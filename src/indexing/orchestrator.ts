@@ -1,5 +1,6 @@
 // Job queue and coordination for indexing pipelines
 
+import { simpleGit } from 'simple-git';
 import { getConfig } from '../config.js';
 import { EmbeddingClient } from './embeddings.js';
 import { DocsIndexer } from './docs-indexer.js';
@@ -32,39 +33,76 @@ export class IndexingOrchestrator {
     }
 
     /**
-     * Check index state for all sources. If any source has never been indexed
-     * or was indexed more than 24h ago, queue a full re-index.
+     * Smart startup check: compare DB commit SHAs against remote HEAD.
+     * Only re-indexes sources that have actually changed, avoiding
+     * unnecessary OpenAI API calls on container restarts.
      */
     async checkAndIndex(): Promise<void> {
         console.log('[orchestrator] Checking index state...');
 
-        let needsFullReindex = false;
-
-        // Check docs state
+        // Check docs
         const docsState = await getIndexState('docs', 'copilotkit-docs');
-        if (this.isStale(docsState)) {
-            console.log('[orchestrator] Docs index is stale or missing');
-            needsFullReindex = true;
+        if (!docsState || !docsState.last_commit_sha || docsState.status === 'error') {
+            console.log('[orchestrator] Docs: never indexed or in error state — queuing full reindex');
+            this.queueFullReindex();
+            return;
         }
 
-        // Check code state for each repo
+        // Check code for each repo
         for (const repoUrl of INDEXED_REPOS) {
             const codeState = await getIndexState('code', repoUrl);
-            if (this.isStale(codeState)) {
-                console.log(
-                    `[orchestrator] Code index stale/missing for ${repoUrl}`,
-                );
-                needsFullReindex = true;
-                break; // One stale source is enough to trigger full reindex
+            if (!codeState || !codeState.last_commit_sha || codeState.status === 'error') {
+                console.log(`[orchestrator] Code: never indexed or in error state for ${repoUrl} — queuing full reindex`);
+                this.queueFullReindex();
+                return;
             }
         }
 
-        if (needsFullReindex) {
-            console.log('[orchestrator] Queuing full re-index');
-            this.queueFullReindex();
-        } else {
-            console.log('[orchestrator] All indexes are fresh');
+        // All sources have been indexed before. Check if remote has new commits.
+        console.log('[orchestrator] All sources previously indexed. Checking remote for changes...');
+
+        try {
+            const remoteHead = await this.getRemoteHead(INDEXED_REPOS[0]);
+            const docsChanged = docsState.last_commit_sha !== remoteHead;
+            const codeState = await getIndexState('code', INDEXED_REPOS[0]);
+            const codeChanged = codeState?.last_commit_sha !== remoteHead;
+
+            if (docsChanged || codeChanged) {
+                console.log(
+                    `[orchestrator] Remote HEAD ${remoteHead.slice(0, 8)} differs from indexed ` +
+                    `(docs: ${docsState.last_commit_sha?.slice(0, 8)}, code: ${codeState?.last_commit_sha?.slice(0, 8)}) — queuing incremental reindex`,
+                );
+                this.queueIncrementalReindex(INDEXED_REPOS[0]);
+            } else {
+                console.log(`[orchestrator] Index is current at ${remoteHead.slice(0, 8)} — no reindex needed`);
+            }
+        } catch (err) {
+            // If we can't check remote, fall back to age-based staleness
+            console.warn('[orchestrator] Failed to check remote HEAD, falling back to age check:', err);
+            if (this.isStale(docsState)) {
+                console.log('[orchestrator] Docs index is stale (>24h) — queuing full reindex');
+                this.queueFullReindex();
+            } else {
+                console.log('[orchestrator] Index appears fresh, skipping');
+            }
         }
+    }
+
+    /**
+     * Get the HEAD SHA of a remote repo without cloning.
+     * Uses `git ls-remote` which only fetches refs.
+     */
+    private async getRemoteHead(repoUrl: string): Promise<string> {
+        const config = getConfig();
+        let url = repoUrl;
+        if (config.githubToken) {
+            url = repoUrl.replace('https://github.com/', `https://x-access-token:${config.githubToken}@github.com/`);
+        }
+        const git = simpleGit();
+        const result = await git.listRemote(['--refs', 'HEAD', url]);
+        const sha = result.split('\t')[0]?.trim();
+        if (!sha) throw new Error(`Could not resolve HEAD for ${repoUrl}`);
+        return sha;
     }
 
     /**
