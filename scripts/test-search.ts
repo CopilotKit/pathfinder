@@ -22,6 +22,7 @@ function parseArgs() {
     let type: 'docs' | 'code' | 'both' = 'both';
     let limit: number | undefined;
     let server = false;
+    let url = '';
     const positional: string[] = [];
 
     for (let i = 0; i < args.length; i++) {
@@ -41,6 +42,9 @@ function parseArgs() {
             }
         } else if (arg === '--server') {
             server = true;
+        } else if (arg === '--url') {
+            server = true;
+            url = args[++i];
         } else if (arg === '--help' || arg === '-h') {
             printUsage();
             process.exit(0);
@@ -56,7 +60,7 @@ function parseArgs() {
         process.exit(1);
     }
 
-    return { query, type, limit, server };
+    return { query, type, limit, server, url };
 }
 
 function printUsage(): void {
@@ -65,7 +69,8 @@ function printUsage(): void {
 Options:
   --type <docs|code>  Search type (default: both)
   --limit <n>         Max results (default: 5 for docs, 10 for code)
-  --server            Query via JSON-RPC to http://localhost:3001/mcp
+  --server            Query via JSON-RPC to the MCP endpoint (default: localhost:3001)
+  --url <url>         MCP endpoint URL (implies --server). e.g. https://mcp-server-production-2253.up.railway.app/mcp
   -h, --help          Show this help message
 `);
 }
@@ -138,8 +143,9 @@ async function serverSearch(
     query: string,
     type: 'docs' | 'code' | 'both',
     limit?: number,
+    url?: string,
 ): Promise<void> {
-    const baseUrl = 'http://localhost:3001/mcp';
+    const baseUrl = url || 'http://localhost:3001/mcp';
     const toolCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
 
     if (type === 'docs' || type === 'both') {
@@ -241,15 +247,15 @@ function truncate(text: string, maxLen: number): string {
 // Main
 // ---------------------------------------------------------------------------
 
-const { query, type, limit, server } = parseArgs();
+const { query, type, limit, server, url } = parseArgs();
 
 const overallStart = Date.now();
 console.log(`Query: "${query}"`);
-console.log(`Type: ${type} | Limit: ${limit ?? 'default'} | Mode: ${server ? 'server' : 'direct'}`);
+console.log(`Type: ${type} | Limit: ${limit ?? 'default'} | Mode: ${server ? `server (${url || 'localhost:3001'})` : 'direct'}`);
 console.log('');
 
 const run = server
-    ? serverSearch(query, type, limit)
+    ? serverSearch(query, type, limit, url || undefined)
     : directSearch(query, type, limit);
 
 run

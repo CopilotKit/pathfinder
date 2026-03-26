@@ -1,16 +1,16 @@
 # MCP Docs Server — Operations Runbook
 
 ## Service URLs
-- Production: https://mcp-server-production-2253.up.railway.app
-- Health: https://mcp-server-production-2253.up.railway.app/health
-- MCP endpoint: https://mcp-server-production-2253.up.railway.app/mcp
+- Production: https://mcp-docs.up.railway.app
+- Health: https://mcp-docs.up.railway.app/health
+- MCP endpoint: https://mcp-docs.up.railway.app/mcp
 - Railway dashboard: https://railway.com/project/4cce72cc-cf76-42e1-a597-c04c851b39cf
 
 ## Quick Checks
 
 ### Health & Index Status
 ```bash
-curl -s https://mcp-server-production-2253.up.railway.app/health | python3 -m json.tool
+curl -s https://mcp-docs.up.railway.app/health | python3 -m json.tool
 ```
 
 Response includes: uptime, indexing status, doc/code chunk counts, per-source index state with last indexed time, commit SHA, and errors.
@@ -40,10 +40,10 @@ railway run npx tsx scripts/seed-index.ts --docs-only
 railway run npx tsx scripts/seed-index.ts --code-only
 ```
 
-### Test search quality
+### Test search quality (against production)
 ```bash
-railway run npx tsx scripts/test-search.ts "how to use useCopilotAction"
-railway run npx tsx scripts/test-search.ts --type code "CopilotRuntime"
+npx tsx scripts/test-search.ts --url https://mcp-docs.up.railway.app/mcp "how to use useCopilotAction"
+npx tsx scripts/test-search.ts --url https://mcp-docs.up.railway.app/mcp --type code "CopilotRuntime"
 ```
 
 ### Restart the service
