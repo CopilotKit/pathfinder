@@ -1,2 +1,420 @@
-// Job queue, full/incremental indexing coordination
-// Implementation in Task 5
+// Job queue and coordination for indexing pipelines
+
+import { getConfig } from '../config.js';
+import { EmbeddingClient } from './embeddings.js';
+import { DocsIndexer } from './docs-indexer.js';
+import { CodeIndexer } from './code-indexer.js';
+import { INDEXED_REPOS } from '../constants.js';
+import {
+    getIndexState,
+    upsertIndexState,
+    type IndexState,
+    type IndexStatus,
+} from '../db/queries.js';
+
+const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+interface Job {
+    type: 'full-reindex' | 'incremental-reindex';
+    repoUrl?: string; // for incremental
+}
+
+export class IndexingOrchestrator {
+    private queue: Job[] = [];
+    private running = false;
+    private processing = false;
+
+    // Per-source mutex: prevents concurrent indexing of the same source
+    private activeSources = new Set<string>();
+
+    constructor() {
+        // No-op — all setup happens lazily via getConfig()
+    }
+
+    /**
+     * Check index state for all sources. If any source has never been indexed
+     * or was indexed more than 24h ago, queue a full re-index.
+     */
+    async checkAndIndex(): Promise<void> {
+        console.log('[orchestrator] Checking index state...');
+
+        let needsFullReindex = false;
+
+        // Check docs state
+        const docsState = await getIndexState('docs', 'copilotkit-docs');
+        if (this.isStale(docsState)) {
+            console.log('[orchestrator] Docs index is stale or missing');
+            needsFullReindex = true;
+        }
+
+        // Check code state for each repo
+        for (const repoUrl of INDEXED_REPOS) {
+            const codeState = await getIndexState('code', repoUrl);
+            if (this.isStale(codeState)) {
+                console.log(
+                    `[orchestrator] Code index stale/missing for ${repoUrl}`,
+                );
+                needsFullReindex = true;
+                break; // One stale source is enough to trigger full reindex
+            }
+        }
+
+        if (needsFullReindex) {
+            console.log('[orchestrator] Queuing full re-index');
+            this.queueFullReindex();
+        } else {
+            console.log('[orchestrator] All indexes are fresh');
+        }
+    }
+
+    /**
+     * Queue a full re-index of all sources. Returns immediately.
+     */
+    queueFullReindex(): void {
+        this.queue.push({ type: 'full-reindex' });
+        console.log('[orchestrator] Full re-index queued');
+        this.drain().catch((err) => {
+            console.error('[orchestrator] drain() failed:', err);
+        });
+    }
+
+    /**
+     * Queue an incremental re-index for a specific repo. Returns immediately.
+     */
+    queueIncrementalReindex(repoUrl: string): void {
+        this.queue.push({ type: 'incremental-reindex', repoUrl });
+        console.log(
+            `[orchestrator] Incremental re-index queued for ${repoUrl}`,
+        );
+        this.drain().catch((err) => {
+            console.error('[orchestrator] drain() failed:', err);
+        });
+    }
+
+    /**
+     * Returns true if any indexing job is currently running.
+     */
+    isIndexing(): boolean {
+        return this.running;
+    }
+
+    // -----------------------------------------------------------------------
+    // Private
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check if an index state is stale (never indexed or older than 24h).
+     */
+    private isStale(state: IndexState | null): boolean {
+        if (!state) return true;
+        if (!state.last_indexed_at) return true;
+        if (state.status === 'error') return true;
+
+        const age = Date.now() - new Date(state.last_indexed_at).getTime();
+        return age > STALE_THRESHOLD_MS;
+    }
+
+    /**
+     * Process the job queue (max 1 concurrent job).
+     */
+    private async drain(): Promise<void> {
+        if (this.processing) return; // Already draining
+        this.processing = true;
+
+        try {
+            while (this.queue.length > 0) {
+                const job = this.queue.shift()!;
+                this.running = true;
+
+                try {
+                    await this.executeJob(job);
+                } catch (err) {
+                    console.error(
+                        '[orchestrator] Job failed:',
+                        err,
+                    );
+                }
+            }
+        } finally {
+            this.running = false;
+            this.processing = false;
+        }
+    }
+
+    /**
+     * Execute a single job.
+     */
+    private async executeJob(job: Job): Promise<void> {
+        const config = getConfig();
+        const embeddingClient = new EmbeddingClient(
+            config.openaiApiKey,
+            config.embeddingModel,
+            config.embeddingDimensions,
+        );
+
+        if (job.type === 'full-reindex') {
+            await this.runFullReindex(embeddingClient, config.cloneDir, config.githubToken);
+        } else if (job.type === 'incremental-reindex' && job.repoUrl) {
+            await this.runIncrementalReindex(
+                embeddingClient,
+                config.cloneDir,
+                config.githubToken,
+                job.repoUrl,
+            );
+        }
+    }
+
+    /**
+     * Run a full re-index of docs and all code repos.
+     */
+    private async runFullReindex(
+        embeddingClient: EmbeddingClient,
+        cloneDir: string,
+        githubToken?: string,
+    ): Promise<void> {
+        console.log('[orchestrator] Starting full re-index');
+
+        // Index docs
+        await this.indexDocsWithState(embeddingClient, cloneDir, githubToken);
+
+        // Index all code repos sequentially
+        const codeIndexer = new CodeIndexer(embeddingClient, cloneDir, githubToken);
+        for (const repoUrl of INDEXED_REPOS) {
+            await this.indexCodeRepoWithState(
+                codeIndexer,
+                repoUrl,
+            );
+        }
+
+        console.log('[orchestrator] Full re-index complete');
+    }
+
+    /**
+     * Run an incremental re-index for a specific repo.
+     */
+    private async runIncrementalReindex(
+        embeddingClient: EmbeddingClient,
+        cloneDir: string,
+        githubToken: string | undefined,
+        repoUrl: string,
+    ): Promise<void> {
+        console.log(
+            `[orchestrator] Starting incremental re-index for ${repoUrl}`,
+        );
+
+        // Determine if this is a docs or code repo
+        const isDocs = repoUrl === 'https://github.com/CopilotKit/CopilotKit.git';
+
+        if (isDocs) {
+            // Check if we have a previous commit SHA for docs
+            const docsState = await getIndexState('docs', 'copilotkit-docs');
+            if (docsState?.last_commit_sha) {
+                const docsIndexer = new DocsIndexer(embeddingClient, cloneDir, githubToken);
+                await this.withSourceLock('docs:copilotkit-docs', async () => {
+                    await this.setIndexStatus('docs', 'copilotkit-docs', 'indexing');
+                    try {
+                        await docsIndexer.incrementalIndex(docsState.last_commit_sha!);
+                        const headSha = await docsIndexer.getHeadSha();
+                        await upsertIndexState({
+                            source_type: 'docs',
+                            source_key: 'copilotkit-docs',
+                            last_commit_sha: headSha,
+                            last_indexed_at: new Date(),
+                            status: 'idle',
+                        });
+                    } catch (err) {
+                        try {
+                            await this.setIndexStatus(
+                                'docs',
+                                'copilotkit-docs',
+                                'error',
+                                err instanceof Error ? err.message : String(err),
+                            );
+                        } catch (statusErr) {
+                            console.error('[orchestrator] Failed to update index status:', statusErr);
+                        }
+                        throw err;
+                    }
+                });
+            } else {
+                // No previous state — do a full docs index
+                await this.indexDocsWithState(embeddingClient, cloneDir, githubToken);
+            }
+        }
+
+        // Always do code incremental for the given repo
+        const codeIndexer = new CodeIndexer(embeddingClient, cloneDir, githubToken);
+        const codeState = await getIndexState('code', repoUrl);
+        if (codeState?.last_commit_sha) {
+            await this.withSourceLock(`code:${repoUrl}`, async () => {
+                await this.setIndexStatus('code', repoUrl, 'indexing');
+                try {
+                    await codeIndexer.incrementalIndex(
+                        repoUrl,
+                        codeState.last_commit_sha!,
+                    );
+                    const headSha = await codeIndexer.getHeadSha(repoUrl);
+                    await upsertIndexState({
+                        source_type: 'code',
+                        source_key: repoUrl,
+                        last_commit_sha: headSha,
+                        last_indexed_at: new Date(),
+                        status: 'idle',
+                    });
+                } catch (err) {
+                    try {
+                        await this.setIndexStatus(
+                            'code',
+                            repoUrl,
+                            'error',
+                            err instanceof Error ? err.message : String(err),
+                        );
+                    } catch (statusErr) {
+                        console.error('[orchestrator] Failed to update index status:', statusErr);
+                    }
+                    throw err;
+                }
+            });
+        } else {
+            // No previous state — do a full index for this repo
+            await this.indexCodeRepoWithState(codeIndexer, repoUrl);
+        }
+    }
+
+    /**
+     * Index docs with full state tracking.
+     */
+    private async indexDocsWithState(
+        embeddingClient: EmbeddingClient,
+        cloneDir: string,
+        githubToken?: string,
+    ): Promise<void> {
+        await this.withSourceLock('docs:copilotkit-docs', async () => {
+            const docsIndexer = new DocsIndexer(embeddingClient, cloneDir, githubToken);
+            await this.setIndexStatus('docs', 'copilotkit-docs', 'indexing');
+
+            try {
+                const docsState = await getIndexState('docs', 'copilotkit-docs');
+                if (docsState?.last_commit_sha) {
+                    await docsIndexer.incrementalIndex(docsState.last_commit_sha);
+                } else {
+                    await docsIndexer.fullIndex();
+                }
+
+                const headSha = await docsIndexer.getHeadSha();
+                await upsertIndexState({
+                    source_type: 'docs',
+                    source_key: 'copilotkit-docs',
+                    last_commit_sha: headSha,
+                    last_indexed_at: new Date(),
+                    status: 'idle',
+                });
+                console.log('[orchestrator] Docs indexing complete');
+            } catch (err) {
+                console.error('[orchestrator] Docs indexing failed:', err);
+                try {
+                    await this.setIndexStatus(
+                        'docs',
+                        'copilotkit-docs',
+                        'error',
+                        err instanceof Error ? err.message : String(err),
+                    );
+                } catch (statusErr) {
+                    console.error('[orchestrator] Failed to update index status:', statusErr);
+                }
+                // Don't rethrow — continue with code repos
+            }
+        });
+    }
+
+    /**
+     * Index a single code repo with full state tracking.
+     */
+    private async indexCodeRepoWithState(
+        codeIndexer: CodeIndexer,
+        repoUrl: string,
+    ): Promise<void> {
+        await this.withSourceLock(`code:${repoUrl}`, async () => {
+            await this.setIndexStatus('code', repoUrl, 'indexing');
+
+            try {
+                const codeState = await getIndexState('code', repoUrl);
+                if (codeState?.last_commit_sha) {
+                    await codeIndexer.incrementalIndex(repoUrl, codeState.last_commit_sha);
+                } else {
+                    await codeIndexer.indexRepo(repoUrl);
+                }
+
+                const headSha = await codeIndexer.getHeadSha(repoUrl);
+                await upsertIndexState({
+                    source_type: 'code',
+                    source_key: repoUrl,
+                    last_commit_sha: headSha,
+                    last_indexed_at: new Date(),
+                    status: 'idle',
+                });
+                console.log(
+                    `[orchestrator] Code indexing complete for ${repoUrl}`,
+                );
+            } catch (err) {
+                console.error(
+                    `[orchestrator] Code indexing failed for ${repoUrl}:`,
+                    err,
+                );
+                try {
+                    await this.setIndexStatus(
+                        'code',
+                        repoUrl,
+                        'error',
+                        err instanceof Error ? err.message : String(err),
+                    );
+                } catch (statusErr) {
+                    console.error('[orchestrator] Failed to update index status:', statusErr);
+                }
+                // Don't rethrow — continue with remaining repos
+            }
+        });
+    }
+
+    /**
+     * Simple per-source mutex. If the source is already being indexed, skip.
+     */
+    private async withSourceLock(
+        sourceKey: string,
+        fn: () => Promise<void>,
+    ): Promise<void> {
+        if (this.activeSources.has(sourceKey)) {
+            console.log(
+                `[orchestrator] Skipping ${sourceKey} — already being indexed`,
+            );
+            return;
+        }
+
+        this.activeSources.add(sourceKey);
+        try {
+            await fn();
+        } finally {
+            this.activeSources.delete(sourceKey);
+        }
+    }
+
+    /**
+     * Update the index_state status for a source.
+     */
+    private async setIndexStatus(
+        sourceType: string,
+        sourceKey: string,
+        status: IndexStatus,
+        errorMessage?: string,
+    ): Promise<void> {
+        const existing = await getIndexState(sourceType, sourceKey);
+        await upsertIndexState({
+            source_type: sourceType,
+            source_key: sourceKey,
+            last_commit_sha: existing?.last_commit_sha ?? null,
+            last_indexed_at: existing?.last_indexed_at ?? null,
+            status,
+            error_message: errorMessage ?? null,
+        });
+    }
+}
