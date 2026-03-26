@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pathfinder — Agentic Docs Retrieval</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+    --bg-deep: #0a0a0f;
+    --bg-surface: #111118;
+    --bg-card: #16161f;
+    --border: #222233;
+    --text-primary: #e8e8f0;
+    --text-secondary: #8888a0;
+    --text-dim: #555570;
+    --accent: #00cc66;
+    --accent-glow: rgba(0,204,102,0.15);
+    --blue: #4488ff;
+    --purple: #aa66ff;
+    --warning: #ffaa00;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Instrument Sans', system-ui, sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
+
+/* Noise overlay */
+body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+}
+
+/* Nav */
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 12px 32px; display:flex; align-items:center; justify-content:space-between;
+    background: rgba(10,10,15,0.8); backdrop-filter: blur(20px) saturate(1.8); border-bottom: 1px solid var(--border); }
+.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--accent); }
+.nav-brand span { color: var(--text-dim); }
+.nav-links { display:flex; gap: 24px; align-items:center; }
+.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 14px; transition: color 0.2s; }
+.nav-links a:hover { color: var(--text-primary); }
+.nav-links .gh-btn { display:inline-flex; align-items:center; gap:6px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.nav-links .gh-btn:hover { border-color: var(--text-dim); }
+
+/* Hero */
+.hero { padding: 140px 32px 80px; max-width: 1000px; margin: 0 auto; text-align: center; }
+.badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-size: 13px; color: var(--text-secondary); margin-bottom: 32px; }
+.badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+.hero h1 { font-size: 52px; font-weight: 700; line-height: 1.15; margin-bottom: 20px; letter-spacing: -0.02em; }
+.hero h1 .accent { color: var(--accent); }
+.hero .subtitle { font-size: 18px; color: var(--text-secondary); max-width: 640px; margin: 0 auto 40px; }
+
+/* Install box */
+.install-box { display: inline-flex; align-items:center; gap: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 14px; margin-bottom: 48px; }
+.install-box .prompt { color: var(--accent); }
+.install-box .cmd { color: var(--text-primary); }
+.install-box .copy-btn { background:none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; color: var(--text-dim); cursor:pointer; font-size: 12px; }
+.install-box .copy-btn:hover { color: var(--text-secondary); border-color: var(--text-dim); }
+
+/* Demo grid */
+.demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 900px; margin: 0 auto; }
+.demo-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-align: left; }
+.demo-header { padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--text-dim); display:flex; gap:8px; align-items:center; }
+.demo-header .dot-r { width:10px; height:10px; border-radius:50%; background:#ff5f57; }
+.demo-header .dot-y { width:10px; height:10px; border-radius:50%; background:#ffbd2e; }
+.demo-header .dot-g { width:10px; height:10px; border-radius:50%; background:#28c840; }
+.demo-body { padding: 16px; font-family: var(--mono); font-size: 13px; line-height: 1.7; min-height: 460px; }
+.demo-body .line { opacity: 0; animation: fadeInLine 0.3s forwards; }
+.demo-body .prompt-line { color: var(--accent); }
+.demo-body .output { color: var(--text-secondary); }
+.demo-body .highlight { color: var(--warning); }
+.demo-body .file { color: var(--blue); }
+@keyframes fadeInLine { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+
+/* Features */
+.features { padding: 80px 32px; max-width: 1000px; margin: 0 auto; }
+.features h2 { text-align:center; font-size: 36px; margin-bottom: 12px; }
+.features .section-sub { text-align:center; color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
+.feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; transition: transform 0.2s, border-color 0.2s; }
+.feature-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.feature-card .icon { font-size: 28px; margin-bottom: 12px; }
+.feature-card h3 { font-size: 16px; margin-bottom: 8px; }
+.feature-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
+
+/* Comparison */
+.comparison { padding: 80px 32px; max-width: 1000px; margin: 0 auto; }
+.comparison h2 { text-align:center; font-size: 36px; margin-bottom: 12px; }
+.comparison .section-sub { text-align:center; color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
+.comp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.comp-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
+.comp-table th.highlight-col { color: var(--accent); border-bottom-color: var(--accent); }
+.comp-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.comp-table td.highlight-col { background: var(--accent-glow); }
+.comp-table .check { color: var(--accent); }
+.comp-table .cross { color: var(--text-dim); }
+.comp-table .partial { color: var(--warning); }
+
+/* Migration CTA */
+.migration { padding: 80px 32px; max-width: 800px; margin: 0 auto; text-align: center; }
+.migration h2 { font-size: 36px; margin-bottom: 12px; }
+.migration .section-sub { color: var(--text-secondary); margin-bottom: 32px; font-size: 16px; }
+.migration .cta-btn { display: inline-flex; align-items:center; gap: 8px; padding: 14px 28px; background: var(--accent); color: var(--bg-deep); font-weight: 600; font-size: 15px; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; transition: opacity 0.2s; }
+.migration .cta-btn:hover { opacity: 0.9; }
+
+/* Footer */
+footer { padding: 40px 32px; border-top: 1px solid var(--border); text-align:center; color: var(--text-dim); font-size: 13px; }
+footer a { color: var(--text-secondary); text-decoration:none; }
+
+/* Selection indicator for brainstorm */
+.feedback-bar { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-card); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 24px; font-size: 14px; color: var(--accent); z-index: 200; display:none; }
+</style>
+</head>
+<body>
+
+<nav>
+    <div class="nav-brand"><span>$</span> pathfinder</div>
+    <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#comparison">vs ChromaFS</a>
+        <a href="#migration">Migrate</a>
+        <a href="#" class="gh-btn">GitHub</a>
+    </div>
+</nav>
+
+<section class="hero">
+    <div class="badge"><span class="dot"></span> Open Source &middot; MIT License</div>
+    <h1><span class="accent">Pathfinder</span><br>Agentic docs retrieval for AI agents</h1>
+    <p class="subtitle">Your AI already knows find, grep, and cat. Give it a virtual filesystem over your docs — plus semantic search when it needs meaning, not just matches. Self-hosted. Open source. Zero lock-in.</p>
+
+    <div class="install-box">
+        <span class="prompt">$</span>
+        <span class="cmd">git clone https://github.com/CopilotKit/pathfinder && cd pathfinder</span>
+        <button class="copy-btn">Copy</button>
+    </div>
+
+    <div class="demo-grid">
+        <div class="demo-panel">
+            <div class="demo-header"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span> pathfinder.yaml</div>
+            <div class="demo-body"><pre style="margin:0; font:inherit; color:inherit; white-space:pre;"><span class="highlight">server:</span>
+  name: my-project-docs
+
+<span class="highlight">sources:</span>
+  - name: docs
+    type: markdown
+    repo: <span class="file">github.com/you/project</span>
+    path: docs/
+
+<span class="highlight">tools:</span>
+  - name: search-docs
+    type: search
+    source: docs
+
+  - name: explore-docs
+    type: bash
+    sources: [docs]
+    bash:
+      session_state: <span class="file">true</span>
+      grep_strategy: <span class="file">hybrid</span></pre>
+            </div>
+        </div>
+        <div class="demo-panel">
+            <div class="demo-header"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span> Agent exploring your docs</div>
+            <div class="demo-body" id="terminal">
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="features" id="features">
+    <h2>Two retrieval paradigms, one server</h2>
+    <p class="section-sub">Agents choose the right tool for each sub-task — no other MCP server does both</p>
+
+    <div class="feature-grid">
+        <div class="feature-card">
+            <div class="icon">🔍</div>
+            <h3>Semantic Search (RAG)</h3>
+            <p>pgvector embeddings with cosine similarity. Ask conceptual questions: "how do I configure auth?"</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">📁</div>
+            <h3>Filesystem Exploration</h3>
+            <p>find, grep, cat, ls, head — agents explore docs like a developer would. Sandboxed via just-bash.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🧭</div>
+            <h3>Session State</h3>
+            <p>cd persists across commands. Agents navigate naturally: cd docs/guides && ls && cat auth.mdx</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">⚡</div>
+            <h3>Vector Grep</h3>
+            <p>3-pass search: semantic embeddings + ILIKE text + dedup. Falls back gracefully when infra is down.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🔗</div>
+            <h3>Cross-Paradigm Hints</h3>
+            <p>`related /path` finds similar files across sources. Grep misses suggest companion search tools.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🚀</div>
+            <h3>Zero-Infra Mode</h3>
+            <p>Bash-only tools work with no database, no API keys. Add RAG when you're ready — it's just config.</p>
+        </div>
+    </div>
+</section>
+
+<section class="comparison" id="comparison">
+    <h2>Pathfinder vs ChromaFS</h2>
+    <p class="section-sub">Mintlify replaced RAG with a filesystem. We compose both.</p>
+
+    <table class="comp-table">
+        <thead>
+            <tr>
+                <th>Capability</th>
+                <th class="highlight-col">Pathfinder</th>
+                <th>ChromaFS</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>Semantic search</td><td class="highlight-col"><span class="check">&#10003;</span> pgvector RAG</td><td><span class="check">&#10003;</span> Via Chroma</td></tr>
+            <tr><td>File exploration</td><td class="highlight-col"><span class="check">&#10003;</span> find/grep/cat/ls</td><td><span class="check">&#10003;</span> find/grep/cat/ls</td></tr>
+            <tr><td>Both paradigms composable</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span> FS-only</td></tr>
+            <tr><td>Session state (persistent CWD)</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span></td></tr>
+            <tr><td>Vector-backed grep</td><td class="highlight-col"><span class="check">&#10003;</span> Configurable</td><td><span class="check">&#10003;</span> Chroma-backed</td></tr>
+            <tr><td>Writable workspace</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span> EROFS</td></tr>
+            <tr><td>Multi-source</td><td class="highlight-col"><span class="check">&#10003;</span> Config-driven</td><td><span class="cross">&#10007;</span> Single collection</td></tr>
+            <tr><td>Feedback collection</td><td class="highlight-col"><span class="check">&#10003;</span> Collect tools</td><td><span class="cross">&#10007;</span></td></tr>
+            <tr><td>Zero-infra mode</td><td class="highlight-col"><span class="check">&#10003;</span> Bash-only</td><td><span class="cross">&#10007;</span> Needs Chroma+Redis</td></tr>
+            <tr><td>Open source</td><td class="highlight-col"><span class="check">&#10003;</span> MIT</td><td><span class="cross">&#10007;</span> Proprietary</td></tr>
+            <tr><td>Auto-refresh on webhook</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="partial">~</span> Manual reingestion</td></tr>
+        </tbody>
+    </table>
+</section>
+
+<section class="migration" id="migration">
+    <h2>Switching from Mintlify?</h2>
+    <p class="section-sub">Your docs are already structured for it. Our migration guide takes 15 minutes.</p>
+    <a href="/migrate-from-mintlify.html" class="cta-btn">Migration Guide →</a>
+</section>
+
+<footer>
+    <p>Pathfinder is MIT Licensed &middot; <a href="#">GitHub</a> &middot; <a href="#">Docs</a> &middot; Built by <a href="#">CopilotKit</a></p>
+</footer>
+
+<script>
+// Terminal animation
+const terminal = document.getElementById('terminal');
+const lines = [
+    { type: 'prompt', text: '$ find / -name "*.mdx" | head -5' },
+    { type: 'output', text: '/docs/quickstart.mdx' },
+    { type: 'output', text: '/docs/guides/streaming.mdx' },
+    { type: 'output', text: '/docs/guides/auth.mdx' },
+    { type: 'output', text: '/docs/reference/hooks.mdx' },
+    { type: 'output', text: '/docs/reference/config.mdx' },
+    { type: 'pause', ms: 800 },
+    { type: 'prompt', text: '$ grep -rl "useAction" /docs' },
+    { type: 'output', text: '/docs/hooks/useAction.mdx' },
+    { type: 'output', text: '/docs/guides/actions.mdx' },
+    { type: 'pause', ms: 600 },
+    { type: 'prompt', text: '$ related /docs/hooks/useAction.mdx' },
+    { type: 'output', text: '  0.92  /docs/guides/actions.mdx' },
+    { type: 'output', text: '  0.87  /code/src/hooks/useAction.ts' },
+    { type: 'output', text: '  0.81  /docs/reference/hooks.mdx' },
+    { type: 'pause', ms: 600 },
+    { type: 'prompt', text: '$ search-docs("async action handling")' },
+    { type: 'output', text: 'SNIPPET 1: /docs/guides/actions.mdx' },
+    { type: 'output', text: '  The useAction hook provides...' },
+];
+
+async function typeText(el, text, speed = 30) {
+    for (const char of text) {
+        el.textContent += char;
+        await new Promise(r => setTimeout(r, speed));
+    }
+}
+
+async function runTerminal() {
+    terminal.innerHTML = '';
+    for (const line of lines) {
+        if (line.type === 'pause') {
+            await new Promise(r => setTimeout(r, line.ms));
+            continue;
+        }
+        const span = document.createElement('div');
+        span.className = line.type === 'prompt' ? 'prompt-line' : 'output';
+        span.style.opacity = '0';
+        terminal.appendChild(span);
+
+        if (line.type === 'prompt') {
+            span.style.opacity = '1';
+            await typeText(span, line.text, 25);
+            await new Promise(r => setTimeout(r, 200));
+        } else {
+            span.textContent = line.text;
+            span.style.transition = 'opacity 0.3s';
+            span.style.opacity = '1';
+            await new Promise(r => setTimeout(r, 100));
+        }
+    }
+    // Add blinking cursor
+    const cursor = document.createElement('span');
+    cursor.textContent = '█';
+    cursor.style.animation = 'pulse 1s infinite';
+    cursor.className = 'prompt-line';
+    terminal.appendChild(cursor);
+
+    await new Promise(r => setTimeout(r, 3000));
+    runTerminal(); // loop
+}
+
+// Start animation when visible
+const observer = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) {
+        observer.disconnect();
+        runTerminal();
+    }
+});
+observer.observe(terminal);
+</script>
+
+</body>
+</html>
