@@ -347,3 +347,44 @@ export async function upsertIndexState(state: IndexState): Promise<void> {
         state.error_message ?? null,
     ]);
 }
+
+// ---------------------------------------------------------------------------
+// Statistics
+// ---------------------------------------------------------------------------
+
+export interface IndexStats {
+    docChunks: number;
+    codeChunks: number;
+    indexedRepos: number;
+    indexStates: IndexState[];
+}
+
+/**
+ * Get aggregate statistics for the health endpoint.
+ */
+export async function getIndexStats(): Promise<IndexStats> {
+    const pool = getPool();
+
+    const [docCount, codeCount, repoCount, states] = await Promise.all([
+        pool.query("SELECT count(*)::int AS count FROM doc_chunks"),
+        pool.query("SELECT count(*)::int AS count FROM code_chunks"),
+        pool.query("SELECT count(DISTINCT repo_url)::int AS count FROM code_chunks"),
+        pool.query(
+            "SELECT source_type, source_key, last_commit_sha, last_indexed_at, status, error_message FROM index_state ORDER BY source_type, source_key",
+        ),
+    ]);
+
+    return {
+        docChunks: docCount.rows[0]?.count ?? 0,
+        codeChunks: codeCount.rows[0]?.count ?? 0,
+        indexedRepos: repoCount.rows[0]?.count ?? 0,
+        indexStates: states.rows.map((r: Record<string, unknown>) => ({
+            source_type: r.source_type as string,
+            source_key: r.source_key as string,
+            last_commit_sha: r.last_commit_sha as string | null,
+            last_indexed_at: r.last_indexed_at as Date | null,
+            status: r.status as IndexStatus,
+            error_message: r.error_message as string | null,
+        })),
+    };
+}

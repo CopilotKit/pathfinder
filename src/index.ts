@@ -3,6 +3,7 @@ import cors from "cors";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "./mcp/server.js";
 import { initializeSchema, getPool } from "./db/client.js";
+import { getIndexStats } from "./db/queries.js";
 import { getConfig } from "./config.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 import { createWebhookHandler } from "./webhooks/github.js";
@@ -24,6 +25,8 @@ app.use(
 // ---------------------------------------------------------------------------
 
 let webhookHandler: ((req: Request, res: Response) => Promise<void>) | null = null;
+let orchestratorRef: IndexingOrchestrator | null = null;
+const startedAt = new Date();
 
 app.post("/webhooks/github", express.raw({ type: "application/json" }), async (req: Request, res: Response) => {
     const handler = webhookHandler;
@@ -90,8 +93,40 @@ app.delete("/mcp", (_req: Request, res: Response) => {
 // Health check
 // ---------------------------------------------------------------------------
 
-app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok", server: "copilotkit-docs-mcp" });
+app.get("/health", async (_req: Request, res: Response) => {
+    try {
+        const stats = await getIndexStats();
+        const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+
+        res.json({
+            status: "ok",
+            server: "copilotkit-docs-mcp",
+            uptime_seconds: uptime,
+            started_at: startedAt.toISOString(),
+            indexing: (orchestratorRef as IndexingOrchestrator | null)?.isIndexing() ?? false,
+            index: {
+                doc_chunks: stats.docChunks,
+                code_chunks: stats.codeChunks,
+                indexed_repos: stats.indexedRepos,
+                sources: stats.indexStates.map((s) => ({
+                    type: s.source_type,
+                    key: s.source_key,
+                    status: s.status,
+                    last_indexed: s.last_indexed_at,
+                    commit: s.last_commit_sha?.slice(0, 8) ?? null,
+                    error: s.error_message ?? null,
+                })),
+            },
+        });
+    } catch (err) {
+        // Fall back to basic health if DB is unavailable
+        res.json({
+            status: "ok",
+            server: "copilotkit-docs-mcp",
+            uptime_seconds: Math.floor((Date.now() - startedAt.getTime()) / 1000),
+            index: "unavailable",
+        });
+    }
 });
 
 // ---------------------------------------------------------------------------
@@ -105,8 +140,9 @@ async function start(): Promise<void> {
     await initializeSchema();
     console.log("[startup] Database schema ready.");
 
-    // Wire the webhook handler with the real orchestrator
+    // Wire the webhook handler and health endpoint with the real orchestrator
     const orchestrator = new IndexingOrchestrator();
+    orchestratorRef = orchestrator;
     webhookHandler = createWebhookHandler(orchestrator);
 
     // Fire-and-forget startup indexing check
