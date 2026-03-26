@@ -22,15 +22,10 @@ echo ""
 
 # ── Repos to configure ─────────────────────────────────────────
 
+# All demo repos were consolidated into CopilotKit/CopilotKit.
+# Only one webhook needed — covers both docs and code changes.
 REPOS=(
     "CopilotKit/CopilotKit"
-    "CopilotKit/with-agno"
-    "CopilotKit/with-crewai-flows"
-    "CopilotKit/with-langgraph-fastapi"
-    "CopilotKit/with-langgraph-js"
-    "CopilotKit/with-langgraph-python"
-    "CopilotKit/with-llamaindex"
-    "CopilotKit/with-mastra"
 )
 
 # ── Prerequisites ──────────────────────────────────────────────
