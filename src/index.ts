@@ -1,6 +1,8 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
+import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
 import { initializeSchema, getPool } from "./db/client.js";
 import { getIndexStats } from "./db/queries.js";
@@ -48,17 +50,49 @@ app.post("/webhooks/github", express.raw({ type: "application/json" }), async (r
 app.use(express.json());
 
 // ---------------------------------------------------------------------------
-// MCP endpoint — stateless mode (fresh server + transport per request)
+// MCP endpoint — session-based (initialize once, then tool calls reuse session)
 // ---------------------------------------------------------------------------
+
+const transports: Record<string, StreamableHTTPServerTransport> = {};
 
 app.post("/mcp", async (req: Request, res: Response) => {
     try {
-        const server = createMcpServer();
-        const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: undefined,
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+        // Existing session — route to its transport
+        if (sessionId && transports[sessionId]) {
+            await transports[sessionId].handleRequest(req, res, req.body);
+            return;
+        }
+
+        // New session — must be an initialize request
+        if (!sessionId && isInitializeRequest(req.body)) {
+            const transport = new StreamableHTTPServerTransport({
+                sessionIdGenerator: () => randomUUID(),
+                onsessioninitialized: (sid) => {
+                    console.log(`[MCP] Session initialized: ${sid.slice(0, 8)}...`);
+                    transports[sid] = transport;
+                },
+            });
+            transport.onclose = () => {
+                const sid = transport.sessionId;
+                if (sid && transports[sid]) {
+                    console.log(`[MCP] Session closed: ${sid.slice(0, 8)}...`);
+                    delete transports[sid];
+                }
+            };
+            const server = createMcpServer();
+            await server.connect(transport);
+            await transport.handleRequest(req, res, req.body);
+            return;
+        }
+
+        // Invalid request
+        res.status(400).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Bad Request: No valid session. Send an initialize request first." },
+            id: null,
         });
-        await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
     } catch (error) {
         console.error("[MCP] Error handling POST request:", error);
         if (!res.headersSent) {
@@ -71,22 +105,32 @@ app.post("/mcp", async (req: Request, res: Response) => {
     }
 });
 
-// SSE stream not needed for stateless mode
-app.get("/mcp", (_req: Request, res: Response) => {
-    res.status(405).json({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Method Not Allowed — stateless mode, no SSE streams" },
-        id: null,
-    });
+// SSE stream for server-initiated notifications
+app.get("/mcp", async (req: Request, res: Response) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (sessionId && transports[sessionId]) {
+        await transports[sessionId].handleRequest(req, res);
+    } else {
+        res.status(400).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Invalid or missing session ID" },
+            id: null,
+        });
+    }
 });
 
-// Session termination not needed for stateless mode
-app.delete("/mcp", (_req: Request, res: Response) => {
-    res.status(405).json({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Method Not Allowed — stateless mode, no sessions" },
-        id: null,
-    });
+// Session termination
+app.delete("/mcp", async (req: Request, res: Response) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (sessionId && transports[sessionId]) {
+        await transports[sessionId].handleRequest(req, res);
+    } else {
+        res.status(400).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Invalid or missing session ID" },
+            id: null,
+        });
+    }
 });
 
 // ---------------------------------------------------------------------------

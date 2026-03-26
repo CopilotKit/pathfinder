@@ -139,6 +139,64 @@ async function directSearch(
 // Server mode: query via JSON-RPC to local MCP server
 // ---------------------------------------------------------------------------
 
+/**
+ * Parse SSE response body into JSON-RPC messages.
+ */
+function parseSseMessages(text: string): Record<string, unknown>[] {
+    const messages: Record<string, unknown>[] = [];
+    for (const line of text.split('\n')) {
+        if (line.startsWith('data: ')) {
+            try {
+                messages.push(JSON.parse(line.slice(6).trim()) as Record<string, unknown>);
+            } catch { /* skip */ }
+        }
+    }
+    return messages;
+}
+
+/**
+ * Send a JSON-RPC request to the MCP endpoint. Returns parsed messages and session ID.
+ */
+async function mcpPost(
+    baseUrl: string,
+    body: unknown,
+    sessionId?: string,
+): Promise<{ messages: Record<string, unknown>[]; sessionId: string | null }> {
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+    };
+    if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+
+    const response = await fetch(baseUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+    });
+
+    const sid = response.headers.get('mcp-session-id');
+
+    if (response.status === 202) {
+        return { messages: [], sessionId: sid ?? sessionId ?? null };
+    }
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status}: ${text}`);
+    }
+
+    const text = await response.text();
+    const messages = parseSseMessages(text);
+    if (messages.length === 0 && text.trim()) {
+        try {
+            return { messages: [JSON.parse(text) as Record<string, unknown>], sessionId: sid ?? sessionId ?? null };
+        } catch {
+            throw new Error(`Unparseable response: ${text.slice(0, 200)}`);
+        }
+    }
+    return { messages, sessionId: sid ?? sessionId ?? null };
+}
+
 async function serverSearch(
     query: string,
     type: 'docs' | 'code' | 'both',
@@ -146,54 +204,57 @@ async function serverSearch(
     url?: string,
 ): Promise<void> {
     const baseUrl = url || 'http://localhost:3001/mcp';
-    const toolCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
 
+    // Step 1: Initialize to get a session
+    console.log('Connecting to MCP server...');
+    const initResp = await mcpPost(baseUrl, {
+        jsonrpc: '2.0',
+        method: 'initialize',
+        id: 0,
+        params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: 'test-search', version: '1.0.0' },
+        },
+    });
+
+    const sid = initResp.sessionId;
+    if (!sid) {
+        console.error('No session ID returned — server may be in stateless mode without session support');
+    }
+
+    // Send initialized notification
+    await mcpPost(baseUrl, { jsonrpc: '2.0', method: 'notifications/initialized' }, sid ?? undefined);
+
+    // Step 2: Call tools
+    const toolCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
     if (type === 'docs' || type === 'both') {
-        toolCalls.push({
-            name: 'search-docs',
-            params: { query, limit: limit ?? 5 },
-        });
+        toolCalls.push({ name: 'search-docs', params: { query, limit: limit ?? 5 } });
     }
     if (type === 'code' || type === 'both') {
-        toolCalls.push({
-            name: 'search-code',
-            params: { query, limit: limit ?? 10 },
-        });
+        toolCalls.push({ name: 'search-code', params: { query, limit: limit ?? 10 } });
     }
 
+    let callId = 1;
     for (const call of toolCalls) {
-        console.log(`--- Calling tool: ${call.name} ---\n`);
+        console.log(`\n--- ${call.name} ---\n`);
         const start = Date.now();
 
-        const rpcRequest = {
+        const resp = await mcpPost(baseUrl, {
             jsonrpc: '2.0',
-            id: 1,
             method: 'tools/call',
-            params: {
-                name: call.name,
-                arguments: call.params,
-            },
-        };
+            id: callId++,
+            params: { name: call.name, arguments: call.params },
+        }, sid ?? undefined);
 
-        const response = await fetch(baseUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(rpcRequest),
-        });
-
-        if (!response.ok) {
-            console.error(`Server returned ${response.status}: ${await response.text()}`);
-            continue;
-        }
-
-        const body = await response.json() as Record<string, unknown>;
         const elapsed = Date.now() - start;
+        const toolResp = resp.messages.find((m) => m.result || m.error);
 
-        if (body.error) {
-            const err = body.error as Record<string, unknown>;
-            console.error(`RPC error: ${err.message}`);
-        } else {
-            const result = body.result as Record<string, unknown>;
+        if (toolResp?.error) {
+            const err = toolResp.error as Record<string, unknown>;
+            console.error(`Error: ${err.message}`);
+        } else if (toolResp?.result) {
+            const result = toolResp.result as Record<string, unknown>;
             const content = result?.content as Array<Record<string, unknown>> | undefined;
             if (content && content.length > 0) {
                 for (const item of content) {
@@ -202,9 +263,11 @@ async function serverSearch(
             } else {
                 console.log('No results.');
             }
+        } else {
+            console.log('No response.');
         }
 
-        console.log(`(${elapsed}ms)\n`);
+        console.log(`(${elapsed}ms)`);
     }
 }
 
