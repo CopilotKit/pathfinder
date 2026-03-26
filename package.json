@@ -1,0 +1,32 @@
+{
+    "name": "mcp-docs",
+    "version": "1.0.0",
+    "description": "Self-hosted MCP server for CopilotKit docs & code search",
+    "type": "module",
+    "main": "dist/index.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "dev": "tsx watch src/index.ts",
+        "seed-index": "tsx scripts/seed-index.ts",
+        "test-search": "tsx scripts/test-search.ts"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.25.2",
+        "cors": "^2.8.5",
+        "express": "^5.2.1",
+        "openai": "^4.80.0",
+        "pg": "^8.13.0",
+        "pgvector": "^0.2.0",
+        "simple-git": "^3.27.0",
+        "zod": "^3.23.8"
+    },
+    "devDependencies": {
+        "@types/cors": "^2.8.19",
+        "@types/express": "^5.0.6",
+        "@types/node": "^25.0.6",
+        "@types/pg": "^8.11.10",
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3"
+    }
+}
