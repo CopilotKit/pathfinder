@@ -30,6 +30,8 @@ services:
             PORT: 3001
             NODE_ENV: development
             LOG_LEVEL: debug
+            AUTO_REINDEX_ENABLED: ${AUTO_REINDEX_ENABLED:-true}
+            AUTO_REINDEX_CRON_HOUR: ${AUTO_REINDEX_CRON_HOUR:-3}
         volumes:
             - ./src:/app/src
             - ./scripts:/app/scripts

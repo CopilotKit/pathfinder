@@ -13,9 +13,19 @@ export interface Config {
     embeddingModel: string;
     embeddingDimensions: number;
     cloneDir: string;
+    autoReindexEnabled: boolean;
+    autoReindexCronHour: number;
 }
 
 let cachedConfig: Config | null = null;
+
+function parseCronHour(value: string | undefined): number {
+    const hour = parseInt(value || '3', 10);
+    if (isNaN(hour) || hour < 0 || hour > 23) {
+        throw new Error(`Invalid AUTO_REINDEX_CRON_HOUR value: ${value}. Must be 0-23.`);
+    }
+    return hour;
+}
 
 function parseConfig(): Config {
     const missing: string[] = [];
@@ -52,6 +62,8 @@ function parseConfig(): Config {
         embeddingModel: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
         embeddingDimensions: 1536,
         cloneDir: process.env.CLONE_DIR || '/tmp/mcp-repos',
+        autoReindexEnabled: (process.env.AUTO_REINDEX_ENABLED || 'true').toLowerCase() === 'true',
+        autoReindexCronHour: parseCronHour(process.env.AUTO_REINDEX_CRON_HOUR),
     };
 }
 

@@ -98,6 +98,31 @@ export class IndexingOrchestrator {
         return this.running;
     }
 
+    /**
+     * Start a background timer that triggers a full reindex once per day at
+     * the configured UTC hour.  Uses a simple setInterval (no cron library).
+     */
+    startNightlyReindex(): void {
+        if (!getConfig().autoReindexEnabled) {
+            console.log('[orchestrator] Nightly reindex disabled');
+            return;
+        }
+
+        const hour = getConfig().autoReindexCronHour;
+        console.log(`[orchestrator] Nightly reindex scheduled at ${hour}:00 UTC`);
+
+        // Check every 60 seconds if it's time to run
+        setInterval(() => {
+            const now = new Date();
+            if (now.getUTCHours() === hour && now.getUTCMinutes() === 0) {
+                if (!this.isIndexing()) {
+                    console.log('[orchestrator] Starting nightly reindex');
+                    this.queueFullReindex();
+                }
+            }
+        }, 60_000);
+    }
+
     // -----------------------------------------------------------------------
     // Private
     // -----------------------------------------------------------------------

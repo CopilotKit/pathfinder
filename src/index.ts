@@ -114,6 +114,9 @@ async function start(): Promise<void> {
         console.error("[startup] Initial index check failed:", err);
     });
 
+    // Start the nightly reindex scheduler
+    orchestrator.startNightlyReindex();
+
     app.listen(cfg.port, () => {
         console.log(`[copilotkit-docs-mcp] Running at http://localhost:${cfg.port}/mcp`);
         console.log(`[health] http://localhost:${cfg.port}/health`);
