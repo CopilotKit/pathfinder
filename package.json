@@ -9,7 +9,8 @@
         "start": "node dist/index.js",
         "dev": "tsx watch src/index.ts",
         "seed-index": "tsx scripts/seed-index.ts",
-        "test-search": "tsx scripts/test-search.ts"
+        "test-search": "tsx scripts/test-search.ts",
+        "integration-test": "tsx scripts/integration-test.ts"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.25.2",
