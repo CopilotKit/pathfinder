@@ -10,7 +10,9 @@
 
 import express from "express";
 import cors from "cors";
+import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { initializeSchema, getPool } from "../src/db/client.js";
 import { getConfig } from "../src/config.js";
 import { EmbeddingClient } from "../src/indexing/embeddings.js";
@@ -367,14 +369,40 @@ async function startTestServer(): Promise<{ server: Server; port: number }> {
     app.use(cors({ origin: "*", exposedHeaders: ["Mcp-Session-Id"] }));
     app.use(express.json());
 
+    // Session-based transport so initialize + tool calls work across requests
+    const transports: Record<string, StreamableHTTPServerTransport> = {};
+
     app.post("/mcp", async (req, res) => {
         try {
-            const mcpServer = createMcpServer();
-            const transport = new StreamableHTTPServerTransport({
-                sessionIdGenerator: undefined,
+            const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+            if (sessionId && transports[sessionId]) {
+                await transports[sessionId].handleRequest(req, res, req.body);
+                return;
+            }
+
+            if (!sessionId && isInitializeRequest(req.body)) {
+                const transport = new StreamableHTTPServerTransport({
+                    sessionIdGenerator: () => randomUUID(),
+                    onsessioninitialized: (sid) => {
+                        transports[sid] = transport;
+                    },
+                });
+                transport.onclose = () => {
+                    const sid = transport.sessionId;
+                    if (sid) delete transports[sid];
+                };
+                const mcpServer = createMcpServer();
+                await mcpServer.connect(transport);
+                await transport.handleRequest(req, res, req.body);
+                return;
+            }
+
+            res.status(400).json({
+                jsonrpc: "2.0",
+                error: { code: -32000, message: "Bad Request: No valid session" },
+                id: null,
             });
-            await mcpServer.connect(transport);
-            await transport.handleRequest(req, res, req.body);
         } catch (error) {
             console.error("[test-server/MCP] Error:", error);
             if (!res.headersSent) {
@@ -387,12 +415,20 @@ async function startTestServer(): Promise<{ server: Server; port: number }> {
         }
     });
 
+    app.get("/mcp", async (req, res) => {
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        if (sessionId && transports[sessionId]) {
+            await transports[sessionId].handleRequest(req, res);
+        } else {
+            res.status(400).send("Invalid session");
+        }
+    });
+
     app.get("/health", (_req, res) => {
         res.json({ status: "ok" });
     });
 
     return new Promise((resolve) => {
-        // Use port 0 for OS-assigned ephemeral port
         const server = app.listen(0, () => {
             const addr = server.address();
             const port = typeof addr === "object" && addr ? addr.port : 0;
@@ -401,303 +437,180 @@ async function startTestServer(): Promise<{ server: Server; port: number }> {
     });
 }
 
+/**
+ * Parse an SSE response body into JSON-RPC messages.
+ */
+function parseSseMessages(text: string): Record<string, unknown>[] {
+    const messages: Record<string, unknown>[] = [];
+    for (const line of text.split("\n")) {
+        if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data) {
+                try {
+                    messages.push(JSON.parse(data) as Record<string, unknown>);
+                } catch {
+                    // skip unparseable SSE data
+                }
+            }
+        }
+    }
+    return messages;
+}
+
+/**
+ * Send an MCP JSON-RPC request, return parsed response and session ID.
+ */
 async function mcpRequest(
     baseUrl: string,
     body: unknown,
-): Promise<Record<string, unknown>> {
+    sessionId?: string,
+): Promise<{ messages: Record<string, unknown>[]; sessionId: string | null }> {
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+    };
+    if (sessionId) {
+        headers["Mcp-Session-Id"] = sessionId;
+    }
+
     const response = await fetch(baseUrl, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json, text/event-stream",
-        },
+        headers,
         body: JSON.stringify(body),
     });
+
+    const respSessionId = response.headers.get("mcp-session-id");
+
+    // 202 Accepted = notification acknowledged, no body expected
+    if (response.status === 202) {
+        return { messages: [], sessionId: respSessionId ?? sessionId ?? null };
+    }
 
     if (!response.ok) {
         const text = await response.text();
         throw new Error(`HTTP ${response.status}: ${text}`);
     }
 
-    // The stateless MCP transport returns SSE-formatted responses.
-    // Parse the SSE stream to extract JSON-RPC messages.
     const text = await response.text();
-    const messages: Record<string, unknown>[] = [];
+    const messages = parseSseMessages(text);
 
-    for (const line of text.split("\n")) {
-        if (line.startsWith("data: ")) {
-            const data = line.slice(6).trim();
-            if (data) {
-                messages.push(JSON.parse(data) as Record<string, unknown>);
-            }
-        }
-    }
-
-    if (messages.length === 0) {
-        // Might be plain JSON (e.g. for errors)
+    if (messages.length === 0 && text.trim()) {
+        // Plain JSON response
         try {
-            return JSON.parse(text) as Record<string, unknown>;
+            return { messages: [JSON.parse(text) as Record<string, unknown>], sessionId: respSessionId ?? sessionId ?? null };
         } catch {
             throw new Error(`No parseable response: ${text.slice(0, 500)}`);
         }
     }
 
-    // Return the last message (the tool call response, after any notifications)
-    return messages[messages.length - 1];
+    return { messages, sessionId: respSessionId ?? sessionId ?? null };
 }
 
 async function testMcpEndpoint(port: number): Promise<void> {
     console.log("\n=== Phase 3: MCP HTTP endpoint ===\n");
     const baseUrl = `http://localhost:${port}/mcp`;
 
-    // Each POST creates a fresh server, so we must initialize first.
-    // The stateless transport handles initialize + tool call as a batch or sequentially.
+    // Step 1: Initialize to get a session
+    console.log("MCP initialize...");
+    const initResp = await mcpRequest(baseUrl, {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "integration-test", version: "1.0.0" },
+        },
+    });
 
-    // Test 1: Initialize handshake
+    const initResult = initResp.messages.find((m) => m.id === 1);
+    assert(initResult !== undefined, "Initialize returned a result");
+    assert(initResp.sessionId !== null, "Got session ID");
+    const sid = initResp.sessionId!;
+    console.log(`  Session: ${sid.slice(0, 8)}...`);
+
+    const result = initResult!.result as Record<string, unknown>;
+    assert(typeof result.serverInfo === "object", "Initialize has serverInfo");
+
+    // Send initialized notification
+    await mcpRequest(baseUrl, {
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+    }, sid);
+
+    // Step 2: search-docs via MCP tool call
     {
-        console.log("MCP initialize...");
-        const result = await mcpRequest(baseUrl, {
+        console.log('MCP tools/call: search-docs "how to get started"');
+        const resp = await mcpRequest(baseUrl, {
             jsonrpc: "2.0",
-            method: "initialize",
-            id: 1,
+            method: "tools/call",
+            id: 2,
             params: {
-                protocolVersion: "2025-03-26",
-                capabilities: {},
-                clientInfo: { name: "integration-test", version: "1.0.0" },
+                name: "search-docs",
+                arguments: { query: "how to get started" },
             },
-        });
-        assert(result.result !== undefined, "Initialize returned a result");
-        const initResult = result.result as Record<string, unknown>;
-        assert(
-            typeof initResult.serverInfo === "object",
-            "Initialize result has serverInfo",
-        );
+        }, sid);
+
+        const toolResp = resp.messages.find((m) => m.id === 2);
+        assert(toolResp !== undefined, "Got search-docs response");
+
+        const toolResult = toolResp!.result as Record<string, unknown>;
+        const content = toolResult?.content as Array<Record<string, unknown>>;
+        assert(content && content.length > 0, "search-docs returned content");
+
+        const text = content[0].text as string;
+        assertContains(text, "Getting Started", "search-docs found Getting Started doc");
     }
 
-    // Test 2: search-docs via MCP tool call
+    // Step 3: search-code via MCP tool call
     {
-        console.log('MCP search-docs: "how to get started"');
-
-        // Initialize first (stateless = fresh server each time)
-        await mcpRequest(baseUrl, {
+        console.log('MCP tools/call: search-code "CopilotRuntime"');
+        const resp = await mcpRequest(baseUrl, {
             jsonrpc: "2.0",
-            method: "initialize",
-            id: 10,
+            method: "tools/call",
+            id: 3,
             params: {
-                protocolVersion: "2025-03-26",
-                capabilities: {},
-                clientInfo: { name: "integration-test", version: "1.0.0" },
+                name: "search-code",
+                arguments: { query: "CopilotRuntime class" },
             },
-        });
+        }, sid);
 
-        // Hmm, stateless means we can't do initialize then tool call on the same server.
-        // Let's test with a JSON-RPC batch: [initialize, notifications/initialized, tools/call]
+        const toolResp = resp.messages.find((m) => m.id === 3);
+        assert(toolResp !== undefined, "Got search-code response");
+
+        const toolResult = toolResp!.result as Record<string, unknown>;
+        const content = toolResult?.content as Array<Record<string, unknown>>;
+        assert(content && content.length > 0, "search-code returned content");
+
+        const text = content[0].text as string;
+        assertContains(text, "CopilotRuntime", "search-code found CopilotRuntime");
     }
 
-    // Actually, for stateless mode, send a batch request:
-    // [initialize, notifications/initialized, tools/call]
-    // The server processes them in order on the same server instance.
-
-    // Test 2 (batch): search-docs
+    // Step 4: search-docs for useCopilotAction
     {
-        console.log('MCP batch: search-docs "how to get started"');
-        const batchBody = [
-            {
-                jsonrpc: "2.0",
-                method: "initialize",
-                id: 20,
-                params: {
-                    protocolVersion: "2025-03-26",
-                    capabilities: {},
-                    clientInfo: { name: "integration-test", version: "1.0.0" },
-                },
+        console.log('MCP tools/call: search-docs "useCopilotAction"');
+        const resp = await mcpRequest(baseUrl, {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            id: 4,
+            params: {
+                name: "search-docs",
+                arguments: { query: "useCopilotAction" },
             },
-            {
-                jsonrpc: "2.0",
-                method: "notifications/initialized",
-            },
-            {
-                jsonrpc: "2.0",
-                method: "tools/call",
-                id: 21,
-                params: {
-                    name: "search-docs",
-                    arguments: { query: "how to get started" },
-                },
-            },
-        ];
+        }, sid);
 
-        const response = await fetch(baseUrl, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json, text/event-stream",
-            },
-            body: JSON.stringify(batchBody),
-        });
+        const toolResp = resp.messages.find((m) => m.id === 4);
+        assert(toolResp !== undefined, "Got search-docs response");
 
-        assert(response.ok, `Batch request succeeded (status ${response.status})`);
+        const toolResult = toolResp!.result as Record<string, unknown>;
+        const content = toolResult?.content as Array<Record<string, unknown>>;
+        assert(content && content.length > 0, "search-docs returned content");
 
-        const text = await response.text();
-        const messages: Record<string, unknown>[] = [];
-        for (const line of text.split("\n")) {
-            if (line.startsWith("data: ")) {
-                const data = line.slice(6).trim();
-                if (data) {
-                    messages.push(JSON.parse(data) as Record<string, unknown>);
-                }
-            }
-        }
-
-        // Find the tools/call response (id: 21)
-        const toolResponse = messages.find((m) => m.id === 21);
-        assert(toolResponse !== undefined, "Got tool call response (id 21)");
-
-        if (toolResponse) {
-            const toolResult = toolResponse.result as Record<string, unknown>;
-            const content = toolResult?.content as Array<Record<string, unknown>>;
-            assert(content !== undefined && content.length > 0, "Tool returned content");
-
-            if (content && content.length > 0) {
-                const resultText = content[0].text as string;
-                assertContains(resultText, "Getting Started", "MCP search-docs result");
-            }
-        }
+        const text = content[0].text as string;
+        assertContains(text, "useCopilotAction", "search-docs found useCopilotAction doc");
     }
 
-    // Test 3 (batch): search-code
-    {
-        console.log('MCP batch: search-code "CopilotRuntime class"');
-        const batchBody = [
-            {
-                jsonrpc: "2.0",
-                method: "initialize",
-                id: 30,
-                params: {
-                    protocolVersion: "2025-03-26",
-                    capabilities: {},
-                    clientInfo: { name: "integration-test", version: "1.0.0" },
-                },
-            },
-            {
-                jsonrpc: "2.0",
-                method: "notifications/initialized",
-            },
-            {
-                jsonrpc: "2.0",
-                method: "tools/call",
-                id: 31,
-                params: {
-                    name: "search-code",
-                    arguments: { query: "CopilotRuntime class" },
-                },
-            },
-        ];
-
-        const response = await fetch(baseUrl, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json, text/event-stream",
-            },
-            body: JSON.stringify(batchBody),
-        });
-
-        assert(response.ok, `Batch request succeeded (status ${response.status})`);
-
-        const text = await response.text();
-        const messages: Record<string, unknown>[] = [];
-        for (const line of text.split("\n")) {
-            if (line.startsWith("data: ")) {
-                const data = line.slice(6).trim();
-                if (data) {
-                    messages.push(JSON.parse(data) as Record<string, unknown>);
-                }
-            }
-        }
-
-        const toolResponse = messages.find((m) => m.id === 31);
-        assert(toolResponse !== undefined, "Got tool call response (id 31)");
-
-        if (toolResponse) {
-            const toolResult = toolResponse.result as Record<string, unknown>;
-            const content = toolResult?.content as Array<Record<string, unknown>>;
-            assert(content !== undefined && content.length > 0, "Tool returned content");
-
-            if (content && content.length > 0) {
-                const resultText = content[0].text as string;
-                assertContains(resultText, "CopilotRuntime", "MCP search-code result");
-            }
-        }
-    }
-
-    // Test 4 (batch): search-docs for useCopilotAction
-    {
-        console.log('MCP batch: search-docs "useCopilotAction"');
-        const batchBody = [
-            {
-                jsonrpc: "2.0",
-                method: "initialize",
-                id: 40,
-                params: {
-                    protocolVersion: "2025-03-26",
-                    capabilities: {},
-                    clientInfo: { name: "integration-test", version: "1.0.0" },
-                },
-            },
-            {
-                jsonrpc: "2.0",
-                method: "notifications/initialized",
-            },
-            {
-                jsonrpc: "2.0",
-                method: "tools/call",
-                id: 41,
-                params: {
-                    name: "search-docs",
-                    arguments: { query: "useCopilotAction" },
-                },
-            },
-        ];
-
-        const response = await fetch(baseUrl, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json, text/event-stream",
-            },
-            body: JSON.stringify(batchBody),
-        });
-
-        assert(response.ok, `Batch request succeeded (status ${response.status})`);
-
-        const text = await response.text();
-        const messages: Record<string, unknown>[] = [];
-        for (const line of text.split("\n")) {
-            if (line.startsWith("data: ")) {
-                const data = line.slice(6).trim();
-                if (data) {
-                    messages.push(JSON.parse(data) as Record<string, unknown>);
-                }
-            }
-        }
-
-        const toolResponse = messages.find((m) => m.id === 41);
-        assert(toolResponse !== undefined, "Got tool call response (id 41)");
-
-        if (toolResponse) {
-            const toolResult = toolResponse.result as Record<string, unknown>;
-            const content = toolResult?.content as Array<Record<string, unknown>>;
-            assert(content !== undefined && content.length > 0, "Tool returned content");
-
-            if (content && content.length > 0) {
-                const resultText = content[0].text as string;
-                assertContains(resultText, "useCopilotAction", "MCP search-docs result");
-            }
-        }
-    }
-
-    // Test 5: Health endpoint
+    // Step 5: Health endpoint
     {
         console.log("Health check...");
         const healthRes = await fetch(`http://localhost:${port}/health`);

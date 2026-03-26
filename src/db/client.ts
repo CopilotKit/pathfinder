@@ -58,8 +58,13 @@ export function getPool(): pg.Pool {
 export async function initializeSchema(): Promise<void> {
     const p = getPool();
 
-    // Register pgvector type with the pool
-    await pgvector.registerType(p);
+    // Register pgvector type — must use a client, not the pool directly
+    const client = await p.connect();
+    try {
+        await pgvector.registerType(client);
+    } finally {
+        client.release();
+    }
 
     const schemaPath = resolveSchemaPath();
     const schemaSql = readFileSync(schemaPath, "utf-8");

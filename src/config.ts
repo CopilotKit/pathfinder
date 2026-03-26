@@ -1,5 +1,7 @@
 // Centralized environment variable parsing with validation
 
+import 'dotenv/config';
+
 export interface Config {
     databaseUrl: string;
     openaiApiKey: string;

@@ -15,6 +15,7 @@
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.25.2",
         "cors": "^2.8.5",
+        "dotenv": "^17.3.1",
         "express": "^5.2.1",
         "openai": "^4.80.0",
         "pg": "^8.13.0",

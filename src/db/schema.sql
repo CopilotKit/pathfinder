@@ -50,16 +50,13 @@ CREATE TABLE IF NOT EXISTS index_state (
     CONSTRAINT index_state_source_uniq UNIQUE (source_type, source_key)
 );
 
--- IVFFlat indexes for cosine similarity search on embedding columns.
--- These require at least some rows to exist for the index to be useful,
--- but CREATE INDEX IF NOT EXISTS makes this idempotent.
+-- HNSW indexes for cosine similarity search on embedding columns.
+-- HNSW works with any number of rows (unlike IVFFlat which needs training data).
 CREATE INDEX IF NOT EXISTS idx_doc_chunks_embedding
-    ON doc_chunks USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+    ON doc_chunks USING hnsw (embedding vector_cosine_ops);
 
 CREATE INDEX IF NOT EXISTS idx_code_chunks_embedding
-    ON code_chunks USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+    ON code_chunks USING hnsw (embedding vector_cosine_ops);
 
 -- Filtering index for code_chunks by repo_url
 CREATE INDEX IF NOT EXISTS idx_code_chunks_repo_url
