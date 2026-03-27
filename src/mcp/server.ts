@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { EmbeddingClient } from "../indexing/embeddings.js";
-import { getConfig } from "../config.js";
+import { getConfig, getServerConfig } from "../config.js";
 import { registerSearchDocsTool } from "./tools/search-docs.js";
 import { registerSearchCodeTool } from "./tools/search-code.js";
 
@@ -10,15 +10,16 @@ import { registerSearchCodeTool } from "./tools/search-code.js";
  */
 export function createMcpServer(): McpServer {
     const cfg = getConfig();
+    const serverCfg = getServerConfig();
     const embeddingClient = new EmbeddingClient(
         cfg.openaiApiKey,
-        cfg.embeddingModel,
-        cfg.embeddingDimensions,
+        serverCfg.embedding.model,
+        serverCfg.embedding.dimensions,
     );
 
     const server = new McpServer({
-        name: "copilotkit-docs-mcp",
-        version: "1.0.0",
+        name: serverCfg.server.name,
+        version: serverCfg.server.version,
     });
 
     registerSearchDocsTool(server, embeddingClient);

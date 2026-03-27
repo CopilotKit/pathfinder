@@ -2,15 +2,21 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { EmbeddingClient } from "../../indexing/embeddings.js";
 import { searchCodeChunks, CodeChunkResult } from "../../db/queries.js";
-import { INDEXED_REPOS, type IndexedRepo } from "../../constants.js";
+import { getServerConfig } from "../../config.js";
 
-export const searchCodeInputSchema = {
-    query: z.string().describe("The search query"),
-    repo: z.enum(INDEXED_REPOS).optional()
-        .describe("Specific repository to search in (format: org-name/repo-name). If not specified, searches all repositories."),
-    limit: z.number().min(1).max(20).default(10).optional()
-        .describe("Maximum number of relevant code chunks to retrieve"),
-};
+function buildSearchCodeInputSchema() {
+    const serverCfg = getServerConfig();
+    const repos = [...new Set(serverCfg.sources.map(s => s.repo))] as [string, ...string[]];
+    return {
+        query: z.string().describe("The search query"),
+        repo: z.enum(repos).optional()
+            .describe("Specific repository to search in (format: org-name/repo-name). If not specified, searches all repositories."),
+        limit: z.number().min(1).max(20).default(10).optional()
+            .describe("Maximum number of relevant code chunks to retrieve"),
+    };
+}
+
+export const searchCodeInputSchema = buildSearchCodeInputSchema();
 
 function formatResults(results: CodeChunkResult[]): string {
     if (results.length === 0) {
@@ -41,7 +47,7 @@ export function registerSearchCodeTool(
         searchCodeInputSchema,
         async ({ query, repo, limit }) => {
             const effectiveLimit = limit ?? 10;
-            const repoUrl: IndexedRepo | undefined = repo;
+            const repoUrl: string | undefined = repo;
 
             try {
                 const embedding = await embeddingClient.embed(query);

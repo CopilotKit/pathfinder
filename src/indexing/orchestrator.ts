@@ -1,11 +1,10 @@
 // Job queue and coordination for indexing pipelines
 
 import { simpleGit } from 'simple-git';
-import { getConfig } from '../config.js';
+import { getConfig, getServerConfig } from '../config.js';
 import { EmbeddingClient } from './embeddings.js';
 import { DocsIndexer } from './docs-indexer.js';
 import { CodeIndexer } from './code-indexer.js';
-import { INDEXED_REPOS } from '../constants.js';
 import {
     getIndexState,
     upsertIndexState,
@@ -13,7 +12,17 @@ import {
     type IndexStatus,
 } from '../db/queries.js';
 
-const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Derive the list of unique repo URLs from YAML sources config
+function getIndexedRepos(): string[] {
+    const serverCfg = getServerConfig();
+    const repos = new Set(serverCfg.sources.map(s => s.repo));
+    return [...repos];
+}
+
+function getStaleThresholdMs(): number {
+    const serverCfg = getServerConfig();
+    return serverCfg.indexing.stale_threshold_hours * 60 * 60 * 1000;
+}
 
 interface Job {
     type: 'full-reindex' | 'incremental-reindex';
@@ -49,7 +58,7 @@ export class IndexingOrchestrator {
         }
 
         // Check code for each repo
-        for (const repoUrl of INDEXED_REPOS) {
+        for (const repoUrl of getIndexedRepos()) {
             const codeState = await getIndexState('code', repoUrl);
             if (!codeState || !codeState.last_commit_sha || codeState.status === 'error') {
                 console.log(`[orchestrator] Code: never indexed or in error state for ${repoUrl} — queuing full reindex`);
@@ -62,9 +71,9 @@ export class IndexingOrchestrator {
         console.log('[orchestrator] All sources previously indexed. Checking remote for changes...');
 
         try {
-            const remoteHead = await this.getRemoteHead(INDEXED_REPOS[0]);
+            const remoteHead = await this.getRemoteHead(getIndexedRepos()[0]);
             const docsChanged = docsState.last_commit_sha !== remoteHead;
-            const codeState = await getIndexState('code', INDEXED_REPOS[0]);
+            const codeState = await getIndexState('code', getIndexedRepos()[0]);
             const codeChanged = codeState?.last_commit_sha !== remoteHead;
 
             if (docsChanged || codeChanged) {
@@ -72,7 +81,7 @@ export class IndexingOrchestrator {
                     `[orchestrator] Remote HEAD ${remoteHead.slice(0, 8)} differs from indexed ` +
                     `(docs: ${docsState.last_commit_sha?.slice(0, 8)}, code: ${codeState?.last_commit_sha?.slice(0, 8)}) — queuing incremental reindex`,
                 );
-                this.queueIncrementalReindex(INDEXED_REPOS[0]);
+                this.queueIncrementalReindex(getIndexedRepos()[0]);
             } else {
                 console.log(`[orchestrator] Index is current at ${remoteHead.slice(0, 8)} — no reindex needed`);
             }
@@ -141,12 +150,13 @@ export class IndexingOrchestrator {
      * the configured UTC hour.  Uses a simple setInterval (no cron library).
      */
     startNightlyReindex(): void {
-        if (!getConfig().autoReindexEnabled) {
+        const serverCfg = getServerConfig();
+        if (!serverCfg.indexing.auto_reindex) {
             console.log('[orchestrator] Nightly reindex disabled');
             return;
         }
 
-        const hour = getConfig().autoReindexCronHour;
+        const hour = serverCfg.indexing.reindex_hour_utc;
         console.log(`[orchestrator] Nightly reindex scheduled at ${hour}:00 UTC`);
 
         // Check every 60 seconds if it's time to run
@@ -174,7 +184,7 @@ export class IndexingOrchestrator {
         if (state.status === 'error') return true;
 
         const age = Date.now() - new Date(state.last_indexed_at).getTime();
-        return age > STALE_THRESHOLD_MS;
+        return age > getStaleThresholdMs();
     }
 
     /**
@@ -209,10 +219,11 @@ export class IndexingOrchestrator {
      */
     private async executeJob(job: Job): Promise<void> {
         const config = getConfig();
+        const serverCfg = getServerConfig();
         const embeddingClient = new EmbeddingClient(
             config.openaiApiKey,
-            config.embeddingModel,
-            config.embeddingDimensions,
+            serverCfg.embedding.model,
+            serverCfg.embedding.dimensions,
         );
 
         if (job.type === 'full-reindex') {
@@ -242,7 +253,7 @@ export class IndexingOrchestrator {
 
         // Index all code repos sequentially
         const codeIndexer = new CodeIndexer(embeddingClient, cloneDir, githubToken);
-        for (const repoUrl of INDEXED_REPOS) {
+        for (const repoUrl of getIndexedRepos()) {
             await this.indexCodeRepoWithState(
                 codeIndexer,
                 repoUrl,

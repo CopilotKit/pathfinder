@@ -1,6 +1,12 @@
-// Centralized environment variable parsing with validation
+// Centralized configuration: env-var secrets + YAML server config.
 
 import 'dotenv/config';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import { ServerConfigSchema, type ServerConfig } from './types.js';
+
+// ── Environment variable config (secrets and runtime settings) ────────────────
 
 export interface Config {
     databaseUrl: string;
@@ -10,22 +16,10 @@ export interface Config {
     port: number;
     nodeEnv: string;
     logLevel: string;
-    embeddingModel: string;
-    embeddingDimensions: number;
     cloneDir: string;
-    autoReindexEnabled: boolean;
-    autoReindexCronHour: number;
 }
 
 let cachedConfig: Config | null = null;
-
-function parseCronHour(value: string | undefined): number {
-    const hour = parseInt(value || '3', 10);
-    if (isNaN(hour) || hour < 0 || hour > 23) {
-        throw new Error(`Invalid AUTO_REINDEX_CRON_HOUR value: ${value}. Must be 0-23.`);
-    }
-    return hour;
-}
 
 function parseConfig(): Config {
     const missing: string[] = [];
@@ -59,11 +53,7 @@ function parseConfig(): Config {
         port,
         nodeEnv: process.env.NODE_ENV || 'development',
         logLevel: process.env.LOG_LEVEL || 'info',
-        embeddingModel: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
-        embeddingDimensions: 1536,
         cloneDir: process.env.CLONE_DIR || '/tmp/mcp-repos',
-        autoReindexEnabled: (process.env.AUTO_REINDEX_ENABLED || 'true').toLowerCase() === 'true',
-        autoReindexCronHour: parseCronHour(process.env.AUTO_REINDEX_CRON_HOUR),
     };
 }
 
@@ -79,3 +69,60 @@ export const config = new Proxy({} as Config, {
         return getConfig()[prop as keyof Config];
     },
 });
+
+// ── YAML server configuration ─────────────────────────────────────────────────
+
+let cachedServerConfig: ServerConfig | null = null;
+
+function resolveConfigPath(): string {
+    const envPath = process.env.MCP_DOCS_CONFIG;
+    if (envPath) {
+        const resolved = resolve(envPath);
+        if (!existsSync(resolved)) {
+            throw new Error(`MCP_DOCS_CONFIG points to ${resolved} but file does not exist.`);
+        }
+        return resolved;
+    }
+
+    const cwdPath = resolve(process.cwd(), 'mcp-docs.yaml');
+    if (existsSync(cwdPath)) {
+        return cwdPath;
+    }
+
+    throw new Error(
+        'No mcp-docs.yaml found. Set MCP_DOCS_CONFIG env var or place mcp-docs.yaml in the working directory.'
+    );
+}
+
+function loadServerConfig(): ServerConfig {
+    const configPath = resolveConfigPath();
+    const raw = readFileSync(configPath, 'utf-8');
+    const parsed = parseYaml(raw);
+
+    const result = ServerConfigSchema.safeParse(parsed);
+    if (!result.success) {
+        const issues = result.error.issues
+            .map(i => `  - ${i.path.join('.')}: ${i.message}`)
+            .join('\n');
+        throw new Error(`Invalid mcp-docs.yaml at ${configPath}:\n${issues}`);
+    }
+
+    // Cross-validate: every tool.source must reference an existing source name
+    const sourceNames = new Set(result.data.sources.map(s => s.name));
+    for (const tool of result.data.tools) {
+        if (!sourceNames.has(tool.source)) {
+            throw new Error(
+                `Tool "${tool.name}" references source "${tool.source}" which is not defined in sources.`
+            );
+        }
+    }
+
+    return result.data;
+}
+
+export function getServerConfig(): ServerConfig {
+    if (!cachedServerConfig) {
+        cachedServerConfig = loadServerConfig();
+    }
+    return cachedServerConfig;
+}

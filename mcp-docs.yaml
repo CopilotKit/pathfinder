@@ -1,0 +1,83 @@
+server:
+  name: copilotkit-docs-mcp
+  version: "1.0.0"
+
+sources:
+  - name: docs
+    type: markdown
+    repo: https://github.com/CopilotKit/CopilotKit.git
+    path: docs/content/docs/
+    base_url: https://docs.copilotkit.ai/
+    url_derivation:
+      strip_prefix: "docs/content/docs/"
+      strip_suffix: ".mdx"
+      strip_route_groups: true
+      strip_index: true
+    file_patterns:
+      - "**/*.mdx"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+  - name: code
+    type: code
+    repo: https://github.com/CopilotKit/CopilotKit.git
+    path: "."
+    file_patterns:
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+      - "**/*.jsx"
+      - "**/*.py"
+    exclude_patterns:
+      - "packages/v1/**"
+      - "packages/v1-*/**"
+      - "**/test/**"
+      - "**/tests/**"
+      - "**/__tests__/**"
+      - "**/*.test.*"
+      - "**/*.spec.*"
+    skip_dirs:
+      - node_modules
+      - dist
+      - build
+      - .git
+    max_file_size: 102400
+    chunk:
+      target_lines: 80
+      overlap_lines: 10
+
+tools:
+  - name: search-docs
+    description: "Search the server's documentation to retrieve relevant information. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+  - name: search-code
+    description: "Search the server's indexed codebase to find relevant code snippets and implementations. Use this tool when you need to understand how something is implemented, find code examples, or locate specific functionality in the codebase. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: code
+    default_limit: 10
+    max_limit: 20
+    result_format: code
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536
+
+indexing:
+  auto_reindex: true
+  reindex_hour_utc: 3
+  stale_threshold_hours: 24
+
+webhook:
+  repo_sources:
+    "CopilotKit/CopilotKit":
+      - docs
+      - code
+  path_triggers:
+    docs:
+      - "docs/"
+    code: []

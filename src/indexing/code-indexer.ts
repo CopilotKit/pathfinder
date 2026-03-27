@@ -10,7 +10,7 @@ import {
     deleteCodeChunksByFile,
     type CodeChunk,
 } from '../db/queries.js';
-import { INDEXED_REPOS } from '../constants.js';
+import { getServerConfig } from '../config.js';
 import { shouldIndex } from './path-filter.js';
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.py']);
@@ -133,11 +133,12 @@ export class CodeIndexer {
      * Full re-index of all repos (sequentially to avoid memory issues).
      */
     async fullIndex(): Promise<void> {
+        const indexedRepos = [...new Set(getServerConfig().sources.map(s => s.repo))];
         console.log(
-            `[code-indexer] Starting full index of ${INDEXED_REPOS.length} repos`,
+            `[code-indexer] Starting full index of ${indexedRepos.length} repos`,
         );
 
-        for (const repoUrl of INDEXED_REPOS) {
+        for (const repoUrl of indexedRepos) {
             try {
                 await this.indexRepo(repoUrl);
             } catch (err) {
