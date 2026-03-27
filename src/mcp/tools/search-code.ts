@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { EmbeddingClient } from "../../indexing/embeddings.js";
-import { searchCodeChunks, CodeChunkResult } from "../../db/queries.js";
+import { searchChunks } from "../../db/queries.js";
+import type { ChunkResult } from "../../types.js";
 import { getServerConfig } from "../../config.js";
 
 function buildSearchCodeInputSchema() {
@@ -18,7 +19,7 @@ function buildSearchCodeInputSchema() {
 
 export const searchCodeInputSchema = buildSearchCodeInputSchema();
 
-function formatResults(results: CodeChunkResult[]): string {
+function formatResults(results: ChunkResult[]): string {
     if (results.length === 0) {
         return "No results found.";
     }
@@ -51,7 +52,7 @@ export function registerSearchCodeTool(
 
             try {
                 const embedding = await embeddingClient.embed(query);
-                const results = await searchCodeChunks(embedding, effectiveLimit, repoUrl);
+                const results = await searchChunks(embedding, effectiveLimit, repoUrl);
 
                 return {
                     content: [

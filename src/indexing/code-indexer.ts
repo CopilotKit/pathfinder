@@ -6,10 +6,10 @@ import { simpleGit, type SimpleGit } from 'simple-git';
 import { chunkCode } from './chunking/code.js';
 import { EmbeddingClient } from './embeddings.js';
 import {
-    upsertCodeChunks,
-    deleteCodeChunksByFile,
-    type CodeChunk,
+    upsertChunks,
+    deleteChunksByFile,
 } from '../db/queries.js';
+import type { Chunk } from '../types.js';
 import { getServerConfig } from '../config.js';
 import { shouldIndex } from './path-filter.js';
 
@@ -233,7 +233,7 @@ export class CodeIndexer {
                 console.log(
                     `[code-indexer] Deleting chunks for removed file: ${relPath}`,
                 );
-                await deleteCodeChunksByFile(repoUrl, relPath);
+                await deleteChunksByFile(repoUrl, relPath);
             }
         }
 
@@ -316,7 +316,8 @@ export class CodeIndexer {
         const texts = codeChunks.map((c) => c.content);
         const embeddings = await this.embeddingClient.embedBatch(texts);
 
-        const dbChunks: CodeChunk[] = codeChunks.map((chunk, i) => ({
+        const dbChunks: Chunk[] = codeChunks.map((chunk, i) => ({
+            source_name: repoUrl,
             repo_url: repoUrl,
             file_path: relPath,
             content: chunk.content,
@@ -329,7 +330,7 @@ export class CodeIndexer {
             commit_sha: commitSha,
         }));
 
-        await upsertCodeChunks(dbChunks);
+        await upsertChunks(dbChunks);
         console.log(
             `[code-indexer] Indexed ${relPath} (${dbChunks.length} chunks)`,
         );

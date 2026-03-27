@@ -150,8 +150,8 @@ app.get("/health", async (_req: Request, res: Response) => {
             started_at: startedAt.toISOString(),
             indexing: (orchestratorRef as IndexingOrchestrator | null)?.isIndexing() ?? false,
             index: {
-                doc_chunks: stats.docChunks,
-                code_chunks: stats.codeChunks,
+                total_chunks: stats.totalChunks,
+                by_source: stats.bySource,
                 indexed_repos: stats.indexedRepos,
                 sources: stats.indexStates.map((s) => ({
                     type: s.source_type,

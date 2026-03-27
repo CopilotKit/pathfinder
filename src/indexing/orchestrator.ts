@@ -8,9 +8,8 @@ import { CodeIndexer } from './code-indexer.js';
 import {
     getIndexState,
     upsertIndexState,
-    type IndexState,
-    type IndexStatus,
 } from '../db/queries.js';
+import type { IndexState, IndexStatus } from '../types.js';
 
 // Derive the list of unique repo URLs from YAML sources config
 function getIndexedRepos(): string[] {

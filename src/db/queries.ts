@@ -1,144 +1,61 @@
 import pgvector from "pgvector";
 import { getPool } from "./client.js";
+import type { Chunk, ChunkResult, IndexState, IndexStatus } from "../types.js";
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface DocChunk {
-    source_url: string;
-    title: string;
-    content: string;
-    embedding: number[];
-    file_path: string;
-    chunk_index: number;
-    metadata?: Record<string, unknown>;
-    commit_sha?: string;
-}
-
-export interface DocChunkResult {
-    id: number;
-    source_url: string;
-    title: string;
-    content: string;
-    file_path: string;
-    similarity: number;
-}
-
-export interface CodeChunk {
-    repo_url: string;
-    file_path: string;
-    content: string;
-    embedding: number[];
-    start_line: number;
-    end_line: number;
-    language: string;
-    chunk_index: number;
-    metadata?: Record<string, unknown>;
-    commit_sha?: string;
-}
-
-export interface CodeChunkResult {
-    id: number;
-    repo_url: string;
-    file_path: string;
-    content: string;
-    start_line: number;
-    end_line: number;
-    language: string;
-    similarity: number;
-}
-
-export type IndexStatus = 'idle' | 'indexing' | 'error';
-
-export interface IndexState {
-    source_type: string;
-    source_key: string;
-    last_commit_sha?: string | null;
-    last_indexed_at?: Date | null;
-    status?: IndexStatus;
-    error_message?: string | null;
-}
-
-// ---------------------------------------------------------------------------
-// Search queries
+// Search
 // ---------------------------------------------------------------------------
 
 /**
- * Cosine similarity search on doc_chunks.
- * Returns results ordered by similarity (highest first).
+ * Cosine similarity search on the unified chunks table.
+ * Optionally filtered by source_name. Returns results ordered by similarity
+ * (highest first).
  */
-export async function searchDocChunks(
+export async function searchChunks(
     embedding: number[],
     limit: number,
-): Promise<DocChunkResult[]> {
-    const pool = getPool();
-    const sql = `
-        SELECT
-            id,
-            source_url,
-            title,
-            content,
-            file_path,
-            1 - (embedding <=> $1) AS similarity
-        FROM doc_chunks
-        ORDER BY embedding <=> $1
-        LIMIT $2
-    `;
-    const { rows } = await pool.query(sql, [pgvector.toSql(embedding), limit]);
-    return rows.map((r: Record<string, unknown>) => ({
-        id: r.id as number,
-        source_url: r.source_url as string,
-        title: r.title as string,
-        content: r.content as string,
-        file_path: r.file_path as string,
-        similarity: parseFloat(r.similarity as string),
-    }));
-}
-
-/**
- * Cosine similarity search on code_chunks, optionally filtered by repo_url.
- * Returns results ordered by similarity (highest first).
- */
-export async function searchCodeChunks(
-    embedding: number[],
-    limit: number,
-    repoUrl?: string,
-): Promise<CodeChunkResult[]> {
+    sourceName?: string,
+): Promise<ChunkResult[]> {
     const pool = getPool();
 
     let sql: string;
     let params: unknown[];
 
-    if (repoUrl) {
+    if (sourceName) {
         sql = `
             SELECT
                 id,
+                source_name,
+                source_url,
+                title,
+                content,
                 repo_url,
                 file_path,
-                content,
                 start_line,
                 end_line,
                 language,
                 1 - (embedding <=> $1) AS similarity
-            FROM code_chunks
-            WHERE repo_url = $2
+            FROM chunks
+            WHERE source_name = $2
             ORDER BY embedding <=> $1
             LIMIT $3
         `;
-        params = [pgvector.toSql(embedding), repoUrl, limit];
+        params = [pgvector.toSql(embedding), sourceName, limit];
     } else {
         sql = `
             SELECT
                 id,
+                source_name,
+                source_url,
+                title,
+                content,
                 repo_url,
                 file_path,
-                content,
                 start_line,
                 end_line,
                 language,
                 1 - (embedding <=> $1) AS similarity
-            FROM code_chunks
+            FROM chunks
             ORDER BY embedding <=> $1
             LIMIT $2
         `;
@@ -148,25 +65,28 @@ export async function searchCodeChunks(
     const { rows } = await pool.query(sql, params);
     return rows.map((r: Record<string, unknown>) => ({
         id: r.id as number,
+        source_name: r.source_name as string,
+        source_url: (r.source_url as string) ?? null,
+        title: (r.title as string) ?? null,
+        content: r.content as string,
         repo_url: r.repo_url as string,
         file_path: r.file_path as string,
-        content: r.content as string,
-        start_line: r.start_line as number,
-        end_line: r.end_line as number,
-        language: r.language as string,
+        start_line: (r.start_line as number) ?? null,
+        end_line: (r.end_line as number) ?? null,
+        language: (r.language as string) ?? null,
         similarity: parseFloat(r.similarity as string),
     }));
 }
 
 // ---------------------------------------------------------------------------
-// Upsert queries
+// Upsert
 // ---------------------------------------------------------------------------
 
 /**
- * Batch upsert doc chunks. Uses ON CONFLICT to update existing rows
- * matched by (file_path, chunk_index).
+ * Batch upsert chunks. Uses ON CONFLICT to update existing rows matched by
+ * (source_name, file_path, chunk_index).
  */
-export async function upsertDocChunks(chunks: DocChunk[]): Promise<void> {
+export async function upsertChunks(chunks: Chunk[]): Promise<void> {
     if (chunks.length === 0) return;
 
     const pool = getPool();
@@ -176,63 +96,18 @@ export async function upsertDocChunks(chunks: DocChunk[]): Promise<void> {
         await client.query("BEGIN");
 
         const sql = `
-            INSERT INTO doc_chunks
-                (source_url, title, content, embedding, file_path, chunk_index, metadata, commit_sha, indexed_at)
+            INSERT INTO chunks
+                (source_name, source_url, title, content, embedding, repo_url,
+                 file_path, start_line, end_line, language, chunk_index,
+                 metadata, commit_sha, indexed_at)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-            ON CONFLICT (file_path, chunk_index) DO UPDATE SET
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+            ON CONFLICT (source_name, file_path, chunk_index) DO UPDATE SET
                 source_url = EXCLUDED.source_url,
                 title      = EXCLUDED.title,
                 content    = EXCLUDED.content,
                 embedding  = EXCLUDED.embedding,
-                metadata   = EXCLUDED.metadata,
-                commit_sha = EXCLUDED.commit_sha,
-                indexed_at = NOW()
-        `;
-
-        for (const chunk of chunks) {
-            await client.query(sql, [
-                chunk.source_url,
-                chunk.title,
-                chunk.content,
-                pgvector.toSql(chunk.embedding),
-                chunk.file_path,
-                chunk.chunk_index,
-                JSON.stringify(chunk.metadata ?? {}),
-                chunk.commit_sha ?? null,
-            ]);
-        }
-
-        await client.query("COMMIT");
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-
-/**
- * Batch upsert code chunks. Uses ON CONFLICT to update existing rows
- * matched by (repo_url, file_path, chunk_index).
- */
-export async function upsertCodeChunks(chunks: CodeChunk[]): Promise<void> {
-    if (chunks.length === 0) return;
-
-    const pool = getPool();
-    const client = await pool.connect();
-
-    try {
-        await client.query("BEGIN");
-
-        const sql = `
-            INSERT INTO code_chunks
-                (repo_url, file_path, content, embedding, start_line, end_line, language, chunk_index, metadata, commit_sha, indexed_at)
-            VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-            ON CONFLICT (repo_url, file_path, chunk_index) DO UPDATE SET
-                content    = EXCLUDED.content,
-                embedding  = EXCLUDED.embedding,
+                repo_url   = EXCLUDED.repo_url,
                 start_line = EXCLUDED.start_line,
                 end_line   = EXCLUDED.end_line,
                 language   = EXCLUDED.language,
@@ -243,13 +118,16 @@ export async function upsertCodeChunks(chunks: CodeChunk[]): Promise<void> {
 
         for (const chunk of chunks) {
             await client.query(sql, [
-                chunk.repo_url,
-                chunk.file_path,
+                chunk.source_name,
+                chunk.source_url ?? null,
+                chunk.title ?? null,
                 chunk.content,
                 pgvector.toSql(chunk.embedding),
-                chunk.start_line,
-                chunk.end_line,
-                chunk.language,
+                chunk.repo_url,
+                chunk.file_path,
+                chunk.start_line ?? null,
+                chunk.end_line ?? null,
+                chunk.language ?? null,
                 chunk.chunk_index,
                 JSON.stringify(chunk.metadata ?? {}),
                 chunk.commit_sha ?? null,
@@ -266,33 +144,33 @@ export async function upsertCodeChunks(chunks: CodeChunk[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Delete queries
+// Delete
 // ---------------------------------------------------------------------------
 
 /**
- * Delete all doc chunks for a given file path.
+ * Delete all chunks for a given source + file path.
  */
-export async function deleteDocChunksByFile(filePath: string): Promise<void> {
-    const pool = getPool();
-    await pool.query("DELETE FROM doc_chunks WHERE file_path = $1", [filePath]);
-}
-
-/**
- * Delete all code chunks for a given repo + file path.
- */
-export async function deleteCodeChunksByFile(
-    repoUrl: string,
+export async function deleteChunksByFile(
+    sourceName: string,
     filePath: string,
 ): Promise<void> {
     const pool = getPool();
     await pool.query(
-        "DELETE FROM code_chunks WHERE repo_url = $1 AND file_path = $2",
-        [repoUrl, filePath],
+        "DELETE FROM chunks WHERE source_name = $1 AND file_path = $2",
+        [sourceName, filePath],
     );
 }
 
+/**
+ * Delete all chunks for a source (useful for full reindex).
+ */
+export async function deleteChunksBySource(sourceName: string): Promise<void> {
+    const pool = getPool();
+    await pool.query("DELETE FROM chunks WHERE source_name = $1", [sourceName]);
+}
+
 // ---------------------------------------------------------------------------
-// Index state queries
+// Index state
 // ---------------------------------------------------------------------------
 
 /**
@@ -317,7 +195,7 @@ export async function getIndexState(
         source_key: row.source_key,
         last_commit_sha: row.last_commit_sha,
         last_indexed_at: row.last_indexed_at,
-        status: row.status,
+        status: row.status as IndexStatus,
         error_message: row.error_message,
     };
 }
@@ -353,8 +231,8 @@ export async function upsertIndexState(state: IndexState): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export interface IndexStats {
-    docChunks: number;
-    codeChunks: number;
+    totalChunks: number;
+    bySource: Array<{ source_name: string; count: number }>;
     indexedRepos: number;
     indexStates: IndexState[];
 }
@@ -365,18 +243,23 @@ export interface IndexStats {
 export async function getIndexStats(): Promise<IndexStats> {
     const pool = getPool();
 
-    const [docCount, codeCount, repoCount, states] = await Promise.all([
-        pool.query("SELECT count(*)::int AS count FROM doc_chunks"),
-        pool.query("SELECT count(*)::int AS count FROM code_chunks"),
-        pool.query("SELECT count(DISTINCT repo_url)::int AS count FROM code_chunks"),
+    const [totalCount, bySource, repoCount, states] = await Promise.all([
+        pool.query("SELECT count(*)::int AS count FROM chunks"),
+        pool.query(
+            "SELECT source_name, count(*)::int AS count FROM chunks GROUP BY source_name ORDER BY source_name",
+        ),
+        pool.query("SELECT count(DISTINCT repo_url)::int AS count FROM chunks"),
         pool.query(
             "SELECT source_type, source_key, last_commit_sha, last_indexed_at, status, error_message FROM index_state ORDER BY source_type, source_key",
         ),
     ]);
 
     return {
-        docChunks: docCount.rows[0]?.count ?? 0,
-        codeChunks: codeCount.rows[0]?.count ?? 0,
+        totalChunks: totalCount.rows[0]?.count ?? 0,
+        bySource: bySource.rows.map((r: Record<string, unknown>) => ({
+            source_name: r.source_name as string,
+            count: r.count as number,
+        })),
         indexedRepos: repoCount.rows[0]?.count ?? 0,
         indexStates: states.rows.map((r: Record<string, unknown>) => ({
             source_type: r.source_type as string,

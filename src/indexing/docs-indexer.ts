@@ -6,10 +6,10 @@ import { simpleGit, type SimpleGit } from 'simple-git';
 import { chunkMarkdown } from './chunking/markdown.js';
 import { EmbeddingClient } from './embeddings.js';
 import {
-    upsertDocChunks,
-    deleteDocChunksByFile,
-    type DocChunk,
+    upsertChunks,
+    deleteChunksByFile,
 } from '../db/queries.js';
+import type { Chunk } from '../types.js';
 import { shouldIndex } from './path-filter.js';
 
 const DOCS_REPO_URL = 'https://github.com/CopilotKit/CopilotKit.git';
@@ -190,7 +190,7 @@ export class DocsIndexer {
         // Delete chunks for removed files
         for (const relPath of deletedFiles) {
             console.log(`[docs-indexer] Deleting chunks for removed file: ${relPath}`);
-            await deleteDocChunksByFile(relPath);
+            await deleteChunksByFile('docs', relPath);
         }
 
         // Re-index changed (non-deleted) files
@@ -262,11 +262,13 @@ export class DocsIndexer {
         const embeddings = await this.embeddingClient.embedBatch(texts);
         const sourceUrl = filePathToSourceUrl(relPath);
 
-        const docChunks: DocChunk[] = markdownChunks.map((chunk, i) => ({
+        const docChunks: Chunk[] = markdownChunks.map((chunk, i) => ({
+            source_name: 'docs',
             source_url: sourceUrl,
             title: chunk.title,
             content: chunk.content,
             embedding: embeddings[i],
+            repo_url: DOCS_REPO_URL,
             file_path: relPath,
             chunk_index: chunk.chunkIndex,
             metadata: {
@@ -275,7 +277,7 @@ export class DocsIndexer {
             commit_sha: commitSha,
         }));
 
-        await upsertDocChunks(docChunks);
+        await upsertChunks(docChunks);
         console.log(
             `[docs-indexer] Indexed ${relPath} (${docChunks.length} chunks)`,
         );

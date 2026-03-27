@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { EmbeddingClient } from "../../indexing/embeddings.js";
-import { searchDocChunks, DocChunkResult } from "../../db/queries.js";
+import { searchChunks } from "../../db/queries.js";
+import type { ChunkResult } from "../../types.js";
 
 export const searchDocsInputSchema = {
     query: z.string().describe("The search query"),
@@ -9,7 +10,7 @@ export const searchDocsInputSchema = {
         .describe("Maximum number of relevant document chunks to retrieve"),
 };
 
-function formatResults(results: DocChunkResult[]): string {
+function formatResults(results: ChunkResult[]): string {
     if (results.length === 0) {
         return "No results found.";
     }
@@ -41,7 +42,7 @@ export function registerSearchDocsTool(
 
             try {
                 const embedding = await embeddingClient.embed(query);
-                const results = await searchDocChunks(embedding, effectiveLimit);
+                const results = await searchChunks(embedding, effectiveLimit);
 
                 return {
                     content: [
