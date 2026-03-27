@@ -54,10 +54,12 @@ function loadConfig(): PathFilterConfig {
 function globToRegex(pattern: string): RegExp {
     let re = pattern
         .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex chars (except * and ?)
-        .replace(/\*\*/g, '{{GLOBSTAR}}')       // placeholder for **
-        .replace(/\*/g, '[^/]*')                 // * = anything except /
-        .replace(/\?/g, '[^/]')                  // ? = single char except /
-        .replace(/\{\{GLOBSTAR\}\}/g, '.*');     // ** = anything including /
+        .replace(/\*\*\//g, '{{GLOBSTAR_SLASH}}') // **/ = any path prefix (including empty)
+        .replace(/\*\*/g, '{{GLOBSTAR}}')          // ** alone = anything
+        .replace(/\*/g, '[^/]*')                    // * = anything except /
+        .replace(/\?/g, '[^/]')                     // ? = single char except /
+        .replace(/\{\{GLOBSTAR_SLASH\}\}/g, '(?:.*/)?') // **/ = optional path prefix
+        .replace(/\{\{GLOBSTAR\}\}/g, '.*');             // ** = anything including /
 
     return new RegExp(`^${re}$`);
 }
