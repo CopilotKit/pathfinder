@@ -1,6 +1,5 @@
-// Job queue and coordination for indexing pipelines
-// NOTE: This orchestrator still uses CopilotKit-specific logic (docs vs code split,
-// hardcoded source keys). Phase 6 will generalize it to iterate over all configured sources.
+// Job queue and coordination for indexing pipelines.
+// Fully config-driven: iterates over all sources defined in mcp-docs.yaml.
 
 import { simpleGit } from 'simple-git';
 import { getConfig, getServerConfig } from '../config.js';
@@ -17,13 +16,6 @@ function getIndexedRepos(): string[] {
     const serverCfg = getServerConfig();
     const repos = new Set(serverCfg.sources.map(s => s.repo));
     return [...repos];
-}
-
-/**
- * Find a source config by name from the YAML config.
- */
-function getSourceByName(name: string): SourceConfig | undefined {
-    return getServerConfig().sources.find(s => s.name === name);
 }
 
 /**
@@ -63,8 +55,9 @@ export class IndexingOrchestrator {
     async checkAndIndex(): Promise<void> {
         console.log('[orchestrator] Checking index state...');
 
-        // Check all configured sources
         const serverCfg = getServerConfig();
+
+        // Check all configured sources for missing/errored state
         for (const source of serverCfg.sources) {
             const state = await getIndexState(source.type, source.name);
             if (!state || !state.last_commit_sha || state.status === 'error') {
@@ -74,41 +67,43 @@ export class IndexingOrchestrator {
             }
         }
 
-        // All sources have been indexed before. Check if remote has new commits.
-        console.log('[orchestrator] All sources previously indexed. Checking remote for changes...');
+        // All sources have been indexed before. Check each unique repo for changes.
+        console.log('[orchestrator] All sources previously indexed. Checking remotes for changes...');
 
-        try {
-            const firstRepo = getIndexedRepos()[0];
-            const remoteHead = await this.getRemoteHead(firstRepo);
-            const sources = getSourcesByRepo(firstRepo);
+        const repos = getIndexedRepos();
+        for (const repoUrl of repos) {
+            try {
+                const remoteHead = await this.getRemoteHead(repoUrl);
+                const sources = getSourcesByRepo(repoUrl);
 
-            let anyChanged = false;
-            for (const source of sources) {
-                const state = await getIndexState(source.type, source.name);
-                if (state?.last_commit_sha !== remoteHead) {
-                    anyChanged = true;
-                    break;
+                let anyChanged = false;
+                for (const source of sources) {
+                    const state = await getIndexState(source.type, source.name);
+                    if (state?.last_commit_sha !== remoteHead) {
+                        anyChanged = true;
+                        break;
+                    }
                 }
-            }
 
-            if (anyChanged) {
-                console.log(
-                    `[orchestrator] Remote HEAD ${remoteHead.slice(0, 8)} differs from indexed — queuing incremental reindex`,
-                );
-                this.queueIncrementalReindex(firstRepo);
-            } else {
-                console.log(`[orchestrator] Index is current at ${remoteHead.slice(0, 8)} — no reindex needed`);
-            }
-        } catch (err) {
-            // If we can't check remote, fall back to age-based staleness
-            console.warn('[orchestrator] Failed to check remote HEAD, falling back to age check:', err);
-            const firstSource = serverCfg.sources[0];
-            const firstState = await getIndexState(firstSource.type, firstSource.name);
-            if (this.isStale(firstState)) {
-                console.log('[orchestrator] Index is stale (>24h) — queuing full reindex');
-                this.queueFullReindex();
-            } else {
-                console.log('[orchestrator] Index appears fresh, skipping');
+                if (anyChanged) {
+                    console.log(
+                        `[orchestrator] Remote HEAD ${remoteHead.slice(0, 8)} for ${repoUrl} differs from indexed — queuing incremental reindex`,
+                    );
+                    this.queueIncrementalReindex(repoUrl);
+                } else {
+                    console.log(`[orchestrator] ${repoUrl} is current at ${remoteHead.slice(0, 8)} — no reindex needed`);
+                }
+            } catch (err) {
+                // If we can't check remote, fall back to age-based staleness
+                console.warn(`[orchestrator] Failed to check remote HEAD for ${repoUrl}, falling back to age check:`, err);
+                const repoSources = getSourcesByRepo(repoUrl);
+                const firstState = await getIndexState(repoSources[0].type, repoSources[0].name);
+                if (this.isStale(firstState)) {
+                    console.log(`[orchestrator] Index for ${repoUrl} is stale (>24h) — queuing full reindex`);
+                    this.queueFullReindex();
+                } else {
+                    console.log(`[orchestrator] Index for ${repoUrl} appears fresh, skipping`);
+                }
             }
         }
     }

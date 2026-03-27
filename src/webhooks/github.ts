@@ -1,8 +1,10 @@
-// GitHub webhook handler for push-event-driven incremental re-indexing
+// GitHub webhook handler for push-event-driven incremental re-indexing.
+// Fully config-driven: uses webhook.repo_sources and webhook.path_triggers
+// from mcp-docs.yaml to determine which pushes trigger reindexing.
 
 import crypto from "node:crypto";
 import type { Request, Response } from "express";
-import { getConfig } from "../config.js";
+import { getConfig, getServerConfig } from "../config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,13 +30,12 @@ interface PushPayload {
 
 /**
  * Minimal interface for the orchestrator dependency.  The full
- * IndexingOrchestrator lives in ../indexing/orchestrator.ts (Task 5) — we only
+ * IndexingOrchestrator lives in ../indexing/orchestrator.ts — we only
  * depend on the subset we actually call so the webhook handler can function
- * even while the orchestrator is still under development.
+ * independently.
  */
 export interface ReindexOrchestrator {
     queueIncrementalReindex(repoUrl: string): void;
-    queueDocsReindex?(repoUrl: string): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,10 +65,18 @@ function isDefaultBranchPush(payload: PushPayload): boolean {
     return branch === payload.repository.default_branch;
 }
 
-function touchesDocs(payload: PushPayload): boolean {
+/**
+ * Check if any committed files match any of the given path prefixes.
+ * An empty prefixes array means "match everything" (no path filtering).
+ */
+function touchesPaths(payload: PushPayload, prefixes: string[]): boolean {
+    if (prefixes.length === 0) return true;
+
     for (const commit of payload.commits) {
         const allPaths = [...commit.added, ...commit.modified, ...commit.removed];
-        if (allPaths.some((p) => p.startsWith("docs/"))) return true;
+        if (allPaths.some((p) => prefixes.some((prefix) => p.startsWith(prefix)))) {
+            return true;
+        }
     }
     return false;
 }
@@ -117,28 +126,46 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
             return;
         }
 
+        const repoFullName = payload.repository.full_name;
         const repoUrl = payload.repository.clone_url;
         const sha = payload.after;
 
+        // -- Config-driven dispatch ----------------------------------------
+        const webhookCfg = getServerConfig().webhook;
+        const sourceNames = webhookCfg?.repo_sources?.[repoFullName] ?? [];
+
+        if (sourceNames.length === 0) {
+            console.log(`[webhook] Push to ${repoFullName} at ${sha.slice(0, 8)} — repo not in webhook config, ignoring`);
+            res.status(200).json({ ignored: true, reason: "repo not in webhook config" });
+            return;
+        }
+
+        // Check path triggers for each source. If any source's triggers match
+        // (or it has no triggers, meaning "match all"), queue a reindex.
+        let shouldReindex = false;
+        for (const sourceName of sourceNames) {
+            const triggers = webhookCfg?.path_triggers?.[sourceName] ?? [];
+            if (touchesPaths(payload, triggers)) {
+                shouldReindex = true;
+                break; // one reindex covers all sources from the same repo
+            }
+        }
+
+        if (!shouldReindex) {
+            console.log(
+                `[webhook] Push to ${repoFullName} at ${sha.slice(0, 8)} — ` +
+                `no path triggers matched, ignoring`,
+            );
+            res.status(200).json({ ignored: true, reason: "no path triggers matched" });
+            return;
+        }
+
         console.log(
-            `[webhook] Push to ${payload.repository.full_name} ` +
+            `[webhook] Push to ${repoFullName} ` +
             `(${payload.repository.default_branch}) at ${sha.slice(0, 8)} — queuing reindex`,
         );
 
-        // -- Dispatch reindexing (fire-and-forget) -------------------------
         orchestrator.queueIncrementalReindex(repoUrl);
-
-        // For the CopilotKit/CopilotKit repo, also queue a docs reindex when
-        // files under docs/ were touched.
-        if (
-            payload.repository.full_name === "CopilotKit/CopilotKit" &&
-            touchesDocs(payload) &&
-            orchestrator.queueDocsReindex
-        ) {
-            console.log("[webhook] docs/ changed in CopilotKit/CopilotKit — queuing docs reindex");
-            orchestrator.queueDocsReindex(repoUrl);
-        }
-
         res.status(200).json({ queued: true });
     };
 }
@@ -154,17 +181,12 @@ function createStubOrchestrator(): ReindexOrchestrator {
         queueIncrementalReindex(repoUrl: string) {
             console.log(`[webhook/stub] Would queue incremental reindex for ${repoUrl}`);
         },
-        queueDocsReindex(repoUrl: string) {
-            console.log(`[webhook/stub] Would queue docs reindex for ${repoUrl}`);
-        },
     };
 }
 
 async function getLazyOrchestrator(): Promise<ReindexOrchestrator> {
     if (!_lazyOrchestrator) {
         try {
-            // Dynamic import with runtime check — the orchestrator module may
-            // not export IndexingOrchestrator yet (Task 5).
             const mod = await import("../indexing/orchestrator.js") as Record<string, unknown>;
             if (typeof mod.IndexingOrchestrator === "function") {
                 _lazyOrchestrator = new (mod.IndexingOrchestrator as new () => ReindexOrchestrator)();
