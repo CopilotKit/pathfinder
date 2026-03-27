@@ -1,8 +1,7 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { EmbeddingClient } from "../indexing/embeddings.js";
-import { getConfig, getServerConfig } from "../config.js";
-import { registerSearchDocsTool } from "./tools/search-docs.js";
-import { registerSearchCodeTool } from "./tools/search-code.js";
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { EmbeddingClient } from '../indexing/embeddings.js';
+import { getConfig, getServerConfig } from '../config.js';
+import { registerSearchTool } from './tools/search.js';
 
 /**
  * Creates a new McpServer instance with all tools registered.
@@ -11,6 +10,7 @@ import { registerSearchCodeTool } from "./tools/search-code.js";
 export function createMcpServer(): McpServer {
     const cfg = getConfig();
     const serverCfg = getServerConfig();
+
     const embeddingClient = new EmbeddingClient(
         cfg.openaiApiKey,
         serverCfg.embedding.model,
@@ -22,8 +22,9 @@ export function createMcpServer(): McpServer {
         version: serverCfg.server.version,
     });
 
-    registerSearchDocsTool(server, embeddingClient);
-    registerSearchCodeTool(server, embeddingClient);
+    for (const tool of serverCfg.tools) {
+        registerSearchTool(server, embeddingClient, tool);
+    }
 
     return server;
 }
