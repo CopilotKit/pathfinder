@@ -99,7 +99,7 @@ export class IndexingOrchestrator {
             url = repoUrl.replace('https://github.com/', `https://x-access-token:${config.githubToken}@github.com/`);
         }
         const git = simpleGit();
-        const result = await git.listRemote(['--refs', 'HEAD', url]);
+        const result = await git.listRemote([url, 'HEAD']);
         const sha = result.split('\t')[0]?.trim();
         if (!sha) throw new Error(`Could not resolve HEAD for ${repoUrl}`);
         return sha;
