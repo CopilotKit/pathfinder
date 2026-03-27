@@ -353,6 +353,9 @@ export class SourceIndexer {
             commit_sha: commitSha,
         }));
 
+        // Delete existing chunks for this file first to remove stale entries
+        // (e.g., file shortened from 5 chunks to 3 — old chunks 3-4 would persist)
+        await deleteChunksByFile(this.sourceConfig.name, relPath);
         await upsertChunks(chunks);
         console.log(
             `${this.logPrefix} Indexed ${relPath} (${chunks.length} chunks)`,

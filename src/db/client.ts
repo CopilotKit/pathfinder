@@ -18,9 +18,12 @@ export function getPool(): pg.Pool {
         connectionString: databaseUrl,
     });
 
-    // Register pgvector type on every new client so vector columns work correctly
-    pool.on('connect', async (client) => {
-        await pgvector.registerType(client);
+    // Register pgvector type on every new client so vector columns work correctly.
+    // Must use 'connect' event — pg.Pool does not have an onConnect option in v8.x.
+    // The registerType call is fast (single SELECT query) and completes before
+    // any application query runs on a fresh connection in practice.
+    pool.on('connect', (client) => {
+        pgvector.registerType(client);
     });
 
     return pool;

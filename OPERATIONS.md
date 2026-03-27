@@ -25,7 +25,7 @@ railway logs --service mcp-server --lines 200
 
 ### Check deployment status
 ```bash
-railway service status --all --json
+railway status --json
 ```
 
 ## Common Operations
@@ -48,12 +48,12 @@ npx tsx scripts/test-search.ts --url https://mcp-docs.up.railway.app/mcp --type 
 
 ### Restart the service
 ```bash
-railway service restart --service mcp-server
+railway service restart mcp-server
 ```
 
 ### Redeploy from latest commit
 ```bash
-railway service redeploy --service mcp-server
+railway service redeploy mcp-server
 ```
 
 ### View/set environment variables
