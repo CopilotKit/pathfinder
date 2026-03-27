@@ -198,10 +198,10 @@ export class CodeIndexer {
             .map((f) => f.trim())
             .filter((f) => f.length > 0);
 
-        // Filter to indexable source files
+        // Filter to indexable source files (extension check + path filter)
         const sourceChanged = changedFiles.filter((f) => {
             const ext = path.extname(f);
-            return SOURCE_EXTENSIONS.has(ext) && !f.endsWith('.min.js');
+            return SOURCE_EXTENSIONS.has(ext) && !f.endsWith('.min.js') && shouldIndex(f, 'code');
         });
 
         if (sourceChanged.length === 0) {
