@@ -43,6 +43,9 @@ export class IndexingOrchestrator {
     // Per-source mutex: prevents concurrent indexing of the same source
     private activeSources = new Set<string>();
 
+    // Track last nightly reindex date to prevent drift-based duplicate triggers
+    private lastReindexDate: string | null = null;
+
     constructor() {
         // No-op — all setup happens lazily via getConfig()
     }
@@ -57,20 +60,40 @@ export class IndexingOrchestrator {
 
         const serverCfg = getServerConfig();
 
-        // Check all configured sources for missing/errored state
+        // Check all configured sources for missing/errored state.
+        // Queue individual sources that need reindexing rather than triggering a full reindex of everything.
+        const sourcesNeedingFullReindex: SourceConfig[] = [];
+        const sourcesOk: SourceConfig[] = [];
         for (const source of serverCfg.sources) {
             const state = await getIndexState(source.type, source.name);
             if (!state || !state.last_commit_sha || state.status === 'error') {
-                console.log(`[orchestrator] ${source.name}: never indexed or in error state — queuing full reindex`);
-                this.queueFullReindex();
-                return;
+                console.log(`[orchestrator] ${source.name}: never indexed or in error state — will queue for reindex`);
+                sourcesNeedingFullReindex.push(source);
+            } else {
+                sourcesOk.push(source);
             }
         }
 
-        // All sources have been indexed before. Check each unique repo for changes.
-        console.log('[orchestrator] All sources previously indexed. Checking remotes for changes...');
+        // Queue full reindex for individual missing/errored sources
+        if (sourcesNeedingFullReindex.length > 0) {
+            // If ALL sources need reindex, just do a full reindex
+            if (sourcesNeedingFullReindex.length === serverCfg.sources.length) {
+                console.log('[orchestrator] All sources need reindexing — queuing full reindex');
+                this.queueFullReindex();
+                return;
+            }
+            // Otherwise queue incremental reindexes for each affected repo
+            const reposToReindex = new Set(sourcesNeedingFullReindex.map(s => s.repo));
+            for (const repoUrl of reposToReindex) {
+                this.queueIncrementalReindex(repoUrl);
+            }
+        }
 
-        const repos = getIndexedRepos();
+        if (sourcesOk.length === 0) return;
+
+        console.log('[orchestrator] Checking remotes for changes on indexed sources...');
+
+        const repos = [...new Set(sourcesOk.map(s => s.repo))];
         for (const repoUrl of repos) {
             try {
                 const remoteHead = await this.getRemoteHead(repoUrl);
@@ -173,8 +196,10 @@ export class IndexingOrchestrator {
         // Check every 60 seconds if it's time to run
         setInterval(() => {
             const now = new Date();
-            if (now.getUTCHours() === hour && now.getUTCMinutes() === 0) {
+            const today = now.toISOString().slice(0, 10);
+            if (now.getUTCHours() === hour && this.lastReindexDate !== today) {
                 if (!this.isIndexing()) {
+                    this.lastReindexDate = today;
                     console.log('[orchestrator] Starting nightly reindex');
                     this.queueFullReindex();
                 }
@@ -303,6 +328,7 @@ export class IndexingOrchestrator {
                             status: 'idle',
                         });
                     } catch (err) {
+                        console.error(`[orchestrator] Incremental reindex failed for ${sourceConfig.name}:`, err);
                         try {
                             await this.setIndexStatus(
                                 sourceConfig.type,
@@ -313,7 +339,7 @@ export class IndexingOrchestrator {
                         } catch (statusErr) {
                             console.error('[orchestrator] Failed to update index status:', statusErr);
                         }
-                        throw err;
+                        // Don't rethrow — continue with remaining sources
                     }
                 });
             } else {

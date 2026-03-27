@@ -12,6 +12,9 @@ export const UrlDerivationConfigSchema = z.object({
     strip_index: z.boolean().optional(),
 });
 
+// ChunkConfig field applicability by source type:
+//   markdown/raw-text: target_tokens, overlap_tokens
+//   code:              target_lines, overlap_lines
 export const ChunkConfigSchema = z.object({
     target_tokens: z.number().int().positive().optional(),
     overlap_tokens: z.number().int().nonnegative().optional(),
@@ -43,6 +46,8 @@ export const ToolConfigSchema = z.object({
     default_limit: z.number().int().positive(),
     max_limit: z.number().int().positive(),
     result_format: z.enum(['docs', 'code', 'raw']),
+}).refine(t => t.default_limit <= t.max_limit, {
+    message: 'default_limit must not exceed max_limit',
 });
 
 // ── Embedding configuration schemas ───────────────────────────────────────────

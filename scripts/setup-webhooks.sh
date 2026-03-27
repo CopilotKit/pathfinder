@@ -17,16 +17,52 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 echo ""
-echo "=== CopilotKit MCP Docs Server — GitHub Webhook Setup ==="
+echo "=== mcp-docs — GitHub Webhook Setup ==="
 echo ""
+
+# ── Parse arguments ───────────────────────────────────────────
+
+CLI_REPOS=()
+CLI_URL=""
+for arg in "$@"; do
+    case "$arg" in
+        --repo=*) CLI_REPOS+=("${arg#--repo=}") ;;
+        --url=*)  CLI_URL="${arg#--url=}" ;;
+        --help|-h)
+            echo "Usage: $0 [--repo=owner/repo ...] [--url=https://...]"
+            echo ""
+            echo "Options:"
+            echo "  --repo=OWNER/REPO  Repository to configure (repeatable)"
+            echo "  --url=URL          Webhook delivery URL"
+            echo ""
+            echo "If --repo is not provided, repos are read from webhook.repo_sources"
+            echo "in mcp-docs.yaml. If --url is not provided, you will be prompted."
+            exit 0
+            ;;
+    esac
+done
 
 # ── Repos to configure ─────────────────────────────────────────
 
-# All demo repos were consolidated into CopilotKit/CopilotKit.
-# Only one webhook needed — covers both docs and code changes.
-REPOS=(
-    "CopilotKit/CopilotKit"
-)
+if [ ${#CLI_REPOS[@]} -gt 0 ]; then
+    REPOS=("${CLI_REPOS[@]}")
+else
+    # Try to read repos from mcp-docs.yaml webhook.repo_sources keys
+    if [ -f mcp-docs.yaml ] && command -v python3 &>/dev/null; then
+        mapfile -t REPOS < <(python3 -c "
+import yaml, sys
+with open('mcp-docs.yaml') as f:
+    cfg = yaml.safe_load(f)
+for repo in cfg.get('webhook', {}).get('repo_sources', {}):
+    print(repo)
+" 2>/dev/null || true)
+    fi
+
+    if [ ${#REPOS[@]} -eq 0 ]; then
+        error "No repos found. Provide --repo=owner/repo or configure webhook.repo_sources in mcp-docs.yaml"
+        exit 1
+    fi
+fi
 
 # ── Prerequisites ──────────────────────────────────────────────
 
@@ -64,11 +100,14 @@ echo ""
 
 # ── Webhook URL ────────────────────────────────────────────────
 
-DEFAULT_URL="https://mcp.copilotkit.ai/webhooks/github"
-
-printf "Webhook URL [%s]: " "$DEFAULT_URL"
-read -r WEBHOOK_URL
-WEBHOOK_URL="${WEBHOOK_URL:-$DEFAULT_URL}"
+if [ -n "$CLI_URL" ]; then
+    WEBHOOK_URL="$CLI_URL"
+else
+    DEFAULT_URL="https://localhost:3001/webhooks/github"
+    printf "Webhook URL [%s]: " "$DEFAULT_URL"
+    read -r WEBHOOK_URL
+    WEBHOOK_URL="${WEBHOOK_URL:-$DEFAULT_URL}"
+fi
 
 echo ""
 echo "Configuring webhooks for: $WEBHOOK_URL"

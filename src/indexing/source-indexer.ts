@@ -102,7 +102,7 @@ export class SourceIndexer {
         this.githubToken = githubToken;
 
         this.logPrefix = `[source-indexer:${sourceConfig.name}]`;
-        this.skipDirs = new Set(sourceConfig.skip_dirs ?? [...DEFAULT_SKIP_DIRS]);
+        this.skipDirs = new Set([...DEFAULT_SKIP_DIRS, ...(sourceConfig.skip_dirs ?? [])]);
         this.maxFileSize = sourceConfig.max_file_size ?? DEFAULT_MAX_FILE_SIZE;
     }
 
@@ -254,11 +254,17 @@ export class SourceIndexer {
     private async ensureRepo(repoDir: string, repoName: string): Promise<SimpleGit> {
         await fs.promises.mkdir(this.cloneDir, { recursive: true });
 
-        if (fs.existsSync(path.join(repoDir, '.git'))) {
+        const gitDir = path.join(repoDir, '.git');
+        if (fs.existsSync(gitDir)) {
             console.log(`${this.logPrefix} Pulling latest changes for ${repoName}`);
             const git = simpleGit(repoDir);
-            await git.pull();
-            return git;
+            try {
+                await git.pull();
+                return git;
+            } catch (err) {
+                console.warn(`${this.logPrefix} Corrupted repo at ${repoDir}, re-cloning:`, err);
+                await fs.promises.rm(repoDir, { recursive: true, force: true });
+            }
         }
 
         const authUrl = authenticatedUrl(this.sourceConfig.repo, this.githubToken);

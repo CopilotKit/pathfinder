@@ -24,6 +24,7 @@ export function deriveUrl(filePath: string, sourceConfig: SourceConfig): string 
     }
     if (d.strip_index) {
         slug = slug.replace(/\/index$/, '');
+        if (slug === 'index') slug = '';
     }
 
     return sourceConfig.base_url + slug;

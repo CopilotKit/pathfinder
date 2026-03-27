@@ -164,12 +164,16 @@ app.get("/health", async (_req: Request, res: Response) => {
             },
         });
     } catch (err) {
-        // Fall back to basic health if DB is unavailable
-        res.json({
-            status: "ok",
-            server: getServerConfig().server.name,
-            uptime_seconds: Math.floor((Date.now() - startedAt.getTime()) / 1000),
+        console.error("[health] Database unavailable:", err);
+        const serverName = getServerConfig().server.name;
+        const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+        res.status(503).json({
+            status: "degraded",
+            server: serverName,
+            uptime_seconds: uptime,
+            started_at: startedAt.toISOString(),
             index: "unavailable",
+            error: err instanceof Error ? err.message : String(err),
         });
     }
 });

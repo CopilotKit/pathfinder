@@ -1,7 +1,7 @@
 import pg from "pg";
 import pgvector from "pgvector/pg";
 import { generateSchema, generateMigration } from "./schema.js";
-import { getServerConfig } from "../config.js";
+import { getConfig, getServerConfig } from "../config.js";
 
 let pool: pg.Pool | null = null;
 
@@ -12,13 +12,15 @@ let pool: pg.Pool | null = null;
 export function getPool(): pg.Pool {
     if (pool) return pool;
 
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-        throw new Error("DATABASE_URL environment variable is required");
-    }
+    const databaseUrl = getConfig().databaseUrl;
 
     pool = new pg.Pool({
         connectionString: databaseUrl,
+    });
+
+    // Register pgvector type on every new client so vector columns work correctly
+    pool.on('connect', async (client) => {
+        await pgvector.registerType(client);
     });
 
     return pool;
@@ -32,19 +34,19 @@ export function getPool(): pg.Pool {
 export async function initializeSchema(): Promise<void> {
     const p = getPool();
 
-    // Register pgvector type — must use a client, not the pool directly
-    const client = await p.connect();
-    try {
-        await pgvector.registerType(client);
-    } finally {
-        client.release();
-    }
-
     const dimensions = getServerConfig().embedding.dimensions;
 
-    // Drop old split tables (doc_chunks, code_chunks) if they exist
-    await p.query(generateMigration());
-
-    // Create unified schema
-    await p.query(generateSchema(dimensions));
+    // Run migration + schema creation atomically
+    const migrationClient = await p.connect();
+    try {
+        await migrationClient.query('BEGIN');
+        await migrationClient.query(generateMigration());
+        await migrationClient.query(generateSchema(dimensions));
+        await migrationClient.query('COMMIT');
+    } catch (err) {
+        await migrationClient.query('ROLLBACK');
+        throw err;
+    } finally {
+        migrationClient.release();
+    }
 }

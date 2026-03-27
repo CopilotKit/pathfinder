@@ -34,10 +34,10 @@ railway service status --all --json
 ```bash
 railway run npx tsx scripts/seed-index.ts
 ```
-Or docs-only / code-only:
+Or a specific source only:
 ```bash
-railway run npx tsx scripts/seed-index.ts --docs-only
-railway run npx tsx scripts/seed-index.ts --code-only
+railway run npx tsx scripts/seed-index.ts --source=docs
+railway run npx tsx scripts/seed-index.ts --source=code
 ```
 
 ### Test search quality (against production)

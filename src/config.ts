@@ -107,13 +107,39 @@ function loadServerConfig(): ServerConfig {
         throw new Error(`Invalid mcp-docs.yaml at ${configPath}:\n${issues}`);
     }
 
-    // Cross-validate: every tool.source must reference an existing source name
+    // Validate source name uniqueness
     const sourceNames = new Set(result.data.sources.map(s => s.name));
+    if (sourceNames.size !== result.data.sources.length) {
+        throw new Error('Duplicate source names found in sources configuration.');
+    }
+
+    // Cross-validate: every tool.source must reference an existing source name
     for (const tool of result.data.tools) {
         if (!sourceNames.has(tool.source)) {
             throw new Error(
                 `Tool "${tool.name}" references source "${tool.source}" which is not defined in sources.`
             );
+        }
+    }
+
+    // Cross-validate: webhook repo_sources and path_triggers must reference valid source names
+    if (result.data.webhook) {
+        const wh = result.data.webhook;
+        for (const [repo, sources] of Object.entries(wh.repo_sources)) {
+            for (const src of sources) {
+                if (!sourceNames.has(src)) {
+                    throw new Error(
+                        `Webhook repo_sources["${repo}"] references source "${src}" which is not defined in sources.`
+                    );
+                }
+            }
+        }
+        for (const triggerKey of Object.keys(wh.path_triggers)) {
+            if (!sourceNames.has(triggerKey)) {
+                throw new Error(
+                    `Webhook path_triggers key "${triggerKey}" does not match any defined source name.`
+                );
+            }
         }
     }
 

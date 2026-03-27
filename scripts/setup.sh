@@ -17,7 +17,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 echo ""
-echo "=== CopilotKit MCP Docs Server — Setup ==="
+echo "=== mcp-docs — Setup ==="
 echo ""
 
 # ── Prerequisites ──────────────────────────────────────────────
