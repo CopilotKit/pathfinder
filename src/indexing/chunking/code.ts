@@ -1,5 +1,7 @@
 // Line-based code splitter
 
+import { type ChunkOutput, type SourceConfig } from '../../types.js';
+
 export interface CodeChunk {
     content: string;
     startLine: number;
@@ -8,8 +10,8 @@ export interface CodeChunk {
     chunkIndex: number;
 }
 
-const TARGET_LINES = 80;
-const OVERLAP_LINES = 10;
+const DEFAULT_TARGET_LINES = 80;
+const DEFAULT_OVERLAP_LINES = 10;
 
 /**
  * Map file extension to language name.
@@ -285,10 +287,13 @@ function selectSplitPoints(candidates: number[], _totalLines: number, targetLine
  * @param filePath - Path to the source file
  * @returns Array of CodeChunk objects
  */
-export function chunkCode(content: string, filePath: string): CodeChunk[] {
+export function chunkCode(content: string, filePath: string, config: SourceConfig): ChunkOutput[] {
     if (!content || !content.trim()) {
         return [];
     }
+
+    const targetLines = config.chunk?.target_lines ?? DEFAULT_TARGET_LINES;
+    const overlapLines = config.chunk?.overlap_lines ?? DEFAULT_OVERLAP_LINES;
 
     const language = detectLanguage(filePath);
     const lines = content.split('\n');
@@ -303,17 +308,17 @@ export function chunkCode(content: string, filePath: string): CodeChunk[] {
     }
 
     // Split into ranges
-    const ranges = splitAtBoundaries(lines, TARGET_LINES);
+    const ranges = splitAtBoundaries(lines, targetLines);
 
     // Apply overlap and build chunks
-    const chunks: CodeChunk[] = [];
+    const chunks: ChunkOutput[] = [];
 
     for (let i = 0; i < ranges.length; i++) {
         let { start, end } = ranges[i];
 
         // Apply overlap from previous chunk
-        if (i > 0 && OVERLAP_LINES > 0) {
-            const overlapStart = Math.max(ranges[i - 1].end - OVERLAP_LINES + 1, ranges[i - 1].start);
+        if (i > 0 && overlapLines > 0) {
+            const overlapStart = Math.max(ranges[i - 1].end - overlapLines + 1, ranges[i - 1].start);
             start = Math.min(start, overlapStart);
         }
 

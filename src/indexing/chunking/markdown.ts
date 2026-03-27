@@ -1,5 +1,7 @@
 // Recursive markdown/MDX splitter
 
+import { type ChunkOutput, type SourceConfig } from '../../types.js';
+
 export interface MarkdownChunk {
     content: string;
     title: string;
@@ -7,8 +9,8 @@ export interface MarkdownChunk {
     chunkIndex: number;
 }
 
-const TARGET_CHARS = 2400;  // ~600 tokens at 4 chars/token
-const OVERLAP_CHARS = 200;  // ~50 tokens
+const DEFAULT_TARGET_TOKENS = 600;
+const DEFAULT_OVERLAP_TOKENS = 50;
 
 /**
  * Parse YAML frontmatter from markdown content.
@@ -198,8 +200,8 @@ function splitOnHeading(content: string, level: number): string[] {
  * Recursively split content to fit within target chunk size.
  * Priority: h2 -> h3 -> paragraph -> line
  */
-function recursiveSplit(content: string, depth: number = 0): string[] {
-    if (content.length <= TARGET_CHARS) {
+function recursiveSplit(content: string, targetChars: number, depth: number = 0): string[] {
+    if (content.length <= targetChars) {
         return [content];
     }
 
@@ -209,7 +211,7 @@ function recursiveSplit(content: string, depth: number = 0): string[] {
         // Split on ## headings
         parts = splitOnHeading(content, 2);
         if (parts.length > 1) {
-            return parts.flatMap(p => recursiveSplit(p, 1));
+            return parts.flatMap(p => recursiveSplit(p, targetChars, 1));
         }
     }
 
@@ -217,7 +219,7 @@ function recursiveSplit(content: string, depth: number = 0): string[] {
         // Split on ### headings
         parts = splitOnHeading(content, 3);
         if (parts.length > 1) {
-            return parts.flatMap(p => recursiveSplit(p, 2));
+            return parts.flatMap(p => recursiveSplit(p, targetChars, 2));
         }
     }
 
@@ -225,14 +227,14 @@ function recursiveSplit(content: string, depth: number = 0): string[] {
         // Split on paragraph boundaries
         parts = splitPreservingCodeBlocks(content, /\n\n+/);
         if (parts.length > 1) {
-            return mergeSmallParts(parts, TARGET_CHARS).flatMap(p => recursiveSplit(p, 3));
+            return mergeSmallParts(parts, targetChars).flatMap(p => recursiveSplit(p, targetChars, 3));
         }
     }
 
     // Split on line boundaries
     const lines = content.split('\n');
     if (lines.length > 1) {
-        return mergeSmallParts(lines, TARGET_CHARS);
+        return mergeSmallParts(lines, targetChars);
     }
 
     // Content is a single very long line; return as-is
@@ -265,13 +267,13 @@ function mergeSmallParts(parts: string[], targetSize: number): string[] {
 /**
  * Apply overlap between consecutive chunks.
  */
-function applyOverlap(chunks: string[]): string[] {
-    if (chunks.length <= 1) return chunks;
+function applyOverlap(chunks: string[], overlapChars: number): string[] {
+    if (chunks.length <= 1 || overlapChars <= 0) return chunks;
 
     const result: string[] = [chunks[0]];
     for (let i = 1; i < chunks.length; i++) {
         const prevChunk = chunks[i - 1];
-        const overlapText = prevChunk.slice(-OVERLAP_CHARS);
+        const overlapText = prevChunk.slice(-overlapChars);
 
         // Find a clean break point (newline or space) in the overlap
         const breakPoint = overlapText.lastIndexOf('\n');
@@ -290,10 +292,13 @@ function applyOverlap(chunks: string[]): string[] {
  * @param filePath - Path to the source file (used for metadata)
  * @returns Array of MarkdownChunk objects
  */
-export function chunkMarkdown(content: string, filePath: string): MarkdownChunk[] {
+export function chunkMarkdown(content: string, filePath: string, config: SourceConfig): ChunkOutput[] {
     if (!content || !content.trim()) {
         return [];
     }
+
+    const targetChars = (config.chunk?.target_tokens ?? DEFAULT_TARGET_TOKENS) * 4;
+    const overlapChars = (config.chunk?.overlap_tokens ?? DEFAULT_OVERLAP_TOKENS) * 4;
 
     // Parse frontmatter
     const { title: fmTitle, body } = parseFrontmatter(content);
@@ -309,13 +314,13 @@ export function chunkMarkdown(content: string, filePath: string): MarkdownChunk[
     const title = fmTitle || extractFirstHeading(cleanBody) || filePath.split('/').pop() || filePath;
 
     // Recursively split the content
-    const rawChunks = recursiveSplit(cleanBody);
+    const rawChunks = recursiveSplit(cleanBody, targetChars);
 
     // Apply overlap
-    const overlappedChunks = applyOverlap(rawChunks);
+    const overlappedChunks = applyOverlap(rawChunks, overlapChars);
 
     // Build heading paths by finding where each raw chunk starts in the original
-    const chunks: MarkdownChunk[] = [];
+    const chunks: ChunkOutput[] = [];
     let searchFrom = 0;
 
     for (let i = 0; i < overlappedChunks.length; i++) {
