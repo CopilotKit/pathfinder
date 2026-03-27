@@ -10,6 +10,7 @@ import {
     deleteDocChunksByFile,
     type DocChunk,
 } from '../db/queries.js';
+import { shouldIndex } from './path-filter.js';
 
 const DOCS_REPO_URL = 'https://github.com/CopilotKit/CopilotKit.git';
 const DOCS_CONTENT_PREFIX = 'docs/content/docs/';
@@ -102,8 +103,16 @@ export class DocsIndexer {
             return;
         }
 
-        const mdxFiles = await walkFiles(docsDir, (f) => f.endsWith('.mdx'));
-        console.log(`[docs-indexer] Found ${mdxFiles.length} MDX files for full index`);
+        const allMdxFiles = await walkFiles(docsDir, (f) => f.endsWith('.mdx'));
+        const mdxFiles = allMdxFiles.filter((absPath) => {
+            const relPath = path.relative(repoDir, absPath);
+            return shouldIndex(relPath, 'docs');
+        });
+        const skipped = allMdxFiles.length - mdxFiles.length;
+        console.log(
+            `[docs-indexer] Found ${mdxFiles.length} MDX files for full index` +
+            (skipped > 0 ? ` (${skipped} excluded by path filters)` : ''),
+        );
 
         for (const absPath of mdxFiles) {
             const relPath = path.relative(repoDir, absPath);

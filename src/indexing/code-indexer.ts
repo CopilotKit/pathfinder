@@ -11,6 +11,7 @@ import {
     type CodeChunk,
 } from '../db/queries.js';
 import { INDEXED_REPOS } from '../constants.js';
+import { shouldIndex } from './path-filter.js';
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.py']);
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git']);
@@ -102,10 +103,18 @@ export class CodeIndexer {
         const git = await this.ensureRepo(repoUrl, repoDir, repoName);
 
         const headSha = await git.revparse(['HEAD']);
-        const sourceFiles = await walkSourceFiles(repoDir);
+        const allFiles = await walkSourceFiles(repoDir);
 
+        // Apply path filters from index-config.json
+        const sourceFiles = allFiles.filter((absPath) => {
+            const relPath = path.relative(repoDir, absPath);
+            return shouldIndex(relPath, 'code');
+        });
+
+        const skipped = allFiles.length - sourceFiles.length;
         console.log(
-            `[code-indexer] Indexing ${repoName}: ${sourceFiles.length} source files`,
+            `[code-indexer] Indexing ${repoName}: ${sourceFiles.length} source files` +
+            (skipped > 0 ? ` (${skipped} excluded by path filters)` : ''),
         );
 
         for (const absPath of sourceFiles) {

@@ -8,6 +8,7 @@ import { initializeSchema, getPool } from "./db/client.js";
 import { getIndexStats } from "./db/queries.js";
 import { getConfig } from "./config.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
+import { getPathFilterConfig } from "./indexing/path-filter.js";
 import { createWebhookHandler } from "./webhooks/github.js";
 
 const app = express();
@@ -183,6 +184,18 @@ async function start(): Promise<void> {
     console.log("[startup] Initializing database schema...");
     await initializeSchema();
     console.log("[startup] Database schema ready.");
+
+    // Log path filter config
+    const filters = getPathFilterConfig();
+    if (filters.code.exclude.length > 0) {
+        console.log(`[startup] Code path excludes: ${filters.code.exclude.join(', ')}`);
+    }
+    if (filters.code.include.length > 0) {
+        console.log(`[startup] Code path includes: ${filters.code.include.join(', ')}`);
+    }
+    if (filters.docs.exclude.length > 0) {
+        console.log(`[startup] Docs path excludes: ${filters.docs.exclude.join(', ')}`);
+    }
 
     // Wire the webhook handler and health endpoint with the real orchestrator
     const orchestrator = new IndexingOrchestrator();
