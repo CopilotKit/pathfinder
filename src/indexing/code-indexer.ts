@@ -307,7 +307,8 @@ export class CodeIndexer {
         commitSha: string,
     ): Promise<void> {
         const content = await fs.promises.readFile(absPath, 'utf-8');
-        const codeChunks = chunkCode(content, relPath);
+        // Temporary: pass a minimal SourceConfig until Phase 4 replaces this file
+        const codeChunks = chunkCode(content, relPath, { name: 'code', type: 'code', repo: '', path: '', file_patterns: [], chunk: {} } as any);
 
         if (codeChunks.length === 0) {
             return;

@@ -252,7 +252,8 @@ export class DocsIndexer {
         commitSha: string,
     ): Promise<void> {
         const content = await fs.promises.readFile(absPath, 'utf-8');
-        const markdownChunks = chunkMarkdown(content, relPath);
+        // Temporary: pass a minimal SourceConfig until Phase 4 replaces this file
+        const markdownChunks = chunkMarkdown(content, relPath, { name: 'docs', type: 'markdown', repo: '', path: '', file_patterns: [], chunk: {} } as any);
 
         if (markdownChunks.length === 0) {
             return;
