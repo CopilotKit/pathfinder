@@ -2,15 +2,15 @@
 //
 // Usage:
 //   npx tsx scripts/test-search.ts "how to use useCopilotAction"
-//   npx tsx scripts/test-search.ts --type code "CopilotRuntime"
 //   npx tsx scripts/test-search.ts --type docs "getting started" --limit 3
+//   npx tsx scripts/test-search.ts --type code "CopilotRuntime"
 //   npx tsx scripts/test-search.ts --server "how to use useCopilotAction"
 
 import { initializeSchema, getPool } from '../src/db/client.js';
-import { getConfig } from '../src/config.js';
+import { getConfig, getServerConfig } from '../src/config.js';
 import { EmbeddingClient } from '../src/indexing/embeddings.js';
-import { searchDocChunks, searchCodeChunks } from '../src/db/queries.js';
-import type { DocChunkResult, CodeChunkResult } from '../src/db/queries.js';
+import { searchChunks } from '../src/db/queries.js';
+import type { ChunkResult } from '../src/types.js';
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -19,7 +19,7 @@ import type { DocChunkResult, CodeChunkResult } from '../src/db/queries.js';
 const args = process.argv.slice(2);
 
 function parseArgs() {
-    let type: 'docs' | 'code' | 'both' = 'both';
+    let type: string | undefined;
     let limit: number | undefined;
     let server = false;
     let url = '';
@@ -28,12 +28,7 @@ function parseArgs() {
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === '--type') {
-            const val = args[++i];
-            if (val !== 'docs' && val !== 'code') {
-                console.error(`Error: --type must be "docs" or "code", got "${val}"`);
-                process.exit(1);
-            }
-            type = val;
+            type = args[++i];
         } else if (arg === '--limit') {
             limit = parseInt(args[++i], 10);
             if (isNaN(limit) || limit < 1) {
@@ -67,11 +62,11 @@ function printUsage(): void {
     console.log(`Usage: npx tsx scripts/test-search.ts [options] <query>
 
 Options:
-  --type <docs|code>  Search type (default: both)
-  --limit <n>         Max results (default: 5 for docs, 10 for code)
-  --server            Query via JSON-RPC to the MCP endpoint (default: localhost:3001)
-  --url <url>         MCP endpoint URL (implies --server). e.g. https://mcp-server-production-2253.up.railway.app/mcp
-  -h, --help          Show this help message
+  --type <source>   Filter by source name (e.g. docs, code). Default: all sources
+  --limit <n>       Max results (default: 10)
+  --server          Query via JSON-RPC to the MCP endpoint (default: localhost:3001)
+  --url <url>       MCP endpoint URL (implies --server)
+  -h, --help        Show this help message
 `);
 }
 
@@ -81,18 +76,19 @@ Options:
 
 async function directSearch(
     query: string,
-    type: 'docs' | 'code' | 'both',
+    sourceName?: string,
     limit?: number,
 ): Promise<void> {
     const config = getConfig();
+    const serverConfig = getServerConfig();
 
     console.log('Initializing database schema...');
     await initializeSchema();
 
     const embeddingClient = new EmbeddingClient(
         config.openaiApiKey,
-        config.embeddingModel,
-        config.embeddingDimensions,
+        serverConfig.embedding.model,
+        serverConfig.embedding.dimensions,
     );
 
     console.log(`Embedding query: "${query}"...`);
@@ -101,38 +97,20 @@ async function directSearch(
     const embedMs = Date.now() - embedStart;
     console.log(`Embedding generated in ${embedMs}ms\n`);
 
-    const searchDocs = type === 'docs' || type === 'both';
-    const searchCode = type === 'code' || type === 'both';
+    const resultLimit = limit ?? 10;
+    const label = sourceName ? `source=${sourceName}` : 'all sources';
+    console.log(`--- Results (${label}, limit ${resultLimit}) ---\n`);
 
-    if (searchDocs) {
-        const docLimit = limit ?? 5;
-        console.log(`--- Doc results (limit ${docLimit}) ---\n`);
-        const docStart = Date.now();
-        const docResults = await searchDocChunks(embedding, docLimit);
-        const docMs = Date.now() - docStart;
+    const searchStart = Date.now();
+    const results = await searchChunks(embedding, resultLimit, sourceName);
+    const searchMs = Date.now() - searchStart;
 
-        if (docResults.length === 0) {
-            console.log('No doc results found.\n');
-        } else {
-            formatDocResults(docResults);
-        }
-        console.log(`(${docResults.length} results in ${docMs}ms)\n`);
+    if (results.length === 0) {
+        console.log('No results found.\n');
+    } else {
+        formatResults(results);
     }
-
-    if (searchCode) {
-        const codeLimit = limit ?? 10;
-        console.log(`--- Code results (limit ${codeLimit}) ---\n`);
-        const codeStart = Date.now();
-        const codeResults = await searchCodeChunks(embedding, codeLimit);
-        const codeMs = Date.now() - codeStart;
-
-        if (codeResults.length === 0) {
-            console.log('No code results found.\n');
-        } else {
-            formatCodeResults(codeResults);
-        }
-        console.log(`(${codeResults.length} results in ${codeMs}ms)\n`);
-    }
+    console.log(`(${results.length} results in ${searchMs}ms)\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,11 +177,12 @@ async function mcpPost(
 
 async function serverSearch(
     query: string,
-    type: 'docs' | 'code' | 'both',
+    sourceName?: string,
     limit?: number,
     url?: string,
 ): Promise<void> {
     const baseUrl = url || 'http://localhost:3001/mcp';
+    const serverConfig = getServerConfig();
 
     // Step 1: Initialize to get a session
     console.log('Connecting to MCP server...');
@@ -226,13 +205,23 @@ async function serverSearch(
     // Send initialized notification
     await mcpPost(baseUrl, { jsonrpc: '2.0', method: 'notifications/initialized' }, sid ?? undefined);
 
-    // Step 2: Call tools
+    // Step 2: Determine which tools to call based on source filter
     const toolCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
-    if (type === 'docs' || type === 'both') {
-        toolCalls.push({ name: 'search-docs', params: { query, limit: limit ?? 5 } });
-    }
-    if (type === 'code' || type === 'both') {
-        toolCalls.push({ name: 'search-code', params: { query, limit: limit ?? 10 } });
+
+    if (sourceName) {
+        // Find the tool for this source
+        const tool = serverConfig.tools.find(t => t.source === sourceName);
+        if (tool) {
+            toolCalls.push({ name: tool.name, params: { query, limit: limit ?? tool.default_limit } });
+        } else {
+            console.error(`No tool found for source "${sourceName}"`);
+            return;
+        }
+    } else {
+        // Call all tools
+        for (const tool of serverConfig.tools) {
+            toolCalls.push({ name: tool.name, params: { query, limit: limit ?? tool.default_limit } });
+        }
     }
 
     let callId = 1;
@@ -275,27 +264,25 @@ async function serverSearch(
 // Formatting
 // ---------------------------------------------------------------------------
 
-function formatDocResults(results: DocChunkResult[]): void {
+function formatResults(results: ChunkResult[]): void {
     for (let i = 0; i < results.length; i++) {
         const r = results[i];
         const similarity = (r.similarity * 100).toFixed(1);
-        console.log(`SNIPPET ${i + 1} [${similarity}% match]`);
-        console.log(`  TITLE:   ${r.title}`);
-        console.log(`  SOURCE:  ${r.source_url}`);
+        console.log(`SNIPPET ${i + 1} [${similarity}% match] (source: ${r.source_name})`);
+        if (r.title) {
+            console.log(`  TITLE:   ${r.title}`);
+        }
+        if (r.source_url) {
+            console.log(`  URL:     ${r.source_url}`);
+        }
+        console.log(`  FILE:    ${r.file_path}`);
+        if (r.start_line != null && r.end_line != null) {
+            console.log(`  LINES:   ${r.start_line}-${r.end_line}`);
+        }
+        if (r.language) {
+            console.log(`  LANG:    ${r.language}`);
+        }
         console.log(`  CONTENT: ${truncate(r.content, 200)}`);
-        console.log('');
-    }
-}
-
-function formatCodeResults(results: CodeChunkResult[]): void {
-    for (let i = 0; i < results.length; i++) {
-        const r = results[i];
-        const similarity = (r.similarity * 100).toFixed(1);
-        console.log(`SNIPPET ${i + 1} [${similarity}% match]`);
-        console.log(`  REPOSITORY: ${r.repo_url}`);
-        console.log(`  PATH:       ${r.file_path}:${r.start_line}-${r.end_line}`);
-        console.log(`  LANGUAGE:   ${r.language}`);
-        console.log(`  CONTENT:    ${truncate(r.content, 200)}`);
         console.log('');
     }
 }
@@ -314,7 +301,7 @@ const { query, type, limit, server, url } = parseArgs();
 
 const overallStart = Date.now();
 console.log(`Query: "${query}"`);
-console.log(`Type: ${type} | Limit: ${limit ?? 'default'} | Mode: ${server ? `server (${url || 'localhost:3001'})` : 'direct'}`);
+console.log(`Source: ${type ?? 'all'} | Limit: ${limit ?? 'default'} | Mode: ${server ? `server (${url || 'localhost:3001'})` : 'direct'}`);
 console.log('');
 
 const run = server

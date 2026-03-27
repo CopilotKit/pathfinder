@@ -42,7 +42,7 @@ function authenticatedUrl(repoUrl: string, githubToken?: string): string {
  * Convert a glob pattern to a RegExp.
  * Supports: ** (any path), * (any segment), ? (any char)
  */
-function globToRegex(pattern: string): RegExp {
+export function globToRegex(pattern: string): RegExp {
     let re = pattern
         .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex chars (except * and ?)
         .replace(/\*\*\//g, '{{GLOBSTAR_SLASH}}') // **/ = any path prefix (including empty)
@@ -59,7 +59,7 @@ function globToRegex(pattern: string): RegExp {
  * Check if a relative file path matches the source's file_patterns (include)
  * and does not match exclude_patterns.
  */
-function matchesPatterns(relPath: string, sourceConfig: SourceConfig): boolean {
+export function matchesPatterns(relPath: string, sourceConfig: SourceConfig): boolean {
     const normalized = relPath.replace(/\\/g, '/');
 
     // Check excludes first (takes precedence)

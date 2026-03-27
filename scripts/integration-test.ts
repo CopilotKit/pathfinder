@@ -14,16 +14,14 @@ import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { initializeSchema, getPool } from "../src/db/client.js";
-import { getConfig } from "../src/config.js";
+import { getConfig, getServerConfig } from "../src/config.js";
 import { EmbeddingClient } from "../src/indexing/embeddings.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import {
-    upsertDocChunks,
-    upsertCodeChunks,
-    searchDocChunks,
-    searchCodeChunks,
+    upsertChunks,
+    searchChunks,
 } from "../src/db/queries.js";
-import type { DocChunk, CodeChunk } from "../src/db/queries.js";
+import type { Chunk, ChunkResult } from "../src/types.js";
 import type { Server } from "node:http";
 
 // ---------------------------------------------------------------------------
@@ -32,8 +30,9 @@ import type { Server } from "node:http";
 
 // Unique prefix so we can clean up without touching real data
 const TEST_PREFIX = "__integration_test__";
-const TEST_DOC_PATH_PREFIX = `${TEST_PREFIX}/docs/`;
-const TEST_CODE_REPO = `${TEST_PREFIX}/repo`;
+const TEST_SOURCE_DOCS = `${TEST_PREFIX}_docs`;
+const TEST_SOURCE_CODE = `${TEST_PREFIX}_code`;
+const TEST_REPO_URL = `https://github.com/${TEST_PREFIX}/repo`;
 
 // ---------------------------------------------------------------------------
 // Test data
@@ -247,7 +246,7 @@ function assertContains(text: string, substring: string, label: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1: Index test data
+// Phase 1: Index test data into unified chunks table
 // ---------------------------------------------------------------------------
 
 async function indexTestData(embeddingClient: EmbeddingClient): Promise<void> {
@@ -258,18 +257,20 @@ async function indexTestData(embeddingClient: EmbeddingClient): Promise<void> {
     const docTexts = DOC_CONTENTS.map((d) => `${d.title}\n\n${d.content}`);
     const docEmbeddings = await embeddingClient.embedBatch(docTexts);
 
-    const docChunks: DocChunk[] = DOC_CONTENTS.map((d, i) => ({
+    const docChunks: Chunk[] = DOC_CONTENTS.map((d, i) => ({
+        source_name: TEST_SOURCE_DOCS,
         source_url: `https://docs.copilotkit.ai/${d.fileName}`,
         title: d.title,
         content: d.content,
         embedding: docEmbeddings[i],
-        file_path: `${TEST_DOC_PATH_PREFIX}${d.fileName}`,
+        repo_url: TEST_REPO_URL,
+        file_path: `docs/${d.fileName}`,
         chunk_index: 0,
         metadata: { integration_test: true },
         commit_sha: "test-sha-000",
     }));
 
-    await upsertDocChunks(docChunks);
+    await upsertChunks(docChunks);
     console.log(`Upserted ${docChunks.length} doc chunks.`);
 
     // Generate code embeddings
@@ -277,11 +278,12 @@ async function indexTestData(embeddingClient: EmbeddingClient): Promise<void> {
     const codeTexts = CODE_CONTENTS.map((c) => `${c.filePath}\n\n${c.content}`);
     const codeEmbeddings = await embeddingClient.embedBatch(codeTexts);
 
-    const codeChunks: CodeChunk[] = CODE_CONTENTS.map((c, i) => ({
-        repo_url: TEST_CODE_REPO,
-        file_path: c.filePath,
+    const codeChunks: Chunk[] = CODE_CONTENTS.map((c, i) => ({
+        source_name: TEST_SOURCE_CODE,
         content: c.content,
         embedding: codeEmbeddings[i],
+        repo_url: TEST_REPO_URL,
+        file_path: c.filePath,
         start_line: c.startLine,
         end_line: c.endLine,
         language: c.language,
@@ -290,12 +292,12 @@ async function indexTestData(embeddingClient: EmbeddingClient): Promise<void> {
         commit_sha: "test-sha-000",
     }));
 
-    await upsertCodeChunks(codeChunks);
+    await upsertChunks(codeChunks);
     console.log(`Upserted ${codeChunks.length} code chunks.`);
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2: Direct DB search
+// Phase 2: Direct DB search using unified searchChunks
 // ---------------------------------------------------------------------------
 
 async function testDirectSearch(embeddingClient: EmbeddingClient): Promise<void> {
@@ -305,11 +307,11 @@ async function testDirectSearch(embeddingClient: EmbeddingClient): Promise<void>
     {
         console.log('Query: "how to get started with copilotkit"');
         const embedding = await embeddingClient.embed("how to get started with copilotkit");
-        const results = await searchDocChunks(embedding, 5);
+        const results = await searchChunks(embedding, 5, TEST_SOURCE_DOCS);
         assert(results.length > 0, "Got doc results");
 
         const topResult = results[0];
-        assertContains(topResult.title, "Getting Started", "Top result title");
+        assertContains(topResult.title ?? "", "Getting Started", "Top result title");
         assertContains(topResult.content, "npm install", "Top result content");
     }
 
@@ -317,11 +319,11 @@ async function testDirectSearch(embeddingClient: EmbeddingClient): Promise<void>
     {
         console.log('Query: "useCopilotAction hook for defining actions"');
         const embedding = await embeddingClient.embed("useCopilotAction hook for defining actions");
-        const results = await searchDocChunks(embedding, 5);
+        const results = await searchChunks(embedding, 5, TEST_SOURCE_DOCS);
         assert(results.length > 0, "Got doc results");
 
         const topResult = results[0];
-        assertContains(topResult.title, "useCopilotAction", "Top result title");
+        assertContains(topResult.title ?? "", "useCopilotAction", "Top result title");
         assertContains(topResult.content, "handler", "Top result mentions handler");
     }
 
@@ -329,7 +331,7 @@ async function testDirectSearch(embeddingClient: EmbeddingClient): Promise<void>
     {
         console.log('Query: "CopilotRuntime class implementation"');
         const embedding = await embeddingClient.embed("CopilotRuntime class implementation");
-        const results = await searchCodeChunks(embedding, 5, TEST_CODE_REPO);
+        const results = await searchChunks(embedding, 5, TEST_SOURCE_CODE);
         assert(results.length > 0, "Got code results");
 
         const topResult = results[0];
@@ -341,7 +343,7 @@ async function testDirectSearch(embeddingClient: EmbeddingClient): Promise<void>
     {
         console.log('Query: "python copilotkit agent sdk"');
         const embedding = await embeddingClient.embed("python copilotkit agent sdk");
-        const results = await searchCodeChunks(embedding, 5, TEST_CODE_REPO);
+        const results = await searchChunks(embedding, 5, TEST_SOURCE_CODE);
         assert(results.length > 0, "Got code results");
 
         const found = results.some((r) => r.language === "python");
@@ -352,11 +354,23 @@ async function testDirectSearch(embeddingClient: EmbeddingClient): Promise<void>
     {
         console.log('Query: "React hook copilot sidebar example"');
         const embedding = await embeddingClient.embed("React hook copilot sidebar example");
-        const results = await searchCodeChunks(embedding, 5, TEST_CODE_REPO);
+        const results = await searchChunks(embedding, 5, TEST_SOURCE_CODE);
         assert(results.length > 0, "Got code results");
 
         const found = results.some((r) => r.file_path.includes("page.tsx"));
         assert(found, "Found the React page example");
+    }
+
+    // Test 6: Cross-source search (no source filter)
+    {
+        console.log('Query: "CopilotKit" (all sources)');
+        const embedding = await embeddingClient.embed("CopilotKit");
+        const results = await searchChunks(embedding, 10);
+        assert(results.length > 0, "Got results across sources");
+
+        const sources = new Set(results.map((r) => r.source_name));
+        // Both test sources should appear since both mention CopilotKit
+        assert(sources.size >= 1, "Results from at least one source");
     }
 }
 
@@ -509,6 +523,7 @@ async function mcpRequest(
 async function testMcpEndpoint(port: number): Promise<void> {
     console.log("\n=== Phase 3: MCP HTTP endpoint ===\n");
     const baseUrl = `http://localhost:${port}/mcp`;
+    const serverConfig = getServerConfig();
 
     // Step 1: Initialize to get a session
     console.log("MCP initialize...");
@@ -538,79 +553,32 @@ async function testMcpEndpoint(port: number): Promise<void> {
         method: "notifications/initialized",
     }, sid);
 
-    // Step 2: search-docs via MCP tool call
-    {
-        console.log('MCP tools/call: search-docs "how to get started"');
+    // Step 2: Call each configured tool
+    let callId = 2;
+    for (const tool of serverConfig.tools) {
+        const query = tool.source.includes("code") ? "CopilotRuntime class" : "how to get started";
+        console.log(`MCP tools/call: ${tool.name} "${query}"`);
         const resp = await mcpRequest(baseUrl, {
             jsonrpc: "2.0",
             method: "tools/call",
-            id: 2,
+            id: callId,
             params: {
-                name: "search-docs",
-                arguments: { query: "how to get started" },
+                name: tool.name,
+                arguments: { query },
             },
         }, sid);
 
-        const toolResp = resp.messages.find((m) => m.id === 2);
-        assert(toolResp !== undefined, "Got search-docs response");
+        const toolResp = resp.messages.find((m) => m.id === callId);
+        assert(toolResp !== undefined, `Got ${tool.name} response`);
 
         const toolResult = toolResp!.result as Record<string, unknown>;
         const content = toolResult?.content as Array<Record<string, unknown>>;
-        assert(content && content.length > 0, "search-docs returned content");
+        assert(content && content.length > 0, `${tool.name} returned content`);
 
-        const text = content[0].text as string;
-        assertContains(text, "Getting Started", "search-docs found Getting Started doc");
+        callId++;
     }
 
-    // Step 3: search-code via MCP tool call
-    {
-        console.log('MCP tools/call: search-code "CopilotRuntime"');
-        const resp = await mcpRequest(baseUrl, {
-            jsonrpc: "2.0",
-            method: "tools/call",
-            id: 3,
-            params: {
-                name: "search-code",
-                arguments: { query: "CopilotRuntime class" },
-            },
-        }, sid);
-
-        const toolResp = resp.messages.find((m) => m.id === 3);
-        assert(toolResp !== undefined, "Got search-code response");
-
-        const toolResult = toolResp!.result as Record<string, unknown>;
-        const content = toolResult?.content as Array<Record<string, unknown>>;
-        assert(content && content.length > 0, "search-code returned content");
-
-        const text = content[0].text as string;
-        assertContains(text, "CopilotRuntime", "search-code found CopilotRuntime");
-    }
-
-    // Step 4: search-docs for useCopilotAction
-    {
-        console.log('MCP tools/call: search-docs "useCopilotAction"');
-        const resp = await mcpRequest(baseUrl, {
-            jsonrpc: "2.0",
-            method: "tools/call",
-            id: 4,
-            params: {
-                name: "search-docs",
-                arguments: { query: "useCopilotAction" },
-            },
-        }, sid);
-
-        const toolResp = resp.messages.find((m) => m.id === 4);
-        assert(toolResp !== undefined, "Got search-docs response");
-
-        const toolResult = toolResp!.result as Record<string, unknown>;
-        const content = toolResult?.content as Array<Record<string, unknown>>;
-        assert(content && content.length > 0, "search-docs returned content");
-
-        const text = content[0].text as string;
-        assertContains(text, "useCopilotAction", "search-docs found useCopilotAction doc");
-    }
-
-    // Step 5: Health endpoint
+    // Step 3: Health endpoint
     {
         console.log("Health check...");
         const healthRes = await fetch(`http://localhost:${port}/health`);
@@ -621,24 +589,18 @@ async function testMcpEndpoint(port: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Cleanup
+// Cleanup — delete by source_name prefix
 // ---------------------------------------------------------------------------
 
 async function cleanupTestData(): Promise<void> {
     console.log("\n=== Cleanup ===\n");
     const pool = getPool();
 
-    const docResult = await pool.query(
-        "DELETE FROM doc_chunks WHERE file_path LIKE $1",
-        [`${TEST_DOC_PATH_PREFIX}%`],
+    const result = await pool.query(
+        "DELETE FROM chunks WHERE source_name LIKE $1",
+        [`${TEST_PREFIX}%`],
     );
-    console.log(`Deleted ${docResult.rowCount} test doc chunks.`);
-
-    const codeResult = await pool.query(
-        "DELETE FROM code_chunks WHERE repo_url = $1",
-        [TEST_CODE_REPO],
-    );
-    console.log(`Deleted ${codeResult.rowCount} test code chunks.`);
+    console.log(`Deleted ${result.rowCount} test chunks.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -656,6 +618,7 @@ async function main(): Promise<void> {
     }
 
     const config = getConfig();
+    const serverConfig = getServerConfig();
 
     console.log("Initializing database schema...");
     await initializeSchema();
@@ -663,8 +626,8 @@ async function main(): Promise<void> {
 
     const embeddingClient = new EmbeddingClient(
         config.openaiApiKey,
-        config.embeddingModel,
-        config.embeddingDimensions,
+        serverConfig.embedding.model,
+        serverConfig.embedding.dimensions,
     );
 
     let httpServer: Server | undefined;

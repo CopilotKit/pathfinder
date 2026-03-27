@@ -6,7 +6,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
 import { initializeSchema, getPool } from "./db/client.js";
 import { getIndexStats } from "./db/queries.js";
-import { getConfig } from "./config.js";
+import { getConfig, getServerConfig } from "./config.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
@@ -145,7 +145,7 @@ app.get("/health", async (_req: Request, res: Response) => {
 
         res.json({
             status: "ok",
-            server: "copilotkit-docs-mcp",
+            server: getServerConfig().server.name,
             uptime_seconds: uptime,
             started_at: startedAt.toISOString(),
             indexing: (orchestratorRef as IndexingOrchestrator | null)?.isIndexing() ?? false,
@@ -167,7 +167,7 @@ app.get("/health", async (_req: Request, res: Response) => {
         // Fall back to basic health if DB is unavailable
         res.json({
             status: "ok",
-            server: "copilotkit-docs-mcp",
+            server: getServerConfig().server.name,
             uptime_seconds: Math.floor((Date.now() - startedAt.getTime()) / 1000),
             index: "unavailable",
         });
@@ -180,10 +180,15 @@ app.get("/health", async (_req: Request, res: Response) => {
 
 async function start(): Promise<void> {
     const cfg = getConfig();
+    const serverCfg = getServerConfig();
 
     console.log("[startup] Initializing database schema...");
     await initializeSchema();
     console.log("[startup] Database schema ready.");
+
+    // Log active sources from config
+    const sourceNames = serverCfg.sources.map(s => `${s.name} (${s.type})`);
+    console.log(`[startup] Active sources: ${sourceNames.join(', ')}`);
 
     // Wire the webhook handler and health endpoint with the real orchestrator
     const orchestrator = new IndexingOrchestrator();
@@ -198,8 +203,9 @@ async function start(): Promise<void> {
     // Start the nightly reindex scheduler
     orchestrator.startNightlyReindex();
 
+    const serverName = serverCfg.server.name;
     app.listen(cfg.port, () => {
-        console.log(`[copilotkit-docs-mcp] Running at http://localhost:${cfg.port}/mcp`);
+        console.log(`[${serverName}] Running at http://localhost:${cfg.port}/mcp`);
         console.log(`[health] http://localhost:${cfg.port}/health`);
     });
 }
