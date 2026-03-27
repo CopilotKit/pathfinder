@@ -9,7 +9,6 @@ services:
             POSTGRES_PASSWORD: mcp_local
         volumes:
             - pgdata:/var/lib/postgresql/data
-            - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
         healthcheck:
             test: ["CMD-SHELL", "pg_isready -U mcp"]
             interval: 5s
@@ -27,14 +26,14 @@ services:
             OPENAI_API_KEY: ${OPENAI_API_KEY}
             GITHUB_TOKEN: ${GITHUB_TOKEN:-}
             GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-local-dev-secret}
+            MCP_DOCS_CONFIG: ${MCP_DOCS_CONFIG:-./mcp-docs.yaml}
             PORT: 3001
             NODE_ENV: development
             LOG_LEVEL: debug
-            AUTO_REINDEX_ENABLED: ${AUTO_REINDEX_ENABLED:-true}
-            AUTO_REINDEX_CRON_HOUR: ${AUTO_REINDEX_CRON_HOUR:-3}
         volumes:
             - ./src:/app/src
             - ./scripts:/app/scripts
+            - ./mcp-docs.yaml:/app/mcp-docs.yaml
         depends_on:
             db:
                 condition: service_healthy

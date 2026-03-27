@@ -71,15 +71,14 @@ railway connect Postgres
 ### Check vector index health
 ```sql
 -- In psql via railway connect:
-SELECT count(*) FROM doc_chunks;
-SELECT count(*) FROM code_chunks;
-SELECT count(DISTINCT repo_url) FROM code_chunks;
+SELECT source_name, count(*) FROM chunks GROUP BY source_name;
+SELECT count(DISTINCT repo_url) FROM chunks;
 SELECT * FROM index_state;
 ```
 
 ## Nightly Reindex
-- Enabled by default (AUTO_REINDEX_ENABLED=true)
-- Runs at 3:00 UTC (configurable via AUTO_REINDEX_CRON_HOUR)
+- Enabled by default (`indexing.auto_reindex: true` in mcp-docs.yaml)
+- Runs at 3:00 UTC (configurable via `indexing.reindex_hour_utc` in mcp-docs.yaml)
 - Skips if indexing is already in progress
 - Logs: `[orchestrator] Starting nightly reindex`
 

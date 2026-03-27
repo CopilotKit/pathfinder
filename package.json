@@ -1,7 +1,7 @@
 {
     "name": "mcp-docs",
     "version": "1.0.0",
-    "description": "Self-hosted MCP server for CopilotKit docs & code search",
+    "description": "Self-hosted MCP server for semantic search over documentation and code",
     "type": "module",
     "main": "dist/index.js",
     "scripts": {
