@@ -114,7 +114,7 @@ export class IndexingOrchestrator {
                     );
                     this.queueIncrementalReindex(repoUrl);
                 } else {
-                    console.log(`[orchestrator] ${repoUrl} is current at ${remoteHead.slice(0, 8)} — no reindex needed`);
+                    console.log(`[orchestrator] Index current at ${remoteHead.slice(0, 8)}`);
                 }
             } catch (err) {
                 // If we can't check remote, fall back to age-based staleness

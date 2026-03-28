@@ -33,9 +33,12 @@ export class EmbeddingClient {
         const totalBatches = chunks.length;
         const results: number[][] = [];
         for (let i = 0; i < chunks.length; i++) {
-            console.log(
-                `Embedding batch ${i + 1}/${totalBatches} (${chunks[i].length} texts)...`
-            );
+            // Only log batch progress when there are multiple batches
+            if (totalBatches > 1) {
+                console.log(
+                    `Embedding batch ${i + 1}/${totalBatches} (${chunks[i].length} texts)...`
+                );
+            }
             const batchResults = await this.embedWithRetry(chunks[i], i + 1);
             results.push(...batchResults);
         }

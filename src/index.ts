@@ -71,14 +71,12 @@ app.post("/mcp", async (req: Request, res: Response) => {
             const transport = new StreamableHTTPServerTransport({
                 sessionIdGenerator: () => randomUUID(),
                 onsessioninitialized: (sid) => {
-                    console.log(`[MCP] Session initialized: ${sid.slice(0, 8)}...`);
                     transports[sid] = transport;
                 },
             });
             transport.onclose = () => {
                 const sid = transport.sessionId;
                 if (sid && transports[sid]) {
-                    console.log(`[MCP] Session closed: ${sid.slice(0, 8)}...`);
                     delete transports[sid];
                 }
             };

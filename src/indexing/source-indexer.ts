@@ -210,8 +210,10 @@ export class SourceIndexer {
             .filter((f) => matchesPatterns(f, this.sourceConfig));
 
         // Delete chunks for removed files
+        if (deletedFiles.length > 0) {
+            console.log(`${this.logPrefix} Removing ${deletedFiles.length} deleted files from index`);
+        }
         for (const relPath of deletedFiles) {
-            console.log(`${this.logPrefix} Deleting chunks for removed file: ${relPath}`);
             await deleteChunksByFile(this.sourceConfig.name, relPath);
         }
 
@@ -357,8 +359,5 @@ export class SourceIndexer {
         // (e.g., file shortened from 5 chunks to 3 — old chunks 3-4 would persist)
         await deleteChunksByFile(this.sourceConfig.name, relPath);
         await upsertChunks(chunks);
-        console.log(
-            `${this.logPrefix} Indexed ${relPath} (${chunks.length} chunks)`,
-        );
     }
 }
