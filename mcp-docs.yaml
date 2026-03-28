@@ -47,6 +47,48 @@ sources:
       target_lines: 80
       overlap_lines: 10
 
+  - name: ag-ui-docs
+    type: markdown
+    repo: https://github.com/ag-ui-protocol/ag-ui.git
+    path: docs/
+    base_url: https://docs.ag-ui.com/
+    url_derivation:
+      strip_prefix: "docs/"
+      strip_suffix: ".mdx"
+      strip_route_groups: true
+      strip_index: true
+    file_patterns:
+      - "**/*.mdx"
+      - "**/*.md"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+  - name: ag-ui-code
+    type: code
+    repo: https://github.com/ag-ui-protocol/ag-ui.git
+    path: sdks/typescript/packages/
+    file_patterns:
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+      - "**/*.jsx"
+    exclude_patterns:
+      - "**/test/**"
+      - "**/tests/**"
+      - "**/__tests__/**"
+      - "**/*.test.*"
+      - "**/*.spec.*"
+    skip_dirs:
+      - node_modules
+      - dist
+      - build
+      - .git
+    max_file_size: 102400
+    chunk:
+      target_lines: 80
+      overlap_lines: 10
+
 tools:
   - name: search-docs
     description: "Search the server's documentation to retrieve relevant information. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
@@ -58,6 +100,20 @@ tools:
   - name: search-code
     description: "Search the server's indexed codebase to find relevant code snippets and implementations. Use this tool when you need to understand how something is implemented, find code examples, or locate specific functionality in the codebase. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: code
+    default_limit: 10
+    max_limit: 20
+    result_format: code
+
+  - name: search-ag-ui-docs
+    description: "Search the AG-UI protocol documentation to retrieve relevant information about the Agent-User Interaction protocol, events, types, and integration guides. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: ag-ui-docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+  - name: search-ag-ui-code
+    description: "Search the AG-UI TypeScript SDK codebase to find relevant code snippets and implementations. Use this tool to understand AG-UI protocol types, events, encoders, and client implementations. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: ag-ui-code
     default_limit: 10
     max_limit: 20
     result_format: code
@@ -77,7 +133,14 @@ webhook:
     "CopilotKit/CopilotKit":
       - docs
       - code
+    "ag-ui-protocol/ag-ui":
+      - ag-ui-docs
+      - ag-ui-code
   path_triggers:
     docs:
       - "docs/"
     code: []
+    ag-ui-docs:
+      - "docs/"
+    ag-ui-code:
+      - "sdks/typescript/packages/"
