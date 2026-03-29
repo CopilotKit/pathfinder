@@ -55,6 +55,24 @@ app.use(express.json());
 // ---------------------------------------------------------------------------
 
 const transports: Record<string, StreamableHTTPServerTransport> = {};
+const sessionLastActivity: Record<string, number> = {};
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+// Reap idle sessions every 5 minutes
+setInterval(() => {
+    const now = Date.now();
+    let reaped = 0;
+    for (const sid of Object.keys(sessionLastActivity)) {
+        if (now - sessionLastActivity[sid] > SESSION_TTL_MS) {
+            delete transports[sid];
+            delete sessionLastActivity[sid];
+            reaped++;
+        }
+    }
+    if (reaped > 0) {
+        console.log(`[mcp] Reaped ${reaped} idle sessions (${Object.keys(transports).length} active)`);
+    }
+}, 5 * 60 * 1000);
 
 function clientIp(req: Request): string {
     return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
@@ -69,6 +87,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
 
         // Existing session — route to its transport
         if (sessionId && transports[sessionId]) {
+            sessionLastActivity[sessionId] = Date.now();
             const method = req.body?.method as string | undefined;
             if (method && method !== 'notifications/initialized') {
                 console.log(`[mcp] ${method} (session ${sessionId.slice(0, 8)}) [${ip}]`);
@@ -82,14 +101,16 @@ app.post("/mcp", async (req: Request, res: Response) => {
             const transport = new StreamableHTTPServerTransport({
                 sessionIdGenerator: () => randomUUID(),
                 onsessioninitialized: (sid) => {
-                    console.log(`[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length + 1} active) [${ip}]`);
                     transports[sid] = transport;
+                    sessionLastActivity[sid] = Date.now();
+                    console.log(`[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length} active) [${ip}]`);
                 },
             });
             transport.onclose = () => {
                 const sid = transport.sessionId;
                 if (sid && transports[sid]) {
                     delete transports[sid];
+                    delete sessionLastActivity[sid];
                     console.log(`[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`);
                 }
             };
