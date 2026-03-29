@@ -62,6 +62,10 @@ app.post("/mcp", async (req: Request, res: Response) => {
 
         // Existing session — route to its transport
         if (sessionId && transports[sessionId]) {
+            const method = req.body?.method as string | undefined;
+            if (method && method !== 'notifications/initialized') {
+                console.log(`[mcp] ${method} (session ${sessionId.slice(0, 8)})`);
+            }
             await transports[sessionId].handleRequest(req, res, req.body);
             return;
         }
@@ -71,6 +75,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
             const transport = new StreamableHTTPServerTransport({
                 sessionIdGenerator: () => randomUUID(),
                 onsessioninitialized: (sid) => {
+                    console.log(`[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length + 1} active)`);
                     transports[sid] = transport;
                 },
             });
@@ -78,6 +83,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
                 const sid = transport.sessionId;
                 if (sid && transports[sid]) {
                     delete transports[sid];
+                    console.log(`[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`);
                 }
             };
             const server = createMcpServer();
