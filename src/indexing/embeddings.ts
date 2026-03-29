@@ -25,9 +25,18 @@ export class EmbeddingClient {
     async embedBatch(texts: string[]): Promise<number[][]> {
         if (texts.length === 0) return [];
 
+        // Truncate texts that exceed OpenAI's 8192 token limit (~32K chars with safety margin)
+        const MAX_CHARS = 30_000;
+        const truncated = texts.map((t) => {
+            if (t.length > MAX_CHARS) {
+                return t.slice(0, MAX_CHARS);
+            }
+            return t;
+        });
+
         const chunks: string[][] = [];
-        for (let i = 0; i < texts.length; i += MAX_BATCH_SIZE) {
-            chunks.push(texts.slice(i, i + MAX_BATCH_SIZE));
+        for (let i = 0; i < truncated.length; i += MAX_BATCH_SIZE) {
+            chunks.push(truncated.slice(i, i + MAX_BATCH_SIZE));
         }
 
         const totalBatches = chunks.length;

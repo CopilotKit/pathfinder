@@ -139,7 +139,8 @@ export class SourceIndexer {
             try {
                 await this.indexFile(absPath, relPath, headSha);
             } catch (err) {
-                console.error(`${this.logPrefix} Failed to index ${relPath}:`, err);
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`${this.logPrefix} Failed to index ${relPath}: ${msg}`);
             }
         }
 
@@ -228,7 +229,8 @@ export class SourceIndexer {
                         await this.indexFile(absPath, relPath, headSha);
                     }
                 } catch (err) {
-                    console.error(`${this.logPrefix} Failed to index ${relPath}:`, err);
+                    const msg = err instanceof Error ? err.message : String(err);
+                console.error(`${this.logPrefix} Failed to index ${relPath}: ${msg}`);
                 }
             }
         }
