@@ -13,6 +13,36 @@ import {
 } from '../db/queries.js';
 import type { Chunk, ChunkOutput, SourceConfig } from '../types.js';
 
+/**
+ * Check if file content has low semantic value (SVG paths, base64, minified code).
+ * Samples the first 8KB and checks the ratio of digits, dots, commas, semicolons,
+ * and equals signs. If >30% of characters are these low-value tokens, the file
+ * is likely SVG path data, base64, or minified code with no search value.
+ */
+export function hasLowSemanticValue(content: string): boolean {
+    if (content.length < 500) return false;
+
+    const sample = content.slice(0, 8192);
+    let lowValueChars = 0;
+
+    for (let i = 0; i < sample.length; i++) {
+        const c = sample.charCodeAt(i);
+        if (
+            (c >= 48 && c <= 57) ||  // 0-9
+            c === 46 ||               // .
+            c === 44 ||               // ,
+            c === 59 ||               // ;
+            c === 61                  // =
+        ) {
+            lowValueChars++;
+        }
+    }
+
+    const ratio = lowValueChars / sample.length;
+    return ratio > 0.3;
+}
+
+
 const DEFAULT_SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git']);
 const DEFAULT_MAX_FILE_SIZE = 102400; // 100KB
 
@@ -325,32 +355,6 @@ export class SourceIndexer {
      * Check if file content has low semantic value (SVG paths, base64, minified code).
      * Returns true if the file should be skipped.
      */
-    private hasLowSemanticValue(content: string): boolean {
-        if (content.length < 500) return false;
-
-        // Sample the file (check first 8KB to avoid scanning huge files)
-        const sample = content.slice(0, 8192);
-        let lowValueChars = 0;
-
-        for (let i = 0; i < sample.length; i++) {
-            const c = sample.charCodeAt(i);
-            // Count digits, dots, commas, and single-char tokens common in
-            // SVG paths, base64, coordinate data, and minified code
-            if (
-                (c >= 48 && c <= 57) ||  // 0-9
-                c === 46 ||               // .
-                c === 44 ||               // ,
-                c === 59 ||               // ;
-                c === 61                  // =
-            ) {
-                lowValueChars++;
-            }
-        }
-
-        const ratio = lowValueChars / sample.length;
-        return ratio > 0.4;
-    }
-
     /**
      * Read, chunk, embed, and upsert a single file.
      */
@@ -361,7 +365,7 @@ export class SourceIndexer {
     ): Promise<void> {
         const content = await fs.promises.readFile(absPath, 'utf-8');
 
-        if (this.hasLowSemanticValue(content)) {
+        if (hasLowSemanticValue(content)) {
             return;
         }
 

@@ -56,15 +56,22 @@ app.use(express.json());
 
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 
+function clientIp(req: Request): string {
+    return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
+        || req.socket.remoteAddress
+        || "unknown";
+}
+
 app.post("/mcp", async (req: Request, res: Response) => {
     try {
         const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        const ip = clientIp(req);
 
         // Existing session — route to its transport
         if (sessionId && transports[sessionId]) {
             const method = req.body?.method as string | undefined;
             if (method && method !== 'notifications/initialized') {
-                console.log(`[mcp] ${method} (session ${sessionId.slice(0, 8)})`);
+                console.log(`[mcp] ${method} (session ${sessionId.slice(0, 8)}) [${ip}]`);
             }
             await transports[sessionId].handleRequest(req, res, req.body);
             return;
@@ -75,7 +82,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
             const transport = new StreamableHTTPServerTransport({
                 sessionIdGenerator: () => randomUUID(),
                 onsessioninitialized: (sid) => {
-                    console.log(`[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length + 1} active)`);
+                    console.log(`[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length + 1} active) [${ip}]`);
                     transports[sid] = transport;
                 },
             });

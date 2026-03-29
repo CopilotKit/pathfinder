@@ -2,7 +2,7 @@
 //
 // Usage: npx tsx scripts/test-path-filter.ts
 
-import { globToRegex, matchesPatterns } from '../src/indexing/source-indexer.js';
+import { globToRegex, matchesPatterns, hasLowSemanticValue } from '../src/indexing/source-indexer.js';
 import type { SourceConfig } from '../src/types.js';
 
 let passed = 0;
@@ -115,6 +115,69 @@ const v1Pattern = globToRegex('packages/v1/**');
 assert(v1Pattern.test('packages/v1/index.ts'), 'packages/v1/** matches file in v1');
 assert(v1Pattern.test('packages/v1/a/b/c.ts'), 'packages/v1/** matches deep file');
 assert(!v1Pattern.test('packages/v2/index.ts'), 'packages/v1/** does not match v2');
+
+// --- hasLowSemanticValue tests ---
+console.log('\n--- hasLowSemanticValue ---');
+
+// SVG icon content (high ratio of digits/dots/commas)
+const svgContent = `export const Icon = () => (
+  <svg width="13.3967723px" height="12px" viewBox="0 0 13.3967723 12">
+    <path d="M5.39935802,0.75 C5.97670802,-0.25 7.42007802,-0.25 7.99742802,0.75 L13.193588,9.75 C13.770888,10.75 13.049288,12 11.894588,12 L1.50223802,12 C0.34753802,12 -0.37414898,10.75 0.20319802,9.75 L5.39935802,0.75 Z" />
+  </svg>
+);`.repeat(20);
+assert(hasLowSemanticValue(svgContent), 'SVG icon content detected as low value');
+
+// Normal TypeScript
+const tsContent = `import { useState, useEffect } from 'react';
+import { CopilotRuntime } from '@copilotkit/runtime';
+
+export class CopilotProvider {
+    private runtime: CopilotRuntime;
+
+    constructor(config: Config) {
+        this.runtime = new CopilotRuntime({
+            actions: config.actions,
+            endpoint: config.endpoint,
+        });
+    }
+
+    async processMessage(message: string): Promise<Response> {
+        const result = await this.runtime.process(message);
+        return result;
+    }
+}`.repeat(20);
+assert(!hasLowSemanticValue(tsContent), 'Normal TypeScript not flagged');
+
+// Minified JavaScript
+const minifiedContent = 'var a=0,b=1,c=2,d=3,e=4,f=5;'.repeat(300);
+assert(hasLowSemanticValue(minifiedContent), 'Minified JS detected as low value');
+
+// Base64 encoded data
+const base64Content = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA' + 'ABCDEF0123456789+/='.repeat(500);
+assert(hasLowSemanticValue(base64Content), 'Base64 data detected as low value');
+
+// Short files should never be flagged
+assert(!hasLowSemanticValue('1.2,3.4,5.6'), 'Short file not flagged (< 500 chars)');
+assert(!hasLowSemanticValue(''), 'Empty file not flagged');
+
+// JSON config (moderate digits but under threshold)
+const jsonContent = `{
+    "name": "my-project",
+    "version": "1.0.0",
+    "dependencies": {
+        "express": "^5.2.1",
+        "openai": "^4.80.0"
+    }
+}`.repeat(30);
+assert(!hasLowSemanticValue(jsonContent), 'JSON config not flagged');
+
+// Python code with some numbers
+const pythonContent = `def calculate_metrics(data):
+    total = sum(item.value for item in data)
+    average = total / len(data)
+    return {"total": total, "average": average, "count": len(data)}
+`.repeat(30);
+assert(!hasLowSemanticValue(pythonContent), 'Python code not flagged');
 
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);
