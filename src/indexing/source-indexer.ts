@@ -322,6 +322,36 @@ export class SourceIndexer {
     }
 
     /**
+     * Check if file content has low semantic value (SVG paths, base64, minified code).
+     * Returns true if the file should be skipped.
+     */
+    private hasLowSemanticValue(content: string): boolean {
+        if (content.length < 500) return false;
+
+        // Sample the file (check first 8KB to avoid scanning huge files)
+        const sample = content.slice(0, 8192);
+        let lowValueChars = 0;
+
+        for (let i = 0; i < sample.length; i++) {
+            const c = sample.charCodeAt(i);
+            // Count digits, dots, commas, and single-char tokens common in
+            // SVG paths, base64, coordinate data, and minified code
+            if (
+                (c >= 48 && c <= 57) ||  // 0-9
+                c === 46 ||               // .
+                c === 44 ||               // ,
+                c === 59 ||               // ;
+                c === 61                  // =
+            ) {
+                lowValueChars++;
+            }
+        }
+
+        const ratio = lowValueChars / sample.length;
+        return ratio > 0.4;
+    }
+
+    /**
      * Read, chunk, embed, and upsert a single file.
      */
     private async indexFile(
@@ -330,6 +360,11 @@ export class SourceIndexer {
         commitSha: string,
     ): Promise<void> {
         const content = await fs.promises.readFile(absPath, 'utf-8');
+
+        if (this.hasLowSemanticValue(content)) {
+            return;
+        }
+
         const chunker = getChunker(this.sourceConfig.type);
         const chunkOutputs: ChunkOutput[] = chunker(content, relPath, this.sourceConfig);
 
