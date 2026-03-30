@@ -89,8 +89,16 @@ app.post("/mcp", async (req: Request, res: Response) => {
         if (sessionId && transports[sessionId]) {
             sessionLastActivity[sessionId] = Date.now();
             const method = req.body?.method as string | undefined;
-            if (method && method !== 'notifications/initialized') {
-                console.log(`[mcp] ${method} (session ${sessionId.slice(0, 8)}) [${ip}]`);
+            if (method === 'tools/call') {
+                const params = req.body?.params as Record<string, unknown> | undefined;
+                const toolName = params?.name ?? 'unknown';
+                const args = params?.arguments as Record<string, unknown> | undefined;
+                const query = args?.query ?? '';
+                const limit = args?.limit;
+                const extra = limit ? ` limit=${limit}` : '';
+                console.log(`[mcp] ${toolName}("${query}"${extra}) [${ip}]`);
+            } else if (method === 'tools/list') {
+                console.log(`[mcp] tools/list [${ip}]`);
             }
             await transports[sessionId].handleRequest(req, res, req.body);
             return;
