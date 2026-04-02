@@ -69,9 +69,9 @@ sources:
       overlap_lines: 10
 ```
 
-### Tools
+### Search Tools
 
-Each tool maps to a source and defines the MCP tool interface:
+Each search tool maps to a source and defines the MCP tool interface:
 
 ```yaml
 tools:
@@ -82,6 +82,36 @@ tools:
     max_limit: 20
     result_format: docs
 ```
+
+### Collect Tools
+
+Collect tools let agents write structured data back to the server. Unlike search tools, they don't query anything — they validate the agent's input against a YAML-defined schema and store it as JSONB in the database. Use them to gather signal from agents without writing any code.
+
+The first built-in use case is search feedback: agents report whether search results were helpful, what they tried, and what went wrong. This surfaces broken or misleading documentation quickly. But collect tools are generic — you can define any schema for any use case (e.g., broken link reporting, feature requests, error logging).
+
+```yaml
+tools:
+  - name: submit-feedback
+    type: collect
+    description: "Submit feedback on whether search results were helpful."
+    response: "Feedback recorded. Thank you."
+    schema:
+      tool_name:
+        type: string
+        description: "Which search tool was used"
+        required: true
+      rating:
+        type: enum
+        values: ["helpful", "not_helpful"]
+        description: "Whether the results were helpful"
+        required: true
+      comment:
+        type: string
+        description: "What worked or didn't work"
+        required: true
+```
+
+Each field in `schema` supports `type` (`string`, `number`, or `enum`), an optional `description` (shown to the agent), `required` (defaults to false), and `values` (required for `enum` fields). The validated input is written as JSONB to the `collected_data` table along with the tool name and a timestamp.
 
 ### Built-in Chunker Types
 
@@ -186,6 +216,9 @@ docker compose up
 
 # Seed index
 docker compose exec app npx tsx scripts/seed-index.ts
+
+# Run unit tests
+npm test
 
 # Test search
 docker compose exec app npx tsx scripts/test-search.ts "your query"
