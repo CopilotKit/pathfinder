@@ -152,6 +152,49 @@ describe('AnyToolConfigSchema', () => {
     });
 });
 
+describe('backwards-compat config defaulting', () => {
+    it('defaults missing type to search and parses via AnyToolConfigSchema', () => {
+        const toolWithoutType = {
+            name: 'search-docs',
+            description: 'Search',
+            source: 'docs',
+            default_limit: 5,
+            max_limit: 20,
+            result_format: 'docs',
+        };
+
+        // Simulate the defaulting logic from config.ts
+        const tool = { ...toolWithoutType } as Record<string, unknown>;
+        if (!('type' in tool)) {
+            tool.type = 'search';
+        }
+
+        const result = AnyToolConfigSchema.safeParse(tool);
+        expect(result.success).toBe(true);
+        if (result.success) expect(result.data.type).toBe('search');
+    });
+
+    it('does not overwrite an explicit type', () => {
+        const collectTool = {
+            name: 'feedback',
+            type: 'collect',
+            description: 'Give feedback',
+            response: 'OK',
+            schema: { note: { type: 'string' } },
+        };
+
+        // Same defaulting logic — should not touch existing type
+        const tool = { ...collectTool } as Record<string, unknown>;
+        if (!('type' in tool)) {
+            tool.type = 'search';
+        }
+
+        const result = AnyToolConfigSchema.safeParse(tool);
+        expect(result.success).toBe(true);
+        if (result.success) expect(result.data.type).toBe('collect');
+    });
+});
+
 describe('ServerConfigSchema', () => {
     const minimalConfig = {
         server: { name: 'test', version: '1.0.0' },

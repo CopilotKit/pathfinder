@@ -278,9 +278,10 @@ async function shutdown(signal: string): Promise<void> {
     try {
         await getPool().end();
     } catch (err) {
-        // Only log if the pool was actually initialized
+        // Only log if the pool was actually initialized — PGlite throws
+        // "PGlite pool not initialized" and pg throws about DATABASE_URL
         const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes('DATABASE_URL')) {
+        if (!msg.includes('not initialized') && !msg.includes('DATABASE_URL')) {
             console.error("[shutdown] Error closing pool:", err);
         }
     }
