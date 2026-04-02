@@ -55,16 +55,22 @@ app.use(express.json());
 // Newer Claude Code versions probe these before connecting.
 // ---------------------------------------------------------------------------
 
-app.get("/.well-known/oauth-protected-resource", (_req: Request, res: Response) => {
-    res.status(404).json({ error: "This server does not require authentication" });
+// Return resource metadata with no authorization servers — signals "no auth required"
+// per RFC 9728. Newer Claude Code versions probe this before connecting.
+app.get("/.well-known/oauth-protected-resource", (req: Request, res: Response) => {
+    const host = req.headers.host || `localhost:${getConfig().port}`;
+    const proto = req.headers["x-forwarded-proto"] || "http";
+    res.json({
+        resource: `${proto}://${host}`,
+    });
 });
 
 app.get("/.well-known/oauth-authorization-server", (_req: Request, res: Response) => {
-    res.status(404).json({ error: "This server does not require authentication" });
+    res.status(404).json({ error: "No authorization server — this resource does not require authentication" });
 });
 
 app.post("/register", (_req: Request, res: Response) => {
-    res.status(404).json({ error: "This server does not require authentication" });
+    res.status(404).json({ error: "No authorization server — this resource does not require authentication" });
 });
 
 // ---------------------------------------------------------------------------
