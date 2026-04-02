@@ -258,9 +258,17 @@ async function start(): Promise<void> {
     orchestrator.startNightlyReindex();
 
     const serverName = serverCfg.server.name;
-    app.listen(cfg.port, () => {
+    const server = app.listen(cfg.port, () => {
         console.log(`[${serverName}] Running at http://localhost:${cfg.port}/mcp`);
         console.log(`[health] http://localhost:${cfg.port}/health`);
+    });
+    server.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE") {
+            console.error(`[startup] Port ${cfg.port} is already in use. Set PORT env var to use a different port.`);
+        } else {
+            console.error(`[startup] Server error:`, err);
+        }
+        process.exit(1);
     });
 }
 
