@@ -31,9 +31,10 @@ export async function initializeSchema(): Promise<void> {
 
     const dimensions = getServerConfig().embedding.dimensions;
 
-    // Register pgvector types on a dedicated client first
+    // Ensure the vector extension exists before registering types
     const setupClient = await p.connect();
     try {
+        await setupClient.query('CREATE EXTENSION IF NOT EXISTS vector');
         await pgvector.registerType(setupClient);
     } finally {
         setupClient.release();
