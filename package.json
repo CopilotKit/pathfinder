@@ -10,7 +10,8 @@
         "dev": "tsx watch src/index.ts",
         "seed-index": "tsx scripts/seed-index.ts",
         "test-search": "tsx scripts/test-search.ts",
-        "integration-test": "tsx scripts/integration-test.ts"
+        "integration-test": "tsx scripts/integration-test.ts",
+        "test": "vitest run"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.25.2",
@@ -30,6 +31,7 @@
         "@types/node": "^25.0.6",
         "@types/pg": "^8.11.10",
         "tsx": "^4.21.0",
-        "typescript": "^5.9.3"
+        "typescript": "^5.9.3",
+        "vitest": "^4.1.2"
     }
 }
