@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     title           TEXT,
     content         TEXT NOT NULL,
     embedding       vector(${dimensions}) NOT NULL,
-    repo_url        TEXT NOT NULL,
+    repo_url        TEXT,
     file_path       TEXT NOT NULL,
     start_line      INTEGER,
     end_line        INTEGER,

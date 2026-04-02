@@ -160,6 +160,18 @@ function loadServerConfig(): ServerConfig {
         }
     }
 
+    // Validate local source paths exist
+    for (const source of result.data.sources) {
+        if (!source.repo) {
+            const resolved = resolve(source.path);
+            if (!existsSync(resolved)) {
+                throw new Error(
+                    `Source "${source.name}" references local path "${source.path}" (resolved to ${resolved}) which does not exist.`
+                );
+            }
+        }
+    }
+
     return result.data;
 }
 
