@@ -30,8 +30,7 @@ function parseConfig(): Config {
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) missing.push('OPENAI_API_KEY');
 
-    const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
-    if (!githubWebhookSecret) missing.push('GITHUB_WEBHOOK_SECRET');
+    const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
 
     if (missing.length > 0) {
         throw new Error(
@@ -155,6 +154,18 @@ function loadServerConfig(): ServerConfig {
             if (!sourceNames.has(triggerKey)) {
                 throw new Error(
                     `Webhook path_triggers key "${triggerKey}" does not match any defined source name.`
+                );
+            }
+        }
+    }
+
+    // Validate local source paths exist
+    for (const source of result.data.sources) {
+        if (!source.repo) {
+            const resolved = resolve(source.path);
+            if (!existsSync(resolved)) {
+                throw new Error(
+                    `Source "${source.name}" references local path "${source.path}" (resolved to ${resolved}) which does not exist.`
                 );
             }
         }

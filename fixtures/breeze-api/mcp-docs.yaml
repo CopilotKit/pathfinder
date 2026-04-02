@@ -1,0 +1,31 @@
+server:
+  name: breeze-api-fixture
+  version: "1.0.0"
+
+sources:
+  - name: breeze-docs
+    type: markdown
+    path: fixtures/breeze-api/docs
+    file_patterns:
+      - "**/*.md"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+tools:
+  - name: search-breeze-docs
+    description: "Search the Breeze API documentation."
+    source: breeze-docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536
+
+indexing:
+  auto_reindex: false
+  reindex_hour_utc: 3
+  stale_threshold_hours: 24

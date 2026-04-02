@@ -11,13 +11,6 @@ import {
 } from '../db/queries.js';
 import type { IndexState, IndexStatus, SourceConfig } from '../types.js';
 
-// Derive the list of unique repo URLs from YAML sources config
-function getIndexedRepos(): string[] {
-    const serverCfg = getServerConfig();
-    const repos = new Set(serverCfg.sources.map(s => s.repo));
-    return [...repos];
-}
-
 /**
  * Find all source configs that reference a given repo URL.
  */
@@ -31,8 +24,9 @@ function getStaleThresholdMs(): number {
 }
 
 interface Job {
-    type: 'full-reindex' | 'incremental-reindex';
+    type: 'full-reindex' | 'incremental-reindex' | 'full-reindex-local';
     repoUrl?: string; // for incremental
+    sources?: SourceConfig[]; // for full-reindex-local
 }
 
 export class IndexingOrchestrator {
@@ -82,18 +76,35 @@ export class IndexingOrchestrator {
                 this.queueFullReindex();
                 return;
             }
-            // Otherwise queue incremental reindexes for each affected repo
-            const reposToReindex = new Set(sourcesNeedingFullReindex.map(s => s.repo));
+            // Queue incremental reindexes for each affected git-backed repo
+            const reposToReindex = new Set(
+                sourcesNeedingFullReindex.filter(s => s.repo).map(s => s.repo!),
+            );
             for (const repoUrl of reposToReindex) {
                 this.queueIncrementalReindex(repoUrl);
+            }
+            // Local sources (no repo) get queued as a full reindex of just those sources
+            const localSources = sourcesNeedingFullReindex.filter(s => !s.repo);
+            if (localSources.length > 0) {
+                this.queue.push({ type: 'full-reindex-local', sources: localSources });
+                this.drain().catch(err => console.error('[orchestrator] drain() failed:', err));
             }
         }
 
         if (sourcesOk.length === 0) return;
 
+        // Local sources in sourcesOk have no remote to check — always reindex on startup
+        const localSourcesOk = sourcesOk.filter(s => !s.repo);
+        if (localSourcesOk.length > 0) {
+            console.log(`[orchestrator] Queuing reindex for ${localSourcesOk.length} local source(s)`);
+            this.queue.push({ type: 'full-reindex-local', sources: localSourcesOk });
+            this.drain().catch(err => console.error('[orchestrator] drain() failed:', err));
+        }
+
         console.log('[orchestrator] Checking remotes for changes on indexed sources...');
 
-        const repos = [...new Set(sourcesOk.map(s => s.repo))];
+        // Only check remotes for git-backed sources
+        const repos = [...new Set(sourcesOk.filter(s => s.repo).map(s => s.repo!))];
         for (const repoUrl of repos) {
             try {
                 const remoteHead = await this.getRemoteHead(repoUrl);
@@ -122,7 +133,8 @@ export class IndexingOrchestrator {
                 const repoSources = getSourcesByRepo(repoUrl);
                 const firstState = await getIndexState(repoSources[0].type, repoSources[0].name);
                 if (this.isStale(firstState)) {
-                    console.log(`[orchestrator] Index for ${repoUrl} is stale (>24h) — queuing full reindex`);
+                    const thresholdHours = getServerConfig().indexing.stale_threshold_hours;
+                    console.log(`[orchestrator] Index for ${repoUrl} is stale (>${thresholdHours}h) — queuing full reindex`);
                     this.queueFullReindex();
                 } else {
                     console.log(`[orchestrator] Index for ${repoUrl} appears fresh, skipping`);
@@ -264,7 +276,19 @@ export class IndexingOrchestrator {
 
         if (job.type === 'full-reindex') {
             await this.runFullReindex(embeddingClient, config.cloneDir, config.githubToken);
-        } else if (job.type === 'incremental-reindex' && job.repoUrl) {
+        } else if (job.type === 'full-reindex-local') {
+            if (!job.sources || job.sources.length === 0) {
+                console.warn('[orchestrator] full-reindex-local job has no sources, skipping');
+                return;
+            }
+            for (const sourceConfig of job.sources) {
+                await this.indexSourceWithState(sourceConfig, embeddingClient, config.cloneDir);
+            }
+        } else if (job.type === 'incremental-reindex') {
+            if (!job.repoUrl) {
+                console.warn('[orchestrator] incremental-reindex job has no repoUrl, skipping');
+                return;
+            }
             await this.runIncrementalReindex(
                 embeddingClient,
                 config.cloneDir,

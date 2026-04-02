@@ -99,6 +99,12 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
             return;
         }
 
+        if (!cfg.githubWebhookSecret?.trim()) {
+            console.log("[webhook] Rejecting request — webhook secret not configured");
+            res.status(403).json({ error: "Forbidden" });
+            return;
+        }
+
         const signature = req.headers["x-hub-signature-256"] as string | undefined;
         if (!verifySignature(rawBody, signature, cfg.githubWebhookSecret)) {
             res.status(401).json({ error: "Invalid or missing webhook signature" });

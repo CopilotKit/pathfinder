@@ -3,6 +3,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { getChunker } from './chunking/index.js';
 import { deriveUrl } from './url-derivation.js';
@@ -136,16 +137,38 @@ export class SourceIndexer {
         this.maxFileSize = sourceConfig.max_file_size ?? DEFAULT_MAX_FILE_SIZE;
     }
 
+    private isLocal(): boolean {
+        return !this.sourceConfig.repo;
+    }
+
     /**
-     * Full re-index: clone/pull the repo, walk matching files, chunk, embed, upsert.
+     * Full re-index: for git-backed sources, clone/pull the repo; for local
+     * sources, read directly from the configured path. Then walk matching
+     * files, chunk, embed, and upsert.
      */
     async fullIndex(): Promise<void> {
-        const repoName = repoNameFromUrl(this.sourceConfig.repo);
-        const repoDir = path.join(this.cloneDir, repoName);
-        const git = await this.ensureRepo(repoDir, repoName);
+        let repoDir: string;
+        let headSha: string;
 
-        const headSha = await git.revparse(['HEAD']);
-        const walkRoot = path.join(repoDir, this.sourceConfig.path);
+        if (this.isLocal()) {
+            repoDir = path.resolve(this.sourceConfig.path);
+            if (!fs.existsSync(repoDir)) {
+                console.error(
+                    `${this.logPrefix} Local source path does not exist: ${repoDir}`,
+                );
+                return;
+            }
+            headSha = await this.computeLocalSha(repoDir);
+        } else {
+            const repoName = repoNameFromUrl(this.sourceConfig.repo!);
+            repoDir = path.join(this.cloneDir, repoName);
+            const git = await this.ensureRepo(repoDir, repoName);
+            headSha = await git.revparse(['HEAD']);
+        }
+
+        const walkRoot = this.isLocal()
+            ? repoDir
+            : path.join(repoDir, this.sourceConfig.path);
 
         if (!fs.existsSync(walkRoot)) {
             console.warn(`${this.logPrefix} Walk root not found at ${walkRoot}, skipping`);
@@ -179,9 +202,16 @@ export class SourceIndexer {
 
     /**
      * Incremental index: re-index only files changed since lastCommitSha.
+     * Local sources always fall back to a full reindex.
      */
     async incrementalIndex(lastCommitSha: string): Promise<void> {
-        const repoName = repoNameFromUrl(this.sourceConfig.repo);
+        if (this.isLocal()) {
+            console.log(`${this.logPrefix} Local source — falling back to full reindex`);
+            await this.fullIndex();
+            return;
+        }
+
+        const repoName = repoNameFromUrl(this.sourceConfig.repo!);
         const repoDir = path.join(this.cloneDir, repoName);
         const git = await this.ensureRepo(repoDir, repoName);
 
@@ -270,12 +300,33 @@ export class SourceIndexer {
 
     /**
      * Get the current HEAD SHA of the cloned repo.
+     * For local sources, returns a deterministic hash based on the file
+     * listing and modification times, so unchanged content produces the
+     * same SHA across restarts.
      */
     async getHeadSha(): Promise<string> {
-        const repoName = repoNameFromUrl(this.sourceConfig.repo);
+        if (this.isLocal()) {
+            const walkRoot = path.resolve(this.sourceConfig.path);
+            return this.computeLocalSha(walkRoot);
+        }
+        const repoName = repoNameFromUrl(this.sourceConfig.repo!);
         const repoDir = path.join(this.cloneDir, repoName);
         const git = simpleGit(repoDir);
         return git.revparse(['HEAD']);
+    }
+
+    /**
+     * Compute a deterministic SHA for a local source directory based on
+     * the sorted list of file paths and their modification times.
+     */
+    private async computeLocalSha(walkRoot: string): Promise<string> {
+        const files = await this.walkFiles(walkRoot);
+        const hash = createHash('sha256');
+        for (const f of files.sort()) {
+            const stat = await fs.promises.stat(f);
+            hash.update(`${f}:${stat.mtimeMs}\n`);
+        }
+        return `local-${hash.digest('hex').slice(0, 12)}`;
     }
 
     // -----------------------------------------------------------------------
@@ -301,8 +352,8 @@ export class SourceIndexer {
             }
         }
 
-        const authUrl = authenticatedUrl(this.sourceConfig.repo, this.githubToken);
-        console.log(`${this.logPrefix} Cloning ${this.sourceConfig.repo} into ${repoDir}`);
+        const authUrl = authenticatedUrl(this.sourceConfig.repo!, this.githubToken);
+        console.log(`${this.logPrefix} Cloning ${this.sourceConfig.repo!} into ${repoDir}`);
         const git = simpleGit(this.cloneDir);
         const cloneOpts = ['--depth=1'];
         if (this.sourceConfig.branch) {
@@ -352,10 +403,6 @@ export class SourceIndexer {
     }
 
     /**
-     * Check if file content has low semantic value (SVG paths, base64, minified code).
-     * Returns true if the file should be skipped.
-     */
-    /**
      * Read, chunk, embed, and upsert a single file.
      */
     private async indexFile(
@@ -386,7 +433,7 @@ export class SourceIndexer {
             title: chunk.title ?? null,
             content: chunk.content,
             embedding: embeddings[i],
-            repo_url: this.sourceConfig.repo,
+            repo_url: this.sourceConfig.repo ?? null,
             file_path: relPath,
             start_line: chunk.startLine ?? null,
             end_line: chunk.endLine ?? null,
