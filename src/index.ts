@@ -179,15 +179,18 @@ app.post("/mcp", async (req: Request, res: Response) => {
     }
 });
 
-// SSE stream for server-initiated notifications
+// SSE stream for server-initiated notifications.
+// Returns 405 when no valid session — the SDK interprets this as
+// "server doesn't offer SSE at GET" which is the expected no-auth path.
+// Returning 400 instead would cause the SDK to throw and trigger auth flow.
 app.get("/mcp", async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     if (sessionId && transports[sessionId]) {
         await transports[sessionId].handleRequest(req, res);
     } else {
-        res.status(400).json({
+        res.status(405).json({
             jsonrpc: "2.0",
-            error: { code: -32000, message: "Invalid or missing session ID" },
+            error: { code: -32000, message: "Method Not Allowed" },
             id: null,
         });
     }
