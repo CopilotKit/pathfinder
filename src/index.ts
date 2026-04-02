@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
-import { initializeSchema, getPool } from "./db/client.js";
+import { initializeSchema, closePool } from "./db/client.js";
 import { getIndexStats } from "./db/queries.js";
 import { getConfig, getServerConfig } from "./config.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
@@ -276,14 +276,9 @@ start().catch((err) => {
 async function shutdown(signal: string): Promise<void> {
     console.log(`\n[shutdown] Received ${signal}, shutting down...`);
     try {
-        await getPool().end();
+        await closePool();
     } catch (err) {
-        // Only log if the pool was actually initialized — PGlite throws
-        // "PGlite pool not initialized" and pg throws about DATABASE_URL
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes('not initialized') && !msg.includes('DATABASE_URL')) {
-            console.error("[shutdown] Error closing pool:", err);
-        }
+        console.error("[shutdown] Error closing pool:", err);
     }
     process.exit(0);
 }
