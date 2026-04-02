@@ -14,7 +14,7 @@
         "fixture:breeze-api": "node fixtures/breeze-api/server.js",
         "fixture:breeze-docs": "DATABASE_URL=pglite:///tmp/breeze-docs MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs.yaml tsx src/index.ts",
         "fixture:breeze-broken-docs": "DATABASE_URL=pglite:///tmp/breeze-broken-docs MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs-broken.yaml tsx src/index.ts",
-        "claude": "_MCP_PORT=${PORT:-3001} && _MCP_TMPDIR=$(mktemp -d) && echo \"{\\\"mcpServers\\\":{\\\"mcp-docs\\\":{\\\"type\\\":\\\"http\\\",\\\"url\\\":\\\"http://localhost:${_MCP_PORT}/mcp\\\"}}}\" > \"$_MCP_TMPDIR/mcp.json\" && (cd \"$_MCP_TMPDIR\" && claude --strict-mcp-config --mcp-config \"$_MCP_TMPDIR/mcp.json\"); rm -rf \"$_MCP_TMPDIR\"",
+        "claude": "_MCP_PORT=${PORT:-3001} && _MCP_TMPDIR=$(mktemp -d) && echo \"{\\\"mcpServers\\\":{\\\"mcp-docs\\\":{\\\"type\\\":\\\"http\\\",\\\"url\\\":\\\"http://localhost:${_MCP_PORT}/mcp\\\",\\\"headers\\\":{}}}}\" > \"$_MCP_TMPDIR/mcp.json\" && (cd \"$_MCP_TMPDIR\" && claude --strict-mcp-config --mcp-config \"$_MCP_TMPDIR/mcp.json\"); rm -rf \"$_MCP_TMPDIR\"",
         "test": "vitest run"
     },
     "dependencies": {
