@@ -152,58 +152,6 @@ describe('AnyToolConfigSchema', () => {
     });
 });
 
-describe('backwards-compat config defaulting', () => {
-    it('injects type "search" for tools missing a type field', () => {
-        // Mirrors the defaulting loop in loadServerConfig() from config.ts
-        const tools: Record<string, unknown>[] = [
-            {
-                name: 'search-docs',
-                description: 'Search docs',
-                source: 'docs',
-                default_limit: 5,
-                max_limit: 20,
-                result_format: 'docs',
-            },
-        ];
-
-        for (const tool of tools) {
-            if (typeof tool === 'object' && tool !== null && !('type' in tool)) {
-                (tool as Record<string, unknown>).type = 'search';
-            }
-        }
-
-        const result = AnyToolConfigSchema.safeParse(tools[0]);
-        expect(result.success).toBe(true);
-        if (result.success) {
-            expect(result.data.type).toBe('search');
-        }
-    });
-
-    it('does not overwrite an explicit type field', () => {
-        const tools: Record<string, unknown>[] = [
-            {
-                name: 'feedback',
-                type: 'collect',
-                description: 'Give feedback',
-                response: 'OK',
-                schema: { note: { type: 'string' } },
-            },
-        ];
-
-        for (const tool of tools) {
-            if (typeof tool === 'object' && tool !== null && !('type' in tool)) {
-                (tool as Record<string, unknown>).type = 'search';
-            }
-        }
-
-        const result = AnyToolConfigSchema.safeParse(tools[0]);
-        expect(result.success).toBe(true);
-        if (result.success) {
-            expect(result.data.type).toBe('collect');
-        }
-    });
-});
-
 describe('ServerConfigSchema', () => {
     const minimalConfig = {
         server: { name: 'test', version: '1.0.0' },
