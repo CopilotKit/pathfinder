@@ -153,54 +153,45 @@ describe('AnyToolConfigSchema', () => {
 });
 
 describe('backwards-compat config defaulting', () => {
-    it('injects type "search" for tools missing a type field', () => {
-        // Mirrors the defaulting loop in loadServerConfig() from config.ts
-        const tools: Record<string, unknown>[] = [
-            {
-                name: 'search-docs',
-                description: 'Search docs',
-                source: 'docs',
-                default_limit: 5,
-                max_limit: 20,
-                result_format: 'docs',
-            },
-        ];
+    it('defaults missing type to search and parses via AnyToolConfigSchema', () => {
+        const toolWithoutType = {
+            name: 'search-docs',
+            description: 'Search',
+            source: 'docs',
+            default_limit: 5,
+            max_limit: 20,
+            result_format: 'docs',
+        };
 
-        for (const tool of tools) {
-            if (typeof tool === 'object' && tool !== null && !('type' in tool)) {
-                (tool as Record<string, unknown>).type = 'search';
-            }
+        // Simulate the defaulting logic from config.ts
+        const tool = { ...toolWithoutType } as Record<string, unknown>;
+        if (!('type' in tool)) {
+            tool.type = 'search';
         }
 
-        const result = AnyToolConfigSchema.safeParse(tools[0]);
+        const result = AnyToolConfigSchema.safeParse(tool);
         expect(result.success).toBe(true);
-        if (result.success) {
-            expect(result.data.type).toBe('search');
-        }
+        if (result.success) expect(result.data.type).toBe('search');
     });
 
-    it('does not overwrite an explicit type field', () => {
-        const tools: Record<string, unknown>[] = [
-            {
-                name: 'feedback',
-                type: 'collect',
-                description: 'Give feedback',
-                response: 'OK',
-                schema: { note: { type: 'string' } },
-            },
-        ];
+    it('does not overwrite an explicit type', () => {
+        const collectTool = {
+            name: 'feedback',
+            type: 'collect',
+            description: 'Give feedback',
+            response: 'OK',
+            schema: { note: { type: 'string' } },
+        };
 
-        for (const tool of tools) {
-            if (typeof tool === 'object' && tool !== null && !('type' in tool)) {
-                (tool as Record<string, unknown>).type = 'search';
-            }
+        // Same defaulting logic — should not touch existing type
+        const tool = { ...collectTool } as Record<string, unknown>;
+        if (!('type' in tool)) {
+            tool.type = 'search';
         }
 
-        const result = AnyToolConfigSchema.safeParse(tools[0]);
+        const result = AnyToolConfigSchema.safeParse(tool);
         expect(result.success).toBe(true);
-        if (result.success) {
-            expect(result.data.type).toBe('collect');
-        }
+        if (result.success) expect(result.data.type).toBe('collect');
     });
 });
 

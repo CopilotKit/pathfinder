@@ -224,7 +224,7 @@ export class IndexingOrchestrator {
     // -----------------------------------------------------------------------
 
     /**
-     * Check if an index state is stale (never indexed or older than 24h).
+     * Check if an index state is stale (never indexed or older than the configured threshold).
      */
     private isStale(state: IndexState | null): boolean {
         if (!state) return true;

@@ -153,10 +153,7 @@ export class SourceIndexer {
         if (this.isLocal()) {
             repoDir = path.resolve(this.sourceConfig.path);
             if (!fs.existsSync(repoDir)) {
-                console.error(
-                    `${this.logPrefix} Local source path does not exist: ${repoDir}`,
-                );
-                return;
+                throw new Error(`Local source path does not exist: ${repoDir}`);
             }
             headSha = await this.computeLocalSha(repoDir);
         } else {
@@ -318,6 +315,8 @@ export class SourceIndexer {
     /**
      * Compute a deterministic SHA for a local source directory based on
      * the sorted list of file paths and their modification times.
+     * Note: uses mtimes, not file content — a fresh deploy with identical
+     * files but new mtimes will produce a different SHA and trigger reindex.
      */
     private async computeLocalSha(walkRoot: string): Promise<string> {
         const files = await this.walkFiles(walkRoot);

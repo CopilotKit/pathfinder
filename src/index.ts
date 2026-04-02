@@ -95,8 +95,12 @@ app.post("/mcp", async (req: Request, res: Response) => {
                 const args = params?.arguments as Record<string, unknown> | undefined;
                 const toolCfg = getServerConfig().tools.find(t => t.name === toolName);
                 if (toolCfg?.type === 'collect') {
-                    const dataPreview = JSON.stringify(args ?? {}).slice(0, 200);
-                    console.log(`[mcp] ${toolName}(${dataPreview}) [${ip}]`);
+                    try {
+                        const dataPreview = JSON.stringify(args ?? {}).slice(0, 200);
+                        console.log(`[mcp] ${toolName}(${dataPreview}) [${ip}]`);
+                    } catch {
+                        console.log(`[mcp] ${toolName}(<unserializable>) [${ip}]`);
+                    }
                 } else {
                     const query = args?.query ?? '';
                     const limit = args?.limit;

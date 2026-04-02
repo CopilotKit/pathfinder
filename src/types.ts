@@ -35,8 +35,6 @@ export const SourceConfigSchema = z.object({
     skip_dirs: z.array(z.string()).optional(),
     max_file_size: z.number().int().positive().optional(),
     chunk: ChunkConfigSchema,
-}).refine(s => !s.branch || s.repo, {
-    message: 'branch requires repo to be set',
 });
 
 // ── Tool configuration schemas ────────────────────────────────────────────────

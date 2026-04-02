@@ -24,8 +24,7 @@ export function createMcpServer(): McpServer {
     });
 
     for (const tool of serverCfg.tools) {
-        const toolType = tool.type;
-        switch (toolType) {
+        switch (tool.type) {
             case 'collect':
                 registerCollectTool(server, tool);
                 break;
@@ -33,8 +32,8 @@ export function createMcpServer(): McpServer {
                 registerSearchTool(server, embeddingClient, tool);
                 break;
             default: {
-                const _exhaustive: never = toolType;
-                throw new Error(`Unknown tool type "${_exhaustive}" for tool "${(tool as any).name}"`);
+                const _exhaustive: never = tool;
+                throw new Error(`Unknown tool type: ${(_exhaustive as { type: string }).type}`);
             }
         }
     }
