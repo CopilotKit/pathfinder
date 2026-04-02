@@ -12,8 +12,8 @@
         "test-search": "tsx scripts/test-search.ts",
         "integration-test": "tsx scripts/integration-test.ts",
         "fixture:breeze-api": "node fixtures/breeze-api/server.js",
-        "fixture:breeze-docs": "DATABASE_URL=pglite:///tmp/breeze-docs MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs.yaml tsx watch src/index.ts",
-        "fixture:breeze-broken-docs": "DATABASE_URL=pglite:///tmp/breeze-broken-docs MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs-broken.yaml tsx watch src/index.ts",
+        "fixture:breeze-docs": "DATABASE_URL=pglite:///tmp/breeze-docs MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs.yaml tsx src/index.ts",
+        "fixture:breeze-broken-docs": "DATABASE_URL=pglite:///tmp/breeze-broken-docs MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs-broken.yaml tsx src/index.ts",
         "claude": "TMPDIR=$(mktemp -d) && echo '{\"mcpServers\":{\"mcp-docs\":{\"type\":\"http\",\"url\":\"http://localhost:3001/mcp\"}}}' > \"$TMPDIR/mcp.json\" && (cd \"$TMPDIR\" && claude --strict-mcp-config --mcp-config \"$TMPDIR/mcp.json\"); rm -rf \"$TMPDIR\"",
         "test": "vitest run"
     },
