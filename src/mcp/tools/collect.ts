@@ -45,7 +45,6 @@ export function yamlSchemaToZod(schema: CollectToolConfig['schema']): Record<str
 /**
  * Register a collect tool on the MCP server.
  * The tool validates inputs against the YAML-defined schema and writes to the DB.
- * On DB failure, logs the error detail server-side and returns a generic error to the caller.
  */
 export function registerCollectTool(
     server: McpServer,

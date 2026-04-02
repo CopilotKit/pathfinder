@@ -25,7 +25,7 @@ export const ChunkConfigSchema = z.object({
 export const SourceConfigSchema = z.object({
     name: z.string().min(1),
     type: z.enum(['markdown', 'code', 'raw-text']),
-    repo: z.string().url(),
+    repo: z.string().url().optional(),
     branch: z.string().optional(),
     path: z.string().min(1),
     base_url: z.string().url().optional(),
@@ -147,7 +147,7 @@ export interface Chunk {
     title?: string | null;
     content: string;
     embedding: number[];
-    repo_url: string;
+    repo_url: string | null;
     file_path: string;
     start_line?: number | null;
     end_line?: number | null;
@@ -163,7 +163,7 @@ export interface ChunkResult {
     source_url: string | null;
     title: string | null;
     content: string;
-    repo_url: string;
+    repo_url: string | null;
     file_path: string;
     start_line: number | null;
     end_line: number | null;

@@ -69,7 +69,7 @@ export async function searchChunks(
         source_url: (r.source_url as string) ?? null,
         title: (r.title as string) ?? null,
         content: r.content as string,
-        repo_url: r.repo_url as string,
+        repo_url: (r.repo_url as string) ?? null,
         file_path: r.file_path as string,
         start_line: (r.start_line as number) ?? null,
         end_line: (r.end_line as number) ?? null,
@@ -266,7 +266,7 @@ export async function getIndexStats(): Promise<IndexStats> {
         pool.query(
             "SELECT source_name, count(*)::int AS count FROM chunks GROUP BY source_name ORDER BY source_name",
         ),
-        pool.query("SELECT count(DISTINCT repo_url)::int AS count FROM chunks"),
+        pool.query("SELECT count(DISTINCT repo_url)::int AS count FROM chunks WHERE repo_url IS NOT NULL"),
         pool.query(
             "SELECT source_type, source_key, last_commit_sha, last_indexed_at, status, error_message FROM index_state ORDER BY source_type, source_key",
         ),
