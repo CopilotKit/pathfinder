@@ -30,8 +30,7 @@ function parseConfig(): Config {
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) missing.push('OPENAI_API_KEY');
 
-    const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
-    if (!githubWebhookSecret) missing.push('GITHUB_WEBHOOK_SECRET');
+    const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
 
     if (missing.length > 0) {
         throw new Error(
