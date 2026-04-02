@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { EmbeddingClient } from '../../indexing/embeddings.js';
-import type { ToolConfig, ChunkResult } from '../../types.js';
+import type { SearchToolConfig, ChunkResult } from '../../types.js';
 import { searchChunks } from '../../db/queries.js';
 
 function formatDocsResults(results: ChunkResult[]): string {
@@ -47,7 +47,7 @@ function formatResults(results: ChunkResult[], format: string): string {
 export function registerSearchTool(
     server: McpServer,
     embeddingClient: EmbeddingClient,
-    toolConfig: ToolConfig,
+    toolConfig: SearchToolConfig,
 ): void {
     const inputSchema = {
         query: z.string().describe("The search query"),
@@ -69,10 +69,10 @@ export function registerSearchTool(
                     content: [{ type: "text" as const, text: formatResults(results, toolConfig.result_format) }],
                 };
             } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                console.error(`[${toolConfig.name}] Error: ${message}`);
+                const detail = error instanceof Error ? error.message : String(error);
+                console.error(`[${toolConfig.name}] Error: ${detail}`);
                 return {
-                    content: [{ type: "text" as const, text: `Error: ${message}` }],
+                    content: [{ type: "text" as const, text: "Error: Search failed. Please try again later." }],
                     isError: true,
                 };
             }
