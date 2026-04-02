@@ -34,6 +34,8 @@ export async function initializeSchema(): Promise<void> {
     // Ensure the vector extension exists before registering types
     const setupClient = await p.connect();
     try {
+        // Requires superuser or pg_extension_owner — works with the default Docker image
+        // but will fail on locked-down setups (e.g. RDS) without explicit grants
         await setupClient.query('CREATE EXTENSION IF NOT EXISTS vector');
         await pgvector.registerType(setupClient);
     } finally {
