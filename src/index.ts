@@ -51,6 +51,23 @@ app.post("/webhooks/github", express.raw({ type: "application/json" }), async (r
 app.use(express.json());
 
 // ---------------------------------------------------------------------------
+// OAuth discovery stubs — tell MCP clients that no auth is required.
+// Newer Claude Code versions probe these before connecting.
+// ---------------------------------------------------------------------------
+
+app.get("/.well-known/oauth-protected-resource", (_req: Request, res: Response) => {
+    res.status(404).json({ error: "This server does not require authentication" });
+});
+
+app.get("/.well-known/oauth-authorization-server", (_req: Request, res: Response) => {
+    res.status(404).json({ error: "This server does not require authentication" });
+});
+
+app.post("/register", (_req: Request, res: Response) => {
+    res.status(404).json({ error: "This server does not require authentication" });
+});
+
+// ---------------------------------------------------------------------------
 // MCP endpoint — session-based (initialize once, then tool calls reuse session)
 // ---------------------------------------------------------------------------
 
