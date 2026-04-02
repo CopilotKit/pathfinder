@@ -24,6 +24,27 @@ tools:
     max_limit: 20
     result_format: docs
 
+  # Collect tools write structured data from agents to the database.
+  # Define input schema, description, and a canned response — no code needed.
+  - name: submit-feedback
+    type: collect
+    description: "Submit feedback on whether search results were helpful."
+    response: "Feedback recorded. Thank you."
+    schema:
+      tool_name:
+        type: string
+        description: "Which search tool was used"
+        required: true
+      rating:
+        type: enum
+        values: ["helpful", "not_helpful"]
+        description: "Whether the results were helpful"
+        required: true
+      comment:
+        type: string
+        description: "What worked or didn't work"
+        required: true
+
 embedding:
   provider: openai
   model: text-embedding-3-small
