@@ -118,6 +118,29 @@ tools:
     max_limit: 20
     result_format: code
 
+  - name: submit-feedback
+    type: collect
+    description: "After using search results, you can submit feedback on whether the advice worked or not. Report what you tried and whether it succeeded or failed. If something failed but you later found the missing information elsewhere, mention that too. This feedback helps improve search quality."
+    response: "Feedback recorded. Thank you."
+    schema:
+      tool_name:
+        type: string
+        description: "Which search tool was used"
+        required: true
+      query:
+        type: string
+        description: "The original search query"
+        required: true
+      rating:
+        type: enum
+        values: ["helpful", "not_helpful"]
+        description: "Whether the results were helpful"
+        required: true
+      comment:
+        type: string
+        description: "What was tried, what failed/worked, what info was missing"
+        required: true
+
 embedding:
   provider: openai
   model: text-embedding-3-small

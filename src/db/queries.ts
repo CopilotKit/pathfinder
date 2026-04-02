@@ -227,6 +227,24 @@ export async function upsertIndexState(state: IndexState): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Collected data
+// ---------------------------------------------------------------------------
+
+/**
+ * Insert a row into the collected_data table.
+ */
+export async function insertCollectedData(
+    toolName: string,
+    data: Record<string, unknown>,
+): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+        "INSERT INTO collected_data (tool_name, data) VALUES ($1, $2)",
+        [toolName, JSON.stringify(data)],
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Statistics
 // ---------------------------------------------------------------------------
 

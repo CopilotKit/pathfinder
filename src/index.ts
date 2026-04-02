@@ -93,10 +93,16 @@ app.post("/mcp", async (req: Request, res: Response) => {
                 const params = req.body?.params as Record<string, unknown> | undefined;
                 const toolName = params?.name ?? 'unknown';
                 const args = params?.arguments as Record<string, unknown> | undefined;
-                const query = args?.query ?? '';
-                const limit = args?.limit;
-                const extra = limit ? ` limit=${limit}` : '';
-                console.log(`[mcp] ${toolName}("${query}"${extra}) [${ip}]`);
+                const toolCfg = getServerConfig().tools.find(t => t.name === toolName);
+                if (toolCfg?.type === 'collect') {
+                    const dataPreview = JSON.stringify(args ?? {}).slice(0, 200);
+                    console.log(`[mcp] ${toolName}(${dataPreview}) [${ip}]`);
+                } else {
+                    const query = args?.query ?? '';
+                    const limit = args?.limit;
+                    const extra = limit ? ` limit=${limit}` : '';
+                    console.log(`[mcp] ${toolName}("${query}"${extra}) [${ip}]`);
+                }
             } else if (method === 'tools/list') {
                 console.log(`[mcp] tools/list [${ip}]`);
             }

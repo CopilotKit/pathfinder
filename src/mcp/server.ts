@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { EmbeddingClient } from '../indexing/embeddings.js';
 import { getConfig, getServerConfig } from '../config.js';
 import { registerSearchTool } from './tools/search.js';
+import { registerCollectTool } from './tools/collect.js';
 
 /**
  * Creates a new McpServer instance with all tools registered.
@@ -23,7 +24,19 @@ export function createMcpServer(): McpServer {
     });
 
     for (const tool of serverCfg.tools) {
-        registerSearchTool(server, embeddingClient, tool);
+        const toolType = tool.type;
+        switch (toolType) {
+            case 'collect':
+                registerCollectTool(server, tool);
+                break;
+            case 'search':
+                registerSearchTool(server, embeddingClient, tool);
+                break;
+            default: {
+                const _exhaustive: never = toolType;
+                throw new Error(`Unknown tool type "${_exhaustive}" for tool "${(tool as any).name}"`);
+            }
+        }
     }
 
     return server;

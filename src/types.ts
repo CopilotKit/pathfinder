@@ -39,16 +39,46 @@ export const SourceConfigSchema = z.object({
 
 // ── Tool configuration schemas ────────────────────────────────────────────────
 
-export const ToolConfigSchema = z.object({
+const SearchToolConfigObjectSchema = z.object({
     name: z.string().min(1),
+    type: z.literal('search'),
     description: z.string().min(1),
     source: z.string().min(1),
     default_limit: z.number().int().positive(),
     max_limit: z.number().int().positive(),
     result_format: z.enum(['docs', 'code', 'raw']),
-}).refine(t => t.default_limit <= t.max_limit, {
-    message: 'default_limit must not exceed max_limit',
 });
+
+// SearchToolConfig type is inferred from the object schema directly.
+// Cross-field validation (default_limit <= max_limit) lives in ServerConfigSchema.superRefine.
+export const SearchToolConfigSchema = SearchToolConfigObjectSchema;
+
+export const CollectToolConfigSchema = z.object({
+    name: z.string().min(1),
+    type: z.literal('collect'),
+    description: z.string().min(1),
+    response: z.string().min(1),
+    schema: z.record(z.string(), z.object({
+        type: z.enum(['string', 'number', 'enum']),
+        description: z.string().optional(),
+        required: z.boolean().optional(),
+        values: z.array(z.string()).optional(),
+    }).refine(f => f.type !== 'enum' || (f.values && f.values.length > 0), {
+        message: 'enum fields must have a non-empty values array',
+    }).refine(f => f.type === 'enum' || !f.values, {
+        message: 'values is only valid for enum fields',
+    })).refine(
+        s => Object.keys(s).length > 0,
+        { message: 'collect tool schema must define at least one field' },
+    ),
+});
+
+// Cross-field constraints (e.g. default_limit <= max_limit for search tools)
+// are enforced in ServerConfigSchema.superRefine, not here.
+export const AnyToolConfigSchema = z.discriminatedUnion('type', [
+    SearchToolConfigObjectSchema,
+    CollectToolConfigSchema,
+]);
 
 // ── Embedding configuration schemas ───────────────────────────────────────────
 
@@ -81,10 +111,20 @@ export const ServerConfigSchema = z.object({
         version: z.string().min(1),
     }),
     sources: z.array(SourceConfigSchema).min(1),
-    tools: z.array(ToolConfigSchema).min(1),
+    tools: z.array(AnyToolConfigSchema).min(1),
     embedding: EmbeddingConfigSchema,
     indexing: IndexingConfigSchema,
     webhook: WebhookConfigSchema.optional(),
+}).superRefine((cfg, ctx) => {
+    for (const tool of cfg.tools) {
+        if (tool.type === 'search' && tool.default_limit > tool.max_limit) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `Tool "${tool.name}": default_limit must not exceed max_limit`,
+                path: ['tools'],
+            });
+        }
+    }
 });
 
 // ── Inferred TypeScript types from Zod schemas ────────────────────────────────
@@ -92,7 +132,8 @@ export const ServerConfigSchema = z.object({
 export type UrlDerivationConfig = z.infer<typeof UrlDerivationConfigSchema>;
 export type ChunkConfig = z.infer<typeof ChunkConfigSchema>;
 export type SourceConfig = z.infer<typeof SourceConfigSchema>;
-export type ToolConfig = z.infer<typeof ToolConfigSchema>;
+export type SearchToolConfig = z.infer<typeof SearchToolConfigSchema>;
+export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;

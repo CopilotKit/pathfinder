@@ -99,6 +99,16 @@ function loadServerConfig(): ServerConfig {
     const raw = readFileSync(configPath, 'utf-8');
     const parsed = parseYaml(raw);
 
+    // Default tool type to 'search' for backwards compatibility
+    if (Array.isArray(parsed?.tools)) {
+        for (const tool of parsed.tools) {
+            if (tool && typeof tool === 'object' && !('type' in tool)) {
+                console.warn(`[config] Tool "${tool.name}" has no type field — defaulting to "search". Add "type: search" explicitly to silence this warning.`);
+                tool.type = 'search';
+            }
+        }
+    }
+
     const result = ServerConfigSchema.safeParse(parsed);
     if (!result.success) {
         const issues = result.error.issues
@@ -113,8 +123,15 @@ function loadServerConfig(): ServerConfig {
         throw new Error('Duplicate source names found in sources configuration.');
     }
 
-    // Cross-validate: every tool.source must reference an existing source name
-    for (const tool of result.data.tools) {
+    // Validate tool name uniqueness
+    const toolNames = new Set(result.data.tools.map(t => t.name));
+    if (toolNames.size !== result.data.tools.length) {
+        throw new Error('Duplicate tool names found in tools configuration.');
+    }
+
+    // Cross-validate: every search tool's source must reference an existing source name
+    const searchTools = result.data.tools.filter(t => t.type === 'search');
+    for (const tool of searchTools) {
         if (!sourceNames.has(tool.source)) {
             throw new Error(
                 `Tool "${tool.name}" references source "${tool.source}" which is not defined in sources.`
