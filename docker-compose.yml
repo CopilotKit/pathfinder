@@ -10,7 +10,7 @@ services:
         volumes:
             - pgdata:/var/lib/postgresql/data
         healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U mcp"]
+            test: ["CMD-SHELL", "pg_isready -U mcp -d mcp_docs"]
             interval: 5s
             retries: 5
 
@@ -20,7 +20,7 @@ services:
             dockerfile: Dockerfile
             target: dev
         ports:
-            - "3001:3001"
+            - "${APP_PORT:-3001}:3001"
         environment:
             DATABASE_URL: postgresql://mcp:mcp_local@db:5432/mcp_docs
             OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -37,7 +37,8 @@ services:
         depends_on:
             db:
                 condition: service_healthy
-        command: npx tsx watch src/index.ts
+        restart: unless-stopped
+        command: npx tsx src/index.ts
 
 volumes:
     pgdata:
