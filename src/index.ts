@@ -1,12 +1,14 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
 import { randomUUID } from "node:crypto";
+import { Bash } from "just-bash";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
+import { buildBashFilesMap } from "./mcp/tools/bash-fs.js";
 import { initializeSchema, closePool } from "./db/client.js";
 import { getIndexStats } from "./db/queries.js";
-import { getConfig, getServerConfig } from "./config.js";
+import { getConfig, getServerConfig, hasSearchTools, hasCollectTools } from "./config.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
@@ -30,6 +32,7 @@ app.use(
 let webhookHandler: ((req: Request, res: Response) => Promise<void>) | null = null;
 let orchestratorRef: IndexingOrchestrator | null = null;
 const startedAt = new Date();
+const bashInstances = new Map<string, Bash>();
 
 app.post("/webhooks/github", express.raw({ type: "application/json" }), async (req: Request, res: Response) => {
     const handler = webhookHandler;
@@ -124,6 +127,9 @@ app.post("/mcp", async (req: Request, res: Response) => {
                     } catch {
                         console.log(`[mcp] ${toolName}(<unserializable>) [${ip}]`);
                     }
+                } else if (toolCfg?.type === 'bash') {
+                    const cmd = args?.command ?? '';
+                    console.log(`[mcp] ${toolName}(${JSON.stringify(cmd).slice(0, 200)}) [${ip}]`);
                 } else {
                     const query = args?.query ?? '';
                     const limit = args?.limit;
@@ -155,7 +161,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
                     console.log(`[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`);
                 }
             };
-            const server = createMcpServer();
+            const server = createMcpServer(bashInstances);
             await server.connect(transport);
             await transport.handleRequest(req, res, req.body);
             return;
@@ -215,10 +221,23 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 app.get("/health", async (_req: Request, res: Response) => {
+    const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+    const needsDb = hasSearchTools() || hasCollectTools();
+
+    if (!needsDb) {
+        res.json({
+            status: "ok",
+            server: getServerConfig().server.name,
+            uptime_seconds: uptime,
+            started_at: startedAt.toISOString(),
+            indexing: false,
+            index: "not_configured",
+        });
+        return;
+    }
+
     try {
         const stats = await getIndexStats();
-        const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
-
         res.json({
             status: "ok",
             server: getServerConfig().server.name,
@@ -241,11 +260,9 @@ app.get("/health", async (_req: Request, res: Response) => {
         });
     } catch (err) {
         console.error("[health] Database unavailable:", err);
-        const serverName = getServerConfig().server.name;
-        const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
         res.status(503).json({
             status: "degraded",
-            server: serverName,
+            server: getServerConfig().server.name,
             uptime_seconds: uptime,
             started_at: startedAt.toISOString(),
             index: "unavailable",
@@ -262,26 +279,41 @@ async function start(): Promise<void> {
     const cfg = getConfig();
     const serverCfg = getServerConfig();
 
-    console.log("[startup] Initializing database schema...");
-    await initializeSchema();
-    console.log("[startup] Database schema ready.");
+    const needsDb = hasSearchTools() || hasCollectTools();
+
+    if (needsDb) {
+        console.log("[startup] Initializing database schema...");
+        await initializeSchema();
+        console.log("[startup] Database schema ready.");
+    }
 
     // Log active sources from config
     const sourceNames = serverCfg.sources.map(s => `${s.name} (${s.type})`);
     console.log(`[startup] Active sources: ${sourceNames.join(', ')}`);
 
-    // Wire the webhook handler and health endpoint with the real orchestrator
-    const orchestrator = new IndexingOrchestrator();
-    orchestratorRef = orchestrator;
-    webhookHandler = createWebhookHandler(orchestrator);
+    // Build shared Bash instances for bash tools (stateless — each exec starts from /)
+    const bashTools = serverCfg.tools.filter(t => t.type === 'bash');
+    for (const tool of bashTools) {
+        const toolSources = serverCfg.sources.filter(s => tool.sources.includes(s.name));
+        const filesMap = await buildBashFilesMap(toolSources);
+        bashInstances.set(tool.name, new Bash({ files: filesMap, cwd: '/' }));
+        console.log(`[startup] Bash tool "${tool.name}": ${Object.keys(filesMap).length} files loaded`);
+    }
 
-    // Fire-and-forget startup indexing check
-    orchestrator.checkAndIndex().catch((err) => {
-        console.error("[startup] Initial index check failed:", err);
-    });
+    // Indexing and webhooks only needed when search tools are configured
+    if (hasSearchTools()) {
+        const orchestrator = new IndexingOrchestrator();
+        orchestratorRef = orchestrator;
+        webhookHandler = createWebhookHandler(orchestrator);
 
-    // Start the nightly reindex scheduler
-    orchestrator.startNightlyReindex();
+        orchestrator.checkAndIndex().catch((err) => {
+            console.error("[startup] Initial index check failed:", err);
+        });
+
+        orchestrator.startNightlyReindex();
+    } else {
+        console.log("[startup] No search tools configured — skipping indexing");
+    }
 
     const serverName = serverCfg.server.name;
     const server = app.listen(cfg.port, () => {

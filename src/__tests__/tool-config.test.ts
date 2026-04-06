@@ -78,6 +78,50 @@ describe('CollectToolConfigSchema', () => {
     });
 });
 
+describe('BashToolConfigSchema', () => {
+    it('parses a valid bash tool config', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+            sources: ['docs'],
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+        if (result.success) expect(result.data.type).toBe('bash');
+    });
+
+    it('parses bash tool with multiple sources', () => {
+        const config = {
+            name: 'explore-all',
+            type: 'bash',
+            description: 'Explore everything',
+            sources: ['docs', 'code'],
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+    });
+
+    it('rejects bash tool with empty sources', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+            sources: [],
+        };
+        expect(AnyToolConfigSchema.safeParse(config).success).toBe(false);
+    });
+
+    it('rejects bash tool without sources', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+        };
+        expect(AnyToolConfigSchema.safeParse(config).success).toBe(false);
+    });
+});
+
 describe('AnyToolConfigSchema', () => {
     it('parses a search tool with explicit type', () => {
         const config = {
@@ -242,5 +286,84 @@ describe('ServerConfigSchema', () => {
         };
         const result = ServerConfigSchema.safeParse(config);
         expect(result.success).toBe(true);
+    });
+
+    it('rejects bash tool referencing undefined source', () => {
+        const config = {
+            ...minimalConfig,
+            tools: [{
+                name: 'explore',
+                type: 'bash',
+                description: 'Explore',
+                sources: ['nonexistent'],
+            }],
+        };
+        const result = ServerConfigSchema.safeParse(config);
+        expect(result.success).toBe(false);
+    });
+
+    it('accepts bash tool referencing valid source', () => {
+        const config = {
+            ...minimalConfig,
+            tools: [{
+                name: 'explore',
+                type: 'bash',
+                description: 'Explore',
+                sources: ['docs'],
+            }],
+        };
+        const result = ServerConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+    });
+
+    it('accepts bash-only config without embedding and indexing', () => {
+        const { embedding, indexing, ...configWithoutEmbedding } = minimalConfig;
+        const config = {
+            ...configWithoutEmbedding,
+            tools: [{
+                name: 'explore',
+                type: 'bash',
+                description: 'Explore',
+                sources: ['docs'],
+            }],
+        };
+        const result = ServerConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+    });
+
+    it('rejects search config without embedding', () => {
+        const { embedding, ...configWithoutEmbedding } = minimalConfig;
+        const config = {
+            ...configWithoutEmbedding,
+            tools: [{
+                name: 'search-docs',
+                type: 'search',
+                description: 'Search',
+                source: 'docs',
+                default_limit: 5,
+                max_limit: 20,
+                result_format: 'docs',
+            }],
+        };
+        const result = ServerConfigSchema.safeParse(config);
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects search config without indexing', () => {
+        const { indexing, ...configWithoutIndexing } = minimalConfig;
+        const config = {
+            ...configWithoutIndexing,
+            tools: [{
+                name: 'search-docs',
+                type: 'search',
+                description: 'Search',
+                source: 'docs',
+                default_limit: 5,
+                max_limit: 20,
+                result_format: 'docs',
+            }],
+        };
+        const result = ServerConfigSchema.safeParse(config);
+        expect(result.success).toBe(false);
     });
 });

@@ -1,8 +1,8 @@
 // Job queue and coordination for indexing pipelines.
-// Fully config-driven: iterates over all sources defined in mcp-docs.yaml.
+// Fully config-driven: indexes sources referenced by search tools in mcp-docs.yaml.
 
 import { simpleGit } from 'simple-git';
-import { getConfig, getServerConfig } from '../config.js';
+import { getConfig, getServerConfig, getIndexableSourceNames } from '../config.js';
 import { EmbeddingClient } from './embeddings.js';
 import { SourceIndexer } from './source-indexer.js';
 import {
@@ -20,7 +20,7 @@ function getSourcesByRepo(repoUrl: string): SourceConfig[] {
 
 function getStaleThresholdMs(): number {
     const serverCfg = getServerConfig();
-    return serverCfg.indexing.stale_threshold_hours * 60 * 60 * 1000;
+    return (serverCfg.indexing?.stale_threshold_hours ?? 24) * 60 * 60 * 1000;
 }
 
 interface Job {
@@ -50,15 +50,22 @@ export class IndexingOrchestrator {
      * unnecessary OpenAI API calls on container restarts.
      */
     async checkAndIndex(): Promise<void> {
+        const indexableNames = getIndexableSourceNames();
+        if (indexableNames.size === 0) {
+            console.log('[orchestrator] No search tools configured — skipping indexing');
+            return;
+        }
+
         console.log('[orchestrator] Checking index state...');
 
         const serverCfg = getServerConfig();
+        const indexableSources = serverCfg.sources.filter(s => indexableNames.has(s.name));
 
-        // Check all configured sources for missing/errored state.
+        // Check indexable sources for missing/errored state.
         // Queue individual sources that need reindexing rather than triggering a full reindex of everything.
         const sourcesNeedingFullReindex: SourceConfig[] = [];
         const sourcesOk: SourceConfig[] = [];
-        for (const source of serverCfg.sources) {
+        for (const source of indexableSources) {
             const state = await getIndexState(source.type, source.name);
             if (!state || !state.last_commit_sha || state.status === 'error') {
                 console.log(`[orchestrator] ${source.name}: never indexed or in error state — will queue for reindex`);
@@ -71,8 +78,8 @@ export class IndexingOrchestrator {
         // Queue full reindex for individual missing/errored sources
         if (sourcesNeedingFullReindex.length > 0) {
             // If ALL sources need reindex, just do a full reindex
-            if (sourcesNeedingFullReindex.length === serverCfg.sources.length) {
-                console.log('[orchestrator] All sources need reindexing — queuing full reindex');
+            if (sourcesNeedingFullReindex.length === indexableSources.length) {
+                console.log('[orchestrator] All indexable sources need reindexing — queuing full reindex');
                 this.queueFullReindex();
                 return;
             }
@@ -108,7 +115,7 @@ export class IndexingOrchestrator {
         for (const repoUrl of repos) {
             try {
                 const remoteHead = await this.getRemoteHead(repoUrl);
-                const sources = getSourcesByRepo(repoUrl);
+                const sources = getSourcesByRepo(repoUrl).filter(s => indexableNames.has(s.name));
 
                 let anyChanged = false;
                 for (const source of sources) {
@@ -133,7 +140,7 @@ export class IndexingOrchestrator {
                 const repoSources = getSourcesByRepo(repoUrl);
                 const firstState = await getIndexState(repoSources[0].type, repoSources[0].name);
                 if (this.isStale(firstState)) {
-                    const thresholdHours = getServerConfig().indexing.stale_threshold_hours;
+                    const thresholdHours = getServerConfig().indexing?.stale_threshold_hours ?? 24;
                     console.log(`[orchestrator] Index for ${repoUrl} is stale (>${thresholdHours}h) — queuing full reindex`);
                     this.queueFullReindex();
                 } else {
@@ -197,7 +204,7 @@ export class IndexingOrchestrator {
      */
     startNightlyReindex(): void {
         const serverCfg = getServerConfig();
-        if (!serverCfg.indexing.auto_reindex) {
+        if (!serverCfg.indexing?.auto_reindex) {
             console.log('[orchestrator] Nightly reindex disabled');
             return;
         }
@@ -268,6 +275,9 @@ export class IndexingOrchestrator {
     private async executeJob(job: Job): Promise<void> {
         const config = getConfig();
         const serverCfg = getServerConfig();
+        if (!serverCfg.embedding) {
+            throw new Error('embedding config is required for indexing');
+        }
         const embeddingClient = new EmbeddingClient(
             config.openaiApiKey,
             serverCfg.embedding.model,
@@ -299,7 +309,7 @@ export class IndexingOrchestrator {
     }
 
     /**
-     * Run a full re-index of all configured sources.
+     * Run a full re-index of all indexable sources (those referenced by search tools).
      */
     private async runFullReindex(
         embeddingClient: EmbeddingClient,
@@ -309,7 +319,8 @@ export class IndexingOrchestrator {
         console.log('[orchestrator] Starting full re-index');
 
         const serverCfg = getServerConfig();
-        for (const sourceConfig of serverCfg.sources) {
+        const indexableNames = getIndexableSourceNames();
+        for (const sourceConfig of serverCfg.sources.filter(s => indexableNames.has(s.name))) {
             await this.indexSourceWithState(
                 sourceConfig,
                 embeddingClient,
@@ -334,7 +345,8 @@ export class IndexingOrchestrator {
             `[orchestrator] Starting incremental re-index for ${repoUrl}`,
         );
 
-        const sources = getSourcesByRepo(repoUrl);
+        const indexableNames = getIndexableSourceNames();
+        const sources = getSourcesByRepo(repoUrl).filter(s => indexableNames.has(s.name));
         for (const sourceConfig of sources) {
             const state = await getIndexState(sourceConfig.type, sourceConfig.name);
             if (state?.last_commit_sha) {

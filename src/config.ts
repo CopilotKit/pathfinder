@@ -19,16 +19,41 @@ export interface Config {
     cloneDir: string;
 }
 
+/**
+ * Check whether any search tools are configured (requires embeddings + indexing).
+ */
+export function hasSearchTools(): boolean {
+    return getServerConfig().tools.some(t => t.type === 'search');
+}
+
+/**
+ * Check whether any collect tools are configured (requires database).
+ */
+export function hasCollectTools(): boolean {
+    return getServerConfig().tools.some(t => t.type === 'collect');
+}
+
+/**
+ * Get the set of source names that need indexing (only those referenced by search tools).
+ */
+export function getIndexableSourceNames(): Set<string> {
+    const searchTools = getServerConfig().tools.filter(t => t.type === 'search');
+    return new Set(searchTools.map(t => t.source));
+}
+
 let cachedConfig: Config | null = null;
 
 function parseConfig(): Config {
     const missing: string[] = [];
 
+    const needsRag = hasSearchTools();
+    const needsDb = needsRag || hasCollectTools();
+
     const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) missing.push('DATABASE_URL');
+    if (!databaseUrl && needsDb) missing.push('DATABASE_URL');
 
     const openaiApiKey = process.env.OPENAI_API_KEY;
-    if (!openaiApiKey) missing.push('OPENAI_API_KEY');
+    if (!openaiApiKey && needsRag) missing.push('OPENAI_API_KEY');
 
     const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
 
@@ -45,8 +70,8 @@ function parseConfig(): Config {
     }
 
     return {
-        databaseUrl: databaseUrl!,
-        openaiApiKey: openaiApiKey!,
+        databaseUrl: databaseUrl ?? '',
+        openaiApiKey: openaiApiKey ?? '',
         githubToken: process.env.GITHUB_TOKEN || '',
         githubWebhookSecret: githubWebhookSecret!,
         port,
