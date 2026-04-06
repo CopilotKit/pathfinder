@@ -109,22 +109,42 @@ export const config = new Proxy({} as Config, {
 let cachedServerConfig: ServerConfig | null = null;
 
 function resolveConfigPath(): string {
-    const envPath = process.env.MCP_DOCS_CONFIG;
-    if (envPath) {
-        const resolved = resolve(envPath);
+    // Primary env var
+    const pathfinderEnv = process.env.PATHFINDER_CONFIG;
+    if (pathfinderEnv) {
+        const resolved = resolve(pathfinderEnv);
+        if (!existsSync(resolved)) {
+            throw new Error(`PATHFINDER_CONFIG points to ${resolved} but file does not exist.`);
+        }
+        return resolved;
+    }
+
+    // Deprecated env var
+    const mcpDocsEnv = process.env.MCP_DOCS_CONFIG;
+    if (mcpDocsEnv) {
+        console.warn('[config] MCP_DOCS_CONFIG is deprecated — use PATHFINDER_CONFIG instead.');
+        const resolved = resolve(mcpDocsEnv);
         if (!existsSync(resolved)) {
             throw new Error(`MCP_DOCS_CONFIG points to ${resolved} but file does not exist.`);
         }
         return resolved;
     }
 
-    const cwdPath = resolve(process.cwd(), 'mcp-docs.yaml');
-    if (existsSync(cwdPath)) {
-        return cwdPath;
+    // Primary config file
+    const pathfinderPath = resolve(process.cwd(), 'pathfinder.yaml');
+    if (existsSync(pathfinderPath)) {
+        return pathfinderPath;
+    }
+
+    // Deprecated config file
+    const mcpDocsPath = resolve(process.cwd(), 'mcp-docs.yaml');
+    if (mcpDocsPath && existsSync(mcpDocsPath)) {
+        console.warn('[config] mcp-docs.yaml is deprecated — rename to pathfinder.yaml.');
+        return mcpDocsPath;
     }
 
     throw new Error(
-        'No mcp-docs.yaml found. Set MCP_DOCS_CONFIG env var or place mcp-docs.yaml in the working directory.'
+        'No pathfinder.yaml found. Set PATHFINDER_CONFIG env var or place pathfinder.yaml in the working directory.'
     );
 }
 

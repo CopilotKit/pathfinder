@@ -1,19 +1,19 @@
-# mcp-docs
+# Pathfinder
 
 A self-hosted MCP server that provides semantic search over your documentation and code. Configure it with a YAML file, deploy with Docker, and give your AI coding agents instant access to your project's knowledge.
 
 ## How It Works
 
-mcp-docs indexes your GitHub repositories — documentation (Markdown/MDX) and source code — into a PostgreSQL vector database using OpenAI embeddings. It exposes configurable search tools via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), so AI agents like Claude Code can search your docs and code semantically.
+Pathfinder indexes your GitHub repositories — documentation (Markdown/MDX) and source code — into a PostgreSQL vector database using OpenAI embeddings. It exposes configurable search tools via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), so AI agents like Claude Code can search your docs and code semantically.
 
 ## Quick Start
 
 1. **Clone and configure:**
    ```bash
-   git clone https://github.com/CopilotKit/mcp-docs.git
-   cd mcp-docs
-   cp mcp-docs.example.yaml mcp-docs.yaml  # edit for your project
-   cp .env.example .env                     # add your OPENAI_API_KEY
+   git clone https://github.com/CopilotKit/pathfinder.git
+   cd pathfinder
+   cp pathfinder.example.yaml pathfinder.yaml  # edit for your project
+   cp .env.example .env                        # add your OPENAI_API_KEY
    ```
 
 2. **Start the server:**
@@ -37,7 +37,7 @@ mcp-docs indexes your GitHub repositories — documentation (Markdown/MDX) and s
 
 ## Configuration
 
-All configuration lives in `mcp-docs.yaml`. See [mcp-docs.example.yaml](mcp-docs.example.yaml) for a minimal starting point.
+All configuration lives in `pathfinder.yaml`. See [pathfinder.example.yaml](pathfinder.example.yaml) for a minimal starting point.
 
 ### Sources
 
@@ -187,7 +187,7 @@ The simplest way to run in production:
 
 1. **Configure:**
    ```bash
-   cp mcp-docs.example.yaml mcp-docs.yaml  # edit for your project
+   cp pathfinder.example.yaml pathfinder.yaml  # edit for your project
    ```
 
 2. **Set environment variables** in `.env`:
@@ -215,7 +215,7 @@ The server automatically indexes on first boot and runs a nightly reindex at the
 
 For real-time re-indexing on push:
 
-1. Add webhook config to `mcp-docs.yaml`:
+1. Add webhook config to `pathfinder.yaml`:
    ```yaml
    webhook:
      repo_sources:
@@ -280,7 +280,7 @@ npx tsx scripts/test-path-filter.ts
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `GITHUB_WEBHOOK_SECRET` | No | HMAC secret for webhook verification |
 | `GITHUB_TOKEN` | No | GitHub token for private repos |
-| `MCP_DOCS_CONFIG` | No | Path to config file (default: `./mcp-docs.yaml`) |
+| `PATHFINDER_CONFIG` | No | Path to config file (default: `./pathfinder.yaml`) |
 | `PORT` | No | Server port (default: `3001`) |
 
 ## License
