@@ -57,7 +57,7 @@ function parseConfig(): Config {
     const missing: string[] = [];
 
     const needsRag = hasSearchTools();
-    const needsDb = needsRag || hasCollectTools();
+    const needsDb = needsRag || hasCollectTools() || hasBashSemanticSearch();
 
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl && needsDb) missing.push('DATABASE_URL');

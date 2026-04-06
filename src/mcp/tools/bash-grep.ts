@@ -132,12 +132,18 @@ export async function vectorGrep(options: VectorGrepOptions): Promise<GrepResult
     }
     const seenIds = new Set<number>();
     const allResults: ChunkResult[] = [];
-    for (const r of [...textResults, ...semanticResults]) {
+    for (const r of [...semanticResults, ...textResults]) {
         if (!seenIds.has(r.id)) { seenIds.add(r.id); allResults.push(r); }
     }
     const regex = new RegExp(escapeRegex(pattern), 'i');
     const matching = allResults.filter(r => regex.test(r.content));
-    if (matching.length === 0) return { stdout: '', stderr: '', exitCode: 1 };
+    let warnings = '';
+    if (semanticError && !textError) {
+        warnings = `[warning: semantic search unavailable: ${semanticError}]\n`;
+    } else if (!semanticError && textError) {
+        warnings = `[warning: text search unavailable: ${textError}]\n`;
+    }
+    if (matching.length === 0) return { stdout: '', stderr: warnings, exitCode: 1 };
     const lines: string[] = [];
     for (const r of matching) {
         const contentLines = r.content.split('\n');
@@ -148,6 +154,6 @@ export async function vectorGrep(options: VectorGrepOptions): Promise<GrepResult
             }
         }
     }
-    if (lines.length === 0) return { stdout: '', stderr: '', exitCode: 1 };
-    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+    if (lines.length === 0) return { stdout: '', stderr: warnings, exitCode: 1 };
+    return { stdout: lines.join('\n') + '\n', stderr: warnings, exitCode: 0 };
 }
