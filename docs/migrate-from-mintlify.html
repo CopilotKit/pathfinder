@@ -27,9 +27,9 @@
     --text-primary: #e8e8f0;
     --text-secondary: #8888a0;
     --text-dim: #555570;
-    --accent: #00ff88;
-    --accent-dim: #00cc6a;
-    --accent-glow: rgba(0,255,136,0.15);
+    --accent: #00ccff;
+    --accent-dim: #00aadd;
+    --accent-glow: rgba(0,204,255,0.15);
     --blue: #4488ff;
     --purple: #aa66ff;
     --warning: #ffaa00;
@@ -46,16 +46,20 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
     background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
+/* Container */
+.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+
 /* Nav */
-nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 12px 32px; display:flex; align-items:center; justify-content:space-between;
-    background: rgba(10,10,15,0.8); backdrop-filter: blur(20px) saturate(1.8); border-bottom: 1px solid var(--border); }
-.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--accent); text-decoration: none; }
-.nav-brand span { color: var(--text-dim); }
-.nav-links { display:flex; gap: 24px; align-items:center; }
-.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 14px; transition: color 0.2s; }
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
+    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
+nav .container { display:flex; align-items:center; justify-content:space-between; }
+.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
+.nav-brand span { color: var(--accent); }
+.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
+.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
 .nav-links a:hover { color: var(--text-primary); }
-.nav-links .gh-btn { display:inline-flex; align-items:center; gap:6px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
-.nav-links .gh-btn:hover { border-color: var(--text-dim); }
+.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
+.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
 
 /* Article layout */
 .article { max-width: 800px; margin: 0 auto; padding: 100px 32px 80px; }
@@ -112,8 +116,12 @@ nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 12px 32px; d
 .back-link:hover { text-decoration: underline; }
 
 /* Footer */
-footer { padding: 40px 32px; border-top: 1px solid var(--border); text-align:center; color: var(--text-dim); font-size: 13px; }
-footer a { color: var(--text-secondary); text-decoration:none; }
+footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
+.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
+.footer-brand .prompt { color: var(--accent); }
+.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
+.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text-primary); }
 
 /* Responsive: Tablet */
 @media (max-width: 768px) {
@@ -122,8 +130,7 @@ footer a { color: var(--text-secondary); text-decoration:none; }
     .callout-grid { grid-template-columns: 1fr; }
     .concept-table { font-size: 12px; }
     .concept-table th, .concept-table td { padding: 8px 10px; }
-    nav { padding: 12px 16px; }
-    .nav-links { gap: 12px; }
+    .nav-links { gap: 1rem; }
 }
 
 /* Responsive: Mobile */
@@ -140,11 +147,13 @@ footer a { color: var(--text-secondary); text-decoration:none; }
 <body>
 
 <nav>
+  <div class="container">
     <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="index.html">Home</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
+  </div>
 </nav>
 
 <article class="article">
@@ -346,7 +355,15 @@ footer a { color: var(--text-secondary); text-decoration:none; }
 </article>
 
 <footer>
-    <p>Pathfinder is MIT Licensed &middot; <a href="https://github.com/CopilotKit/pathfinder">GitHub</a> &middot; <a href="index.html">Home</a> &middot; Built by <a href="https://copilotkit.ai">CopilotKit</a></p>
+  <div class="container">
+    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; MIT License</div>
+    <ul class="footer-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
+        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
+    </ul>
+  </div>
 </footer>
 
 </body>
