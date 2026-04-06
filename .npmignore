@@ -1,0 +1,32 @@
+# Source (dist/ is the published artifact)
+src/
+tsconfig.json
+
+# Tests and fixtures
+**/__tests__/
+fixtures/
+
+# Scripts
+scripts/
+
+# Docs and website
+docs/
+
+# CI/CD
+.github/
+
+# Docker
+Dockerfile
+docker-compose*.yml
+docker-compose*.yaml
+
+# Config examples and operations
+*.example.yaml
+mcp-docs.example.yaml
+pathfinder.yaml
+OPERATIONS.md
+railway.toml
+
+# Dev files
+.env*
+!.env.example
