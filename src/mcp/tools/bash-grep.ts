@@ -8,6 +8,9 @@ export interface ParsedGrep {
     paths: string[];
 }
 
+/** Flags that consume the next token as their argument. */
+const FLAGS_WITH_ARGS = new Set(['-e', '-m', '-f', '-A', '-B', '-C']);
+
 export function parseGrepCommand(command: string): ParsedGrep {
     const trimmed = command.trim();
     if (trimmed.includes('|') || trimmed.includes(';') || trimmed.includes('&&')) {
@@ -37,14 +40,49 @@ export function parseGrepCommand(command: string): ParsedGrep {
     let pattern = '';
     const paths: string[] = [];
     let patternFound = false;
-    for (const token of tokens) {
-        if (token.startsWith('-') && !patternFound) { flags.push(token); }
+    for (let t = 0; t < tokens.length; t++) {
+        const token = tokens[t];
+        if (token.startsWith('-') && !patternFound) {
+            flags.push(token);
+            // If this flag takes an argument, consume the next token too
+            if (FLAGS_WITH_ARGS.has(token) && t + 1 < tokens.length) {
+                t++;
+                flags.push(tokens[t]);
+            }
+        }
         else if (!patternFound) { pattern = token; patternFound = true; }
         else { paths.push(token); }
     }
     if (!pattern) return { isGrep: false, pattern: '', flags: [], paths: [] };
     if (paths.length === 0) paths.push('/');
     return { isGrep: true, pattern, flags, paths };
+}
+
+export interface ParsedQmd {
+    isQmd: boolean;
+    query: string;
+}
+
+export function parseQmdCommand(command: string): ParsedQmd {
+    const trimmed = command.trim();
+    // Reject piped/chained commands
+    if (trimmed.includes('|') || trimmed.includes(';') || trimmed.includes('&&')) {
+        return { isQmd: false, query: '' };
+    }
+    if (!trimmed.startsWith('qmd ') && trimmed !== 'qmd') {
+        return { isQmd: false, query: '' };
+    }
+    // Extract the query after "qmd "
+    const rest = trimmed.slice(4).trim();
+    if (!rest) return { isQmd: false, query: '' };
+    // Handle quoted query: qmd "query" or qmd 'query'
+    if ((rest.startsWith('"') && rest.endsWith('"')) || (rest.startsWith("'") && rest.endsWith("'"))) {
+        const query = rest.slice(1, -1);
+        if (!query) return { isQmd: false, query: '' };
+        return { isQmd: true, query };
+    }
+    // Unquoted: qmd query words here
+    return { isQmd: true, query: rest };
 }
 
 export interface VectorGrepOptions {

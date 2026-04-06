@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseGrepCommand, vectorGrep } from '../mcp/tools/bash-grep.js';
+import { parseGrepCommand, parseQmdCommand, vectorGrep } from '../mcp/tools/bash-grep.js';
 
 describe('parseGrepCommand', () => {
     it('parses basic grep command', () => {
@@ -33,6 +33,48 @@ describe('parseGrepCommand', () => {
     it('handles grep with no path (defaults to /)', () => {
         const result = parseGrepCommand('grep "pattern"');
         expect(result).toEqual({ isGrep: true, pattern: 'pattern', flags: [], paths: ['/'] });
+    });
+    it('handles flags with arguments (-m 5)', () => {
+        const result = parseGrepCommand('grep -m 5 "pattern" /docs');
+        expect(result).toEqual({ isGrep: true, pattern: 'pattern', flags: ['-m', '5'], paths: ['/docs'] });
+    });
+    it('handles -e flag with argument', () => {
+        // -e consumes "pattern" as its argument, so "/docs" becomes the search pattern
+        const result = parseGrepCommand('grep -e "pattern" /docs');
+        expect(result).toEqual({ isGrep: true, pattern: '/docs', flags: ['-e', 'pattern'], paths: ['/'] });
+    });
+    it('handles -A flag with argument', () => {
+        const result = parseGrepCommand('grep -A 3 "pattern" /docs');
+        expect(result).toEqual({ isGrep: true, pattern: 'pattern', flags: ['-A', '3'], paths: ['/docs'] });
+    });
+});
+
+describe('parseQmdCommand', () => {
+    it('parses qmd with double-quoted query', () => {
+        expect(parseQmdCommand('qmd "how to use hooks"')).toEqual({ isQmd: true, query: 'how to use hooks' });
+    });
+    it('parses qmd with single-quoted query', () => {
+        expect(parseQmdCommand("qmd 'streaming agents'")).toEqual({ isQmd: true, query: 'streaming agents' });
+    });
+    it('parses qmd with unquoted query', () => {
+        expect(parseQmdCommand('qmd streaming agents')).toEqual({ isQmd: true, query: 'streaming agents' });
+    });
+    it('rejects bare qmd with no query', () => {
+        expect(parseQmdCommand('qmd')).toEqual({ isQmd: false, query: '' });
+        expect(parseQmdCommand('qmd  ')).toEqual({ isQmd: false, query: '' });
+    });
+    it('rejects piped qmd commands', () => {
+        expect(parseQmdCommand('qmd "query" | head')).toEqual({ isQmd: false, query: '' });
+        expect(parseQmdCommand('qmd "query" && echo done')).toEqual({ isQmd: false, query: '' });
+        expect(parseQmdCommand('qmd "query"; rm -rf /')).toEqual({ isQmd: false, query: '' });
+    });
+    it('rejects non-qmd commands', () => {
+        expect(parseQmdCommand('grep pattern').isQmd).toBe(false);
+        expect(parseQmdCommand('cat file.txt').isQmd).toBe(false);
+    });
+    it('rejects empty quoted query', () => {
+        expect(parseQmdCommand('qmd ""')).toEqual({ isQmd: false, query: '' });
+        expect(parseQmdCommand("qmd ''")).toEqual({ isQmd: false, query: '' });
     });
 });
 

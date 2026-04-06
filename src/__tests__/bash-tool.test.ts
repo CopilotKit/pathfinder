@@ -127,4 +127,11 @@ describe('Bash integration', () => {
         const result = await bash.exec('pwd');
         expect(result.stdout.trim()).toBe('/');
     });
+
+    it('grep commands pass through to bash unchanged (no interception)', async () => {
+        const bash = new Bash({ files });
+        const result = await bash.exec('grep -rl "Streaming" /');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('/docs/guides/streaming.mdx');
+    });
 });

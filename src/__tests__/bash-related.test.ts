@@ -57,6 +57,20 @@ describe('handleRelatedCommand', () => {
         expect(result.stdout).not.toMatch(/\d+\.\d+\s+\/docs\/quickstart\.mdx/);
     });
 
+    it('does not false-positive exclude files sharing a basename', async () => {
+        const searchWithSharedBasename = vi.fn().mockResolvedValue([
+            { id: 1, source_name: 'docs', source_url: null, title: 'Components Index', content: 'components', repo_url: null, file_path: 'components/index.mdx', start_line: 1, end_line: 5, language: null, similarity: 0.90 },
+            { id: 2, source_name: 'docs', source_url: null, title: 'Root Index', content: 'root', repo_url: null, file_path: 'index.mdx', start_line: 1, end_line: 5, language: null, similarity: 0.85 },
+        ]);
+        // Searching for /docs/components/index.mdx — only that exact path should be excluded, not /docs/index.mdx
+        const result = await handleRelatedCommand('/docs/components/index.mdx', '# Components', mockEmbed as any, searchWithSharedBasename);
+        expect(result.exitCode).toBe(0);
+        // /docs/index.mdx should NOT be excluded (different directory)
+        expect(result.stdout).toContain('/docs/index.mdx');
+        // /docs/components/index.mdx IS the self — should be excluded
+        expect(result.stdout).not.toMatch(/\d+\.\d+\s+\/docs\/components\/index\.mdx/);
+    });
+
     it('handles embedding client error', async () => {
         const failEmbed = { embed: vi.fn().mockRejectedValue(new Error('embed failed')), embedBatch: vi.fn() };
         const result = await handleRelatedCommand('/file.md', 'content', failEmbed as any, mockSearch);
@@ -81,8 +95,9 @@ describe('handleRelatedCommand', () => {
 });
 
 describe('formatGrepMissSuggestion', () => {
-    it('formats suggestion with tool names', () => {
+    it('formats suggestion with tool names and qmd', () => {
         const result = formatGrepMissSuggestion(['search-docs', 'search-code']);
+        expect(result).toContain('qmd');
         expect(result).toContain('search-docs');
         expect(result).toContain('search-code');
     });

@@ -3,7 +3,7 @@ import type { Bash } from 'just-bash';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BashToolConfig } from '../../types.js';
 import { BashSessionState } from './bash-session.js';
-import { parseGrepCommand, vectorGrep } from './bash-grep.js';
+import { parseGrepCommand, parseQmdCommand, vectorGrep } from './bash-grep.js';
 import { parseRelatedCommand, handleRelatedCommand, formatGrepMissSuggestion } from './bash-related.js';
 import { searchChunks, textSearchChunks } from '../../db/queries.js';
 import type { EmbeddingClient } from '../../indexing/embeddings.js';
@@ -108,7 +108,8 @@ export function registerBashTool(
                     if (rel.isRelated) {
                         const resolvedPath = sessionState ? sessionState.resolvePath(rel.path) : rel.path;
                         // Try to get file content from bash instance
-                        const catResult = await bash.exec(`cat "${resolvedPath}"`, { cwd: '/' });
+                        const escaped = resolvedPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                        const catResult = await bash.exec(`cat "${escaped}"`, { cwd: '/' });
                         const fileContent = catResult.exitCode === 0 ? catResult.stdout : undefined;
                         const relResult = await handleRelatedCommand(
                             resolvedPath, fileContent, options.embeddingClient,
@@ -120,20 +121,20 @@ export function registerBashTool(
                     }
                 }
 
-                // Intercept grep for vector-backed search
+                // Intercept `qmd` command for vector-backed semantic search
                 const grepStrategy = toolConfig.bash?.grep_strategy;
                 if (grepStrategy && grepStrategy !== 'memory' && options?.embeddingClient) {
-                    const parsed = parseGrepCommand(command);
-                    if (parsed.isGrep) {
-                        const grepResult = await vectorGrep({
-                            pattern: parsed.pattern,
+                    const qmd = parseQmdCommand(command);
+                    if (qmd.isQmd) {
+                        const qmdResult = await vectorGrep({
+                            pattern: qmd.query,
                             sourceName: undefined,  // search all sources
                             embeddingClient: options.embeddingClient,
                             searchChunksFn: searchChunks,
                             textSearchFn: textSearchChunks,
                         });
                         return {
-                            content: [{ type: "text" as const, text: formatBashResult(command, grepResult) }],
+                            content: [{ type: "text" as const, text: formatBashResult(command, qmdResult) }],
                         };
                     }
                 }

@@ -39,7 +39,7 @@ export async function handleRelatedCommand(
         const byFile = new Map<string, { path: string; similarity: number }>();
         for (const r of results) {
             const vPath = r.source_name ? `/${r.source_name}/${r.file_path}` : `/${r.file_path}`;
-            if (vPath === filePath || filePath.endsWith('/' + r.file_path)) continue; // skip self
+            if (vPath === filePath) continue; // skip self — exact match only
             const existing = byFile.get(vPath);
             if (!existing || r.similarity > existing.similarity) {
                 byFile.set(vPath, { path: vPath, similarity: r.similarity });
@@ -66,5 +66,5 @@ export async function handleRelatedCommand(
 export function formatGrepMissSuggestion(searchToolNames: string[]): string {
     if (searchToolNames.length === 0) return '';
     const tools = searchToolNames.join(', ');
-    return `\nNo matches found. Try semantic search: ${tools}("your query")\n`;
+    return `\nNo matches found. Try semantic search: qmd "your query" or ${tools}("your query")\n`;
 }
