@@ -1,0 +1,22 @@
+name: Unreleased Changes Check
+on:
+  push:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for unreleased changes
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No tags found, skipping"
+            exit 0
+          fi
+          COMMITS=$(git rev-list "$LATEST_TAG"..HEAD -- src/ | wc -l | tr -d ' ')
+          if [ "$COMMITS" -gt "0" ]; then
+            echo "::warning::$COMMITS source commits since $LATEST_TAG — consider releasing"
+          fi

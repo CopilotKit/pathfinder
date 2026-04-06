@@ -1,0 +1,39 @@
+server:
+  name: breeze-api-fixture
+  version: "1.0.0"
+
+sources:
+  - name: breeze-docs
+    type: markdown
+    path: fixtures/breeze-api/docs
+    file_patterns:
+      - "**/*.md"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+tools:
+  - name: explore-breeze-docs
+    type: bash
+    description: "Explore Breeze API documentation files directly using bash commands (find, grep, cat, head, etc.). Read-only sandboxed environment."
+    sources:
+      - breeze-docs
+
+  - name: submit-breeze-feedback
+    type: collect
+    description: "Submit feedback on whether search results were helpful."
+    response: "Feedback recorded. Thank you."
+    schema:
+      tool_name:
+        type: string
+        description: "Which search tool was used"
+        required: true
+      rating:
+        type: enum
+        values: ["helpful", "not_helpful"]
+        description: "Whether the results were helpful"
+        required: true
+      comment:
+        type: string
+        description: "What worked or didn't work"
+        required: true

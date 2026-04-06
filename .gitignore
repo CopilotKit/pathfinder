@@ -4,3 +4,5 @@ dist/
 *.local
 pgdata/
 tmp/
+.superpowers/
+.claude/

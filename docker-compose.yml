@@ -9,9 +9,8 @@ services:
             POSTGRES_PASSWORD: mcp_local
         volumes:
             - pgdata:/var/lib/postgresql/data
-            - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
         healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U mcp"]
+            test: ["CMD-SHELL", "pg_isready -U mcp -d mcp_docs"]
             interval: 5s
             retries: 5
 
@@ -21,22 +20,25 @@ services:
             dockerfile: Dockerfile
             target: dev
         ports:
-            - "3001:3001"
+            - "${APP_PORT:-3001}:3001"
         environment:
             DATABASE_URL: postgresql://mcp:mcp_local@db:5432/mcp_docs
             OPENAI_API_KEY: ${OPENAI_API_KEY}
             GITHUB_TOKEN: ${GITHUB_TOKEN:-}
             GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-local-dev-secret}
+            MCP_DOCS_CONFIG: ${MCP_DOCS_CONFIG:-./mcp-docs.yaml}
             PORT: 3001
             NODE_ENV: development
             LOG_LEVEL: debug
         volumes:
             - ./src:/app/src
             - ./scripts:/app/scripts
+            - ./mcp-docs.yaml:/app/mcp-docs.yaml
         depends_on:
             db:
                 condition: service_healthy
-        command: npx tsx watch src/index.ts
+        restart: unless-stopped
+        command: npx tsx src/index.ts
 
 volumes:
     pgdata:

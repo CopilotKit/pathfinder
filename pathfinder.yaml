@@ -1,0 +1,191 @@
+server:
+  name: copilotkit-docs-mcp
+  version: "1.0.0"
+
+sources:
+  - name: docs
+    type: markdown
+    repo: https://github.com/CopilotKit/CopilotKit.git
+    path: docs/content/docs/
+    base_url: https://docs.copilotkit.ai/
+    url_derivation:
+      strip_prefix: "docs/content/docs/"
+      strip_suffix: ".mdx"
+      strip_route_groups: true
+      strip_index: true
+    file_patterns:
+      - "**/*.mdx"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+  - name: code
+    type: code
+    repo: https://github.com/CopilotKit/CopilotKit.git
+    path: "."
+    file_patterns:
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+      - "**/*.jsx"
+      - "**/*.py"
+    exclude_patterns:
+      - "packages/v1/**"
+      - "packages/v1-*/**"
+      - "**/test/**"
+      - "**/tests/**"
+      - "**/__tests__/**"
+      - "**/*.test.*"
+      - "**/*.spec.*"
+    skip_dirs:
+      - node_modules
+      - dist
+      - build
+      - .git
+    max_file_size: 102400
+    chunk:
+      target_lines: 80
+      overlap_lines: 10
+
+  - name: ag-ui-docs
+    type: markdown
+    repo: https://github.com/ag-ui-protocol/ag-ui.git
+    path: docs/
+    base_url: https://docs.ag-ui.com/
+    url_derivation:
+      strip_prefix: "docs/"
+      strip_suffix: ".mdx"
+      strip_route_groups: true
+      strip_index: true
+    file_patterns:
+      - "**/*.mdx"
+      - "**/*.md"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+  - name: ag-ui-code
+    type: code
+    repo: https://github.com/ag-ui-protocol/ag-ui.git
+    path: sdks/typescript/packages/
+    file_patterns:
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+      - "**/*.jsx"
+    exclude_patterns:
+      - "**/test/**"
+      - "**/tests/**"
+      - "**/__tests__/**"
+      - "**/*.test.*"
+      - "**/*.spec.*"
+    skip_dirs:
+      - node_modules
+      - dist
+      - build
+      - .git
+    max_file_size: 102400
+    chunk:
+      target_lines: 80
+      overlap_lines: 10
+
+tools:
+  - name: search-docs
+    type: search
+    description: "Search the server's documentation to retrieve relevant information. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+  - name: search-code
+    type: search
+    description: "Search the server's indexed codebase to find relevant code snippets and implementations. Use this tool when you need to understand how something is implemented, find code examples, or locate specific functionality in the codebase. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: code
+    default_limit: 10
+    max_limit: 20
+    result_format: code
+
+  - name: search-ag-ui-docs
+    type: search
+    description: "Search the AG-UI protocol documentation to retrieve relevant information about the Agent-User Interaction protocol, events, types, and integration guides. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: ag-ui-docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+  - name: search-ag-ui-code
+    type: search
+    description: "Search the AG-UI TypeScript SDK codebase to find relevant code snippets and implementations. Use this tool to understand AG-UI protocol types, events, encoders, and client implementations. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: ag-ui-code
+    default_limit: 10
+    max_limit: 20
+    result_format: code
+
+  - name: explore-docs
+    type: bash
+    description: "Explore CopilotKit and AG-UI documentation files using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.mdx\" | head -20' or 'cat /INDEX.md' to see what's available."
+    sources: [docs, ag-ui-docs]
+    bash:
+      session_state: true
+      grep_strategy: hybrid
+      virtual_files: true
+
+  - name: explore-code
+    type: bash
+    description: "Explore CopilotKit and AG-UI source code files using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.ts\" | head -20' to see what's available."
+    sources: [code, ag-ui-code]
+    bash:
+      session_state: true
+      grep_strategy: hybrid
+      virtual_files: true
+
+  - name: submit-feedback
+    type: collect
+    description: "After using search results, you can submit feedback on whether the advice worked or not. Report what you tried and whether it succeeded or failed. If something failed but you later found the missing information elsewhere, mention that too. This feedback helps improve search quality."
+    response: "Feedback recorded. Thank you."
+    schema:
+      tool_name:
+        type: string
+        description: "Which search tool was used"
+        required: true
+      query:
+        type: string
+        description: "The original search query"
+        required: true
+      rating:
+        type: enum
+        values: ["helpful", "not_helpful"]
+        description: "Whether the results were helpful"
+        required: true
+      comment:
+        type: string
+        description: "What was tried, what failed/worked, what info was missing"
+        required: true
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536
+
+indexing:
+  auto_reindex: true
+  reindex_hour_utc: 3
+  stale_threshold_hours: 24
+
+webhook:
+  repo_sources:
+    "CopilotKit/CopilotKit":
+      - docs
+      - code
+    "ag-ui-protocol/ag-ui":
+      - ag-ui-docs
+      - ag-ui-code
+  path_triggers:
+    docs:
+      - "docs/"
+    code: []
+    ag-ui-docs:
+      - "docs/"
+    ag-ui-code:
+      - "sdks/typescript/packages/"
