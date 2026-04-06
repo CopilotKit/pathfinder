@@ -78,6 +78,43 @@ export async function searchChunks(
     }));
 }
 
+/**
+ * Text search (ILIKE) on the unified chunks table.
+ * Optionally filtered by source_name. Returns results ordered by id.
+ */
+export async function textSearchChunks(
+    pattern: string,
+    limit: number,
+    sourceName?: string,
+): Promise<ChunkResult[]> {
+    const pool = getPool();
+    const escaped = pattern.replace(/[%_\\]/g, '\\$&');
+    const likePattern = `%${escaped}%`;
+    let sql: string;
+    let params: unknown[];
+    if (sourceName) {
+        sql = `SELECT id, source_name, source_url, title, content, repo_url, file_path, start_line, end_line, language, 0.0 AS similarity FROM chunks WHERE source_name = $1 AND content ILIKE $2 ORDER BY id LIMIT $3`;
+        params = [sourceName, likePattern, limit];
+    } else {
+        sql = `SELECT id, source_name, source_url, title, content, repo_url, file_path, start_line, end_line, language, 0.0 AS similarity FROM chunks WHERE content ILIKE $1 ORDER BY id LIMIT $2`;
+        params = [likePattern, limit];
+    }
+    const { rows } = await pool.query(sql, params);
+    return rows.map((r: Record<string, unknown>) => ({
+        id: r.id as number,
+        source_name: r.source_name as string,
+        source_url: (r.source_url as string) ?? null,
+        title: (r.title as string) ?? null,
+        content: r.content as string,
+        repo_url: (r.repo_url as string) ?? null,
+        file_path: r.file_path as string,
+        start_line: (r.start_line as number) ?? null,
+        end_line: (r.end_line as number) ?? null,
+        language: (r.language as string) ?? null,
+        similarity: parseFloat(r.similarity as string),
+    }));
+}
+
 // ---------------------------------------------------------------------------
 // Upsert
 // ---------------------------------------------------------------------------
