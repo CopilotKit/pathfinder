@@ -9,9 +9,8 @@ import { SessionStateManager } from './tools/bash-session.js';
 
 /**
  * Creates a new McpServer instance with all tools registered.
- * Each call returns a fresh server — suitable for stateless per-request usage.
- * When bash tools are configured, bashInstances maps tool name → shared Bash instance.
- * When sessionStateManager and sessionId are provided, bash tools get per-session CWD tracking.
+ * Each MCP session gets its own server instance. Bash tools share
+ * a common filesystem but get per-session CWD tracking when enabled.
  */
 export function createMcpServer(
     bashInstances?: Map<string, Bash>,

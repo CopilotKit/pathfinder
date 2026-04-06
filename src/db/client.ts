@@ -16,6 +16,12 @@ export function getPool(): pg.Pool {
 
     const databaseUrl = getConfig().databaseUrl;
 
+    if (!databaseUrl) {
+        throw new Error(
+            "DATABASE_URL is not set. Cannot create database pool.",
+        );
+    }
+
     if (isPGliteUrl(databaseUrl)) {
         throw new Error(
             "PGlite pool not initialized. Call initializeSchema() first.",
@@ -29,8 +35,8 @@ export function getPool(): pg.Pool {
     return pool;
 }
 
-function isPGliteUrl(url: string): boolean {
-    return url.startsWith("pglite://");
+function isPGliteUrl(url: string | undefined): boolean {
+    return !!url && url.startsWith("pglite://");
 }
 
 function parsePGliteDataDir(url: string): string {
@@ -39,6 +45,9 @@ function parsePGliteDataDir(url: string): string {
 
 async function initializePGlite(): Promise<void> {
     const databaseUrl = getConfig().databaseUrl;
+    if (!databaseUrl) {
+        throw new Error("DATABASE_URL is not set. Cannot initialize PGlite.");
+    }
     const dataDir = parsePGliteDataDir(databaseUrl);
     const dimensions = getServerConfig().embedding?.dimensions;
     if (!dimensions) throw new Error('embedding.dimensions is required for database schema initialization');
@@ -90,6 +99,10 @@ async function initializePGlite(): Promise<void> {
  */
 export async function initializeSchema(): Promise<void> {
     const databaseUrl = getConfig().databaseUrl;
+
+    if (!databaseUrl) {
+        throw new Error("DATABASE_URL is not set. Cannot initialize database schema.");
+    }
 
     if (isPGliteUrl(databaseUrl)) {
         await initializePGlite();

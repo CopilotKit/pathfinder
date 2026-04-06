@@ -42,6 +42,7 @@ async function walkFiles(
 export interface BashFilesMapOptions {
     virtualFiles?: boolean;
     searchToolNames?: string[];
+    cloneDir?: string;
 }
 
 export async function buildBashFilesMap(
@@ -52,7 +53,14 @@ export async function buildBashFilesMap(
     const multiSource = sources.length > 1;
 
     for (const source of sources) {
-        const rootDir = path.resolve(source.path);
+        let rootDir: string;
+        if (source.repo && options?.cloneDir) {
+            // Git-based source: the orchestrator clones into cloneDir/<repoName>/
+            const repoName = source.repo.replace(/\.git$/, '').split('/').pop()!;
+            rootDir = path.join(options.cloneDir, repoName, source.path);
+        } else {
+            rootDir = path.resolve(source.path);
+        }
         if (!fs.existsSync(rootDir)) {
             console.warn(`[bash-fs] Source "${source.name}" path does not exist: ${rootDir}`);
             continue;
@@ -146,7 +154,7 @@ export async function rebuildBashInstance(
     sources: SourceConfig[],
     options?: BashFilesMapOptions,
 ): Promise<{ bash: Bash; fileCount: number }> {
-    const filesMap = await buildBashFilesMap(sources, options);
+    const filesMap = await buildBashFilesMap(sources, { ...options });
     return {
         bash: new Bash({ files: filesMap, cwd: '/' }),
         fileCount: Object.keys(filesMap).length,

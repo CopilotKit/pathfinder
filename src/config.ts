@@ -9,7 +9,7 @@ import { ServerConfigSchema, type ServerConfig } from './types.js';
 // ── Environment variable config (secrets and runtime settings) ────────────────
 
 export interface Config {
-    databaseUrl: string;
+    databaseUrl: string | undefined;
     openaiApiKey: string;
     githubToken: string;
     githubWebhookSecret: string;
@@ -31,6 +31,16 @@ export function hasSearchTools(): boolean {
  */
 export function hasCollectTools(): boolean {
     return getServerConfig().tools.some(t => t.type === 'collect');
+}
+
+/**
+ * Check whether any bash tools use vector or hybrid grep (requires embeddings + database).
+ */
+export function hasBashSemanticSearch(): boolean {
+    return getServerConfig().tools.some(t =>
+        t.type === 'bash' &&
+        (t.bash?.grep_strategy === 'vector' || t.bash?.grep_strategy === 'hybrid')
+    );
 }
 
 /**
@@ -70,7 +80,7 @@ function parseConfig(): Config {
     }
 
     return {
-        databaseUrl: databaseUrl ?? '',
+        databaseUrl,
         openaiApiKey: openaiApiKey ?? '',
         githubToken: process.env.GITHUB_TOKEN || '',
         githubWebhookSecret: githubWebhookSecret!,

@@ -59,12 +59,12 @@ export const BashCacheConfigSchema = z.object({
 });
 
 export const BashOptionsSchema = z.object({
-    session_state: z.boolean().default(false),
-    grep_strategy: z.enum(['memory', 'vector', 'hybrid']).default('memory'),
-    workspace: z.boolean().default(false),
-    virtual_files: z.boolean().default(false),
-    max_file_size: z.number().int().positive().default(102400),
-    cache: BashCacheConfigSchema.default({ max_entries: 200, ttl_seconds: 300 }),
+    session_state: z.boolean(),
+    grep_strategy: z.enum(['memory', 'vector', 'hybrid']),
+    workspace: z.boolean(),
+    virtual_files: z.boolean(),
+    max_file_size: z.number().int().positive(),
+    cache: BashCacheConfigSchema,
 }).partial();
 
 export const BashToolConfigSchema = z.object({
