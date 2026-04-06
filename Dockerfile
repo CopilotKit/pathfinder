@@ -1,20 +1,26 @@
-# Base — shared dependencies
+# Base — shared dependencies (all deps needed for build)
 FROM node:20-slim AS base
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package.json pnpm-lock.yaml* package-lock.json* ./
-RUN corepack enable && \
-    if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; \
-    elif [ -f package-lock.json ]; then npm ci; \
-    else npm install; fi
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Build — compile TypeScript
+FROM base AS build
+COPY . .
+RUN npm run build
 
 # Dev — source mounted, hot reload via tsx watch
 FROM base AS dev
 COPY . .
 CMD ["npx", "tsx", "watch", "src/index.ts"]
 
-# Prod — compiled JS only
-FROM base AS prod
-COPY dist/ ./dist/
-COPY src/db/schema.sql ./dist/db/schema.sql
+# Prod — compiled JS only, fresh slim image with prod deps only
+FROM node:20-slim AS prod
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY --from=build /app/dist/ ./dist/
+COPY pathfinder.yaml ./pathfinder.yaml
 CMD ["node", "dist/index.js"]

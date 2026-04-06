@@ -1,0 +1,36 @@
+services:
+    db:
+        image: pgvector/pgvector:pg16
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: mcp_docs
+            POSTGRES_USER: mcp
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+        volumes:
+            - pgdata:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U mcp"]
+            interval: 10s
+            retries: 5
+
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: prod
+        restart: unless-stopped
+        ports:
+            - "${PORT:-3001}:${PORT:-3001}"
+        environment:
+            DATABASE_URL: postgresql://mcp:${POSTGRES_PASSWORD:-changeme}@db:5432/mcp_docs
+            OPENAI_API_KEY: ${OPENAI_API_KEY}
+            GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+            GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+            PORT: ${PORT:-3001}
+            NODE_ENV: production
+        depends_on:
+            db:
+                condition: service_healthy
+
+volumes:
+    pgdata:

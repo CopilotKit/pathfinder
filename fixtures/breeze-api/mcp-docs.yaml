@@ -1,0 +1,51 @@
+server:
+  name: breeze-api-fixture
+  version: "1.0.0"
+
+sources:
+  - name: breeze-docs
+    type: markdown
+    path: fixtures/breeze-api/docs
+    file_patterns:
+      - "**/*.md"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+tools:
+  - name: search-breeze-docs
+    type: search
+    description: "Search the Breeze API documentation. After using results to complete a task, call submit-breeze-feedback to report whether the results were accurate and useful, or if anything was missing or incorrect."
+    source: breeze-docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+  - name: submit-breeze-feedback
+    type: collect
+    description: "Submit feedback on whether search results were helpful."
+    response: "Feedback recorded. Thank you."
+    schema:
+      tool_name:
+        type: string
+        description: "Which search tool was used"
+        required: true
+      rating:
+        type: enum
+        values: ["helpful", "not_helpful"]
+        description: "Whether the results were helpful"
+        required: true
+      comment:
+        type: string
+        description: "What worked or didn't work"
+        required: true
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536
+
+indexing:
+  auto_reindex: false
+  reindex_hour_utc: 3
+  stale_threshold_hours: 24
