@@ -1,6 +1,36 @@
 import { describe, it, expect } from 'vitest';
 import { Bash } from 'just-bash';
-import { formatBashResult } from '../mcp/tools/bash.js';
+import { formatBashResult, parseBareCD } from '../mcp/tools/bash.js';
+
+describe('parseBareCD', () => {
+    it('parses cd with absolute path', () => {
+        expect(parseBareCD('cd /docs')).toBe('/docs');
+    });
+    it('parses cd with relative path', () => {
+        expect(parseBareCD('cd guides')).toBe('guides');
+    });
+    it('parses cd with no args (goes to /)', () => {
+        expect(parseBareCD('cd')).toBe('/');
+    });
+    it('parses cd with .. path', () => {
+        expect(parseBareCD('cd ..')).toBe('..');
+    });
+    it('returns null for cd in pipeline', () => {
+        expect(parseBareCD('cd /docs && ls')).toBeNull();
+    });
+    it('returns null for cd with semicolon', () => {
+        expect(parseBareCD('cd /docs; ls')).toBeNull();
+    });
+    it('returns null for cd with pipe', () => {
+        expect(parseBareCD('echo foo | cd /docs')).toBeNull();
+    });
+    it('returns null for non-cd command', () => {
+        expect(parseBareCD('ls /docs')).toBeNull();
+    });
+    it('handles whitespace around command', () => {
+        expect(parseBareCD('  cd /docs  ')).toBe('/docs');
+    });
+});
 
 describe('formatBashResult', () => {
     it('formats successful output', () => {

@@ -367,3 +367,216 @@ describe('ServerConfigSchema', () => {
         expect(result.success).toBe(false);
     });
 });
+
+describe('BashToolConfigSchema with bash options', () => {
+    it('accepts bash tool with all bash options', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+            sources: ['docs'],
+            bash: {
+                session_state: true,
+                grep_strategy: 'hybrid',
+                workspace: true,
+                virtual_files: true,
+                max_file_size: 204800,
+                cache: { max_entries: 500, ttl_seconds: 600 },
+            },
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+    });
+
+    it('accepts bash tool with no bash options (all defaults)', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+            sources: ['docs'],
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+    });
+
+    it('accepts bash tool with partial bash options', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+            sources: ['docs'],
+            bash: {
+                session_state: true,
+            },
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+    });
+
+    it('rejects invalid grep_strategy value', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+            sources: ['docs'],
+            bash: {
+                grep_strategy: 'quantum',
+            },
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects negative max_file_size', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+            sources: ['docs'],
+            bash: {
+                max_file_size: -1,
+            },
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects cache with zero max_entries', () => {
+        const config = {
+            name: 'explore-docs',
+            type: 'bash',
+            description: 'Explore docs',
+            sources: ['docs'],
+            bash: {
+                cache: { max_entries: 0, ttl_seconds: 60 },
+            },
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(false);
+    });
+});
+
+describe('BashOptionsSchema defaults', () => {
+    it('accepts empty bash options object (all fields are partial)', () => {
+        const config = {
+            name: 'explore',
+            type: 'bash',
+            description: 'Explore',
+            sources: ['docs'],
+            bash: {},
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+        if (result.success && result.data.type === 'bash') {
+            // BashOptionsSchema uses .partial(), so empty {} is valid
+            // and fields remain undefined (no defaults applied for partial fields)
+            expect(result.data.bash).toBeDefined();
+        }
+    });
+
+    it('preserves explicit values through parsing', () => {
+        const config = {
+            name: 'explore',
+            type: 'bash',
+            description: 'Explore',
+            sources: ['docs'],
+            bash: {
+                session_state: true,
+                grep_strategy: 'hybrid',
+                workspace: true,
+                virtual_files: true,
+            },
+        };
+        const result = AnyToolConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+        if (result.success && result.data.type === 'bash') {
+            expect(result.data.bash?.session_state).toBe(true);
+            expect(result.data.bash?.grep_strategy).toBe('hybrid');
+            expect(result.data.bash?.workspace).toBe(true);
+            expect(result.data.bash?.virtual_files).toBe(true);
+        }
+    });
+});
+
+describe('ServerConfigSchema vector grep without embedding', () => {
+    it('adds issue when grep_strategy is vector but no embedding config', () => {
+        const config = {
+            server: { name: 'test', version: '1.0.0' },
+            sources: [{
+                name: 'docs',
+                type: 'markdown',
+                repo: 'https://github.com/test/test.git',
+                path: 'docs/',
+                file_patterns: ['**/*.md'],
+                chunk: { target_tokens: 600, overlap_tokens: 50 },
+            }],
+            tools: [{
+                name: 'explore',
+                type: 'bash',
+                description: 'Explore',
+                sources: ['docs'],
+                bash: {
+                    grep_strategy: 'vector',
+                },
+            }],
+        };
+        const result = ServerConfigSchema.safeParse(config);
+        expect(result.success).toBe(false);
+        if (!result.success) {
+            const messages = result.error.issues.map(i => i.message);
+            expect(messages.some(m => m.includes('embedding'))).toBe(true);
+        }
+    });
+
+    it('allows grep_strategy vector when embedding config present', () => {
+        const config = {
+            server: { name: 'test', version: '1.0.0' },
+            sources: [{
+                name: 'docs',
+                type: 'markdown',
+                repo: 'https://github.com/test/test.git',
+                path: 'docs/',
+                file_patterns: ['**/*.md'],
+                chunk: { target_tokens: 600, overlap_tokens: 50 },
+            }],
+            tools: [{
+                name: 'explore',
+                type: 'bash',
+                description: 'Explore',
+                sources: ['docs'],
+                bash: {
+                    grep_strategy: 'vector',
+                },
+            }],
+            embedding: { provider: 'openai', model: 'text-embedding-3-small', dimensions: 1536 },
+            indexing: { auto_reindex: true, reindex_hour_utc: 3, stale_threshold_hours: 24 },
+        };
+        const result = ServerConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+    });
+
+    it('allows grep_strategy memory without embedding config', () => {
+        const config = {
+            server: { name: 'test', version: '1.0.0' },
+            sources: [{
+                name: 'docs',
+                type: 'markdown',
+                repo: 'https://github.com/test/test.git',
+                path: 'docs/',
+                file_patterns: ['**/*.md'],
+                chunk: { target_tokens: 600, overlap_tokens: 50 },
+            }],
+            tools: [{
+                name: 'explore',
+                type: 'bash',
+                description: 'Explore',
+                sources: ['docs'],
+                bash: {
+                    grep_strategy: 'memory',
+                },
+            }],
+        };
+        const result = ServerConfigSchema.safeParse(config);
+        expect(result.success).toBe(true);
+    });
+});
