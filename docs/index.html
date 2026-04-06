@@ -64,23 +64,23 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
 
 /* Hero */
-.hero { padding: 140px 32px 80px; max-width: 1000px; margin: 0 auto; text-align: center; }
+.hero { padding: 140px 0 80px; max-width: 1120px; margin: 0 auto; padding-left: 2rem; padding-right: 2rem; }
 .badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 32px; }
 .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-.hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; line-height: 1.08; margin-bottom: 20px; letter-spacing: -0.03em; }
+.hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; line-height: 1.08; margin-bottom: 24px; letter-spacing: -0.03em; }
 .hero h1 .accent { color: var(--accent); }
-.hero .subtitle { font-size: 18px; color: var(--text-secondary); max-width: 640px; margin: 0 auto 40px; }
+.hero .subtitle { font-size: 1.2rem; color: var(--text-secondary); max-width: 700px; line-height: 1.7; margin-bottom: 40px; }
 
 /* Install box */
-.install-box { display: inline-flex; align-items:center; gap: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 14px; margin-bottom: 48px; }
+.install-box { display: inline-flex; align-items:center; gap: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 0.9rem; margin-bottom: 48px; }
 .install-box .prompt { color: var(--accent); }
 .install-box .cmd { color: var(--text-primary); }
-.install-box .copy-btn { background:none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; color: var(--text-dim); cursor:pointer; font-size: 12px; }
+.install-box .copy-btn { background:none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; color: var(--text-dim); cursor:pointer; font-size: 12px; font-family: var(--mono); }
 .install-box .copy-btn:hover { color: var(--text-secondary); border-color: var(--text-dim); }
 
 /* Demo grid */
-.demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 900px; margin: 0 auto; }
+.demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1120px; }
 .demo-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-align: left; }
 .demo-header { padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--text-dim); display:flex; gap:8px; align-items:center; }
 .demo-header .dot-r { width:10px; height:10px; border-radius:50%; background:#ff5f57; }
@@ -95,9 +95,9 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 @keyframes fadeInLine { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
 
 /* Features */
-.features { padding: 80px 32px; max-width: 1000px; margin: 0 auto; }
-.features h2 { text-align:center; font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
-.features .section-sub { text-align:center; color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
+.features { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; }
+.features h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
+.features .section-sub { color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
 .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; transition: transform 0.2s, border-color 0.2s; }
 .feature-card:hover { transform: translateY(-2px); border-color: var(--accent-dim); }
@@ -106,9 +106,9 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .feature-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
 
 /* Comparison */
-.comparison { padding: 80px 32px; max-width: 1000px; margin: 0 auto; }
-.comparison h2 { text-align:center; font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
-.comparison .section-sub { text-align:center; color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
+.comparison { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; }
+.comparison h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
+.comparison .section-sub { color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
 .comp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .comp-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
 .comp-table th.highlight-col { color: var(--accent); border-bottom-color: var(--accent); }
@@ -119,7 +119,7 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .comp-table .partial { color: var(--warning); }
 
 /* Migration CTA */
-.migration { padding: 80px 32px; max-width: 800px; margin: 0 auto; text-align: center; }
+.migration { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; text-align: center; }
 .migration h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
 .migration .section-sub { color: var(--text-secondary); margin-bottom: 32px; font-size: 16px; }
 .migration .cta-btn { display: inline-flex; align-items:center; gap: 8px; padding: 14px 28px; background: var(--accent); color: var(--bg-deep); font-family: var(--mono); font-weight: 600; font-size: 0.875rem; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; transition: opacity 0.2s; }
@@ -144,7 +144,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     .comp-table th, .comp-table td { padding: 8px 10px; }
     .nav-links { gap: 1rem; }
     .hero { padding: 120px 16px 60px; }
-    .features, .comparison, .migration { padding: 60px 16px; }
+    .hero, .features, .comparison, .migration { padding-left: 1rem; padding-right: 1rem; }
 }
 
 /* Responsive: Mobile */
@@ -175,8 +175,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </nav>
 
 <section class="hero">
-    <div class="badge"><span class="dot"></span> Open Source &middot; MIT License</div>
-    <h1><span class="accent">Pathfinder</span><br>Agentic docs retrieval for AI agents</h1>
+    <div class="badge"><span class="dot"></span> pathfinder — agentic docs retrieval for AI agents</div>
+    <h1><span class="accent">Semantic search</span> and <span class="accent">filesystem exploration</span> for AI agents</h1>
     <p class="subtitle">Your AI already knows find, grep, and cat. Give it a virtual filesystem over your docs — plus semantic search when it needs meaning, not just matches. Self-hosted. Open source. Zero lock-in.</p>
 
     <div class="install-box">
