@@ -91,6 +91,7 @@ sources:
 
 tools:
   - name: search-docs
+    type: search
     description: "Search the server's documentation to retrieve relevant information. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: docs
     default_limit: 5
@@ -98,6 +99,7 @@ tools:
     result_format: docs
 
   - name: search-code
+    type: search
     description: "Search the server's indexed codebase to find relevant code snippets and implementations. Use this tool when you need to understand how something is implemented, find code examples, or locate specific functionality in the codebase. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: code
     default_limit: 10
@@ -105,6 +107,7 @@ tools:
     result_format: code
 
   - name: search-ag-ui-docs
+    type: search
     description: "Search the AG-UI protocol documentation to retrieve relevant information about the Agent-User Interaction protocol, events, types, and integration guides. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: ag-ui-docs
     default_limit: 5
@@ -112,11 +115,24 @@ tools:
     result_format: docs
 
   - name: search-ag-ui-code
+    type: search
     description: "Search the AG-UI TypeScript SDK codebase to find relevant code snippets and implementations. Use this tool to understand AG-UI protocol types, events, encoders, and client implementations. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: ag-ui-code
     default_limit: 10
     max_limit: 20
     result_format: code
+
+  - name: explore-docs
+    type: bash
+    description: "Explore documentation files directly using bash commands (find, grep, cat, head, etc.). Read-only sandboxed environment. Use this when you need to read exact file contents, browse directory structure, or search for specific patterns in the documentation."
+    sources:
+      - docs
+
+  - name: explore-code
+    type: bash
+    description: "Explore source code files directly using bash commands (find, grep, cat, head, etc.). Read-only sandboxed environment. Use this when you need to read exact source code, find implementations, or search for specific patterns across the codebase."
+    sources:
+      - code
 
   - name: submit-feedback
     type: collect
