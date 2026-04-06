@@ -1,6 +1,8 @@
 // Job queue and coordination for indexing pipelines.
 // Fully config-driven: indexes sources referenced by search tools in mcp-docs.yaml.
 
+import fs from 'fs';
+import path from 'path';
 import { simpleGit } from 'simple-git';
 import { getConfig, getServerConfig, getIndexableSourceNames } from '../config.js';
 import { EmbeddingClient } from './embeddings.js';
@@ -126,10 +128,17 @@ export class IndexingOrchestrator {
                     }
                 }
 
-                if (anyChanged) {
-                    console.log(
-                        `[orchestrator] Remote HEAD ${remoteHead.slice(0, 8)} for ${repoUrl} differs from indexed — queuing incremental reindex`,
-                    );
+                // Even if DB says current, verify clone dir exists (fresh container = empty /tmp)
+                const repoName = repoUrl.split('/').pop()?.replace(/\.git$/, '') ?? '';
+                const cloneDir = getConfig().cloneDir;
+                const repoDir = path.join(cloneDir, repoName);
+                const cloneMissing = !fs.existsSync(repoDir);
+
+                if (anyChanged || cloneMissing) {
+                    const reason = cloneMissing
+                        ? `clone dir missing at ${repoDir}`
+                        : `remote HEAD ${remoteHead.slice(0, 8)} differs from indexed`;
+                    console.log(`[orchestrator] ${reason} for ${repoUrl} — queuing incremental reindex`);
                     this.queueIncrementalReindex(repoUrl);
                 } else {
                     console.log(`[orchestrator] Index current at ${remoteHead.slice(0, 8)}`);
