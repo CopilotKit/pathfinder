@@ -350,11 +350,14 @@ async function start(): Promise<void> {
         orchestratorRef = orchestrator;
         webhookHandler = createWebhookHandler(orchestrator);
 
-        orchestrator.checkAndIndex().then(() => {
-            const allSourceNames = serverCfg.sources.map(s => s.name);
-            return refreshBashInstances(allSourceNames, "startup");
-        }).catch((err) => {
-            console.error("[startup] Initial index/bash-refresh failed:", err);
+        orchestrator.onReindexComplete = (sourceNames) => {
+            refreshBashInstances(sourceNames, "reindex").catch((err) => {
+                console.error("[reindex] Bash refresh failed:", err);
+            });
+        };
+
+        orchestrator.checkAndIndex().catch((err) => {
+            console.error("[startup] Initial index check failed:", err);
         });
 
         orchestrator.startNightlyReindex();

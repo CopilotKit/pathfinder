@@ -42,6 +42,9 @@ export class IndexingOrchestrator {
     // Track last nightly reindex date to prevent drift-based duplicate triggers
     private lastReindexDate: string | null = null;
 
+    // Callback fired after each reindex job completes with affected source names
+    onReindexComplete?: (sourceNames: string[]) => void;
+
     constructor() {
         // No-op — all setup happens lazily via getConfig()
     }
@@ -293,8 +296,12 @@ export class IndexingOrchestrator {
             serverCfg.embedding.dimensions,
         );
 
+        const serverCfg2 = getServerConfig();
+        let affectedSourceNames: string[] = [];
+
         if (job.type === 'full-reindex') {
             await this.runFullReindex(embeddingClient, config.cloneDir, config.githubToken);
+            affectedSourceNames = serverCfg2.sources.map(s => s.name);
         } else if (job.type === 'full-reindex-local') {
             if (!job.sources || job.sources.length === 0) {
                 console.warn('[orchestrator] full-reindex-local job has no sources, skipping');
@@ -303,6 +310,7 @@ export class IndexingOrchestrator {
             for (const sourceConfig of job.sources) {
                 await this.indexSourceWithState(sourceConfig, embeddingClient, config.cloneDir);
             }
+            affectedSourceNames = job.sources.map(s => s.name);
         } else if (job.type === 'incremental-reindex') {
             if (!job.repoUrl) {
                 console.warn('[orchestrator] incremental-reindex job has no repoUrl, skipping');
@@ -314,6 +322,15 @@ export class IndexingOrchestrator {
                 config.githubToken,
                 job.repoUrl,
             );
+            affectedSourceNames = getSourcesByRepo(job.repoUrl).map(s => s.name);
+        }
+
+        if (affectedSourceNames.length > 0 && this.onReindexComplete) {
+            try {
+                this.onReindexComplete(affectedSourceNames);
+            } catch (err) {
+                console.error('[orchestrator] onReindexComplete callback failed:', err);
+            }
         }
     }
 
