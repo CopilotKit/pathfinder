@@ -26,14 +26,14 @@ services:
             OPENAI_API_KEY: ${OPENAI_API_KEY}
             GITHUB_TOKEN: ${GITHUB_TOKEN:-}
             GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-local-dev-secret}
-            MCP_DOCS_CONFIG: ${MCP_DOCS_CONFIG:-./mcp-docs.yaml}
+            PATHFINDER_CONFIG: ${PATHFINDER_CONFIG:-./pathfinder.yaml}
             PORT: 3001
             NODE_ENV: development
             LOG_LEVEL: debug
         volumes:
             - ./src:/app/src
             - ./scripts:/app/scripts
-            - ./mcp-docs.yaml:/app/mcp-docs.yaml
+            - ./pathfinder.yaml:/app/pathfinder.yaml
         depends_on:
             db:
                 condition: service_healthy
