@@ -27,6 +27,9 @@ pathfinder.yaml
 OPERATIONS.md
 railway.toml
 
+# Superpowers artifacts
+.superpowers/
+
 # Dev files
 .env*
 !.env.example
