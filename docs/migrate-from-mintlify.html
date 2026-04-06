@@ -16,7 +16,8 @@
 <meta name="twitter:description" content="Step-by-step guide: ChromaFS to Pathfinder in 15 minutes.">
 <meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
     --bg-deep: #0a0a0f;
@@ -26,16 +27,19 @@
     --text-primary: #e8e8f0;
     --text-secondary: #8888a0;
     --text-dim: #555570;
-    --accent: #00cc66;
-    --accent-glow: rgba(0,204,102,0.15);
+    --accent: #00ff88;
+    --accent-dim: #00cc6a;
+    --accent-glow: rgba(0,255,136,0.15);
     --blue: #4488ff;
     --purple: #aa66ff;
     --warning: #ffaa00;
-    --mono: 'JetBrains Mono', monospace;
-    --sans: 'Instrument Sans', system-ui, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
 body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
+code, pre, kbd, .demo-body, .install-command { font-feature-settings: "liga" 0, "calt" 0; }
 
 /* Noise overlay */
 body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
