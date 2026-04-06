@@ -181,7 +181,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
     <div class="install-box">
         <span class="prompt">$</span>
-        <span class="cmd">git clone https://github.com/CopilotKit/pathfinder && cd pathfinder</span>
+        <span class="cmd">npm install @copilotkit/pathfinder</span>
         <button class="copy-btn">Copy</button>
     </div>
 
@@ -369,7 +369,7 @@ async function runTerminal() {
 
 // Copy button
 document.querySelector('.copy-btn').addEventListener('click', async function() {
-    const text = 'git clone https://github.com/CopilotKit/pathfinder && cd pathfinder';
+    const text = 'npm install @copilotkit/pathfinder';
     try {
         await navigator.clipboard.writeText(text);
         this.textContent = 'Copied!';
