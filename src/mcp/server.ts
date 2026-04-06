@@ -5,13 +5,19 @@ import { getConfig, getServerConfig } from '../config.js';
 import { registerSearchTool } from './tools/search.js';
 import { registerCollectTool } from './tools/collect.js';
 import { registerBashTool } from './tools/bash.js';
+import { SessionStateManager } from './tools/bash-session.js';
 
 /**
  * Creates a new McpServer instance with all tools registered.
  * Each call returns a fresh server — suitable for stateless per-request usage.
  * When bash tools are configured, bashInstances maps tool name → shared Bash instance.
+ * When sessionStateManager and sessionId are provided, bash tools get per-session CWD tracking.
  */
-export function createMcpServer(bashInstances?: Map<string, Bash>): McpServer {
+export function createMcpServer(
+    bashInstances?: Map<string, Bash>,
+    sessionStateManager?: SessionStateManager,
+    getSessionId?: () => string | undefined,
+): McpServer {
     const cfg = getConfig();
     const serverCfg = getServerConfig();
 
@@ -49,7 +55,20 @@ export function createMcpServer(bashInstances?: Map<string, Bash>): McpServer {
                 if (!bash) {
                     throw new Error(`Bash tool "${tool.name}" is configured but no Bash instance was created.`);
                 }
-                registerBashTool(server, tool, bash);
+                const getSessionState = (sessionStateManager && getSessionId)
+                    ? () => {
+                        const sid = getSessionId();
+                        return sid ? sessionStateManager.getOrCreate(sid) : undefined;
+                    }
+                    : undefined;
+                const grepStrategy = tool.bash?.grep_strategy;
+                const needsEmbedding = grepStrategy === 'vector' || grepStrategy === 'hybrid';
+                const searchToolNames = serverCfg.tools.filter(t => t.type === 'search').map(t => t.name);
+                registerBashTool(server, tool, bash, {
+                    getSessionState,
+                    embeddingClient: needsEmbedding ? getEmbeddingClient() : undefined,
+                    searchToolNames,
+                });
                 break;
             }
             default: {

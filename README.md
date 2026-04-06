@@ -113,6 +113,41 @@ tools:
 
 Each field in `schema` supports `type` (`string`, `number`, or `enum`), an optional `description` (shown to the agent), `required` (defaults to false), and `values` (required for `enum` fields). The validated input is written as JSONB to the `collected_data` table along with the tool name and a timestamp.
 
+### Bash Tool Options
+
+Bash tools expose source files as a read-only virtual filesystem that agents can explore with standard commands (`find`, `grep`, `cat`, `ls`, `head`). Several options control behavior:
+
+```yaml
+tools:
+  - name: explore-docs
+    type: bash
+    description: "Explore documentation files"
+    sources: [docs]
+    bash:
+      session_state: true       # Persistent CWD across commands (default: false)
+      grep_strategy: hybrid     # memory | vector | hybrid (default: memory)
+      workspace: true           # Writable /workspace/ per session (default: false)
+      virtual_files: true       # Auto-generate INDEX.md, SEARCH_TIPS.md (default: false)
+      max_file_size: 102400     # Max file size in bytes (default: 100KB)
+      cache:
+        max_entries: 1000       # LRU cache size for lazy loading
+        ttl_seconds: 300        # Cache TTL
+```
+
+- **session_state**: When enabled, `cd` persists across commands within a session. Agents can run `cd /docs && ls` in one tool call and then `cat file.md` in the next without repeating the path.
+- **grep_strategy**: Controls how `grep` searches work. `memory` uses pure in-memory regex (zero infra). `vector` uses semantic search via embeddings plus text `ILIKE`. `hybrid` combines both strategies. The `vector` and `hybrid` modes require an `embedding` config block.
+- **workspace**: Enables a per-session writable `/workspace/` directory (1MB cap). Agents can save grep results, notes, or intermediate files there.
+- **virtual_files**: Auto-generates `/INDEX.md` (file listing with descriptions) and `/SEARCH_TIPS.md` (usage guidance) at the root of the virtual filesystem.
+- **Telemetry**: When enabled globally, tracks file access patterns and grep misses to the `collected_data` table for search quality analysis.
+
+Agents can also run the `related` command inside bash tools to find semantically similar files across all mounted sources:
+
+```bash
+related /docs/concepts/coagents.mdx
+```
+
+This returns a ranked list of files from any source that are semantically related to the given file, useful for discovering cross-references between documentation and code.
+
 ### Built-in Chunker Types
 
 | Type | Best For | Splits On |
