@@ -53,11 +53,26 @@ const SearchToolConfigObjectSchema = z.object({
 // Cross-field validation (default_limit <= max_limit) lives in ServerConfigSchema.superRefine.
 export const SearchToolConfigSchema = SearchToolConfigObjectSchema;
 
+export const BashCacheConfigSchema = z.object({
+    max_entries: z.number().int().positive(),
+    ttl_seconds: z.number().int().positive(),
+});
+
+export const BashOptionsSchema = z.object({
+    session_state: z.boolean(),
+    grep_strategy: z.enum(['memory', 'vector', 'hybrid']),
+    workspace: z.boolean(),
+    virtual_files: z.boolean(),
+    max_file_size: z.number().int().positive(),
+    cache: BashCacheConfigSchema,
+}).partial();
+
 export const BashToolConfigSchema = z.object({
     name: z.string().min(1),
     type: z.literal('bash'),
     description: z.string().min(1),
     sources: z.array(z.string().min(1)).min(1),
+    bash: BashOptionsSchema.optional(),
 });
 
 export const CollectToolConfigSchema = z.object({
@@ -158,6 +173,14 @@ export const ServerConfigSchema = z.object({
                     });
                 }
             }
+            const grepStrategy = tool.bash?.grep_strategy;
+            if ((grepStrategy === 'vector' || grepStrategy === 'hybrid') && !cfg.embedding) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: `Bash tool "${tool.name}" uses grep_strategy "${grepStrategy}" which requires embedding config.`,
+                    path: ['embedding'],
+                });
+            }
         }
     }
 });
@@ -174,6 +197,8 @@ export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
+export type BashCacheConfig = z.infer<typeof BashCacheConfigSchema>;
+export type BashOptions = z.infer<typeof BashOptionsSchema>;
 
 // ── Data types: unified chunk ─────────────────────────────────────────────────
 

@@ -1,19 +1,19 @@
-# mcp-docs
+# Pathfinder
 
 A self-hosted MCP server that provides semantic search over your documentation and code. Configure it with a YAML file, deploy with Docker, and give your AI coding agents instant access to your project's knowledge.
 
 ## How It Works
 
-mcp-docs indexes your GitHub repositories — documentation (Markdown/MDX) and source code — into a PostgreSQL vector database using OpenAI embeddings. It exposes configurable search tools via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), so AI agents like Claude Code can search your docs and code semantically.
+Pathfinder indexes your GitHub repositories — documentation (Markdown/MDX) and source code — into a PostgreSQL vector database using OpenAI embeddings. It exposes configurable search tools via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), so AI agents like Claude Code can search your docs and code semantically.
 
 ## Quick Start
 
 1. **Clone and configure:**
    ```bash
-   git clone https://github.com/CopilotKit/mcp-docs.git
-   cd mcp-docs
-   cp mcp-docs.example.yaml mcp-docs.yaml  # edit for your project
-   cp .env.example .env                     # add your OPENAI_API_KEY
+   git clone https://github.com/CopilotKit/pathfinder.git
+   cd pathfinder
+   cp pathfinder.example.yaml pathfinder.yaml  # edit for your project
+   cp .env.example .env                        # add your OPENAI_API_KEY
    ```
 
 2. **Start the server:**
@@ -37,7 +37,7 @@ mcp-docs indexes your GitHub repositories — documentation (Markdown/MDX) and s
 
 ## Configuration
 
-All configuration lives in `mcp-docs.yaml`. See [mcp-docs.example.yaml](mcp-docs.example.yaml) for a minimal starting point.
+All configuration lives in `pathfinder.yaml`. See [pathfinder.example.yaml](pathfinder.example.yaml) for a minimal starting point.
 
 ### Sources
 
@@ -113,6 +113,44 @@ tools:
 
 Each field in `schema` supports `type` (`string`, `number`, or `enum`), an optional `description` (shown to the agent), `required` (defaults to false), and `values` (required for `enum` fields). The validated input is written as JSONB to the `collected_data` table along with the tool name and a timestamp.
 
+### Bash Tool Options
+
+Bash tools expose source files as a read-only virtual filesystem that agents can explore with standard commands (`find`, `grep`, `cat`, `ls`, `head`). Several options control behavior:
+
+```yaml
+tools:
+  - name: explore-docs
+    type: bash
+    description: "Explore documentation files"
+    sources: [docs]
+    bash:
+      session_state: true       # Persistent CWD across commands (default: false)
+      grep_strategy: hybrid     # memory | vector | hybrid — enables qmd semantic search (default: memory, no qmd)
+      virtual_files: true       # Auto-generate INDEX.md, SEARCH_TIPS.md (default: false)
+```
+
+- **session_state**: When enabled, `cd` persists across commands within a session. Agents can run `cd /docs` in one tool call and then `ls` or `cat file.md` in the next without repeating the path.
+- **grep_strategy**: Controls whether the `qmd` semantic search command is available. `memory` uses pure in-memory regex only (no `qmd`). `vector` or `hybrid` enable the `qmd` command, which performs semantic search via embeddings plus text `ILIKE`. The `vector` and `hybrid` modes require an `embedding` config block.
+- **virtual_files**: Auto-generates `/INDEX.md` (file listing with descriptions) and `/SEARCH_TIPS.md` (usage guidance) at the root of the virtual filesystem.
+
+Agents can also run the `related` command inside bash tools to find semantically similar files across all mounted sources:
+
+```bash
+related /docs/concepts/coagents.mdx
+```
+
+This returns a ranked list of files from any source that are semantically related to the given file, useful for discovering cross-references between documentation and code.
+
+When `grep_strategy` is set to `vector` or `hybrid`, agents can use the `qmd` command for semantic search:
+
+```bash
+qmd "how do I configure authentication"
+```
+
+This performs a 2-pass search (semantic embeddings + text ILIKE) with dedup and filtering, and returns file:line:content results. Standard `grep` is never intercepted — it always works with standard flags as agents expect.
+
+**Note:** The virtual filesystem is read-only and shared across all MCP sessions for a given tool. Content refreshes on webhook or server restart.
+
 ### Built-in Chunker Types
 
 | Type | Best For | Splits On |
@@ -145,7 +183,7 @@ The simplest way to run in production:
 
 1. **Configure:**
    ```bash
-   cp mcp-docs.example.yaml mcp-docs.yaml  # edit for your project
+   cp pathfinder.example.yaml pathfinder.yaml  # edit for your project
    ```
 
 2. **Set environment variables** in `.env`:
@@ -173,7 +211,7 @@ The server automatically indexes on first boot and runs a nightly reindex at the
 
 For real-time re-indexing on push:
 
-1. Add webhook config to `mcp-docs.yaml`:
+1. Add webhook config to `pathfinder.yaml`:
    ```yaml
    webhook:
      repo_sources:
@@ -238,7 +276,7 @@ npx tsx scripts/test-path-filter.ts
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `GITHUB_WEBHOOK_SECRET` | No | HMAC secret for webhook verification |
 | `GITHUB_TOKEN` | No | GitHub token for private repos |
-| `MCP_DOCS_CONFIG` | No | Path to config file (default: `./mcp-docs.yaml`) |
+| `PATHFINDER_CONFIG` | No | Path to config file (default: `./pathfinder.yaml`) |
 | `PORT` | No | Server port (default: `3001`) |
 
 ## License

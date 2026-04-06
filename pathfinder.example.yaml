@@ -1,0 +1,48 @@
+# Pathfinder — agentic docs retrieval for AI agents
+# Copy this file to pathfinder.yaml and customize for your project.
+# Full documentation: https://pathfinder.copilotkit.dev
+
+server:
+  name: my-project-docs
+  version: "1.0.0"
+
+sources:
+  - name: docs
+    type: markdown
+    repo: https://github.com/your-org/your-repo.git
+    path: docs/
+    file_patterns: ["**/*.mdx", "**/*.md"]
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+tools:
+  # Semantic search (RAG) — requires embedding config below
+  - name: search-docs
+    type: search
+    description: "Search documentation for relevant information."
+    source: docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+  # Filesystem exploration — no database or API keys needed
+  - name: explore-docs
+    type: bash
+    description: "Explore documentation files using bash commands (find, grep, cat, ls, head)."
+    sources: [docs]
+    bash:
+      session_state: true
+      grep_strategy: hybrid  # memory | vector | hybrid
+      virtual_files: true
+
+# Required for search tools (omit for bash-only mode)
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536
+
+indexing:
+  auto_reindex: true
+  reindex_hour_utc: 3
+  stale_threshold_hours: 24

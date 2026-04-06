@@ -5,13 +5,14 @@ import { Bash } from "just-bash";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
-import { buildBashFilesMap } from "./mcp/tools/bash-fs.js";
+import { buildBashFilesMap, rebuildBashInstance } from "./mcp/tools/bash-fs.js";
 import { initializeSchema, closePool } from "./db/client.js";
 import { getIndexStats } from "./db/queries.js";
-import { getConfig, getServerConfig, hasSearchTools, hasCollectTools } from "./config.js";
+import { getConfig, getServerConfig, hasSearchTools, hasCollectTools, hasBashSemanticSearch } from "./config.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
+import { SessionStateManager } from "./mcp/tools/bash-session.js";
 
 const app = express();
 app.use(
@@ -33,6 +34,28 @@ let webhookHandler: ((req: Request, res: Response) => Promise<void>) | null = nu
 let orchestratorRef: IndexingOrchestrator | null = null;
 const startedAt = new Date();
 const bashInstances = new Map<string, Bash>();
+const sessionStateManager = new SessionStateManager();
+
+async function refreshBashInstances(sourceNames: string[]): Promise<void> {
+    const serverCfg = getServerConfig();
+    const bashTools = serverCfg.tools.filter(t => t.type === 'bash');
+    const searchToolNames = serverCfg.tools.filter(t => t.type === 'search').map(t => t.name);
+
+    for (const tool of bashTools) {
+        const affected = tool.sources.some(s => sourceNames.includes(s));
+        if (!affected) continue;
+
+        const toolSources = serverCfg.sources.filter(s => tool.sources.includes(s.name));
+        const virtualFiles = tool.bash?.virtual_files === true;
+        const { bash, fileCount } = await rebuildBashInstance(toolSources, {
+            virtualFiles,
+            searchToolNames: virtualFiles ? searchToolNames : undefined,
+            cloneDir: getConfig().cloneDir,
+        });
+        bashInstances.set(tool.name, bash);
+        console.log(`[webhook] Refreshed bash tool "${tool.name}": ${fileCount} files`);
+    }
+}
 
 app.post("/webhooks/github", express.raw({ type: "application/json" }), async (req: Request, res: Response) => {
     const handler = webhookHandler;
@@ -42,6 +65,18 @@ app.post("/webhooks/github", express.raw({ type: "application/json" }), async (r
     }
     try {
         await handler(req, res);
+        // Schedule bash refresh after reindexing. The orchestrator runs async,
+        // so we use a delay heuristic — TODO: replace with event-based notification.
+        const serverCfg = getServerConfig();
+        const bashTools = serverCfg.tools.filter(t => t.type === 'bash');
+        if (bashTools.length > 0) {
+            const REFRESH_DELAY_MS = 30_000;
+            setTimeout(() => {
+                refreshBashInstances(
+                    serverCfg.sources.map(s => s.name),
+                ).catch(err => console.error('[webhook] Bash refresh failed:', err));
+            }, REFRESH_DELAY_MS);
+        }
     } catch (err) {
         console.error("[webhook] Handler error:", err);
         if (!res.headersSent) {
@@ -92,6 +127,7 @@ setInterval(() => {
         if (now - sessionLastActivity[sid] > SESSION_TTL_MS) {
             delete transports[sid];
             delete sessionLastActivity[sid];
+            sessionStateManager.cleanup(sid);
             reaped++;
         }
     }
@@ -158,10 +194,11 @@ app.post("/mcp", async (req: Request, res: Response) => {
                 if (sid && transports[sid]) {
                     delete transports[sid];
                     delete sessionLastActivity[sid];
+                    sessionStateManager.cleanup(sid);
                     console.log(`[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`);
                 }
             };
-            const server = createMcpServer(bashInstances);
+            const server = createMcpServer(bashInstances, sessionStateManager, () => transport.sessionId ?? undefined);
             await server.connect(transport);
             await transport.handleRequest(req, res, req.body);
             return;
@@ -222,7 +259,7 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 
 app.get("/health", async (_req: Request, res: Response) => {
     const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
-    const needsDb = hasSearchTools() || hasCollectTools();
+    const needsDb = hasSearchTools() || hasCollectTools() || hasBashSemanticSearch();
 
     if (!needsDb) {
         res.json({
@@ -279,7 +316,7 @@ async function start(): Promise<void> {
     const cfg = getConfig();
     const serverCfg = getServerConfig();
 
-    const needsDb = hasSearchTools() || hasCollectTools();
+    const needsDb = hasSearchTools() || hasCollectTools() || hasBashSemanticSearch();
 
     if (needsDb) {
         console.log("[startup] Initializing database schema...");
@@ -291,11 +328,18 @@ async function start(): Promise<void> {
     const sourceNames = serverCfg.sources.map(s => `${s.name} (${s.type})`);
     console.log(`[startup] Active sources: ${sourceNames.join(', ')}`);
 
-    // Build shared Bash instances for bash tools (stateless — each exec starts from /)
+    // Build shared Bash instances for bash tools. The filesystem is shared;
+    // per-session CWD tracking is handled at the tool registration layer.
     const bashTools = serverCfg.tools.filter(t => t.type === 'bash');
+    const searchToolNames = serverCfg.tools.filter(t => t.type === 'search').map(t => t.name);
     for (const tool of bashTools) {
         const toolSources = serverCfg.sources.filter(s => tool.sources.includes(s.name));
-        const filesMap = await buildBashFilesMap(toolSources);
+        const virtualFiles = tool.bash?.virtual_files === true;
+        const filesMap = await buildBashFilesMap(toolSources, {
+            virtualFiles,
+            searchToolNames: virtualFiles ? searchToolNames : undefined,
+            cloneDir: cfg.cloneDir,
+        });
         bashInstances.set(tool.name, new Bash({ files: filesMap, cwd: '/' }));
         console.log(`[startup] Bash tool "${tool.name}": ${Object.keys(filesMap).length} files loaded`);
     }

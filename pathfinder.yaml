@@ -124,15 +124,21 @@ tools:
 
   - name: explore-docs
     type: bash
-    description: "Explore documentation files directly using bash commands (find, grep, cat, head, etc.). Read-only sandboxed environment. Use this when you need to read exact file contents, browse directory structure, or search for specific patterns in the documentation."
-    sources:
-      - docs
+    description: "Explore CopilotKit and AG-UI documentation files using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.mdx\" | head -20' or 'cat /INDEX.md' to see what's available."
+    sources: [docs, ag-ui-docs]
+    bash:
+      session_state: true
+      grep_strategy: hybrid
+      virtual_files: true
 
   - name: explore-code
     type: bash
-    description: "Explore source code files directly using bash commands (find, grep, cat, head, etc.). Read-only sandboxed environment. Use this when you need to read exact source code, find implementations, or search for specific patterns across the codebase."
-    sources:
-      - code
+    description: "Explore CopilotKit and AG-UI source code files using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.ts\" | head -20' to see what's available."
+    sources: [code, ag-ui-code]
+    bash:
+      session_state: true
+      grep_strategy: hybrid
+      virtual_files: true
 
   - name: submit-feedback
     type: collect

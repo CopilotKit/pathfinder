@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { Bash } from 'just-bash';
 import { matchesPatterns } from '../../indexing/source-indexer.js';
 import type { SourceConfig } from '../../types.js';
+import { generateIndexMd, generateSearchTipsMd } from './bash-virtual-files.js';
 
 const DEFAULT_SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git']);
 const DEFAULT_MAX_FILE_SIZE = 102400; // 100KB
@@ -37,14 +39,28 @@ async function walkFiles(
     return results;
 }
 
+export interface BashFilesMapOptions {
+    virtualFiles?: boolean;
+    searchToolNames?: string[];
+    cloneDir?: string;
+}
+
 export async function buildBashFilesMap(
     sources: SourceConfig[],
+    options?: BashFilesMapOptions,
 ): Promise<Record<string, string>> {
     const files: Record<string, string> = {};
     const multiSource = sources.length > 1;
 
     for (const source of sources) {
-        const rootDir = path.resolve(source.path);
+        let rootDir: string;
+        if (source.repo && options?.cloneDir) {
+            // Git-based source: the orchestrator clones into cloneDir/<repoName>/
+            const repoName = source.repo.replace(/\.git$/, '').split('/').pop()!;
+            rootDir = path.join(options.cloneDir, repoName, source.path);
+        } else {
+            rootDir = path.resolve(source.path);
+        }
         if (!fs.existsSync(rootDir)) {
             console.warn(`[bash-fs] Source "${source.name}" path does not exist: ${rootDir}`);
             continue;
@@ -72,5 +88,75 @@ export async function buildBashFilesMap(
         }
     }
 
+    if (options?.virtualFiles) {
+        files['/INDEX.md'] = generateIndexMd(files);
+        files['/SEARCH_TIPS.md'] = generateSearchTipsMd(options.searchToolNames ?? []);
+    }
+
     return files;
+}
+
+export interface FileMetadata {
+    size: number;
+    lines: number;
+}
+
+export function buildFileMetadata(files: Record<string, string>): Record<string, FileMetadata> {
+    const meta: Record<string, FileMetadata> = {};
+    for (const [path, content] of Object.entries(files)) {
+        const size = Buffer.byteLength(content, 'utf-8');
+        const lines = content === '' ? 0 : content.endsWith('\n')
+            ? content.split('\n').length - 1
+            : content.split('\n').length;
+        meta[path] = { size, lines };
+    }
+    return meta;
+}
+
+export function formatLsLong(
+    dir: string,
+    allPaths: string[],
+    metadata: Record<string, FileMetadata>,
+): string {
+    const normalizedDir = dir.endsWith('/') ? dir : dir + '/';
+    const files: string[] = [];
+    const subdirs = new Set<string>();
+
+    for (const p of allPaths) {
+        if (!p.startsWith(normalizedDir)) continue;
+        const rest = p.slice(normalizedDir.length);
+        const slashIdx = rest.indexOf('/');
+        if (slashIdx === -1) {
+            files.push(p);
+        } else {
+            subdirs.add(rest.slice(0, slashIdx));
+        }
+    }
+
+    const lines: string[] = [];
+    for (const d of [...subdirs].sort()) {
+        lines.push(`drwxr-xr-x  ${d}/`);
+    }
+    for (const f of files.sort()) {
+        const name = f.slice(normalizedDir.length);
+        const meta = metadata[f];
+        if (meta) {
+            const sizeStr = String(meta.size).padStart(8);
+            lines.push(`-rw-r--r--  ${sizeStr}  ${meta.lines} lines  ${name}`);
+        } else {
+            lines.push(`-rw-r--r--  ${name}`);
+        }
+    }
+    return lines.join('\n') + '\n';
+}
+
+export async function rebuildBashInstance(
+    sources: SourceConfig[],
+    options?: BashFilesMapOptions,
+): Promise<{ bash: Bash; fileCount: number }> {
+    const filesMap = await buildBashFilesMap(sources, { ...options });
+    return {
+        bash: new Bash({ files: filesMap, cwd: '/' }),
+        fileCount: Object.keys(filesMap).length,
+    };
 }

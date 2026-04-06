@@ -22,5 +22,5 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist/ ./dist/
-COPY mcp-docs.yaml ./mcp-docs.yaml
+COPY pathfinder.yaml ./pathfinder.yaml
 CMD ["node", "dist/index.js"]

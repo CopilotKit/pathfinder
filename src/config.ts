@@ -9,7 +9,7 @@ import { ServerConfigSchema, type ServerConfig } from './types.js';
 // ── Environment variable config (secrets and runtime settings) ────────────────
 
 export interface Config {
-    databaseUrl: string;
+    databaseUrl: string | undefined;
     openaiApiKey: string;
     githubToken: string;
     githubWebhookSecret: string;
@@ -34,6 +34,16 @@ export function hasCollectTools(): boolean {
 }
 
 /**
+ * Check whether any bash tools use vector or hybrid grep (requires embeddings + database).
+ */
+export function hasBashSemanticSearch(): boolean {
+    return getServerConfig().tools.some(t =>
+        t.type === 'bash' &&
+        (t.bash?.grep_strategy === 'vector' || t.bash?.grep_strategy === 'hybrid')
+    );
+}
+
+/**
  * Get the set of source names that need indexing (only those referenced by search tools).
  */
 export function getIndexableSourceNames(): Set<string> {
@@ -47,7 +57,7 @@ function parseConfig(): Config {
     const missing: string[] = [];
 
     const needsRag = hasSearchTools();
-    const needsDb = needsRag || hasCollectTools();
+    const needsDb = needsRag || hasCollectTools() || hasBashSemanticSearch();
 
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl && needsDb) missing.push('DATABASE_URL');
@@ -70,7 +80,7 @@ function parseConfig(): Config {
     }
 
     return {
-        databaseUrl: databaseUrl ?? '',
+        databaseUrl,
         openaiApiKey: openaiApiKey ?? '',
         githubToken: process.env.GITHUB_TOKEN || '',
         githubWebhookSecret: githubWebhookSecret!,
@@ -99,22 +109,42 @@ export const config = new Proxy({} as Config, {
 let cachedServerConfig: ServerConfig | null = null;
 
 function resolveConfigPath(): string {
-    const envPath = process.env.MCP_DOCS_CONFIG;
-    if (envPath) {
-        const resolved = resolve(envPath);
+    // Primary env var
+    const pathfinderEnv = process.env.PATHFINDER_CONFIG;
+    if (pathfinderEnv) {
+        const resolved = resolve(pathfinderEnv);
+        if (!existsSync(resolved)) {
+            throw new Error(`PATHFINDER_CONFIG points to ${resolved} but file does not exist.`);
+        }
+        return resolved;
+    }
+
+    // Deprecated env var
+    const mcpDocsEnv = process.env.MCP_DOCS_CONFIG;
+    if (mcpDocsEnv) {
+        console.warn('[config] MCP_DOCS_CONFIG is deprecated — use PATHFINDER_CONFIG instead.');
+        const resolved = resolve(mcpDocsEnv);
         if (!existsSync(resolved)) {
             throw new Error(`MCP_DOCS_CONFIG points to ${resolved} but file does not exist.`);
         }
         return resolved;
     }
 
-    const cwdPath = resolve(process.cwd(), 'mcp-docs.yaml');
-    if (existsSync(cwdPath)) {
-        return cwdPath;
+    // Primary config file
+    const pathfinderPath = resolve(process.cwd(), 'pathfinder.yaml');
+    if (existsSync(pathfinderPath)) {
+        return pathfinderPath;
+    }
+
+    // Deprecated config file
+    const mcpDocsPath = resolve(process.cwd(), 'mcp-docs.yaml');
+    if (mcpDocsPath && existsSync(mcpDocsPath)) {
+        console.warn('[config] mcp-docs.yaml is deprecated — rename to pathfinder.yaml.');
+        return mcpDocsPath;
     }
 
     throw new Error(
-        'No mcp-docs.yaml found. Set MCP_DOCS_CONFIG env var or place mcp-docs.yaml in the working directory.'
+        'No pathfinder.yaml found. Set PATHFINDER_CONFIG env var or place pathfinder.yaml in the working directory.'
     );
 }
 
@@ -138,7 +168,7 @@ function loadServerConfig(): ServerConfig {
         const issues = result.error.issues
             .map(i => `  - ${i.path.join('.')}: ${i.message}`)
             .join('\n');
-        throw new Error(`Invalid mcp-docs.yaml at ${configPath}:\n${issues}`);
+        throw new Error(`Invalid config at ${configPath}:\n${issues}`);
     }
 
     // Validate source name uniqueness
