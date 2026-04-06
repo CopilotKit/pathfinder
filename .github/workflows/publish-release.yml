@@ -1,7 +1,7 @@
 name: Publish Release
 on:
   push:
-    branches: [main]
+    branches: [main, master]
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -31,10 +31,17 @@ jobs:
         id: check_npm
         if: steps.check_tag.outputs.exists == 'false'
         run: |
-          if npm view "@copilotkit/pathfinder@${{ steps.version.outputs.version }}" version 2>/dev/null; then
+          set +e
+          OUTPUT=$(npm view "@copilotkit/pathfinder@${{ steps.version.outputs.version }}" version 2>&1)
+          EXIT_CODE=$?
+          set -e
+          if [ $EXIT_CODE -eq 0 ]; then
             echo "published=true" >> $GITHUB_OUTPUT
-          else
+          elif echo "$OUTPUT" | grep -qi "404\|not found\|is not in this registry"; then
             echo "published=false" >> $GITHUB_OUTPUT
+          else
+            echo "::error::npm view failed unexpectedly: $OUTPUT"
+            exit 1
           fi
       - name: Install latest npm (OIDC requires >= 11.5.1)
         if: steps.check_tag.outputs.exists == 'false' && steps.check_npm.outputs.published == 'false'
@@ -43,10 +50,11 @@ jobs:
         if: steps.check_tag.outputs.exists == 'false' && steps.check_npm.outputs.published == 'false'
         run: npm ci && npm run build
       - name: Publish to npm (OIDC trusted publishing)
+        id: npm_publish
         if: steps.check_tag.outputs.exists == 'false' && steps.check_npm.outputs.published == 'false'
         run: npm publish --access public
       - name: Create tag and release
-        if: steps.check_tag.outputs.exists == 'false'
+        if: steps.check_tag.outputs.exists == 'false' && (steps.check_npm.outputs.published == 'true' || steps.npm_publish.outcome == 'success')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

@@ -168,7 +168,7 @@ function loadServerConfig(): ServerConfig {
         const issues = result.error.issues
             .map(i => `  - ${i.path.join('.')}: ${i.message}`)
             .join('\n');
-        throw new Error(`Invalid mcp-docs.yaml at ${configPath}:\n${issues}`);
+        throw new Error(`Invalid config at ${configPath}:\n${issues}`);
     }
 
     // Validate source name uniqueness

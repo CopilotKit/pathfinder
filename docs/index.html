@@ -345,9 +345,22 @@ async function runTerminal() {
 }
 
 // Copy button
-document.querySelector('.copy-btn').addEventListener('click', function() {
-    navigator.clipboard.writeText('git clone https://github.com/CopilotKit/pathfinder && cd pathfinder');
-    this.textContent = 'Copied!';
+document.querySelector('.copy-btn').addEventListener('click', async function() {
+    const text = 'git clone https://github.com/CopilotKit/pathfinder && cd pathfinder';
+    try {
+        await navigator.clipboard.writeText(text);
+        this.textContent = 'Copied!';
+    } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        this.textContent = 'Copied!';
+    }
     setTimeout(() => this.textContent = 'Copy', 2000);
 });
 
