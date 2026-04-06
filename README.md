@@ -127,13 +127,9 @@ tools:
       session_state: true       # Persistent CWD across commands (default: false)
       grep_strategy: hybrid     # memory | vector | hybrid — enables qmd semantic search (default: memory, no qmd)
       virtual_files: true       # Auto-generate INDEX.md, SEARCH_TIPS.md (default: false)
-      max_file_size: 102400     # Max file size in bytes (default: 100KB)
-      cache:
-        max_entries: 1000       # LRU cache size for lazy loading
-        ttl_seconds: 300        # Cache TTL
 ```
 
-- **session_state**: When enabled, `cd` persists across commands within a session. Agents can run `cd /docs && ls` in one tool call and then `cat file.md` in the next without repeating the path.
+- **session_state**: When enabled, `cd` persists across commands within a session. Agents can run `cd /docs` in one tool call and then `ls` or `cat file.md` in the next without repeating the path.
 - **grep_strategy**: Controls whether the `qmd` semantic search command is available. `memory` uses pure in-memory regex only (no `qmd`). `vector` or `hybrid` enable the `qmd` command, which performs semantic search via embeddings plus text `ILIKE`. The `vector` and `hybrid` modes require an `embedding` config block.
 - **virtual_files**: Auto-generates `/INDEX.md` (file listing with descriptions) and `/SEARCH_TIPS.md` (usage guidance) at the root of the virtual filesystem.
 
@@ -151,9 +147,9 @@ When `grep_strategy` is set to `vector` or `hybrid`, agents can use the `qmd` co
 qmd "how do I configure authentication"
 ```
 
-This performs a 3-pass search (semantic embeddings + text ILIKE + dedup) and returns file:line:content results. Standard `grep` is never intercepted — it always works with standard flags as agents expect.
+This performs a 2-pass search (semantic embeddings + text ILIKE) with dedup and filtering, and returns file:line:content results. Standard `grep` is never intercepted — it always works with standard flags as agents expect.
 
-**Note:** The virtual filesystem is shared across all MCP sessions. File writes by one session are visible to others. For read-only documentation exploration this is fine; avoid using bash tools for session-specific writable state.
+**Note:** The virtual filesystem is read-only and shared across all MCP sessions for a given tool. Content refreshes on webhook or server restart.
 
 ### Built-in Chunker Types
 

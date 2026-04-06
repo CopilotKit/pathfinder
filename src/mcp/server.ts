@@ -9,8 +9,8 @@ import { SessionStateManager } from './tools/bash-session.js';
 
 /**
  * Creates a new McpServer instance with all tools registered.
- * Each MCP session gets its own server instance. Bash tools share
- * a common filesystem but get per-session CWD tracking when enabled.
+ * Each MCP session gets its own server instance. Each bash tool gets its own
+ * virtual filesystem instance, shared across all MCP sessions for that tool.
  */
 export function createMcpServer(
     bashInstances?: Map<string, Bash>,
