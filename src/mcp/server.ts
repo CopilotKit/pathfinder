@@ -1,22 +1,35 @@
+import type { Bash } from 'just-bash';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { EmbeddingClient } from '../indexing/embeddings.js';
 import { getConfig, getServerConfig } from '../config.js';
 import { registerSearchTool } from './tools/search.js';
 import { registerCollectTool } from './tools/collect.js';
+import { registerBashTool } from './tools/bash.js';
 
 /**
  * Creates a new McpServer instance with all tools registered.
  * Each call returns a fresh server — suitable for stateless per-request usage.
+ * When bash tools are configured, bashInstances maps tool name → shared Bash instance.
  */
-export function createMcpServer(): McpServer {
+export function createMcpServer(bashInstances?: Map<string, Bash>): McpServer {
     const cfg = getConfig();
     const serverCfg = getServerConfig();
 
-    const embeddingClient = new EmbeddingClient(
-        cfg.openaiApiKey,
-        serverCfg.embedding.model,
-        serverCfg.embedding.dimensions,
-    );
+    // Lazily created — only when a RAG tool needs it
+    let embeddingClient: EmbeddingClient | null = null;
+    function getEmbeddingClient(): EmbeddingClient {
+        if (!embeddingClient) {
+            if (!serverCfg.embedding) {
+                throw new Error('embedding config is required for search tools');
+            }
+            embeddingClient = new EmbeddingClient(
+                cfg.openaiApiKey,
+                serverCfg.embedding.model,
+                serverCfg.embedding.dimensions,
+            );
+        }
+        return embeddingClient;
+    }
 
     const server = new McpServer({
         name: serverCfg.server.name,
@@ -29,8 +42,16 @@ export function createMcpServer(): McpServer {
                 registerCollectTool(server, tool);
                 break;
             case 'search':
-                registerSearchTool(server, embeddingClient, tool);
+                registerSearchTool(server, getEmbeddingClient(), tool);
                 break;
+            case 'bash': {
+                const bash = bashInstances?.get(tool.name);
+                if (!bash) {
+                    throw new Error(`Bash tool "${tool.name}" is configured but no Bash instance was created.`);
+                }
+                registerBashTool(server, tool, bash);
+                break;
+            }
             default: {
                 const _exhaustive: never = tool;
                 throw new Error(`Unknown tool type: ${(_exhaustive as { type: string }).type}`);

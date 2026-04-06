@@ -53,6 +53,13 @@ const SearchToolConfigObjectSchema = z.object({
 // Cross-field validation (default_limit <= max_limit) lives in ServerConfigSchema.superRefine.
 export const SearchToolConfigSchema = SearchToolConfigObjectSchema;
 
+export const BashToolConfigSchema = z.object({
+    name: z.string().min(1),
+    type: z.literal('bash'),
+    description: z.string().min(1),
+    sources: z.array(z.string().min(1)).min(1),
+});
+
 export const CollectToolConfigSchema = z.object({
     name: z.string().min(1),
     type: z.literal('collect'),
@@ -78,6 +85,7 @@ export const CollectToolConfigSchema = z.object({
 export const AnyToolConfigSchema = z.discriminatedUnion('type', [
     SearchToolConfigObjectSchema,
     CollectToolConfigSchema,
+    BashToolConfigSchema,
 ]);
 
 // ── Embedding configuration schemas ───────────────────────────────────────────
@@ -112,10 +120,26 @@ export const ServerConfigSchema = z.object({
     }),
     sources: z.array(SourceConfigSchema).min(1),
     tools: z.array(AnyToolConfigSchema).min(1),
-    embedding: EmbeddingConfigSchema,
-    indexing: IndexingConfigSchema,
+    embedding: EmbeddingConfigSchema.optional(),
+    indexing: IndexingConfigSchema.optional(),
     webhook: WebhookConfigSchema.optional(),
 }).superRefine((cfg, ctx) => {
+    const hasRag = cfg.tools.some(t => t.type === 'search');
+    if (hasRag && !cfg.embedding) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'embedding config is required when search tools are configured.',
+            path: ['embedding'],
+        });
+    }
+    if (hasRag && !cfg.indexing) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'indexing config is required when search tools are configured.',
+            path: ['indexing'],
+        });
+    }
+    const sourceNames = new Set(cfg.sources.map(s => s.name));
     for (const tool of cfg.tools) {
         if (tool.type === 'search' && tool.default_limit > tool.max_limit) {
             ctx.addIssue({
@@ -123,6 +147,17 @@ export const ServerConfigSchema = z.object({
                 message: `Tool "${tool.name}": default_limit must not exceed max_limit`,
                 path: ['tools'],
             });
+        }
+        if (tool.type === 'bash') {
+            for (const src of tool.sources) {
+                if (!sourceNames.has(src)) {
+                    ctx.addIssue({
+                        code: z.ZodIssueCode.custom,
+                        message: `Bash tool "${tool.name}" references source "${src}" which is not defined in sources.`,
+                        path: ['tools'],
+                    });
+                }
+            }
         }
     }
 });
@@ -133,6 +168,7 @@ export type UrlDerivationConfig = z.infer<typeof UrlDerivationConfigSchema>;
 export type ChunkConfig = z.infer<typeof ChunkConfigSchema>;
 export type SourceConfig = z.infer<typeof SourceConfigSchema>;
 export type SearchToolConfig = z.infer<typeof SearchToolConfigSchema>;
+export type BashToolConfig = z.infer<typeof BashToolConfigSchema>;
 export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;

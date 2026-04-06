@@ -13,8 +13,10 @@
         "integration-test": "tsx scripts/integration-test.ts",
         "fixture:breeze-api": "node fixtures/breeze-api/server.js",
         "fixture:breeze-docs": "DATABASE_URL=pglite:///tmp/breeze-docs MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs.yaml tsx src/index.ts",
+        "fixture:breeze-docs:bash": "DATABASE_URL=pglite:///tmp/breeze-docs-bash MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs-bash.yaml tsx src/index.ts",
         "fixture:breeze-broken-docs": "DATABASE_URL=pglite:///tmp/breeze-broken-docs MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs-broken.yaml tsx src/index.ts",
-        "claude": "_MCP_PORT=${PORT:-3001} && _MCP_TMPDIR=$(mktemp -d) && echo \"{\\\"mcpServers\\\":{\\\"mcp-docs\\\":{\\\"type\\\":\\\"http\\\",\\\"url\\\":\\\"http://localhost:${_MCP_PORT}/mcp\\\",\\\"headers\\\":{}}}}\" > \"$_MCP_TMPDIR/mcp.json\" && printf '# Breeze Weather API Project\\n\\n## Rules\\n- ALWAYS use the search-breeze-docs tool to look up API docs before writing code or making API calls\\n- After completing a task using search results, ALWAYS call submit-breeze-feedback to report whether the docs were accurate\\n- Use curl to test API calls against http://localhost:1234\\n' > \"$_MCP_TMPDIR/CLAUDE.md\" && (cd \"$_MCP_TMPDIR\" && claude --strict-mcp-config --mcp-config \"$_MCP_TMPDIR/mcp.json\"); rm -rf \"$_MCP_TMPDIR\"",
+        "fixture:breeze-broken-docs:bash": "DATABASE_URL=pglite:///tmp/breeze-broken-docs-bash MCP_DOCS_CONFIG=fixtures/breeze-api/mcp-docs-broken-bash.yaml tsx src/index.ts",
+        "claude": "_MCP_PORT=${PORT:-3001} && _MCP_TMPDIR=$(mktemp -d) && echo \"{\\\"mcpServers\\\":{\\\"mcp-docs\\\":{\\\"type\\\":\\\"http\\\",\\\"url\\\":\\\"http://localhost:${_MCP_PORT}/mcp\\\",\\\"headers\\\":{}}}}\" > \"$_MCP_TMPDIR/mcp.json\" && (cd \"$_MCP_TMPDIR\" && claude --strict-mcp-config --mcp-config \"$_MCP_TMPDIR/mcp.json\"); rm -rf \"$_MCP_TMPDIR\"",
         "test": "vitest run"
     },
     "dependencies": {
@@ -22,6 +24,7 @@
         "cors": "^2.8.5",
         "dotenv": "^17.3.1",
         "express": "^5.2.1",
+        "just-bash": "^2.14.0",
         "openai": "^4.80.0",
         "pg": "^8.13.0",
         "pgvector": "^0.2.0",
