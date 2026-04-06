@@ -36,7 +36,7 @@ const startedAt = new Date();
 const bashInstances = new Map<string, Bash>();
 const sessionStateManager = new SessionStateManager();
 
-async function refreshBashInstances(sourceNames: string[]): Promise<void> {
+async function refreshBashInstances(sourceNames: string[], logPrefix = "webhook"): Promise<void> {
     const serverCfg = getServerConfig();
     const bashTools = serverCfg.tools.filter(t => t.type === 'bash');
     const searchToolNames = serverCfg.tools.filter(t => t.type === 'search').map(t => t.name);
@@ -53,7 +53,7 @@ async function refreshBashInstances(sourceNames: string[]): Promise<void> {
             cloneDir: getConfig().cloneDir,
         });
         bashInstances.set(tool.name, bash);
-        console.log(`[webhook] Refreshed bash tool "${tool.name}": ${fileCount} files`);
+        console.log(`[${logPrefix}] Refreshed bash tool "${tool.name}": ${fileCount} files`);
     }
 }
 
@@ -350,8 +350,11 @@ async function start(): Promise<void> {
         orchestratorRef = orchestrator;
         webhookHandler = createWebhookHandler(orchestrator);
 
-        orchestrator.checkAndIndex().catch((err) => {
-            console.error("[startup] Initial index check failed:", err);
+        orchestrator.checkAndIndex().then(() => {
+            const allSourceNames = serverCfg.sources.map(s => s.name);
+            return refreshBashInstances(allSourceNames, "startup");
+        }).catch((err) => {
+            console.error("[startup] Initial index/bash-refresh failed:", err);
         });
 
         orchestrator.startNightlyReindex();
