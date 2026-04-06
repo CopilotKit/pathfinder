@@ -4,6 +4,9 @@
     "description": "Pathfinder — agentic docs retrieval for AI agents",
     "type": "module",
     "main": "dist/index.js",
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "tsc",
         "start": "node dist/index.js",
