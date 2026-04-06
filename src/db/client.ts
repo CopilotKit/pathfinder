@@ -40,7 +40,8 @@ function parsePGliteDataDir(url: string): string {
 async function initializePGlite(): Promise<void> {
     const databaseUrl = getConfig().databaseUrl;
     const dataDir = parsePGliteDataDir(databaseUrl);
-    const dimensions = getServerConfig().embedding.dimensions;
+    const dimensions = getServerConfig().embedding?.dimensions;
+    if (!dimensions) throw new Error('embedding.dimensions is required for database schema initialization');
 
     const { PGlite } = await import("@electric-sql/pglite");
     const { vector } = await import("@electric-sql/pglite/vector");
@@ -97,7 +98,8 @@ export async function initializeSchema(): Promise<void> {
 
     const p = getPool();
 
-    const dimensions = getServerConfig().embedding.dimensions;
+    const dimensions = getServerConfig().embedding?.dimensions;
+    if (!dimensions) throw new Error('embedding.dimensions is required for database schema initialization');
 
     // Ensure the vector extension exists before registering types
     const setupClient = await p.connect();
