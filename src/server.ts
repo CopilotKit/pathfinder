@@ -7,7 +7,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
 import { buildBashFilesMap, rebuildBashInstance } from "./mcp/tools/bash-fs.js";
 import { initializeSchema, closePool } from "./db/client.js";
-import { getIndexStats } from "./db/queries.js";
+import { getIndexStats, getAllChunksForLlms } from "./db/queries.js";
 import { getConfig, getServerConfig, hasSearchTools, hasCollectTools, hasBashSemanticSearch } from "./config.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
@@ -15,6 +15,10 @@ import { createWebhookHandler } from "./webhooks/github.js";
 import { SessionStateManager } from "./mcp/tools/bash-session.js";
 import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
 import { insertCollectedData } from "./db/queries.js";
+import { IpSessionLimiter } from "./ip-limiter.js";
+import { WorkspaceManager } from "./workspace.js";
+import { generateLlmsTxt, generateLlmsFullTxt } from "./llms-txt.js";
+import { generateSkillMd } from "./skill-md.js";
 
 export interface ServerOptions {
     port?: number;
@@ -28,6 +32,12 @@ app.use(
         exposedHeaders: ["Mcp-Session-Id"],
     }),
 );
+
+// Advertise llms.txt via Link header on all responses
+app.use((_req, res, next) => {
+    res.setHeader('Link', '</llms.txt>; rel="llms-txt"');
+    next();
+});
 
 // ---------------------------------------------------------------------------
 // Webhook endpoint — registered BEFORE express.json() so the handler receives
@@ -126,7 +136,9 @@ app.post("/register", (_req: Request, res: Response) => {
 
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 const sessionLastActivity: Record<string, number> = {};
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+let SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes default, overridden by config
+let ipLimiter: IpSessionLimiter | undefined;
+let workspaceManager: WorkspaceManager | undefined;
 
 // Reap idle sessions every 5 minutes
 setInterval(() => {
@@ -137,6 +149,8 @@ setInterval(() => {
             delete transports[sid];
             delete sessionLastActivity[sid];
             sessionStateManager.cleanup(sid);
+            ipLimiter?.remove(sid);
+            workspaceManager?.cleanup(sid);
             reaped++;
         }
     }
@@ -190,11 +204,28 @@ app.post("/mcp", async (req: Request, res: Response) => {
 
         // New session — must be an initialize request
         if (!sessionId && isInitializeRequest(req.body)) {
+            // Check IP rate limit before creating session
+            if (ipLimiter) {
+                // Peek at current count — if at limit, reject early
+                const currentCount = ipLimiter.getSessionCount(ip);
+                const maxPerIp = ipLimiter.getMax();
+                if (currentCount >= maxPerIp) {
+                    res.status(429).json({
+                        jsonrpc: "2.0",
+                        error: { code: -32000, message: "Too many sessions from this IP" },
+                        id: null,
+                    });
+                    return;
+                }
+            }
+
             const transport = new StreamableHTTPServerTransport({
                 sessionIdGenerator: () => randomUUID(),
                 onsessioninitialized: (sid) => {
                     transports[sid] = transport;
                     sessionLastActivity[sid] = Date.now();
+                    ipLimiter?.tryAdd(ip, sid);
+                    workspaceManager?.ensureSession(sid);
                     console.log(`[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length} active) [${ip}]`);
                 },
             });
@@ -204,10 +235,12 @@ app.post("/mcp", async (req: Request, res: Response) => {
                     delete transports[sid];
                     delete sessionLastActivity[sid];
                     sessionStateManager.cleanup(sid);
+                    ipLimiter?.remove(sid);
+                    workspaceManager?.cleanup(sid);
                     console.log(`[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`);
                 }
             };
-            const server = createMcpServer(bashInstances, sessionStateManager, () => transport.sessionId ?? undefined, bashTelemetry);
+            const server = createMcpServer(bashInstances, sessionStateManager, () => transport.sessionId ?? undefined, bashTelemetry, workspaceManager);
             await server.connect(transport);
             await transport.handleRequest(req, res, req.body);
             return;
@@ -331,6 +364,20 @@ export async function startServer(options?: ServerOptions): Promise<void> {
 
     const port = options?.port ?? cfg.port;
 
+    // Configure session TTL and IP rate limiter from config
+    const maxSessionsPerIp = serverCfg.server.max_sessions_per_ip ?? 20;
+    SESSION_TTL_MS = (serverCfg.server.session_ttl_minutes ?? 30) * 60 * 1000;
+    ipLimiter = new IpSessionLimiter(maxSessionsPerIp);
+    console.log(`[startup] IP rate limit: ${maxSessionsPerIp} sessions/IP, TTL: ${serverCfg.server.session_ttl_minutes ?? 30}m`);
+
+    // Initialize workspace manager if any bash tool has workspace enabled
+    const hasBashWorkspace = serverCfg.tools.some(t => t.type === 'bash' && t.bash?.workspace === true);
+    const workspaceDir = process.env.WORKSPACE_DIR ?? '/tmp/pathfinder-workspaces';
+    if (hasBashWorkspace) {
+        workspaceManager = new WorkspaceManager(workspaceDir);
+        console.log(`[startup] Workspace manager enabled (dir: ${workspaceDir})`);
+    }
+
     const needsDb = hasSearchTools() || hasCollectTools() || hasBashSemanticSearch();
 
     if (needsDb) {
@@ -417,6 +464,7 @@ export async function startServer(options?: ServerOptions): Promise<void> {
                 await bashTelemetry.flush();
                 console.log("[shutdown] Telemetry flushed.");
             }
+            workspaceManager?.cleanupAll();
             await closePool();
         } catch (err) {
             console.error("[shutdown] Error during shutdown:", err);

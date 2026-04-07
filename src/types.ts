@@ -35,6 +35,7 @@ export const SourceConfigSchema = z.object({
     skip_dirs: z.array(z.string()).optional(),
     max_file_size: z.number().int().positive().optional(),
     chunk: ChunkConfigSchema,
+    version: z.string().optional(),
 });
 
 // ── Tool configuration schemas ────────────────────────────────────────────────
@@ -47,6 +48,7 @@ const SearchToolConfigObjectSchema = z.object({
     default_limit: z.number().int().positive(),
     max_limit: z.number().int().positive(),
     result_format: z.enum(['docs', 'code', 'raw']),
+    min_score: z.number().min(0).max(1).optional(),
 });
 
 // SearchToolConfig type is inferred from the object schema directly.
@@ -132,6 +134,8 @@ export const ServerConfigSchema = z.object({
     server: z.object({
         name: z.string().min(1),
         version: z.string().min(1),
+        max_sessions_per_ip: z.number().int().positive().optional(),
+        session_ttl_minutes: z.number().int().positive().optional(),
     }),
     sources: z.array(SourceConfigSchema).min(1),
     tools: z.array(AnyToolConfigSchema).min(1),
@@ -216,6 +220,7 @@ export interface Chunk {
     chunk_index: number;
     metadata?: Record<string, unknown>;
     commit_sha?: string | null;
+    version?: string | null;
 }
 
 export interface ChunkResult {

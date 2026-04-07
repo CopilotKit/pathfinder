@@ -34,4 +34,8 @@ export class IpSessionLimiter {
     getSessionCount(ip: string): number {
         return this.ipToSessions.get(ip)?.size ?? 0;
     }
+
+    getMax(): number {
+        return this.maxPerIp;
+    }
 }
