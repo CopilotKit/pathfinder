@@ -288,6 +288,14 @@ describe('chunkHtml', () => {
         expect(chunks[0].title).toBe('API Reference');
     });
 
+    it('preserves multi-segment title with greedy match', () => {
+        const html = `<!DOCTYPE html><html><head><title>CLI - Command Reference - My Docs</title></head><body>
+            <article><p>Content.</p></article>
+        </body></html>`;
+        const chunks = chunkHtml(html, 'docs/cli.html', htmlConfig);
+        expect(chunks[0].title).toBe('CLI - Command Reference');
+    });
+
     it('splits oversized sections between headings', () => {
         const longContent = Array.from({ length: 20 }, (_, i) =>
             `<p>Section content paragraph ${i + 1}. ${'Lorem ipsum dolor sit amet consectetur. '.repeat(5)}</p>`

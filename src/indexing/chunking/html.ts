@@ -210,7 +210,7 @@ function splitLargeText(text: string, targetChars: number): string[] {
     // Fall back to line boundaries
     const lines = text.split('\n');
     if (lines.length > 1) {
-        return mergeSmallParts(lines, targetChars);
+        return mergeSmallParts(lines, targetChars, '\n');
     }
 
     // Single long line — return as-is
@@ -218,11 +218,11 @@ function splitLargeText(text: string, targetChars: number): string[] {
 }
 
 /** Merge adjacent small parts until they approach target size. */
-function mergeSmallParts(parts: string[], targetSize: number): string[] {
+function mergeSmallParts(parts: string[], targetSize: number, separator: string = '\n\n'): string[] {
     const merged: string[] = [];
     let current = '';
     for (const part of parts) {
-        const sep = current ? '\n\n' : '';
+        const sep = current ? separator : '';
         if (current && (current.length + sep.length + part.length) > targetSize) {
             merged.push(current);
             current = part;
@@ -312,7 +312,7 @@ function extractTitle($: CheerioAPI, filePath: string): string {
     const titleTag = $('title').first().text().trim();
     if (titleTag) {
         // Strip " — SiteName", " - SiteName", " | SiteName" suffixes common in doc sites
-        const match = titleTag.match(/^(.+?)(?:\s+[—\-|]\s+.+)$/);
+        const match = titleTag.match(/^(.+)(?:\s+[—\-|]\s+.+)$/);
         return match ? match[1] : titleTag;
     }
 
