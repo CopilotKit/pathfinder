@@ -4,6 +4,7 @@ import { getChunker } from './chunking/index.js';
 import { deriveUrl } from './url-derivation.js';
 import { EmbeddingClient } from './embeddings.js';
 import { upsertChunks, deleteChunksByFile } from '../db/queries.js';
+import { isFileSourceConfig } from '../types.js';
 import type { Chunk, SourceConfig } from '../types.js';
 import type { ContentItem } from './providers/types.js';
 
@@ -50,7 +51,7 @@ export class IndexingPipeline {
 
         const texts = chunkOutputs.map(c => c.content);
         const embeddings = await this.embeddingClient.embedBatch(texts);
-        const sourceUrl = item.sourceUrl ?? deriveUrl(item.id, this.sourceConfig);
+        const sourceUrl = item.sourceUrl ?? (isFileSourceConfig(this.sourceConfig) ? deriveUrl(item.id, this.sourceConfig) : null);
 
         const chunks: Chunk[] = chunkOutputs.map((chunk, i) => ({
             source_name: this.sourceConfig.name,
@@ -58,7 +59,7 @@ export class IndexingPipeline {
             title: chunk.title ?? item.title ?? null,
             content: chunk.content,
             embedding: embeddings[i],
-            repo_url: this.sourceConfig.repo ?? null,
+            repo_url: isFileSourceConfig(this.sourceConfig) ? (this.sourceConfig.repo ?? null) : null,
             file_path: item.id,
             start_line: chunk.startLine ?? null,
             end_line: chunk.endLine ?? null,

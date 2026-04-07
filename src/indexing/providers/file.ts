@@ -6,7 +6,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { matchesPatterns, hasLowSemanticValue } from '../utils.js';
-import type { SourceConfig } from '../../types.js';
+import { isFileSourceConfig } from '../../types.js';
+import type { SourceConfig, FileSourceConfig } from '../../types.js';
 import type { DataProvider, AcquisitionResult, ContentItem, ProviderOptions } from './types.js';
 
 const DEFAULT_SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git']);
@@ -28,13 +29,16 @@ function authenticatedUrl(repoUrl: string, githubToken?: string): string {
 }
 
 export class FileDataProvider implements DataProvider {
-    private config: SourceConfig;
+    private config: FileSourceConfig;
     private options: ProviderOptions;
     private logPrefix: string;
     private skipDirs: Set<string>;
     private maxFileSize: number;
 
     constructor(config: SourceConfig, options: ProviderOptions) {
+        if (!isFileSourceConfig(config)) {
+            throw new Error('FileDataProvider cannot handle slack source type');
+        }
         this.config = config;
         this.options = options;
         this.logPrefix = `[file-provider:${config.name}]`;

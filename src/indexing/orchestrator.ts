@@ -9,14 +9,15 @@ import {
     getIndexState,
     upsertIndexState,
 } from '../db/queries.js';
-import type { IndexState, IndexStatus, SourceConfig } from '../types.js';
+import { isFileSourceConfig } from '../types.js';
+import type { IndexState, IndexStatus, SourceConfig, FileSourceConfig } from '../types.js';
 import type { ProviderOptions } from './providers/types.js';
 
 /**
  * Find all source configs that reference a given repo URL.
  */
 function getSourcesByRepo(repoUrl: string): SourceConfig[] {
-    return getServerConfig().sources.filter(s => s.repo === repoUrl);
+    return getServerConfig().sources.filter(s => isFileSourceConfig(s) && s.repo === repoUrl);
 }
 
 function getStaleThresholdMs(): number {
@@ -89,13 +90,13 @@ export class IndexingOrchestrator {
             }
             // Queue incremental reindexes for each affected git-backed repo
             const reposToReindex = new Set(
-                sourcesNeedingFullReindex.filter(s => s.repo).map(s => s.repo!),
+                sourcesNeedingFullReindex.filter(s => isFileSourceConfig(s) && s.repo).map(s => (s as FileSourceConfig).repo!),
             );
             for (const repoUrl of reposToReindex) {
                 this.queueIncrementalReindex(repoUrl);
             }
             // Local sources (no repo) get queued as a full reindex of just those sources
-            const localSources = sourcesNeedingFullReindex.filter(s => !s.repo);
+            const localSources = sourcesNeedingFullReindex.filter(s => isFileSourceConfig(s) && !s.repo);
             if (localSources.length > 0) {
                 this.queue.push({ type: 'full-reindex-local', sources: localSources });
                 this.drain().catch(err => console.error('[orchestrator] drain() failed:', err));
@@ -105,7 +106,7 @@ export class IndexingOrchestrator {
         if (sourcesOk.length === 0) return;
 
         // Local sources in sourcesOk have no remote to check — always reindex on startup
-        const localSourcesOk = sourcesOk.filter(s => !s.repo);
+        const localSourcesOk = sourcesOk.filter(s => isFileSourceConfig(s) && !s.repo);
         if (localSourcesOk.length > 0) {
             console.log(`[orchestrator] Queuing reindex for ${localSourcesOk.length} local source(s)`);
             this.queue.push({ type: 'full-reindex-local', sources: localSourcesOk });
@@ -115,7 +116,7 @@ export class IndexingOrchestrator {
         console.log('[orchestrator] Checking remotes for changes on indexed sources...');
 
         // Check each git-backed source for changes
-        const gitSourcesOk = sourcesOk.filter(s => s.repo);
+        const gitSourcesOk = sourcesOk.filter(s => isFileSourceConfig(s) && s.repo);
         for (const source of gitSourcesOk) {
             try {
                 const currentToken = await this.getSourceStateToken(source);
@@ -126,7 +127,7 @@ export class IndexingOrchestrator {
                         ? 'source unavailable (clone missing?)'
                         : `remote ${currentToken.slice(0, 8)} differs from indexed`;
                     console.log(`[orchestrator] ${reason} for ${source.name} — queuing reindex`);
-                    if (source.repo) {
+                    if (isFileSourceConfig(source) && source.repo) {
                         this.queueIncrementalReindex(source.repo);
                     }
                 } else {
@@ -152,6 +153,7 @@ export class IndexingOrchestrator {
         const providerOptions: ProviderOptions = {
             cloneDir: config.cloneDir,
             githubToken: config.githubToken,
+            slackBotToken: config.slackBotToken,
         };
         const provider = getProvider(source.type)(source, providerOptions);
         return provider.getCurrentStateToken();
@@ -367,7 +369,7 @@ export class IndexingOrchestrator {
     ): Promise<void> {
         const lockKey = `${sourceConfig.type}:${sourceConfig.name}`;
         await this.withSourceLock(lockKey, async () => {
-            const providerOptions: ProviderOptions = { cloneDir, githubToken };
+            const providerOptions: ProviderOptions = { cloneDir, githubToken, slackBotToken: getConfig().slackBotToken };
             const provider = getProvider(sourceConfig.type)(sourceConfig, providerOptions);
             const pipeline = new IndexingPipeline(embeddingClient, sourceConfig);
 

@@ -22,8 +22,16 @@ export const ChunkConfigSchema = z.object({
     overlap_lines: z.number().int().nonnegative().optional(),
 });
 
-export const SourceConfigSchema = z.object({
+// Base fields shared by all source types
+const BaseSourceFields = {
     name: z.string().min(1),
+    chunk: ChunkConfigSchema,
+    version: z.string().optional(),
+};
+
+// File-based source schema (markdown, code, raw-text, html) — unchanged fields from today
+export const FileSourceConfigSchema = z.object({
+    ...BaseSourceFields,
     type: z.enum(['markdown', 'code', 'raw-text', 'html']),
     repo: z.string().url().optional(),
     branch: z.string().optional(),
@@ -34,9 +42,24 @@ export const SourceConfigSchema = z.object({
     exclude_patterns: z.array(z.string()).optional(),
     skip_dirs: z.array(z.string()).optional(),
     max_file_size: z.number().int().positive().optional(),
-    chunk: ChunkConfigSchema,
-    version: z.string().optional(),
 });
+
+// Slack source schema — different required fields
+export const SlackSourceConfigSchema = z.object({
+    ...BaseSourceFields,
+    type: z.literal('slack'),
+    channels: z.array(z.string()).min(1),
+    confidence_threshold: z.number().min(0).max(1).default(0.7),
+    trigger_emoji: z.string().default('pathfinder'),
+    min_thread_replies: z.number().int().positive().default(2),
+    distiller_model: z.string().optional(),
+});
+
+// Union: TypeScript infers the right shape based on `type`
+export const SourceConfigSchema = z.discriminatedUnion('type', [
+    FileSourceConfigSchema,
+    SlackSourceConfigSchema,
+]);
 
 // ── Tool configuration schemas ────────────────────────────────────────────────
 
@@ -194,6 +217,8 @@ export const ServerConfigSchema = z.object({
 export type UrlDerivationConfig = z.infer<typeof UrlDerivationConfigSchema>;
 export type ChunkConfig = z.infer<typeof ChunkConfigSchema>;
 export type SourceConfig = z.infer<typeof SourceConfigSchema>;
+export type FileSourceConfig = z.infer<typeof FileSourceConfigSchema>;
+export type SlackSourceConfig = z.infer<typeof SlackSourceConfigSchema>;
 export type SearchToolConfig = z.infer<typeof SearchToolConfigSchema>;
 export type BashToolConfig = z.infer<typeof BashToolConfigSchema>;
 export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
@@ -203,6 +228,16 @@ export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type BashCacheConfig = z.infer<typeof BashCacheConfigSchema>;
 export type BashOptions = z.infer<typeof BashOptionsSchema>;
+
+// ── Source config type guards ────────────────────────────────────────────────
+
+export function isFileSourceConfig(config: SourceConfig): config is FileSourceConfig {
+    return config.type !== 'slack';
+}
+
+export function isSlackSourceConfig(config: SourceConfig): config is SlackSourceConfig {
+    return config.type === 'slack';
+}
 
 // ── Data types: unified chunk ─────────────────────────────────────────────────
 

@@ -17,6 +17,8 @@ export interface Config {
     nodeEnv: string;
     logLevel: string;
     cloneDir: string;
+    slackBotToken: string;
+    slackSigningSecret: string;
 }
 
 /**
@@ -67,6 +69,13 @@ function parseConfig(): Config {
 
     const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
 
+    // Slack credentials — required when any slack source is configured
+    const hasSlackSource = getServerConfig().sources.some(s => s.type === 'slack');
+    const slackBotToken = process.env.SLACK_BOT_TOKEN ?? '';
+    const slackSigningSecret = process.env.SLACK_SIGNING_SECRET ?? '';
+    if (hasSlackSource && !slackBotToken) missing.push('SLACK_BOT_TOKEN');
+    if (hasSlackSource && !openaiApiKey) missing.push('OPENAI_API_KEY (required for Slack distillation)');
+
     if (missing.length > 0) {
         throw new Error(
             `Missing required environment variables: ${missing.join(', ')}. ` +
@@ -88,6 +97,8 @@ function parseConfig(): Config {
         nodeEnv: process.env.NODE_ENV || 'development',
         logLevel: process.env.LOG_LEVEL || 'info',
         cloneDir: process.env.CLONE_DIR || '/tmp/mcp-repos',
+        slackBotToken,
+        slackSigningSecret,
     };
 }
 
@@ -214,8 +225,9 @@ function loadServerConfig(): ServerConfig {
         }
     }
 
-    // Validate local source paths exist
+    // Validate local source paths exist (file-based sources only)
     for (const source of result.data.sources) {
+        if (source.type === 'slack') continue;
         if (!source.repo) {
             const resolved = resolve(source.path);
             if (!existsSync(resolved)) {

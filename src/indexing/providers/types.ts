@@ -56,6 +56,7 @@ export interface DataProvider {
 export interface ProviderOptions {
     cloneDir: string;
     githubToken?: string;
+    slackBotToken?: string;
 }
 
 /** Factory function that creates a DataProvider for a given source config. */
