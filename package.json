@@ -1,8 +1,14 @@
 {
     "name": "@copilotkit/pathfinder",
     "version": "1.1.0",
-    "description": "Pathfinder — agentic docs retrieval for AI agents",
+    "description": "Agentic docs retrieval for AI agents — semantic search and filesystem exploration over your documentation and code via MCP.",
     "type": "module",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/CopilotKit/pathfinder"
+    },
+    "homepage": "https://pathfinder.copilotkit.dev",
+    "keywords": ["mcp", "ai", "agents", "documentation", "search", "rag", "embeddings", "copilotkit"],
     "main": "dist/index.js",
     "bin": {
         "pathfinder": "dist/cli.js"
