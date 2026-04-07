@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test for Pathfinder production
+# Smoke test for any Pathfinder instance.
 # Run BEFORE and AFTER merge to compare results.
 #
 # Usage:
@@ -67,7 +67,7 @@ mcp_call() {
       -d "$1" | parse_sse
 }
 
-# 3. List tools
+# 3. List tools — discover what's available
 echo ""
 echo "--- Tools ---"
 TOOLS_JSON=$(mcp_call '{"jsonrpc":"2.0","method":"tools/list","id":2}')
@@ -81,14 +81,39 @@ for t in sorted(tools, key=lambda x: x['name']):
 print(f\"Total: {len(tools)} tools\")
 " 2>/dev/null || echo "FAILED: tools/list"
 
-# 4. Search tests — 3 queries, capture top result title
+# Discover the first search tool and first bash tool from the tools list
+SEARCH_TOOL=$(echo "$TOOLS_JSON" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+tools = d.get('result', {}).get('tools', [])
+for t in sorted(tools, key=lambda x: x['name']):
+    props = t.get('inputSchema', {}).get('properties', {})
+    if 'query' in props:
+        print(t['name'])
+        break
+" 2>/dev/null || true)
+
+BASH_TOOL=$(echo "$TOOLS_JSON" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+tools = d.get('result', {}).get('tools', [])
+for t in sorted(tools, key=lambda x: x['name']):
+    props = t.get('inputSchema', {}).get('properties', {})
+    if 'command' in props:
+        print(t['name'])
+        break
+" 2>/dev/null || true)
+
+# 4. Search tests — use discovered search tool with generic queries
 echo ""
 echo "--- Search Results ---"
-for QUERY in "how to use useCopilotAction" "authentication setup" "streaming response handling"; do
-    BODY="{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"search-docs\",\"arguments\":{\"query\":\"$QUERY\",\"limit\":3}},\"id\":3}"
-    SEARCH_JSON=$(mcp_call "$BODY")
-    echo "Query: \"$QUERY\""
-    echo "$SEARCH_JSON" | python3 -c "
+if [ -n "$SEARCH_TOOL" ]; then
+    echo "Using tool: $SEARCH_TOOL"
+    for QUERY in "getting started" "configuration" "how to install"; do
+        BODY="{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"$SEARCH_TOOL\",\"arguments\":{\"query\":\"$QUERY\",\"limit\":3}},\"id\":3}"
+        SEARCH_JSON=$(mcp_call "$BODY")
+        echo "Query: \"$QUERY\""
+        echo "$SEARCH_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 text = d.get('result', {}).get('content', [{}])[0].get('text', '')
@@ -99,44 +124,53 @@ for line in lines:
 if 'No results' in text:
     print('  No results found')
 " 2>/dev/null || echo "  FAILED"
-done
+    done
+else
+    echo "No search tool found — skipping"
+fi
 
-# 5. Bash tool — find and grep
+# 5. Bash tool — generic filesystem exploration
 echo ""
 echo "--- Bash Tool ---"
-BASH_JSON=$(mcp_call '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"explore-docs","arguments":{"command":"find / -name \"*.mdx\" | head -5"}},"id":4}')
-echo "find / -name '*.mdx' | head -5:"
-echo "$BASH_JSON" | python3 -c "
+if [ -n "$BASH_TOOL" ]; then
+    echo "Using tool: $BASH_TOOL"
+
+    FIND_JSON=$(mcp_call "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"$BASH_TOOL\",\"arguments\":{\"command\":\"find / -maxdepth 2 -type f | head -10\"}},\"id\":4}")
+    echo "find / -maxdepth 2 -type f | head -10:"
+    echo "$FIND_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 text = d.get('result', {}).get('content', [{}])[0].get('text', '')
-for line in text.split('\n')[1:6]:
+for line in text.split('\n')[1:11]:
     if line.strip():
         print(f\"  {line}\")
 " 2>/dev/null || echo "  FAILED"
 
-GREP_JSON=$(mcp_call '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"explore-docs","arguments":{"command":"grep -rl \"useCopilotAction\" /docs | head -3"}},"id":5}')
-echo ""
-echo "grep -rl 'useCopilotAction' /docs | head -3:"
-echo "$GREP_JSON" | python3 -c "
+    echo ""
+    GREP_JSON=$(mcp_call "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"$BASH_TOOL\",\"arguments\":{\"command\":\"ls -la /\"}},\"id\":5}")
+    echo "ls -la /:"
+    echo "$GREP_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 text = d.get('result', {}).get('content', [{}])[0].get('text', '')
-for line in text.split('\n')[1:4]:
+for line in text.split('\n')[1:11]:
     if line.strip():
         print(f\"  {line}\")
 " 2>/dev/null || echo "  FAILED"
+else
+    echo "No bash tool found — skipping"
+fi
 
-# 6. New endpoints (v1.3)
+# 6. Endpoints
 echo ""
-echo "--- New Endpoints (v1.3) ---"
+echo "--- Endpoints ---"
 echo -n "GET /llms.txt: "
 LLMS_STATUS=$(curl -so /dev/null -w "%{http_code}" "$BASE_URL/llms.txt" 2>/dev/null || echo "000")
 if [ "$LLMS_STATUS" = "200" ]; then
     LLMS_LINES=$(curl -sf "$BASE_URL/llms.txt" 2>/dev/null | wc -l | tr -d ' ')
     echo "OK ($LLMS_LINES lines)"
 else
-    echo "HTTP $LLMS_STATUS (not deployed yet — expected before merge)"
+    echo "HTTP $LLMS_STATUS"
 fi
 
 echo -n "GET /llms-full.txt: "
@@ -145,7 +179,7 @@ if [ "$FULL_STATUS" = "200" ]; then
     FULL_SIZE=$(curl -sf "$BASE_URL/llms-full.txt" 2>/dev/null | wc -c | tr -d ' ')
     echo "OK ($FULL_SIZE bytes)"
 else
-    echo "HTTP $FULL_STATUS (not deployed yet — expected before merge)"
+    echo "HTTP $FULL_STATUS"
 fi
 
 echo -n "GET /.well-known/skills/default/skill.md: "
@@ -153,7 +187,7 @@ SKILL_STATUS=$(curl -so /dev/null -w "%{http_code}" "$BASE_URL/.well-known/skill
 if [ "$SKILL_STATUS" = "200" ]; then
     echo "OK"
 else
-    echo "HTTP $SKILL_STATUS (not deployed yet — expected before merge)"
+    echo "HTTP $SKILL_STATUS"
 fi
 
 echo -n "Link header: "
@@ -161,7 +195,7 @@ LINK_HEADER=$(curl -sI "$BASE_URL/health" 2>/dev/null | grep -i "^link:" | tr -d
 if [ -n "$LINK_HEADER" ]; then
     echo "$LINK_HEADER"
 else
-    echo "not present (not deployed yet — expected before merge)"
+    echo "not present"
 fi
 
 # 7. Clean up
