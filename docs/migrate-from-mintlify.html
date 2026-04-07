@@ -151,6 +151,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="index.html">Home</a>
+        <a href="usage.html">Docs</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
   </div>
@@ -196,10 +197,13 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <div class="step">
         <div class="step-num">1</div>
         <div class="step-content">
-            <h3>Clone Pathfinder</h3>
-            <div class="code-block"><span class="cmd">$</span> git clone https://github.com/CopilotKit/pathfinder.git
-<span class="cmd">$</span> cd pathfinder
-<span class="cmd">$</span> cp pathfinder.example.yaml pathfinder.yaml</div>
+            <h3>Install Pathfinder</h3>
+            <p><strong>CLI:</strong></p>
+            <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder init
+<span class="cmd">$</span> npx @copilotkit/pathfinder serve</div>
+            <p><strong>Docker:</strong></p>
+            <div class="code-block"><span class="cmd">$</span> docker pull ghcr.io/copilotkit/pathfinder</div>
+            <p>See <a href="usage.html">full setup guide</a> for detailed instructions.</p>
         </div>
     </div>
 
@@ -306,8 +310,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         </div>
         <div class="callout-card">
             <div class="icon">⚡</div>
-            <h4>Vector Grep</h4>
-            <p>When <code>grep</code> misses, semantic search fills the gaps. Three-pass deduplication gives clean results.</p>
+            <h4>Vector Grep &amp; qmd</h4>
+            <p>When <code>grep</code> misses, Pathfinder suggests <code>qmd</code> — a semantic search command that finds docs by meaning, not just text matches.</p>
         </div>
         <div class="callout-card">
             <div class="icon">📝</div>
