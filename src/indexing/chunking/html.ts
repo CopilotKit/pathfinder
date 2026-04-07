@@ -194,6 +194,47 @@ function buildHeadingPath(sections: HtmlSection[], upToIndex: number): string[] 
 }
 
 /**
+ * Recursively split oversized text on paragraph then line boundaries.
+ * Ensures no chunk exceeds targetChars (best-effort — a single very long
+ * line will be returned as-is).
+ */
+function splitLargeText(text: string, targetChars: number): string[] {
+    if (text.length <= targetChars) return [text];
+
+    // Try paragraph boundaries first
+    const paragraphs = text.split(/\n\n+/);
+    if (paragraphs.length > 1) {
+        return mergeSmallParts(paragraphs, targetChars).flatMap(p => splitLargeText(p, targetChars));
+    }
+
+    // Fall back to line boundaries
+    const lines = text.split('\n');
+    if (lines.length > 1) {
+        return mergeSmallParts(lines, targetChars, '\n');
+    }
+
+    // Single long line — return as-is
+    return [text];
+}
+
+/** Merge adjacent small parts until they approach target size. */
+function mergeSmallParts(parts: string[], targetSize: number, separator: string = '\n\n'): string[] {
+    const merged: string[] = [];
+    let current = '';
+    for (const part of parts) {
+        const sep = current ? separator : '';
+        if (current && (current.length + sep.length + part.length) > targetSize) {
+            merged.push(current);
+            current = part;
+        } else {
+            current = current ? current + sep + part : part;
+        }
+    }
+    if (current) merged.push(current);
+    return merged;
+}
+
+/**
  * Merge small consecutive sections that share the same heading context,
  * then apply overlap between chunks.
  *
@@ -232,21 +273,36 @@ function mergeAndOverlap(sections: HtmlSection[], targetChars: number, overlapCh
     }
 
     // Apply overlap
-    if (merged.length <= 1 || overlapChars <= 0) return merged;
-
-    const result: { content: string; sectionIndex: number }[] = [merged[0]];
-    for (let i = 1; i < merged.length; i++) {
-        const prev = merged[i - 1].content;
-        const overlapText = prev.slice(-overlapChars);
-        const breakPoint = overlapText.lastIndexOf('\n');
-        const cleanOverlap = breakPoint > 0 ? overlapText.slice(breakPoint) : overlapText;
-        result.push({
-            content: cleanOverlap + '\n\n' + merged[i].content,
-            sectionIndex: merged[i].sectionIndex,
-        });
+    let result: { content: string; sectionIndex: number }[];
+    if (merged.length <= 1 || overlapChars <= 0) {
+        result = merged;
+    } else {
+        result = [merged[0]];
+        for (let i = 1; i < merged.length; i++) {
+            const prev = merged[i - 1].content;
+            const overlapText = prev.slice(-overlapChars);
+            const breakPoint = overlapText.lastIndexOf('\n');
+            const cleanOverlap = breakPoint > 0 ? overlapText.slice(breakPoint) : overlapText;
+            result.push({
+                content: cleanOverlap + '\n\n' + merged[i].content,
+                sectionIndex: merged[i].sectionIndex,
+            });
+        }
     }
 
-    return result;
+    // Post-pass: split any chunks that still exceed target
+    const final: { content: string; sectionIndex: number }[] = [];
+    for (const chunk of result) {
+        if (chunk.content.length > targetChars) {
+            const parts = splitLargeText(chunk.content, targetChars);
+            for (const part of parts) {
+                final.push({ content: part, sectionIndex: chunk.sectionIndex });
+            }
+        } else {
+            final.push(chunk);
+        }
+    }
+    return final;
 }
 
 /**
@@ -255,9 +311,9 @@ function mergeAndOverlap(sections: HtmlSection[], targetChars: number, overlapCh
 function extractTitle($: CheerioAPI, filePath: string): string {
     const titleTag = $('title').first().text().trim();
     if (titleTag) {
-        // Strip " — SiteName" suffixes common in doc sites
-        const dashIdx = titleTag.indexOf(' — ');
-        return dashIdx > 0 ? titleTag.slice(0, dashIdx) : titleTag;
+        // Strip " — SiteName", " - SiteName", " | SiteName" suffixes common in doc sites
+        const match = titleTag.match(/^(.+)(?:\s+[—\-|]\s+.+)$/);
+        return match ? match[1] : titleTag;
     }
 
     const h1 = $('h1').first().text().trim();
@@ -305,15 +361,16 @@ export function chunkHtml(content: string, filePath: string, config: SourceConfi
     const sections = splitOnHeadings($, container);
 
     if (sections.length === 0) {
-        // No headings — treat entire content as one section
+        // No headings — treat entire content as one or more chunks
         const text = extractText($, container);
         if (!text.trim()) return [];
-        return [{
-            content: text.trim(),
+        const parts = splitLargeText(text.trim(), targetChars);
+        return parts.map((content, i) => ({
+            content,
             title,
             headingPath: [],
-            chunkIndex: 0,
-        }];
+            chunkIndex: i,
+        }));
     }
 
     // Merge small sections and apply overlap
