@@ -440,6 +440,7 @@ export class SourceIndexer {
             chunk_index: chunk.chunkIndex,
             metadata: chunk.headingPath ? { headingPath: chunk.headingPath } : {},
             commit_sha: commitSha,
+            version: this.sourceConfig.version ?? null,
         }));
 
         // Delete existing chunks for this file first to remove stale entries
