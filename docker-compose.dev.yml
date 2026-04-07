@@ -1,0 +1,47 @@
+services:
+    db:
+        image: pgvector/pgvector:pg16
+        ports:
+            - "5432:5432"
+        environment:
+            POSTGRES_DB: mcp_docs
+            POSTGRES_USER: mcp
+            POSTGRES_PASSWORD: mcp_local
+        volumes:
+            - pgdata:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U mcp -d mcp_docs"]
+            interval: 5s
+            retries: 5
+
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: dev
+        ports:
+            - "${APP_PORT:-3001}:3001"
+        environment:
+            DATABASE_URL: postgresql://mcp:mcp_local@db:5432/mcp_docs
+            OPENAI_API_KEY: ${OPENAI_API_KEY}
+            GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+            GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-local-dev-secret}
+            PATHFINDER_CONFIG: ${PATHFINDER_CONFIG:-./pathfinder.yaml}
+            WORKSPACE_DIR: /data/workspaces
+            PORT: 3001
+            NODE_ENV: development
+            LOG_LEVEL: debug
+        volumes:
+            - ./src:/app/src
+            - ./scripts:/app/scripts
+            - ./pathfinder.yaml:/app/pathfinder.yaml
+            - workspaces:/data
+        depends_on:
+            db:
+                condition: service_healthy
+        restart: unless-stopped
+        command: npx tsx src/index.ts
+
+volumes:
+    pgdata:
+    workspaces:

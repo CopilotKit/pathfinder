@@ -1,0 +1,12 @@
+{
+    "name": "pathfinder",
+    "display_name": "Pathfinder",
+    "description": "Agentic docs retrieval — semantic search + filesystem exploration for AI agents",
+    "version": "1.0.0",
+    "mcp_servers": {
+        "pathfinder": {
+            "type": "http",
+            "url": "${PATHFINDER_URL}/mcp"
+        }
+    }
+}

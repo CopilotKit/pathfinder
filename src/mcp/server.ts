@@ -6,16 +6,20 @@ import { registerSearchTool } from './tools/search.js';
 import { registerCollectTool } from './tools/collect.js';
 import { registerBashTool } from './tools/bash.js';
 import { SessionStateManager } from './tools/bash-session.js';
+import type { BashTelemetry } from './tools/bash-telemetry.js';
+import type { WorkspaceManager } from '../workspace.js';
 
 /**
  * Creates a new McpServer instance with all tools registered.
- * Each MCP session gets its own server instance. Bash tools share
- * a common filesystem but get per-session CWD tracking when enabled.
+ * Each MCP session gets its own server instance. Each bash tool gets its own
+ * virtual filesystem instance, shared across all MCP sessions for that tool.
  */
 export function createMcpServer(
     bashInstances?: Map<string, Bash>,
     sessionStateManager?: SessionStateManager,
     getSessionId?: () => string | undefined,
+    telemetry?: BashTelemetry,
+    workspace?: WorkspaceManager,
 ): McpServer {
     const cfg = getConfig();
     const serverCfg = getServerConfig();
@@ -63,10 +67,14 @@ export function createMcpServer(
                 const grepStrategy = tool.bash?.grep_strategy;
                 const needsEmbedding = grepStrategy === 'vector' || grepStrategy === 'hybrid';
                 const searchToolNames = serverCfg.tools.filter(t => t.type === 'search').map(t => t.name);
+                const needsWorkspace = tool.bash?.workspace === true;
                 registerBashTool(server, tool, bash, {
                     getSessionState,
                     embeddingClient: needsEmbedding ? getEmbeddingClient() : undefined,
                     searchToolNames,
+                    telemetry,
+                    workspace: needsWorkspace ? workspace : undefined,
+                    getSessionId: needsWorkspace ? getSessionId : undefined,
                 });
                 break;
             }

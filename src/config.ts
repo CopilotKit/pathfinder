@@ -57,7 +57,7 @@ function parseConfig(): Config {
     const missing: string[] = [];
 
     const needsRag = hasSearchTools();
-    const needsDb = needsRag || hasCollectTools();
+    const needsDb = needsRag || hasCollectTools() || hasBashSemanticSearch();
 
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl && needsDb) missing.push('DATABASE_URL');
@@ -168,7 +168,7 @@ function loadServerConfig(): ServerConfig {
         const issues = result.error.issues
             .map(i => `  - ${i.path.join('.')}: ${i.message}`)
             .join('\n');
-        throw new Error(`Invalid mcp-docs.yaml at ${configPath}:\n${issues}`);
+        throw new Error(`Invalid config at ${configPath}:\n${issues}`);
     }
 
     // Validate source name uniqueness

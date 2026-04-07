@@ -1,0 +1,54 @@
+server:
+  name: pathfinder-docs
+  version: "1.4.0"
+
+sources:
+  - name: pathfinder-docs
+    type: html
+    repo: https://github.com/CopilotKit/pathfinder.git
+    path: docs/
+    base_url: https://pathfinder.copilotkit.dev/
+    url_derivation:
+      strip_prefix: "docs/"
+      strip_suffix: ".html"
+    file_patterns:
+      - "**/*.html"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+tools:
+  - name: search-docs
+    type: search
+    description: "Search Pathfinder documentation for configuration, deployment, client setup, and usage guides."
+    source: pathfinder-docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+  - name: explore-docs
+    type: bash
+    description: "Explore Pathfinder documentation files using bash commands (find, grep, cat, ls, head)."
+    sources: [pathfinder-docs]
+    bash:
+      session_state: true
+      grep_strategy: hybrid
+      virtual_files: true
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536
+
+indexing:
+  auto_reindex: true
+  reindex_hour_utc: 3
+  stale_threshold_hours: 24
+
+webhook:
+  repo_sources:
+    "CopilotKit/pathfinder":
+      - pathfinder-docs
+  path_triggers:
+    pathfinder-docs:
+      - "docs/"

@@ -2,54 +2,52 @@ name: Publish Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      - name: Get version
-        id: version
-        run: echo "version=$(node -p 'require("./package.json").version')" >> $GITHUB_OUTPUT
-      - name: Check if tag exists
-        id: check_tag
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+
+      - name: Check if version is already published
+        id: check
         run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "version=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version 2>/dev/null; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "published=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Check if npm version published
-        id: check_npm
-        if: steps.check_tag.outputs.exists == 'false'
+
+      - name: Build and publish
+        if: steps.check.outputs.published == 'false'
+        run: npm run build && npm publish --access public
+
+      - name: Ensure git tag exists
+        if: steps.check.outputs.published == 'false'
         run: |
-          if npm view "@copilotkit/pathfinder@${{ steps.version.outputs.version }}" version 2>/dev/null; then
-            echo "published=true" >> $GITHUB_OUTPUT
-          else
-            echo "published=false" >> $GITHUB_OUTPUT
+          TAG="v${{ steps.check.outputs.version }}"
+          if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
+            git tag "${TAG}"
+            git push origin "${TAG}"
           fi
-      - name: Install latest npm (OIDC requires >= 11.5.1)
-        if: steps.check_tag.outputs.exists == 'false' && steps.check_npm.outputs.published == 'false'
-        run: npm install -g npm@latest
-      - name: Install and build
-        if: steps.check_tag.outputs.exists == 'false' && steps.check_npm.outputs.published == 'false'
-        run: npm ci && npm run build
-      - name: Publish to npm (OIDC trusted publishing)
-        if: steps.check_tag.outputs.exists == 'false' && steps.check_npm.outputs.published == 'false'
-        run: npm publish --access public
-      - name: Create tag and release
-        if: steps.check_tag.outputs.exists == 'false'
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.published == 'false'
+        run: |
+          TAG="v${{ steps.check.outputs.version }}"
+          gh release create "${TAG}" --generate-notes --title "${TAG}" --verify-tag
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git tag "v${{ steps.version.outputs.version }}"
-          git push origin "v${{ steps.version.outputs.version }}"
-          gh release create "v${{ steps.version.outputs.version }}" --generate-notes
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

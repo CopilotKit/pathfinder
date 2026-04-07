@@ -20,7 +20,9 @@ export function getChunker(type: string): ChunkerFn {
 import { chunkMarkdown } from './markdown.js';
 import { chunkCode } from './code.js';
 import { chunkRawText } from './raw-text.js';
+import { chunkHtml } from './html.js';
 
 registerChunker('markdown', chunkMarkdown);
 registerChunker('code', chunkCode);
 registerChunker('raw-text', chunkRawText);
+registerChunker('html', chunkHtml);

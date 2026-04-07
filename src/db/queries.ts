@@ -8,59 +8,53 @@ import type { Chunk, ChunkResult, IndexState, IndexStatus } from "../types.js";
 
 /**
  * Cosine similarity search on the unified chunks table.
- * Optionally filtered by source_name. Returns results ordered by similarity
- * (highest first).
+ * Optionally filtered by source_name and/or version. Returns results ordered
+ * by similarity (highest first).
  */
 export async function searchChunks(
     embedding: number[],
     limit: number,
     sourceName?: string,
+    version?: string,
 ): Promise<ChunkResult[]> {
     const pool = getPool();
 
-    let sql: string;
-    let params: unknown[];
+    const conditions: string[] = [];
+    const params: unknown[] = [pgvector.toSql(embedding)];
+    let paramIdx = 2;
 
     if (sourceName) {
-        sql = `
-            SELECT
-                id,
-                source_name,
-                source_url,
-                title,
-                content,
-                repo_url,
-                file_path,
-                start_line,
-                end_line,
-                language,
-                1 - (embedding <=> $1) AS similarity
-            FROM chunks
-            WHERE source_name = $2
-            ORDER BY embedding <=> $1
-            LIMIT $3
-        `;
-        params = [pgvector.toSql(embedding), sourceName, limit];
-    } else {
-        sql = `
-            SELECT
-                id,
-                source_name,
-                source_url,
-                title,
-                content,
-                repo_url,
-                file_path,
-                start_line,
-                end_line,
-                language,
-                1 - (embedding <=> $1) AS similarity
-            FROM chunks
-            ORDER BY embedding <=> $1
-            LIMIT $2
-        `;
-        params = [pgvector.toSql(embedding), limit];
+        conditions.push(`source_name = $${paramIdx++}`);
+        params.push(sourceName);
     }
+    if (version) {
+        conditions.push(`version = $${paramIdx++}`);
+        params.push(version);
+    }
+
+    const whereClause = conditions.length > 0
+        ? `WHERE ${conditions.join(' AND ')}`
+        : '';
+
+    const sql = `
+        SELECT
+            id,
+            source_name,
+            source_url,
+            title,
+            content,
+            repo_url,
+            file_path,
+            start_line,
+            end_line,
+            language,
+            1 - (embedding <=> $1) AS similarity
+        FROM chunks
+        ${whereClause}
+        ORDER BY embedding <=> $1
+        LIMIT $${paramIdx}
+    `;
+    params.push(limit);
 
     const { rows } = await pool.query(sql, params);
     return rows.map((r: Record<string, unknown>) => ({
@@ -136,9 +130,9 @@ export async function upsertChunks(chunks: Chunk[]): Promise<void> {
             INSERT INTO chunks
                 (source_name, source_url, title, content, embedding, repo_url,
                  file_path, start_line, end_line, language, chunk_index,
-                 metadata, commit_sha, indexed_at)
+                 metadata, commit_sha, version, indexed_at)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
             ON CONFLICT (source_name, file_path, chunk_index) DO UPDATE SET
                 source_url = EXCLUDED.source_url,
                 title      = EXCLUDED.title,
@@ -150,6 +144,7 @@ export async function upsertChunks(chunks: Chunk[]): Promise<void> {
                 language   = EXCLUDED.language,
                 metadata   = EXCLUDED.metadata,
                 commit_sha = EXCLUDED.commit_sha,
+                version    = EXCLUDED.version,
                 indexed_at = NOW()
         `;
 
@@ -168,6 +163,7 @@ export async function upsertChunks(chunks: Chunk[]): Promise<void> {
                 chunk.chunk_index,
                 JSON.stringify(chunk.metadata ?? {}),
                 chunk.commit_sha ?? null,
+                chunk.version ?? null,
             ]);
         }
 
@@ -290,6 +286,18 @@ export interface IndexStats {
     bySource: Array<{ source_name: string; count: number }>;
     indexedRepos: number;
     indexStates: IndexState[];
+}
+
+/**
+ * Fetch all chunks (without embeddings) for llms.txt generation.
+ * Ordered by source_name, file_path, chunk_index for deterministic output.
+ */
+export async function getAllChunksForLlms(): Promise<{ source_name: string; file_path: string; title: string | null; content: string; chunk_index: number }[]> {
+    const pool = getPool();
+    const result = await pool.query(
+        'SELECT source_name, file_path, title, content, chunk_index FROM chunks ORDER BY source_name, file_path, chunk_index'
+    );
+    return result.rows;
 }
 
 /**

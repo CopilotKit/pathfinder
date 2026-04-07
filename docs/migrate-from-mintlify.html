@@ -4,10 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Migrate from Mintlify to Pathfinder</title>
-<meta name="description" content="Step-by-step guide to migrating from Mintlify's hosted docs to Pathfinder's self-hosted agentic retrieval in 15 minutes.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta name="description" content="Step-by-step guide to migrating from Mintlify ChromaFS to Pathfinder for agentic docs retrieval.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://pathfinder.copilotkit.dev/migrate-from-mintlify.html">
+<meta property="og:title" content="Migrating from Mintlify to Pathfinder">
+<meta property="og:description" content="Your docs are already structured for it. This guide takes 15 minutes.">
+<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Migrating from Mintlify to Pathfinder">
+<meta name="twitter:description" content="Step-by-step guide: ChromaFS to Pathfinder in 15 minutes.">
+<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
     --bg-deep: #0a0a0f;
@@ -17,57 +27,108 @@
     --text-primary: #e8e8f0;
     --text-secondary: #8888a0;
     --text-dim: #555570;
-    --accent: #00cc66;
-    --accent-glow: rgba(0,204,102,0.15);
+    --accent: #00ccff;
+    --accent-dim: #00aadd;
+    --accent-glow: rgba(0,204,255,0.15);
     --blue: #4488ff;
     --purple: #aa66ff;
     --warning: #ffaa00;
-    --mono: 'JetBrains Mono', monospace;
-    --sans: 'Instrument Sans', system-ui, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
 body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
+code, pre, kbd, .demo-body, .install-command { font-feature-settings: "liga" 0, "calt" 0; }
 
 /* Noise overlay */
 body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
     background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
+/* Container */
+.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+
 /* Nav */
-nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 12px 32px; display:flex; align-items:center; justify-content:space-between;
-    background: rgba(10,10,15,0.8); backdrop-filter: blur(20px) saturate(1.8); border-bottom: 1px solid var(--border); }
-.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--accent); text-decoration: none; }
-.nav-brand span { color: var(--text-dim); }
-.nav-links { display:flex; gap: 24px; align-items:center; }
-.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 14px; transition: color 0.2s; }
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
+    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
+nav .container { display:flex; align-items:center; justify-content:space-between; }
+.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
+.nav-brand span { color: var(--accent); }
+.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
+.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
 .nav-links a:hover { color: var(--text-primary); }
-.nav-links .gh-btn { display:inline-flex; align-items:center; gap:6px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
-.nav-links .gh-btn:hover { border-color: var(--text-dim); }
+.nav-links a.active { color: var(--accent); }
+.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
+.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+
+/* Sidebar */
+:root { --sb-width: 220px; }
+#page-sidebar {
+    position: fixed;
+    top: 60px;
+    right: 0;
+    width: var(--sb-width);
+    height: calc(100vh - 60px);
+    overflow-y: auto;
+    padding: 2rem 1.5rem 2rem 1.5rem;
+    border-left: 1px solid var(--border);
+}
+#page-sidebar .sb-title {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    margin-bottom: 0.75rem;
+}
+#page-sidebar a {
+    display: block;
+    padding: 0.25rem 0;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.15s;
+    line-height: 1.4;
+}
+#page-sidebar a:hover { color: var(--text-primary); }
+#page-sidebar a.active { color: var(--accent); }
+#page-sidebar a.sb-indent { padding-left: 0.75rem; font-size: 0.75rem; }
 
 /* Article layout */
-.article { max-width: 800px; margin: 0 auto; padding: 100px 32px 80px; }
+.article {
+    max-width: 860px;
+    padding: 100px 2rem 80px;
+    margin-right: calc(var(--sb-width) + max(0px, (100vw - var(--sb-width) - 860px) / 2));
+    margin-left: max(2rem, calc((100vw - var(--sb-width) - 860px) / 2));
+}
+@media (max-width: 1200px) {
+    #page-sidebar { display: none; }
+    .article { max-width: 1120px; margin: 0 auto; }
+}
 .article h1 { font-size: 42px; font-weight: 700; line-height: 1.15; margin-bottom: 16px; letter-spacing: -0.02em; }
 .article h1 .accent { color: var(--accent); }
 .article .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 48px; }
-.article h2 { font-size: 28px; font-weight: 600; margin: 48px 0 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.article h2 { font-size: 28px; font-weight: 600; margin: 48px 0 16px; padding-top: 16px; border-top: 1px solid var(--border); scroll-margin-top: 80px; }
 .article h2:first-of-type { border-top: none; }
-.article h3 { font-size: 20px; font-weight: 600; margin: 32px 0 12px; }
-.article p { color: var(--text-secondary); margin-bottom: 16px; font-size: 15px; }
-.article ul, .article ol { color: var(--text-secondary); margin: 0 0 16px 24px; font-size: 15px; }
-.article li { margin-bottom: 8px; }
+.article h3 { font-size: 20px; font-weight: 600; margin: 32px 0 12px; scroll-margin-top: 80px; }
+.article p { color: var(--text-secondary); margin-bottom: 16px; font-size: 1rem; line-height: 1.7; }
+.article ul, .article ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; font-size: 1rem; line-height: 1.7; }
+.article li { margin-bottom: 0.35rem; line-height: 1.6; }
 .article li strong { color: var(--text-primary); }
 .article a { color: var(--accent); text-decoration: none; }
 .article a:hover { text-decoration: underline; }
 
 /* Code blocks */
-.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); }
+.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
 .code-block .comment { color: var(--text-dim); }
 .code-block .key { color: var(--warning); }
 .code-block .value { color: var(--blue); }
 .code-block .cmd { color: var(--accent); }
 
 /* Inline code */
-.article code { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-family: var(--mono); font-size: 13px; color: var(--accent); }
+.article code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
 
 /* Concept mapping table */
 .concept-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
@@ -99,8 +160,12 @@ nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 12px 32px; d
 .back-link:hover { text-decoration: underline; }
 
 /* Footer */
-footer { padding: 40px 32px; border-top: 1px solid var(--border); text-align:center; color: var(--text-dim); font-size: 13px; }
-footer a { color: var(--text-secondary); text-decoration:none; }
+footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
+.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
+.footer-brand .prompt { color: var(--accent); }
+.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
+.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text-primary); }
 
 /* Responsive: Tablet */
 @media (max-width: 768px) {
@@ -109,8 +174,7 @@ footer a { color: var(--text-secondary); text-decoration:none; }
     .callout-grid { grid-template-columns: 1fr; }
     .concept-table { font-size: 12px; }
     .concept-table th, .concept-table td { padding: 8px 10px; }
-    nav { padding: 12px 16px; }
-    .nav-links { gap: 12px; }
+    .nav-links { gap: 1rem; }
 }
 
 /* Responsive: Mobile */
@@ -118,21 +182,64 @@ footer a { color: var(--text-secondary); text-decoration:none; }
     .article h1 { font-size: 26px; }
     .article .lead { font-size: 15px; }
     .article h2 { font-size: 22px; }
-    .nav-links a:not(.gh-btn) { display: none; }
     .code-block { font-size: 11px; padding: 12px 14px; }
     .step { flex-direction: column; gap: 8px; }
+}
+
+/* Hamburger menu */
+.hamburger { display:none; background:none; border:none; cursor:pointer; padding:0.5rem; z-index:101; }
+.hamburger span { display:block; width:22px; height:2px; background:var(--text-primary); margin:5px 0; transition: transform 0.3s, opacity 0.3s; border-radius:1px; }
+.hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.hamburger.open span:nth-child(2) { opacity:0; }
+.hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+.mobile-menu { display:none; position:fixed; top:57px; left:0; right:0; background:var(--bg-surface); border-bottom:1px solid var(--border); padding:1rem 2rem 1.5rem; z-index:99; flex-direction:column; gap:0.25rem; }
+.mobile-menu.open { display:flex; }
+@media (min-width: 769px) { .mobile-menu { display:none !important; } }
+.mobile-menu a { color:var(--text-secondary); text-decoration:none; font-size:1rem; font-weight:500; padding:0.6rem 0; border-bottom:1px solid var(--border); transition:color 0.2s; }
+.mobile-menu a:last-child { border-bottom:none; }
+.mobile-menu a:hover { color:var(--text-primary); }
+.mobile-menu a.active { color:var(--accent); }
+.mobile-menu .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; margin-top:0.5rem; padding:0.5rem 1rem; border:1px solid var(--border); border-radius:6px; width:fit-content; }
+.mobile-menu .gh-btn:hover { border-color:var(--text-dim); background:var(--bg-card); }
+@media (max-width: 768px) {
+    .hamburger { display:block; }
+    .nav-links { display:none !important; }
 }
 </style>
 </head>
 <body>
 
 <nav>
+  <div class="container">
     <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="index.html">Home</a>
+        <a href="usage.html">Docs</a>
+        <a href="config.html">Config</a>
+        <a href="deploy.html">Deploy</a>
+        <a href="clients.html">Clients</a>
+        <a href="search.html">Search</a>
+        <a href="migrate-from-mintlify.html" class="active">Migrate</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
+    <button class="hamburger" aria-label="Menu">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+  </div>
 </nav>
+
+<div class="mobile-menu">
+    <a href="index.html">Home</a>
+    <a href="usage.html">Docs</a>
+    <a href="config.html">Config</a>
+    <a href="deploy.html">Deploy</a>
+    <a href="clients.html">Clients</a>
+    <a href="search.html">Search</a>
+    <a href="migrate-from-mintlify.html" class="active">Migrate</a>
+    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+</div>
 
 <article class="article">
     <h1>Migrate from <span class="accent">Mintlify</span> to Pathfinder</h1>
@@ -174,10 +281,13 @@ footer a { color: var(--text-secondary); text-decoration:none; }
     <div class="step">
         <div class="step-num">1</div>
         <div class="step-content">
-            <h3>Clone Pathfinder</h3>
-            <div class="code-block"><span class="cmd">$</span> git clone https://github.com/CopilotKit/pathfinder.git
-<span class="cmd">$</span> cd pathfinder
-<span class="cmd">$</span> cp pathfinder.example.yaml pathfinder.yaml</div>
+            <h3>Install Pathfinder</h3>
+            <p><strong>CLI:</strong></p>
+            <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder init
+<span class="cmd">$</span> npx @copilotkit/pathfinder serve</div>
+            <p><strong>Docker:</strong></p>
+            <div class="code-block"><span class="cmd">$</span> docker pull ghcr.io/copilotkit/pathfinder</div>
+            <p>See <a href="usage.html">full setup guide</a> for detailed instructions.</p>
         </div>
     </div>
 
@@ -284,8 +394,8 @@ footer a { color: var(--text-secondary); text-decoration:none; }
         </div>
         <div class="callout-card">
             <div class="icon">⚡</div>
-            <h4>Vector Grep</h4>
-            <p>When <code>grep</code> misses, semantic search fills the gaps. Three-pass deduplication gives clean results.</p>
+            <h4>Vector Grep &amp; qmd</h4>
+            <p>When <code>grep</code> misses, Pathfinder suggests <code>qmd</code> — a semantic search command that finds docs by meaning, not just text matches.</p>
         </div>
         <div class="callout-card">
             <div class="icon">📝</div>
@@ -332,9 +442,37 @@ footer a { color: var(--text-secondary); text-decoration:none; }
     <a href="index.html" class="back-link">&larr; Back to Pathfinder</a>
 </article>
 
+<aside id="page-sidebar"></aside>
+<script src="sidebar.js"></script>
+
 <footer>
-    <p>Pathfinder is MIT Licensed &middot; <a href="https://github.com/CopilotKit/pathfinder">GitHub</a> &middot; <a href="index.html">Home</a> &middot; Built by <a href="https://copilotkit.ai">CopilotKit</a></p>
+  <div class="container">
+    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; MIT License</div>
+    <ul class="footer-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
+        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
+    </ul>
+  </div>
 </footer>
 
+<script>
+(function(){
+  var btn=document.querySelector(".hamburger");
+  var menu=document.querySelector(".mobile-menu");
+  if(!btn||!menu)return;
+  btn.addEventListener("click",function(){
+    btn.classList.toggle("open");
+    menu.classList.toggle("open");
+  });
+  menu.addEventListener("click",function(e){
+    if(e.target.tagName==="A"){
+      btn.classList.remove("open");
+      menu.classList.remove("open");
+    }
+  });
+})();
+</script>
 </body>
 </html>

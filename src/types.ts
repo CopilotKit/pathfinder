@@ -13,8 +13,8 @@ export const UrlDerivationConfigSchema = z.object({
 });
 
 // ChunkConfig field applicability by source type:
-//   markdown/raw-text: target_tokens, overlap_tokens
-//   code:              target_lines, overlap_lines
+//   markdown/raw-text/html: target_tokens, overlap_tokens
+//   code:                   target_lines, overlap_lines
 export const ChunkConfigSchema = z.object({
     target_tokens: z.number().int().positive().optional(),
     overlap_tokens: z.number().int().nonnegative().optional(),
@@ -24,7 +24,7 @@ export const ChunkConfigSchema = z.object({
 
 export const SourceConfigSchema = z.object({
     name: z.string().min(1),
-    type: z.enum(['markdown', 'code', 'raw-text']),
+    type: z.enum(['markdown', 'code', 'raw-text', 'html']),
     repo: z.string().url().optional(),
     branch: z.string().optional(),
     path: z.string().min(1),
@@ -35,6 +35,7 @@ export const SourceConfigSchema = z.object({
     skip_dirs: z.array(z.string()).optional(),
     max_file_size: z.number().int().positive().optional(),
     chunk: ChunkConfigSchema,
+    version: z.string().optional(),
 });
 
 // ── Tool configuration schemas ────────────────────────────────────────────────
@@ -47,6 +48,7 @@ const SearchToolConfigObjectSchema = z.object({
     default_limit: z.number().int().positive(),
     max_limit: z.number().int().positive(),
     result_format: z.enum(['docs', 'code', 'raw']),
+    min_score: z.number().min(0).max(1).optional(),
 });
 
 // SearchToolConfig type is inferred from the object schema directly.
@@ -132,6 +134,8 @@ export const ServerConfigSchema = z.object({
     server: z.object({
         name: z.string().min(1),
         version: z.string().min(1),
+        max_sessions_per_ip: z.number().int().positive().optional(),
+        session_ttl_minutes: z.number().int().positive().optional(),
     }),
     sources: z.array(SourceConfigSchema).min(1),
     tools: z.array(AnyToolConfigSchema).min(1),
@@ -216,6 +220,7 @@ export interface Chunk {
     chunk_index: number;
     metadata?: Record<string, unknown>;
     commit_sha?: string | null;
+    version?: string | null;
 }
 
 export interface ChunkResult {
