@@ -39,7 +39,7 @@ describe('chunkHtml', () => {
             </article>
         </body></html>`;
         const chunks = chunkHtml(html, 'docs/test.html', htmlConfig);
-        expect(chunks.length).toBeGreaterThanOrEqual(1);
+        expect(chunks.length).toBe(3);
         expect(chunks[0].title).toBe('Test Page');
         const allText = chunks.map(c => c.content).join('\n');
         expect(allText).toContain('Welcome to the docs');
@@ -200,7 +200,7 @@ describe('chunkHtml', () => {
             <article><h1>My Page Title</h1><p>Content.</p></article>
         </body></html>`;
         const chunks = chunkHtml(html, 'docs/notitle.html', htmlConfig);
-        expect(chunks.length).toBeGreaterThanOrEqual(1);
+        expect(chunks.length).toBe(1);
         expect(chunks[0].title).toBe('My Page Title');
     });
 
@@ -209,7 +209,7 @@ describe('chunkHtml', () => {
             <article><p>Just a paragraph.</p></article>
         </body></html>`;
         const chunks = chunkHtml(html, 'docs/notitle.html', htmlConfig);
-        expect(chunks.length).toBeGreaterThanOrEqual(1);
+        expect(chunks.length).toBe(1);
         expect(chunks[0].title).toBe('notitle.html');
     });
 
@@ -247,13 +247,62 @@ describe('chunkHtml', () => {
             </main>
         </body></html>`;
         const chunks = chunkHtml(html, 'docs/nested.html', htmlConfig);
-        expect(chunks.length).toBeGreaterThanOrEqual(2);
+        expect(chunks.length).toBe(2);
         const first = chunks.find(c => c.content.includes('First content'));
         const second = chunks.find(c => c.content.includes('Second content'));
         expect(first).toBeDefined();
         expect(second).toBeDefined();
         expect(first!.headingPath).toEqual(['First Section']);
         expect(second!.headingPath).toEqual(['Second Section']);
+    });
+
+    it('splits oversized content without headings into multiple chunks', () => {
+        // Generate content larger than targetChars (600 tokens * 4 = 2400 chars)
+        const paragraphs = Array.from({ length: 30 }, (_, i) =>
+            `<p>Paragraph ${i + 1} with enough text to take up some space in the chunk. ${'Lorem ipsum dolor sit amet consectetur adipiscing elit. '.repeat(5)}</p>`
+        ).join('');
+        const html = `<!DOCTYPE html><html><head><title>Large</title></head><body>
+            <article>${paragraphs}</article>
+        </body></html>`;
+        const chunks = chunkHtml(html, 'docs/large.html', htmlConfig);
+        expect(chunks.length).toBeGreaterThan(1);
+        // All chunks should have empty headingPath
+        for (const chunk of chunks) {
+            expect(chunk.headingPath).toEqual([]);
+        }
+    });
+
+    it('strips site name suffix with hyphen separator', () => {
+        const html = `<!DOCTYPE html><html><head><title>Getting Started - My Docs</title></head><body>
+            <article><p>Content.</p></article>
+        </body></html>`;
+        const chunks = chunkHtml(html, 'docs/start.html', htmlConfig);
+        expect(chunks[0].title).toBe('Getting Started');
+    });
+
+    it('strips site name suffix with pipe separator', () => {
+        const html = `<!DOCTYPE html><html><head><title>API Reference | My Docs</title></head><body>
+            <article><p>Content.</p></article>
+        </body></html>`;
+        const chunks = chunkHtml(html, 'docs/api.html', htmlConfig);
+        expect(chunks[0].title).toBe('API Reference');
+    });
+
+    it('splits oversized sections between headings', () => {
+        const longContent = Array.from({ length: 20 }, (_, i) =>
+            `<p>Section content paragraph ${i + 1}. ${'Lorem ipsum dolor sit amet consectetur. '.repeat(5)}</p>`
+        ).join('');
+        const html = `<!DOCTYPE html><html><head><title>Big Section</title></head><body>
+            <article>
+                <h2>Small Section</h2>
+                <p>Brief content.</p>
+                <h2>Large Section</h2>
+                ${longContent}
+            </article>
+        </body></html>`;
+        const chunks = chunkHtml(html, 'docs/bigsection.html', htmlConfig);
+        // Should have more than 2 chunks (the large section should be split)
+        expect(chunks.length).toBeGreaterThan(2);
     });
 
     it('returns single chunk with empty headingPath when no headings present', () => {
