@@ -249,6 +249,30 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         </div>
     </div>
 
+    <h2>Try It — Pathfinder on Its Own Docs</h2>
+
+    <p>This documentation site is indexed by a live Pathfinder instance. Connect your AI agent to search and explore these docs via MCP:</p>
+
+    <div class="path-card" style="margin-bottom: 2rem;">
+        <h3>Claude Code</h3>
+        <div class="code-block"><span class="cmd">$</span> claude mcp add pathfinder-docs \
+  --transport http \
+  https://pathfinder-docs-production.up.railway.app/mcp</div>
+    </div>
+
+    <div class="path-card" style="margin-bottom: 2rem;">
+        <h3>Claude Desktop / Cursor / Any MCP Client</h3>
+        <div class="code-block">{
+  "mcpServers": {
+    "pathfinder-docs": {
+      "url": "https://pathfinder-docs-production.up.railway.app/mcp"
+    }
+  }
+}</div>
+    </div>
+
+    <p>Once connected, your agent can <code>search-docs("how to configure sources")</code> or <code>explore-docs("cat /config.html")</code> to get answers from these pages.</p>
+
     <h2>Auto-Generated Endpoints</h2>
 
     <p>Pathfinder automatically generates and serves several discovery endpoints. These are cached and invalidated whenever sources are reindexed.</p>

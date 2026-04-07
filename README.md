@@ -28,6 +28,26 @@ Then connect your AI agent:
 }
 ```
 
+## Try It — Pathfinder on Its Own Docs
+
+This documentation is indexed by a live Pathfinder instance. Connect your agent to try it:
+
+```bash
+# Claude Code
+claude mcp add pathfinder-docs --transport http https://pathfinder-docs-production.up.railway.app/mcp
+```
+
+```json
+// Claude Desktop / Cursor / any MCP client
+{
+  "mcpServers": {
+    "pathfinder-docs": {
+      "url": "https://pathfinder-docs-production.up.railway.app/mcp"
+    }
+  }
+}
+```
+
 ## What It Does
 
 Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source code — into a PostgreSQL vector database using OpenAI embeddings. It serves configurable search and filesystem exploration tools via [MCP](https://modelcontextprotocol.io), so AI agents can search your docs semantically and browse files with bash commands.
