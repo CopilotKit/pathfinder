@@ -63,4 +63,27 @@ describe('WorkspaceManager', () => {
         mgr.writeFile('sess-1', 'b.txt', 'b');
         expect(mgr.listFiles('sess-1').sort()).toEqual(['a.txt', 'b.txt']);
     });
+
+    it('rejects path traversal in writeFile', () => {
+        mgr.ensureSession('sess-1');
+        const ok = mgr.writeFile('sess-1', '../escape.txt', 'pwned');
+        expect(ok).toBe(false);
+        // Verify file was NOT created outside session dir
+        expect(fs.existsSync(path.join(baseDir, 'escape.txt'))).toBe(false);
+    });
+
+    it('rejects path traversal in readFile', () => {
+        mgr.ensureSession('sess-1');
+        mgr.ensureSession('sess-2');
+        mgr.writeFile('sess-2', 'secret.txt', 'sensitive');
+        // Try to read another session's file via traversal
+        const result = mgr.readFile('sess-1', '../sess-2/secret.txt');
+        expect(result).toBeNull();
+    });
+
+    it('rejects deeply nested path traversal', () => {
+        mgr.ensureSession('sess-1');
+        const ok = mgr.writeFile('sess-1', 'subdir/../../../etc/passwd', 'pwned');
+        expect(ok).toBe(false);
+    });
 });
