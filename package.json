@@ -9,6 +9,7 @@
     },
     "homepage": "https://pathfinder.copilotkit.dev",
     "keywords": ["mcp", "ai", "agents", "documentation", "search", "rag", "embeddings", "copilotkit"],
+    "license": "MIT",
     "main": "dist/index.js",
     "bin": {
         "pathfinder": "dist/cli.js"
