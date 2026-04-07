@@ -64,3 +64,14 @@ DROP TABLE IF EXISTS doc_chunks CASCADE;
 DROP TABLE IF EXISTS code_chunks CASCADE;
 `;
 }
+
+/**
+ * Generate post-schema migration SQL for columns added after initial release.
+ * Safe to run repeatedly — uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
+ */
+export function generatePostSchemaMigration(): string {
+    return `
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS version TEXT;
+CREATE INDEX IF NOT EXISTS idx_chunks_version ON chunks (version);
+`;
+}

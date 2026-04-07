@@ -148,9 +148,9 @@ setInterval(() => {
         if (now - sessionLastActivity[sid] > SESSION_TTL_MS) {
             delete transports[sid];
             delete sessionLastActivity[sid];
-            sessionStateManager.cleanup(sid);
-            ipLimiter?.remove(sid);
-            workspaceManager?.cleanup(sid);
+            try { sessionStateManager.cleanup(sid); } catch (e) { console.error(`[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`, e); }
+            try { ipLimiter?.remove(sid); } catch (e) { console.error(`[mcp] IP limiter cleanup failed:`, e); }
+            try { workspaceManager?.cleanup(sid); } catch (e) { console.error(`[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`, e); }
             reaped++;
         }
     }
@@ -204,27 +204,19 @@ app.post("/mcp", async (req: Request, res: Response) => {
 
         // New session — must be an initialize request
         if (!sessionId && isInitializeRequest(req.body)) {
-            // Check IP rate limit before creating session
-            if (ipLimiter) {
-                // Peek at current count — if at limit, reject early
-                const currentCount = ipLimiter.getSessionCount(ip);
-                const maxPerIp = ipLimiter.getMax();
-                if (currentCount >= maxPerIp) {
-                    res.status(429).json({
-                        jsonrpc: "2.0",
-                        error: { code: -32000, message: "Too many sessions from this IP" },
-                        id: null,
-                    });
-                    return;
-                }
-            }
-
             const transport = new StreamableHTTPServerTransport({
                 sessionIdGenerator: () => randomUUID(),
                 onsessioninitialized: (sid) => {
                     transports[sid] = transport;
                     sessionLastActivity[sid] = Date.now();
-                    ipLimiter?.tryAdd(ip, sid);
+                    if (ipLimiter && !ipLimiter.tryAdd(ip, sid)) {
+                        // Rate limit exceeded — tear down immediately
+                        console.warn(`[mcp] IP rate limit exceeded for ${ip}, closing session ${sid.slice(0, 8)}`);
+                        delete transports[sid];
+                        delete sessionLastActivity[sid];
+                        transport.close?.();
+                        return;
+                    }
                     workspaceManager?.ensureSession(sid);
                     console.log(`[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length} active) [${ip}]`);
                 },
@@ -388,7 +380,12 @@ app.get('/llms-full.txt', async (_req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 app.get('/.well-known/skills/default/skill.md', (_req: Request, res: Response) => {
-    res.type('text/markdown').send(generateSkillMd(getServerConfig()));
+    try {
+        res.type('text/markdown').send(generateSkillMd(getServerConfig()));
+    } catch (err) {
+        console.error('[skill.md] Generation failed:', err);
+        res.status(500).type('text/plain').send('Error generating skill.md');
+    }
 });
 
 // ---------------------------------------------------------------------------
@@ -500,19 +497,10 @@ export async function startServer(options?: ServerOptions): Promise<void> {
 
     async function shutdown(signal: string): Promise<void> {
         console.log(`\n[shutdown] Received ${signal}, shutting down...`);
-        try {
-            if (telemetryFlushInterval) {
-                clearInterval(telemetryFlushInterval);
-            }
-            if (bashTelemetry) {
-                await bashTelemetry.flush();
-                console.log("[shutdown] Telemetry flushed.");
-            }
-            workspaceManager?.cleanupAll();
-            await closePool();
-        } catch (err) {
-            console.error("[shutdown] Error during shutdown:", err);
-        }
+        if (telemetryFlushInterval) clearInterval(telemetryFlushInterval);
+        try { await bashTelemetry?.flush(); } catch (e) { console.error('[shutdown] Telemetry flush failed:', e); }
+        try { workspaceManager?.cleanupAll(); } catch (e) { console.error('[shutdown] Workspace cleanup failed:', e); }
+        try { await closePool(); } catch (e) { console.error('[shutdown] DB pool close failed:', e); }
         process.exit(0);
     }
 
