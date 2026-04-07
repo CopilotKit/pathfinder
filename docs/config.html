@@ -188,8 +188,48 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks.</li>
         <li><strong>repo</strong> — If provided, Pathfinder clones and updates from this repo. Omit for local directories.</li>
         <li><strong>version</strong> — Tags all indexed chunks with this version string. Used for version-filtered search queries.</li>
+        <li><strong>base_url</strong> — Base URL prepended to the derived slug when generating document links. Works together with <code>url_derivation</code>.</li>
+        <li><strong>url_derivation</strong> — Controls how file paths are transformed into URL slugs that get appended to <code>base_url</code>. Each step is applied in order:
+            <ul>
+                <li><strong>strip_prefix</strong> — Remove this prefix from the file path before generating the URL. For example, <code>"docs/"</code> turns <code>docs/guide/auth.mdx</code> into <code>guide/auth.mdx</code>.</li>
+                <li><strong>strip_suffix</strong> — Remove the file extension. For example, <code>".mdx"</code> turns <code>guide/auth.mdx</code> into <code>guide/auth</code>.</li>
+                <li><strong>strip_route_groups</strong> — When <code>true</code>, removes Next.js-style route group segments like <code>(marketing)</code> or <code>(guides)</code> from the path.</li>
+                <li><strong>strip_index</strong> — When <code>true</code>, removes a trailing <code>/index</code> from the path (e.g. <code>guide/auth/index</code> becomes <code>guide/auth</code>).</li>
+            </ul>
+        </li>
         <li><strong>chunk</strong> — Use <code>target_tokens</code>/<code>overlap_tokens</code> for markdown and raw-text sources. Use <code>target_lines</code>/<code>overlap_lines</code> for code sources.</li>
     </ul>
+
+    <h3>url_derivation example</h3>
+
+    <p>Given a file at <code>docs/(guides)/getting-started/index.mdx</code> with the following config:</p>
+
+    <div class="code-block"><span class="key">base_url:</span> <span class="value">https://docs.example.com/</span>
+<span class="key">url_derivation:</span>
+  <span class="key">strip_prefix:</span> <span class="value">docs/</span>
+  <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
+  <span class="key">strip_route_groups:</span> <span class="value">true</span>
+  <span class="key">strip_index:</span> <span class="value">true</span></div>
+
+    <p>The derivation steps produce:</p>
+
+    <div class="code-block"><span class="comment"># Original file path</span>
+docs/(guides)/getting-started/index.mdx
+
+<span class="comment"># After strip_prefix: "docs/"</span>
+(guides)/getting-started/index.mdx
+
+<span class="comment"># After strip_suffix: ".mdx"</span>
+(guides)/getting-started/index
+
+<span class="comment"># After strip_route_groups: true</span>
+getting-started/index
+
+<span class="comment"># After strip_index: true</span>
+getting-started
+
+<span class="comment"># Final URL = base_url + slug</span>
+https://docs.example.com/getting-started</div>
 
     <h2>tools</h2>
 
