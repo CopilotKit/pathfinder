@@ -189,15 +189,19 @@ export class FileDataProvider implements DataProvider {
             const result = await git.listRemote([url, 'HEAD']);
             const sha = result.split('\t')[0]?.trim();
             return sha || null;
-        } catch {
-            // If ls-remote fails, check if clone dir exists and get local HEAD
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`${this.logPrefix} ls-remote failed for ${this.config.repo}: ${msg}`);
+            // Fall back to local HEAD if clone dir exists
             const repoName = repoNameFromUrl(this.config.repo!);
             const repoDir = path.join(this.options.cloneDir, repoName);
             if (!fs.existsSync(repoDir)) return null;
             try {
                 const git = simpleGit(repoDir);
                 return await git.revparse(['HEAD']);
-            } catch {
+            } catch (innerErr) {
+                const innerMsg = innerErr instanceof Error ? innerErr.message : String(innerErr);
+                console.warn(`${this.logPrefix} local HEAD lookup also failed for ${repoDir}: ${innerMsg}`);
                 return null;
             }
         }

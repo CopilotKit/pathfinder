@@ -6,7 +6,7 @@ import type { SourceConfig } from '../types.js';
 // Mock the dependencies
 vi.mock('../indexing/chunking/index.js', () => ({
     getChunker: vi.fn().mockReturnValue(
-        (content: string, _filePath: string) => [{
+        (content: string, _filePath: string, _config: unknown) => [{
             content,
             title: 'Test Title',
             chunkIndex: 0,

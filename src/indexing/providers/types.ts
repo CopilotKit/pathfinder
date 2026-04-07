@@ -22,7 +22,9 @@ export interface AcquisitionResult {
     items: ContentItem[];
     /**
      * Item IDs to remove from the index.
-     * Full acquire: always empty (snapshot, not diff — preserves existing stale-chunk behavior).
+     * Full acquire: always empty — deleted-file detection is not performed during
+     * full acquire, so chunks from files no longer in the source persist until the
+     * next incremental acquire or manual cleanup.
      * Incremental acquire: IDs of items deleted since lastStateToken.
      */
     removedIds: string[];

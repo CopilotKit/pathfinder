@@ -1,4 +1,4 @@
-// Tests for path filter — verifies include/exclude glob logic in source-indexer
+// Tests for path filter — verifies include/exclude glob logic in indexing utils
 //
 // Usage: npx tsx scripts/test-path-filter.ts
 
