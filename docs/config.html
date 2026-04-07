@@ -150,8 +150,27 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     .article h1 { font-size: 26px; }
     .article .lead { font-size: 15px; }
     .article h2 { font-size: 22px; }
-    .nav-links a:not(.gh-btn) { display: none; }
     .code-block { font-size: 11px; padding: 12px 14px; }
+}
+
+/* Hamburger menu */
+.hamburger { display:none; background:none; border:none; cursor:pointer; padding:0.5rem; z-index:101; }
+.hamburger span { display:block; width:22px; height:2px; background:var(--text-primary); margin:5px 0; transition: transform 0.3s, opacity 0.3s; border-radius:1px; }
+.hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.hamburger.open span:nth-child(2) { opacity:0; }
+.hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+.mobile-menu { display:none; position:fixed; top:57px; left:0; right:0; background:var(--bg-surface); border-bottom:1px solid var(--border); padding:1rem 2rem 1.5rem; z-index:99; flex-direction:column; gap:0.25rem; }
+.mobile-menu.open { display:flex; }
+@media (min-width: 769px) { .mobile-menu { display:none !important; } }
+.mobile-menu a { color:var(--text-secondary); text-decoration:none; font-size:1rem; font-weight:500; padding:0.6rem 0; border-bottom:1px solid var(--border); transition:color 0.2s; }
+.mobile-menu a:last-child { border-bottom:none; }
+.mobile-menu a:hover { color:var(--text-primary); }
+.mobile-menu a.active { color:var(--accent); }
+.mobile-menu .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; margin-top:0.5rem; padding:0.5rem 1rem; border:1px solid var(--border); border-radius:6px; width:fit-content; }
+.mobile-menu .gh-btn:hover { border-color:var(--text-dim); background:var(--bg-card); }
+@media (max-width: 768px) {
+    .hamburger { display:block; }
+    .nav-links { display:none !important; }
 }
 </style>
 </head>
@@ -170,8 +189,24 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <a href="migrate-from-mintlify.html">Migrate</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
+    <button class="hamburger" aria-label="Menu">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
   </div>
 </nav>
+
+<div class="mobile-menu">
+    <a href="index.html">Home</a>
+    <a href="usage.html">Docs</a>
+    <a href="config.html" class="active">Config</a>
+    <a href="deploy.html">Deploy</a>
+    <a href="clients.html">Clients</a>
+    <a href="search.html">Search</a>
+    <a href="migrate-from-mintlify.html">Migrate</a>
+    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+</div>
 
 <article class="article">
     <h1>Configuration <span class="accent">Reference</span></h1>
@@ -571,5 +606,22 @@ https://docs.example.com/getting-started</div>
   </div>
 </footer>
 
+<script>
+(function(){
+  var btn=document.querySelector(".hamburger");
+  var menu=document.querySelector(".mobile-menu");
+  if(!btn||!menu)return;
+  btn.addEventListener("click",function(){
+    btn.classList.toggle("open");
+    menu.classList.toggle("open");
+  });
+  menu.addEventListener("click",function(e){
+    if(e.target.tagName==="A"){
+      btn.classList.remove("open");
+      menu.classList.remove("open");
+    }
+  });
+})();
+</script>
 </body>
 </html>
