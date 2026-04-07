@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0
+
+### Minor Changes
+
+- Add HTML source type for indexing static HTML documentation sites (cheerio-based parser)
+- Strip non-content elements (script, style, nav, footer, header, svg, noscript)
+- Content container auto-detection (main, article, [role="main"], .content, #content)
+- Heading-boundary chunking with headingPath tracking (h1-h3)
+- Code block preservation, list formatting, table formatting
+- Add pathfinder-docs.yaml for dogfooding Pathfinder on its own documentation
+- Dockerfile updated to support multi-config deployments
+
 ## 1.1.0
 
 ### Minor Changes
