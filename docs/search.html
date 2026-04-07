@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Getting Started — Pathfinder</title>
+<title>Search Features — Pathfinder</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<meta name="description" content="Install and configure Pathfinder — CLI or Docker. Add semantic search with Postgres and OpenAI when you're ready.">
+<meta name="description" content="How semantic search works in Pathfinder — qmd, related files, grep-miss suggestions, and search configuration.">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://pathfinder.copilotkit.dev/usage.html">
-<meta property="og:title" content="Getting Started with Pathfinder">
-<meta property="og:description" content="Two install paths. Same server. Choose what fits your workflow.">
+<meta property="og:url" content="https://pathfinder.copilotkit.dev/search.html">
+<meta property="og:title" content="Search Features — Pathfinder">
+<meta property="og:description" content="Semantic search, qmd, related files, and grep-miss suggestions.">
 <meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Getting Started with Pathfinder">
-<meta name="twitter:description" content="Install and configure Pathfinder — CLI or Docker.">
+<meta name="twitter:title" content="Search Features — Pathfinder">
+<meta name="twitter:description" content="Semantic search, qmd, related files, and grep-miss suggestions.">
 <meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -130,16 +130,7 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 /* Inline code */
 .article code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
 
-/* Quick start cards */
-.quick-start-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 32px; }
-.path-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
-.path-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 18px; }
-.path-card h3 a { color: var(--accent); text-decoration: none; }
-.path-card h3 a:hover { text-decoration: underline; }
-.path-card .subtitle { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
-.path-card .subtitle code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-family: var(--mono); font-size: 12px; color: var(--accent); }
-
-/* Env table */
+/* Env table (reused for search params) */
 .env-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
 .env-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
 .env-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
@@ -157,7 +148,6 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 @media (max-width: 768px) {
     .article h1 { font-size: 32px; }
     .article { padding: 90px 16px 60px; }
-    .quick-start-paths { grid-template-columns: 1fr; }
     .env-table { font-size: 12px; }
     .env-table th, .env-table td { padding: 8px 10px; }
     .nav-links { gap: 1rem; }
@@ -180,11 +170,11 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="index.html">Home</a>
-        <a href="usage.html" class="active">Docs</a>
+        <a href="usage.html">Docs</a>
         <a href="config.html">Config</a>
         <a href="deploy.html">Deploy</a>
         <a href="clients.html">Clients</a>
-        <a href="search.html">Search</a>
+        <a href="search.html" class="active">Search</a>
         <a href="migrate-from-mintlify.html">Migrate</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
@@ -192,64 +182,129 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </nav>
 
 <article class="article">
-    <h1>Getting <span class="accent">Started</span></h1>
-    <p class="lead">Two install paths. Same server. Choose what fits your workflow.</p>
+    <h1>Search <span class="accent">Features</span></h1>
+    <p class="lead">Semantic search, filesystem exploration, and the commands that bridge them.</p>
 
-    <h2>Quick Start</h2>
+    <h2>How Semantic Search Works</h2>
 
-    <div class="quick-start-paths">
-        <div class="path-card">
-            <h3>CLI</h3>
-            <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder init
-<span class="cmd">$</span> npx @copilotkit/pathfinder serve</div>
-            <p class="subtitle">Quickest start. No Docker needed. Add Postgres later for semantic search.</p>
-        </div>
-        <div class="path-card">
-            <h3>Docker</h3>
-            <div class="code-block"><span class="cmd">$</span> docker pull ghcr.io/copilotkit/pathfinder
-<span class="cmd">$</span> docker run -v ./pathfinder.yaml:/app/pathfinder.yaml \
-  -v ./docs:/app/docs -p 3001:3001 \
-  ghcr.io/copilotkit/pathfinder</div>
-            <p class="subtitle">Production-ready. Use docker-compose to add Postgres for full semantic search.</p>
-        </div>
-    </div>
+    <p>Pathfinder uses a three-stage pipeline to answer conceptual questions about your docs:</p>
 
-    <h2>Auto-Generated Endpoints</h2>
+    <ol>
+        <li><strong>Indexing</strong> — Your docs are chunked (split into segments based on headings, functions, or token counts) and each chunk is converted into a high-dimensional vector using OpenAI's embedding model.</li>
+        <li><strong>Storage</strong> — Vectors are stored in PostgreSQL using the pgvector extension, which provides efficient approximate nearest-neighbor search.</li>
+        <li><strong>Retrieval</strong> — When an agent searches, the query is embedded using the same model, then compared against stored vectors using cosine similarity. The most similar chunks are returned, ranked by score (0-1).</li>
+    </ol>
 
-    <p>Pathfinder automatically generates and serves several discovery endpoints. These are cached and invalidated whenever sources are reindexed.</p>
+    <p>This means agents can ask "how do I handle authentication?" and find the relevant docs even if they never contain the word "authentication" — because the meaning is captured in the vector representation.</p>
 
-    <ul>
-        <li><strong><code>/llms.txt</code></strong> — A concise index of all indexed documentation, following the <a href="https://llmstxt.org/">llms.txt convention</a>. Useful for agents that want a quick overview of available content.</li>
-        <li><strong><code>/llms-full.txt</code></strong> — The complete content of all indexed docs in plain text. Larger, but gives agents full context without multiple tool calls.</li>
-        <li><strong><code>/.well-known/skills/default/skill.md</code></strong> — A dynamic agent capability description that reflects your current tool configuration. Agents can read this to understand what Pathfinder can do.</li>
-    </ul>
+    <h2>qmd</h2>
 
-    <p>All HTTP responses include a <code>Link</code> header pointing to <code>/llms.txt</code>, so clients that follow the convention can discover the index automatically.</p>
+    <p>When <code>grep_strategy</code> is set to <code>vector</code> or <code>hybrid</code> in your bash tool config, Pathfinder exposes a <code>qmd</code> command inside the bash sandbox. This is a semantic search command that agents can use alongside regular shell tools.</p>
 
-    <h2>Learn More</h2>
+    <div class="code-block"><span class="cmd">$</span> qmd "how do I handle errors"
+/docs/guides/error-handling.mdx (0.94)
+/docs/reference/hooks.mdx (0.87)
+/docs/guides/streaming.mdx (0.81)</div>
 
-    <div class="quick-start-paths">
-        <div class="path-card">
-            <h3><a href="config.html">Configuration Reference</a></h3>
-            <p class="subtitle">Full annotated <code>pathfinder.yaml</code> — server, sources, tools, embedding, indexing, and webhooks. Includes example configs for bash-only, full-stack, multi-repo, and multi-version setups.</p>
-        </div>
-        <div class="path-card">
-            <h3><a href="deploy.html">Deployment Guide</a></h3>
-            <p class="subtitle">Docker, Docker Compose, Railway, and generic VPS deployment. Environment variables, volume mounts, and production setup.</p>
-        </div>
-        <div class="path-card">
-            <h3><a href="clients.html">MCP Client Setup</a></h3>
-            <p class="subtitle">Connect Claude Desktop, Cursor, Codex, VS Code (Continue), or any Streamable HTTP client to your Pathfinder instance.</p>
-        </div>
-        <div class="path-card">
-            <h3><a href="search.html">Search Features</a></h3>
-            <p class="subtitle">How semantic search works, the <code>qmd</code> command, related files, grep-miss suggestions, and search tool parameters.</p>
-        </div>
-        <div class="path-card">
-            <h3><a href="migrate-from-mintlify.html">Migrate from Mintlify</a></h3>
-            <p class="subtitle">Step-by-step guide from ChromaFS to Pathfinder. Concept mapping, walkthrough, and what's different.</p>
-        </div>
-    </div>
+    <p><code>qmd</code> returns file paths ranked by semantic similarity, with scores in parentheses. Higher scores mean stronger matches.</p>
+
+    <h3>qmd vs grep</h3>
+
+    <p>Use <code>grep</code> when you know the exact text you're looking for — function names, config keys, error messages. Use <code>qmd</code> when you need to find docs by concept or meaning.</p>
+
+    <div class="code-block"><span class="comment"># Find exact string matches</span>
+<span class="cmd">$</span> grep -rl "useAction" /docs
+/docs/hooks/useAction.mdx
+/docs/guides/actions.mdx
+
+<span class="comment"># Find conceptually related docs</span>
+<span class="cmd">$</span> qmd "how to trigger server-side actions from the frontend"
+/docs/hooks/useAction.mdx (0.92)
+/docs/guides/actions.mdx (0.88)
+/docs/guides/server-actions.mdx (0.79)</div>
+
+    <p>Regular <code>grep</code> passes through to real bash unchanged — it is never intercepted or replaced.</p>
+
+    <h2>Related Files</h2>
+
+    <p>The <code>related</code> command finds semantically similar files across all indexed sources. Give it a file path, and it returns the closest matches by content similarity.</p>
+
+    <div class="code-block"><span class="cmd">$</span> related /docs/guides/auth.mdx
+/docs/reference/auth-config.mdx (0.91)
+/docs/guides/middleware.mdx (0.84)
+/docs/guides/sessions.mdx (0.78)
+/docs/reference/jwt.mdx (0.72)</div>
+
+    <p>This is useful for discovering related documentation that agents might not find through directory browsing alone — especially across different source repositories.</p>
+
+    <h2>Grep-Miss Suggestions</h2>
+
+    <p>When an agent runs <code>grep</code> and gets no results, Pathfinder automatically appends a hint suggesting <code>qmd</code> as an alternative. This nudges agents toward semantic search when exact-match grep fails, without forcing a workflow change.</p>
+
+    <div class="code-block"><span class="cmd">$</span> grep -rl "authentication flow" /docs
+<span class="comment"># (no results)</span>
+<span class="comment"># Hint: No matches found. Try `qmd "authentication flow"` for semantic search.</span></div>
+
+    <p>The hint only appears when grep returns zero results and a search tool is configured for the same source. It does not appear when grep finds matches.</p>
+
+    <h2>Search Tool Parameters</h2>
+
+    <p>When agents call the search tool directly (not via <code>qmd</code>), these parameters are available:</p>
+
+    <table class="env-table">
+        <thead>
+            <tr>
+                <th>Parameter</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>query</code></td><td>string</td><td>-</td><td>The search query (required)</td></tr>
+            <tr><td><code>limit</code></td><td>number</td><td>Config default</td><td>Max results to return (capped at <code>max_limit</code>)</td></tr>
+            <tr><td><code>min_score</code></td><td>number</td><td>Config default</td><td>Minimum cosine similarity (0-1). Results below this threshold are filtered out.</td></tr>
+            <tr><td><code>version</code></td><td>string</td><td>-</td><td>Filter results to a specific version tag (matches the <code>version</code> field on sources)</td></tr>
+        </tbody>
+    </table>
+
+    <p><strong>Note:</strong> The output format (<code>docs</code>, <code>code</code>, or <code>raw</code>) is configured at the tool level via <code>result_format</code> in your <a href="config.html">pathfinder.yaml</a>, not as a per-query parameter.</p>
+
+    <h2>Configuring Search</h2>
+
+    <p>Search requires three pieces of configuration in your <code>pathfinder.yaml</code>: a source, a search tool, and embedding settings. See the <a href="config.html">full config reference</a> for all options.</p>
+
+    <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>, <span class="value">"**/*.md"</span>]
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span>
+
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-docs</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search the documentation</span>
+    <span class="key">source:</span> <span class="value">docs</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
+    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Filter out low-quality matches</span>
+
+<span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>
+
+<span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
+
+    <p>The <code>embedding</code> and <code>indexing</code> blocks are required whenever any search tool is configured. The first server boot after adding search triggers an initial indexing pass. Subsequent updates happen on the schedule defined by <code>indexing</code> or when triggered by <a href="config.html#webhook">webhooks</a>.</p>
 
 </article>
 

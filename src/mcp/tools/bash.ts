@@ -8,6 +8,7 @@ import { parseRelatedCommand, handleRelatedCommand, formatGrepMissSuggestion } f
 import { searchChunks, textSearchChunks } from '../../db/queries.js';
 import type { EmbeddingClient } from '../../indexing/embeddings.js';
 import type { BashTelemetry } from './bash-telemetry.js';
+import type { WorkspaceManager } from '../../workspace.js';
 
 interface ExecResult {
     stdout: string;
@@ -42,6 +43,10 @@ export interface BashToolOptions {
     searchToolNames?: string[];
     /** Telemetry recorder for commands, file accesses, and grep misses. */
     telemetry?: BashTelemetry;
+    /** Workspace manager for /workspace/ file operations. */
+    workspace?: WorkspaceManager;
+    /** Resolver for session ID — used by workspace interception. */
+    getSessionId?: () => string | undefined;
 }
 
 export function registerBashTool(
@@ -139,6 +144,60 @@ export function registerBashTool(
                         return {
                             content: [{ type: "text" as const, text: formatBashResult(command, qmdResult) }],
                         };
+                    }
+                }
+
+                // Intercept workspace commands (/workspace/ virtual directory)
+                if (options?.workspace && options?.getSessionId) {
+                    const sid = options.getSessionId();
+                    if (sid) {
+                        const trimmedCmd = command.trim();
+
+                        // Write: echo "..." > /workspace/file or cat ... > /workspace/file
+                        const writeMatch = trimmedCmd.match(/^(?:echo\s+.*?|cat\s+.*?)>\s*\/workspace\/(.+)/);
+                        if (writeMatch) {
+                            const filename = writeMatch[1].trim();
+                            options.workspace.ensureSession(sid);
+                            const contentResult = await bash.exec(trimmedCmd.replace(/>\s*\/workspace\/.*$/, ''), { cwd });
+                            if (contentResult.exitCode === 0) {
+                                const ok = options.workspace.writeFile(sid, filename, contentResult.stdout);
+                                if (!ok) {
+                                    return { content: [{ type: "text" as const, text: formatBashResult(command, { stdout: '', stderr: 'workspace: quota exceeded', exitCode: 1 }) }] };
+                                }
+                                return { content: [{ type: "text" as const, text: formatBashResult(command, { stdout: `Written to /workspace/${filename}`, stderr: '', exitCode: 0 }) }] };
+                            } else {
+                                return { content: [{ type: "text" as const, text: formatBashResult(command, contentResult) }] };
+                            }
+                        }
+
+                        // Read: cat/head/tail /workspace/file
+                        const readMatch = trimmedCmd.match(/^(cat|head|tail)\s+\/workspace\/(.+)/);
+                        if (readMatch) {
+                            options.workspace.ensureSession(sid);
+                            const content = options.workspace.readFile(sid, readMatch[2].trim());
+                            if (content === null) {
+                                return { content: [{ type: "text" as const, text: formatBashResult(command, { stdout: '', stderr: `cat: /workspace/${readMatch[2].trim()}: No such file`, exitCode: 1 }) }] };
+                            }
+                            return { content: [{ type: "text" as const, text: formatBashResult(command, { stdout: content, stderr: '', exitCode: 0 }) }] };
+                        }
+
+                        // List: ls [-flags] /workspace[/subdir]
+                        const lsMatch = trimmedCmd.match(/^ls\s+(?:-\S+\s+)?\/workspace\/?(.*)$/);
+                        if (lsMatch) {
+                            options.workspace.ensureSession(sid);
+                            const subdir = lsMatch[1]?.trim() || undefined;
+                            const files = options.workspace.listFiles(sid, subdir);
+                            return { content: [{ type: "text" as const, text: formatBashResult(command, { stdout: files.join('\n'), stderr: '', exitCode: 0 }) }] };
+                        }
+
+                        // Catch-all: unrecognized /workspace/ command
+                        if (trimmedCmd.includes('/workspace/') || trimmedCmd.includes('/workspace')) {
+                            return { content: [{ type: "text" as const, text: formatBashResult(command, {
+                                stdout: '',
+                                stderr: 'workspace: supported operations are:\n  echo "content" > /workspace/file\n  cat /workspace/file\n  head /workspace/file\n  tail /workspace/file\n  ls /workspace/\n  ls /workspace/subdir/',
+                                exitCode: 1,
+                            }) }] };
+                        }
                     }
                 }
 

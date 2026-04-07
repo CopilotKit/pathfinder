@@ -7,7 +7,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
 import { buildBashFilesMap, rebuildBashInstance } from "./mcp/tools/bash-fs.js";
 import { initializeSchema, closePool } from "./db/client.js";
-import { getIndexStats } from "./db/queries.js";
+import { getIndexStats, getAllChunksForLlms } from "./db/queries.js";
 import { getConfig, getServerConfig, hasSearchTools, hasCollectTools, hasBashSemanticSearch } from "./config.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
@@ -15,6 +15,10 @@ import { createWebhookHandler } from "./webhooks/github.js";
 import { SessionStateManager } from "./mcp/tools/bash-session.js";
 import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
 import { insertCollectedData } from "./db/queries.js";
+import { IpSessionLimiter } from "./ip-limiter.js";
+import { WorkspaceManager } from "./workspace.js";
+import { generateLlmsTxt, generateLlmsFullTxt } from "./llms-txt.js";
+import { generateSkillMd } from "./skill-md.js";
 
 export interface ServerOptions {
     port?: number;
@@ -28,6 +32,12 @@ app.use(
         exposedHeaders: ["Mcp-Session-Id"],
     }),
 );
+
+// Advertise llms.txt via Link header on all responses
+app.use((_req, res, next) => {
+    res.setHeader('Link', '</llms.txt>; rel="llms-txt"');
+    next();
+});
 
 // ---------------------------------------------------------------------------
 // Webhook endpoint — registered BEFORE express.json() so the handler receives
@@ -126,7 +136,9 @@ app.post("/register", (_req: Request, res: Response) => {
 
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 const sessionLastActivity: Record<string, number> = {};
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+let SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes default, overridden by config
+let ipLimiter: IpSessionLimiter | undefined;
+let workspaceManager: WorkspaceManager | undefined;
 
 // Reap idle sessions every 5 minutes
 setInterval(() => {
@@ -136,7 +148,9 @@ setInterval(() => {
         if (now - sessionLastActivity[sid] > SESSION_TTL_MS) {
             delete transports[sid];
             delete sessionLastActivity[sid];
-            sessionStateManager.cleanup(sid);
+            try { sessionStateManager.cleanup(sid); } catch (e) { console.error(`[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`, e); }
+            try { ipLimiter?.remove(sid); } catch (e) { console.error(`[mcp] IP limiter cleanup failed:`, e); }
+            try { workspaceManager?.cleanup(sid); } catch (e) { console.error(`[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`, e); }
             reaped++;
         }
     }
@@ -195,6 +209,15 @@ app.post("/mcp", async (req: Request, res: Response) => {
                 onsessioninitialized: (sid) => {
                     transports[sid] = transport;
                     sessionLastActivity[sid] = Date.now();
+                    if (ipLimiter && !ipLimiter.tryAdd(ip, sid)) {
+                        // Rate limit exceeded — tear down immediately
+                        console.warn(`[mcp] IP rate limit exceeded for ${ip}, closing session ${sid.slice(0, 8)}`);
+                        delete transports[sid];
+                        delete sessionLastActivity[sid];
+                        transport.close?.();
+                        return;
+                    }
+                    workspaceManager?.ensureSession(sid);
                     console.log(`[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length} active) [${ip}]`);
                 },
             });
@@ -204,10 +227,12 @@ app.post("/mcp", async (req: Request, res: Response) => {
                     delete transports[sid];
                     delete sessionLastActivity[sid];
                     sessionStateManager.cleanup(sid);
+                    ipLimiter?.remove(sid);
+                    workspaceManager?.cleanup(sid);
                     console.log(`[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`);
                 }
             };
-            const server = createMcpServer(bashInstances, sessionStateManager, () => transport.sessionId ?? undefined, bashTelemetry);
+            const server = createMcpServer(bashInstances, sessionStateManager, () => transport.sessionId ?? undefined, bashTelemetry, workspaceManager);
             await server.connect(transport);
             await transport.handleRequest(req, res, req.body);
             return;
@@ -318,6 +343,52 @@ app.get("/health", async (_req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// llms.txt and llms-full.txt — cached, invalidated on reindex
+// ---------------------------------------------------------------------------
+
+let cachedLlmsTxt: string | null = null;
+let cachedLlmsFullTxt: string | null = null;
+
+app.get('/llms.txt', async (_req: Request, res: Response) => {
+    try {
+        if (!cachedLlmsTxt) {
+            const chunks = await getAllChunksForLlms();
+            cachedLlmsTxt = generateLlmsTxt(chunks, getServerConfig().server.name);
+        }
+        res.type('text/plain').send(cachedLlmsTxt);
+    } catch (err) {
+        console.error("[llms.txt] Generation failed:", err);
+        res.status(503).type('text/plain').send('# Service unavailable\nIndex not ready.');
+    }
+});
+
+app.get('/llms-full.txt', async (_req: Request, res: Response) => {
+    try {
+        if (!cachedLlmsFullTxt) {
+            const chunks = await getAllChunksForLlms();
+            cachedLlmsFullTxt = generateLlmsFullTxt(chunks);
+        }
+        res.type('text/plain').send(cachedLlmsFullTxt);
+    } catch (err) {
+        console.error("[llms-full.txt] Generation failed:", err);
+        res.status(503).type('text/plain').send('Service unavailable — index not ready.');
+    }
+});
+
+// ---------------------------------------------------------------------------
+// skill.md — dynamically generated from server config
+// ---------------------------------------------------------------------------
+
+app.get('/.well-known/skills/default/skill.md', (_req: Request, res: Response) => {
+    try {
+        res.type('text/markdown').send(generateSkillMd(getServerConfig()));
+    } catch (err) {
+        console.error('[skill.md] Generation failed:', err);
+        res.status(500).type('text/plain').send('Error generating skill.md');
+    }
+});
+
+// ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
@@ -330,6 +401,20 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     const serverCfg = getServerConfig();
 
     const port = options?.port ?? cfg.port;
+
+    // Configure session TTL and IP rate limiter from config
+    const maxSessionsPerIp = serverCfg.server.max_sessions_per_ip ?? 20;
+    SESSION_TTL_MS = (serverCfg.server.session_ttl_minutes ?? 30) * 60 * 1000;
+    ipLimiter = new IpSessionLimiter(maxSessionsPerIp);
+    console.log(`[startup] IP rate limit: ${maxSessionsPerIp} sessions/IP, TTL: ${serverCfg.server.session_ttl_minutes ?? 30}m`);
+
+    // Initialize workspace manager if any bash tool has workspace enabled
+    const hasBashWorkspace = serverCfg.tools.some(t => t.type === 'bash' && t.bash?.workspace === true);
+    const workspaceDir = process.env.WORKSPACE_DIR ?? '/tmp/pathfinder-workspaces';
+    if (hasBashWorkspace) {
+        workspaceManager = new WorkspaceManager(workspaceDir);
+        console.log(`[startup] Workspace manager enabled (dir: ${workspaceDir})`);
+    }
 
     const needsDb = hasSearchTools() || hasCollectTools() || hasBashSemanticSearch();
 
@@ -375,6 +460,9 @@ export async function startServer(options?: ServerOptions): Promise<void> {
         webhookHandler = createWebhookHandler(orchestrator);
 
         orchestrator.onReindexComplete = (sourceNames) => {
+            // Invalidate llms.txt caches so next request regenerates
+            cachedLlmsTxt = null;
+            cachedLlmsFullTxt = null;
             refreshBashInstances(sourceNames, "reindex").catch((err) => {
                 console.error("[reindex] Bash refresh failed:", err);
             });
@@ -409,18 +497,10 @@ export async function startServer(options?: ServerOptions): Promise<void> {
 
     async function shutdown(signal: string): Promise<void> {
         console.log(`\n[shutdown] Received ${signal}, shutting down...`);
-        try {
-            if (telemetryFlushInterval) {
-                clearInterval(telemetryFlushInterval);
-            }
-            if (bashTelemetry) {
-                await bashTelemetry.flush();
-                console.log("[shutdown] Telemetry flushed.");
-            }
-            await closePool();
-        } catch (err) {
-            console.error("[shutdown] Error during shutdown:", err);
-        }
+        if (telemetryFlushInterval) clearInterval(telemetryFlushInterval);
+        try { await bashTelemetry?.flush(); } catch (e) { console.error('[shutdown] Telemetry flush failed:', e); }
+        try { workspaceManager?.cleanupAll(); } catch (e) { console.error('[shutdown] Workspace cleanup failed:', e); }
+        try { await closePool(); } catch (e) { console.error('[shutdown] DB pool close failed:', e); }
         process.exit(0);
     }
 

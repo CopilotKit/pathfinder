@@ -26,13 +26,16 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       PATHFINDER_CONFIG: /app/pathfinder.yaml
+      WORKSPACE_DIR: /data/workspaces
       PORT: ${PORT:-3001}
       NODE_ENV: production
     volumes:
       - ./pathfinder.yaml:/app/pathfinder.yaml:ro
+      - workspaces:/data
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   pgdata:
+  workspaces:

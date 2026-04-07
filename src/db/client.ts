@@ -1,6 +1,6 @@
 import pg from "pg";
 import pgvector from "pgvector/pg";
-import { generateSchema, generateMigration } from "./schema.js";
+import { generateSchema, generateMigration, generatePostSchemaMigration } from "./schema.js";
 import { getConfig, getServerConfig } from "../config.js";
 
 let pool: pg.Pool | null = null;
@@ -63,6 +63,7 @@ async function initializePGlite(): Promise<void> {
     try {
         await db.exec(generateMigration());
         await db.exec(generateSchema(dimensions));
+        await db.exec(generatePostSchemaMigration());
         await db.exec('COMMIT');
     } catch (err) {
         try {
@@ -131,6 +132,7 @@ export async function initializeSchema(): Promise<void> {
         await migrationClient.query('BEGIN');
         await migrationClient.query(generateMigration());
         await migrationClient.query(generateSchema(dimensions));
+        await migrationClient.query(generatePostSchemaMigration());
         await migrationClient.query('COMMIT');
     } catch (err) {
         await migrationClient.query('ROLLBACK');

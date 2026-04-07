@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Getting Started — Pathfinder</title>
+<title>MCP Client Setup — Pathfinder</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<meta name="description" content="Install and configure Pathfinder — CLI or Docker. Add semantic search with Postgres and OpenAI when you're ready.">
+<meta name="description" content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, VS Code, and generic HTTP MCP clients.">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://pathfinder.copilotkit.dev/usage.html">
-<meta property="og:title" content="Getting Started with Pathfinder">
-<meta property="og:description" content="Two install paths. Same server. Choose what fits your workflow.">
+<meta property="og:url" content="https://pathfinder.copilotkit.dev/clients.html">
+<meta property="og:title" content="MCP Client Setup — Pathfinder">
+<meta property="og:description" content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, VS Code, and generic HTTP MCP clients.">
 <meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Getting Started with Pathfinder">
-<meta name="twitter:description" content="Install and configure Pathfinder — CLI or Docker.">
+<meta name="twitter:title" content="MCP Client Setup — Pathfinder">
+<meta name="twitter:description" content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, and more.">
 <meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -130,20 +130,12 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 /* Inline code */
 .article code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
 
-/* Quick start cards */
-.quick-start-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 32px; }
-.path-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
-.path-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 18px; }
-.path-card h3 a { color: var(--accent); text-decoration: none; }
-.path-card h3 a:hover { text-decoration: underline; }
-.path-card .subtitle { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
-.path-card .subtitle code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-family: var(--mono); font-size: 12px; color: var(--accent); }
-
-/* Env table */
-.env-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
-.env-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
-.env-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
-.env-table td code { font-size: 12px; }
+/* Client cards */
+.client-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin-bottom: 24px; }
+.client-card h3 { margin-top: 0; margin-bottom: 8px; font-size: 20px; }
+.client-card .config-path { font-size: 13px; color: var(--text-dim); font-family: var(--mono); margin-bottom: 16px; }
+.client-card p { color: var(--text-secondary); font-size: 15px; margin-bottom: 12px; }
+.client-card .code-block { margin-bottom: 0; }
 
 /* Footer */
 footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
@@ -157,9 +149,6 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 @media (max-width: 768px) {
     .article h1 { font-size: 32px; }
     .article { padding: 90px 16px 60px; }
-    .quick-start-paths { grid-template-columns: 1fr; }
-    .env-table { font-size: 12px; }
-    .env-table th, .env-table td { padding: 8px 10px; }
     .nav-links { gap: 1rem; }
 }
 
@@ -180,10 +169,10 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="index.html">Home</a>
-        <a href="usage.html" class="active">Docs</a>
+        <a href="usage.html">Docs</a>
         <a href="config.html">Config</a>
         <a href="deploy.html">Deploy</a>
-        <a href="clients.html">Clients</a>
+        <a href="clients.html" class="active">Clients</a>
         <a href="search.html">Search</a>
         <a href="migrate-from-mintlify.html">Migrate</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
@@ -192,64 +181,114 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </nav>
 
 <article class="article">
-    <h1>Getting <span class="accent">Started</span></h1>
-    <p class="lead">Two install paths. Same server. Choose what fits your workflow.</p>
+    <h1>MCP <span class="accent">Client</span> Setup</h1>
+    <p class="lead">Point your AI agent at Pathfinder. Any client that supports Streamable HTTP transport works.</p>
 
-    <h2>Quick Start</h2>
+    <h2>Client Configurations</h2>
 
-    <div class="quick-start-paths">
-        <div class="path-card">
-            <h3>CLI</h3>
-            <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder init
-<span class="cmd">$</span> npx @copilotkit/pathfinder serve</div>
-            <p class="subtitle">Quickest start. No Docker needed. Add Postgres later for semantic search.</p>
-        </div>
-        <div class="path-card">
-            <h3>Docker</h3>
-            <div class="code-block"><span class="cmd">$</span> docker pull ghcr.io/copilotkit/pathfinder
-<span class="cmd">$</span> docker run -v ./pathfinder.yaml:/app/pathfinder.yaml \
-  -v ./docs:/app/docs -p 3001:3001 \
-  ghcr.io/copilotkit/pathfinder</div>
-            <p class="subtitle">Production-ready. Use docker-compose to add Postgres for full semantic search.</p>
-        </div>
+    <div class="client-card">
+        <h3>Claude Desktop</h3>
+        <div class="config-path">~/Library/Application Support/Claude/claude_desktop_config.json (macOS)</div>
+        <p>Claude Desktop uses its own config file with <code>mcpServers</code> as the top-level key.</p>
+        <div class="code-block">{
+  <span class="key">"mcpServers"</span>: {
+    <span class="key">"docs"</span>: {
+      <span class="key">"type"</span>: <span class="value">"http"</span>,
+      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
+    }
+  }
+}</div>
     </div>
 
-    <h2>Auto-Generated Endpoints</h2>
-
-    <p>Pathfinder automatically generates and serves several discovery endpoints. These are cached and invalidated whenever sources are reindexed.</p>
-
-    <ul>
-        <li><strong><code>/llms.txt</code></strong> — A concise index of all indexed documentation, following the <a href="https://llmstxt.org/">llms.txt convention</a>. Useful for agents that want a quick overview of available content.</li>
-        <li><strong><code>/llms-full.txt</code></strong> — The complete content of all indexed docs in plain text. Larger, but gives agents full context without multiple tool calls.</li>
-        <li><strong><code>/.well-known/skills/default/skill.md</code></strong> — A dynamic agent capability description that reflects your current tool configuration. Agents can read this to understand what Pathfinder can do.</li>
-    </ul>
-
-    <p>All HTTP responses include a <code>Link</code> header pointing to <code>/llms.txt</code>, so clients that follow the convention can discover the index automatically.</p>
-
-    <h2>Learn More</h2>
-
-    <div class="quick-start-paths">
-        <div class="path-card">
-            <h3><a href="config.html">Configuration Reference</a></h3>
-            <p class="subtitle">Full annotated <code>pathfinder.yaml</code> — server, sources, tools, embedding, indexing, and webhooks. Includes example configs for bash-only, full-stack, multi-repo, and multi-version setups.</p>
-        </div>
-        <div class="path-card">
-            <h3><a href="deploy.html">Deployment Guide</a></h3>
-            <p class="subtitle">Docker, Docker Compose, Railway, and generic VPS deployment. Environment variables, volume mounts, and production setup.</p>
-        </div>
-        <div class="path-card">
-            <h3><a href="clients.html">MCP Client Setup</a></h3>
-            <p class="subtitle">Connect Claude Desktop, Cursor, Codex, VS Code (Continue), or any Streamable HTTP client to your Pathfinder instance.</p>
-        </div>
-        <div class="path-card">
-            <h3><a href="search.html">Search Features</a></h3>
-            <p class="subtitle">How semantic search works, the <code>qmd</code> command, related files, grep-miss suggestions, and search tool parameters.</p>
-        </div>
-        <div class="path-card">
-            <h3><a href="migrate-from-mintlify.html">Migrate from Mintlify</a></h3>
-            <p class="subtitle">Step-by-step guide from ChromaFS to Pathfinder. Concept mapping, walkthrough, and what's different.</p>
-        </div>
+    <div class="client-card">
+        <h3>Claude Code</h3>
+        <div class="config-path">~/.claude/mcp.json</div>
+        <p>Claude Code uses a separate config file with <code>mcp-servers</code> as the key.</p>
+        <div class="code-block">{
+  <span class="key">"mcp-servers"</span>: {
+    <span class="key">"docs"</span>: {
+      <span class="key">"type"</span>: <span class="value">"http"</span>,
+      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
+    }
+  }
+}</div>
     </div>
+
+    <div class="client-card">
+        <h3>Cursor</h3>
+        <div class="config-path">.cursor/mcp.json</div>
+        <p>Place this in your project root. Cursor picks it up automatically.</p>
+        <div class="code-block">{
+  <span class="key">"mcpServers"</span>: {
+    <span class="key">"docs"</span>: {
+      <span class="key">"type"</span>: <span class="value">"http"</span>,
+      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
+    }
+  }
+}</div>
+    </div>
+
+    <div class="client-card">
+        <h3>OpenAI Codex</h3>
+        <div class="config-path">codex CLI --mcp-config</div>
+        <p>Codex supports MCP servers via the <code>--mcp-config</code> flag or a config file. Pass a JSON file with the server definition:</p>
+        <div class="code-block">{
+  <span class="key">"mcpServers"</span>: {
+    <span class="key">"docs"</span>: {
+      <span class="key">"type"</span>: <span class="value">"http"</span>,
+      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
+    }
+  }
+}</div>
+    </div>
+
+    <div class="client-card">
+        <h3>VS Code (Continue)</h3>
+        <div class="config-path">~/.continue/config.json</div>
+        <p>Add Pathfinder to the <code>mcpServers</code> section of your Continue config:</p>
+        <div class="code-block">{
+  <span class="key">"mcpServers"</span>: [
+    {
+      <span class="key">"name"</span>: <span class="value">"docs"</span>,
+      <span class="key">"transport"</span>: {
+        <span class="key">"type"</span>: <span class="value">"http"</span>,
+        <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
+      }
+    }
+  ]
+}</div>
+    </div>
+
+    <div class="client-card">
+        <h3>Generic (Streamable HTTP)</h3>
+        <div class="config-path">Any MCP-compatible client</div>
+        <p>Pathfinder exposes a single Streamable HTTP endpoint. Any MCP client that supports this transport can connect with:</p>
+        <div class="code-block"><span class="comment"># Endpoint</span>
+<span class="key">URL:</span>       <span class="value">http://localhost:3001/mcp</span>
+<span class="key">Transport:</span> <span class="value">Streamable HTTP</span>
+<span class="key">Method:</span>    <span class="value">POST</span></div>
+    </div>
+
+    <h2>Remote Servers</h2>
+
+    <p>For deployed Pathfinder instances, replace <code>localhost:3001</code> with your server's URL:</p>
+
+    <div class="code-block">{
+  <span class="key">"mcpServers"</span>: {
+    <span class="key">"docs"</span>: {
+      <span class="key">"type"</span>: <span class="value">"http"</span>,
+      <span class="key">"url"</span>: <span class="value">"https://docs.example.com/mcp"</span>
+    }
+  }
+}</div>
+
+    <p>Pathfinder handles session management automatically. Each MCP connection gets its own session with independent state (working directory, workspace, etc.).</p>
+
+    <h2>Verifying the Connection</h2>
+
+    <p>Once connected, your agent should see Pathfinder's tools in its available tools list. The exact tools depend on your <a href="config.html">configuration</a> — typically a combination of search and bash tools.</p>
+
+    <p>Try asking your agent to run a simple command like <code>find / -name "*.md" | head -5</code> to verify the bash tool is working, or ask a question about your docs to test semantic search.</p>
 
 </article>
 

@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deployment Guide — Pathfinder</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta name="description" content="Deploy Pathfinder with Docker, Docker Compose, Railway, or a generic VPS. Full environment variable and volume reference.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://pathfinder.copilotkit.dev/deploy.html">
+<meta property="og:title" content="Deployment Guide — Pathfinder">
+<meta property="og:description" content="Deploy Pathfinder with Docker, Docker Compose, Railway, or a generic VPS.">
+<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Deployment Guide — Pathfinder">
+<meta name="twitter:description" content="Deploy Pathfinder with Docker, Docker Compose, Railway, or a generic VPS.">
+<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+    --bg-deep: #0a0a0f;
+    --bg-surface: #111118;
+    --bg-card: #16161f;
+    --border: #222233;
+    --text-primary: #e8e8f0;
+    --text-secondary: #8888a0;
+    --text-dim: #555570;
+    --accent: #00ccff;
+    --accent-dim: #00aadd;
+    --accent-glow: rgba(0,204,255,0.15);
+    --blue: #4488ff;
+    --purple: #aa66ff;
+    --warning: #ffaa00;
+    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
+body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
+code, pre, kbd { font-feature-settings: "liga" 0, "calt" 0; }
+
+/* Noise overlay */
+body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+}
+
+/* Container */
+.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+
+/* Nav */
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
+    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
+nav .container { display:flex; align-items:center; justify-content:space-between; }
+.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
+.nav-brand span { color: var(--accent); }
+.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
+.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
+.nav-links a:hover { color: var(--text-primary); }
+.nav-links a.active { color: var(--accent); }
+.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
+.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+
+/* Sidebar */
+:root { --sb-width: 220px; }
+#page-sidebar {
+    position: fixed;
+    top: 60px;
+    right: 0;
+    width: var(--sb-width);
+    height: calc(100vh - 60px);
+    overflow-y: auto;
+    padding: 2rem 1.5rem 2rem 1.5rem;
+    border-left: 1px solid var(--border);
+}
+#page-sidebar .sb-title {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    margin-bottom: 0.75rem;
+}
+#page-sidebar a {
+    display: block;
+    padding: 0.25rem 0;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.15s;
+    line-height: 1.4;
+}
+#page-sidebar a:hover { color: var(--text-primary); }
+#page-sidebar a.active { color: var(--accent); }
+#page-sidebar a.sb-indent { padding-left: 0.75rem; font-size: 0.75rem; }
+
+/* Article layout */
+.article {
+    max-width: 860px;
+    padding: 100px 2rem 80px;
+    margin-right: calc(var(--sb-width) + max(0px, (100vw - var(--sb-width) - 860px) / 2));
+    margin-left: max(2rem, calc((100vw - var(--sb-width) - 860px) / 2));
+}
+@media (max-width: 1200px) {
+    #page-sidebar { display: none; }
+    .article { max-width: 1120px; margin: 0 auto; }
+}
+.article h1 { font-size: 42px; font-weight: 700; line-height: 1.15; margin-bottom: 16px; letter-spacing: -0.02em; }
+.article h1 .accent { color: var(--accent); }
+.article .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 48px; }
+.article h2 { font-size: 28px; font-weight: 600; margin: 48px 0 16px; padding-top: 16px; border-top: 1px solid var(--border); scroll-margin-top: 80px; }
+.article h2:first-of-type { border-top: none; }
+.article h3 { font-size: 20px; font-weight: 600; margin: 32px 0 12px; scroll-margin-top: 80px; }
+.article p { color: var(--text-secondary); margin-bottom: 16px; font-size: 1rem; line-height: 1.7; }
+.article ul, .article ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; font-size: 1rem; line-height: 1.7; }
+.article li { margin-bottom: 0.35rem; line-height: 1.6; }
+.article li strong { color: var(--text-primary); }
+.article a { color: var(--accent); text-decoration: none; }
+.article a:hover { text-decoration: underline; }
+
+/* Code blocks */
+.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
+.code-block .comment { color: var(--text-dim); }
+.code-block .key { color: var(--warning); }
+.code-block .value { color: var(--blue); }
+.code-block .cmd { color: var(--accent); }
+
+/* Inline code */
+.article code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
+
+/* Warning callout */
+.gap-card { background: var(--bg-surface); border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 0 10px 10px 0; padding: 16px 20px; margin-bottom: 12px; }
+.gap-card h4 { font-size: 14px; margin-bottom: 4px; color: var(--warning); }
+.gap-card p { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
+
+/* Env table */
+.env-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
+.env-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
+.env-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.env-table td code { font-size: 12px; }
+
+/* Footer */
+footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
+.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
+.footer-brand .prompt { color: var(--accent); }
+.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
+.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text-primary); }
+
+/* Responsive: Tablet */
+@media (max-width: 768px) {
+    .article h1 { font-size: 32px; }
+    .article { padding: 90px 16px 60px; }
+    .env-table { font-size: 12px; }
+    .env-table th, .env-table td { padding: 8px 10px; }
+    .nav-links { gap: 1rem; }
+}
+
+/* Responsive: Mobile */
+@media (max-width: 480px) {
+    .article h1 { font-size: 26px; }
+    .article .lead { font-size: 15px; }
+    .article h2 { font-size: 22px; }
+    .nav-links a:not(.gh-btn) { display: none; }
+    .code-block { font-size: 11px; padding: 12px 14px; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
+    <div class="nav-links">
+        <a href="index.html">Home</a>
+        <a href="usage.html">Docs</a>
+        <a href="config.html">Config</a>
+        <a href="deploy.html" class="active">Deploy</a>
+        <a href="clients.html">Clients</a>
+        <a href="search.html">Search</a>
+        <a href="migrate-from-mintlify.html">Migrate</a>
+        <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<article class="article">
+    <h1>Deployment <span class="accent">Guide</span></h1>
+    <p class="lead">Run Pathfinder anywhere — single container, full stack, or bare metal.</p>
+
+    <h2>Docker (single container, bash-only)</h2>
+
+    <p>The quickest Docker setup. No database needed — agents explore docs with shell commands only.</p>
+
+    <div class="code-block"><span class="cmd">$</span> docker run -d \
+  -v ./pathfinder.yaml:/app/pathfinder.yaml:ro \
+  -v ./docs:/app/docs:ro \
+  -p 3001:3001 \
+  ghcr.io/copilotkit/pathfinder:latest</div>
+
+    <p>This mounts your config and local docs into the container. Agents get read-only access to your documentation via bash tools.</p>
+
+    <h2>Docker Compose (full stack)</h2>
+
+    <p>For semantic search, you need Postgres with pgvector. The production <code>docker-compose.yml</code> sets up everything:</p>
+
+    <div class="code-block"><span class="comment"># docker-compose.yml</span>
+<span class="key">services:</span>
+  <span class="key">db:</span>
+    <span class="key">image:</span> <span class="value">pgvector/pgvector:pg16</span>
+    <span class="key">environment:</span>
+      <span class="key">POSTGRES_DB:</span> <span class="value">pathfinder</span>
+      <span class="key">POSTGRES_USER:</span> <span class="value">pathfinder</span>
+      <span class="key">POSTGRES_PASSWORD:</span> <span class="value">${POSTGRES_PASSWORD:-changeme}</span>
+    <span class="key">volumes:</span>
+      - <span class="value">pgdata:/var/lib/postgresql/data</span>
+    <span class="key">healthcheck:</span>
+      <span class="key">test:</span> [<span class="value">"CMD-SHELL"</span>, <span class="value">"pg_isready -U pathfinder"</span>]
+      <span class="key">interval:</span> <span class="value">5s</span>
+      <span class="key">timeout:</span> <span class="value">3s</span>
+      <span class="key">retries:</span> <span class="value">5</span>
+
+  <span class="key">app:</span>
+    <span class="key">image:</span> <span class="value">ghcr.io/copilotkit/pathfinder:latest</span>
+    <span class="key">ports:</span>
+      - <span class="value">"${PORT:-3001}:${PORT:-3001}"</span>
+    <span class="key">environment:</span>
+      <span class="key">DATABASE_URL:</span> <span class="value">postgres://pathfinder:${POSTGRES_PASSWORD:-changeme}@db:5432/pathfinder</span>
+      <span class="key">OPENAI_API_KEY:</span> <span class="value">${OPENAI_API_KEY}</span>
+      <span class="key">GITHUB_TOKEN:</span> <span class="value">${GITHUB_TOKEN:-}</span>
+      <span class="key">GITHUB_WEBHOOK_SECRET:</span> <span class="value">${GITHUB_WEBHOOK_SECRET:-}</span>
+      <span class="key">PATHFINDER_CONFIG:</span> <span class="value">/app/pathfinder.yaml</span>
+      <span class="key">WORKSPACE_DIR:</span> <span class="value">/data/workspaces</span>
+      <span class="key">PORT:</span> <span class="value">${PORT:-3001}</span>
+      <span class="key">NODE_ENV:</span> <span class="value">production</span>
+    <span class="key">volumes:</span>
+      - <span class="value">./pathfinder.yaml:/app/pathfinder.yaml:ro</span>
+      - <span class="value">workspaces:/data</span>
+    <span class="key">depends_on:</span>
+      <span class="key">db:</span>
+        <span class="key">condition:</span> <span class="value">service_healthy</span>
+
+<span class="key">volumes:</span>
+  <span class="key">pgdata:</span>
+  <span class="key">workspaces:</span></div>
+
+    <p>Create a <code>.env</code> file with your secrets, then start:</p>
+
+    <div class="code-block"><span class="cmd">$</span> docker compose up -d</div>
+
+    <div class="gap-card">
+        <h4>Persistent volume required for workspaces</h4>
+        <p>Without a persistent volume mounted at <code>/data</code>, agent workspaces are lost on every container restart. If you use workspaces, always mount a volume. The <code>workspaces</code> volume in the compose file above handles this.</p>
+    </div>
+
+    <h2>Railway</h2>
+
+    <p>Deploy to Railway with a Postgres plugin and persistent volume:</p>
+
+    <ol>
+        <li>Create a new project on Railway and add a <strong>PostgreSQL</strong> database (use the pgvector template if available).</li>
+        <li>Add a new service from the Pathfinder GitHub repo or Docker image (<code>ghcr.io/copilotkit/pathfinder:latest</code>).</li>
+        <li>Set environment variables: <code>DATABASE_URL</code> (from Railway's Postgres), <code>OPENAI_API_KEY</code>, <code>GITHUB_TOKEN</code> (if needed).</li>
+        <li>Add a persistent volume mounted at <code>/data</code> for workspace storage.</li>
+        <li>Set <code>WORKSPACE_DIR=/data/workspaces</code> in the service environment.</li>
+        <li>Deploy. The first boot auto-indexes your configured sources.</li>
+    </ol>
+
+    <h2>Generic VPS</h2>
+
+    <p>Run Pathfinder directly on any Linux server with Node.js 20+.</p>
+
+    <h3>systemd service</h3>
+
+    <div class="code-block"><span class="comment"># /etc/systemd/system/pathfinder.service</span>
+[Unit]
+Description=Pathfinder MCP Server
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=pathfinder
+WorkingDirectory=/opt/pathfinder
+ExecStart=/usr/bin/node dist/server.js
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Environment=DATABASE_URL=postgresql://pathfinder:secret@localhost:5432/pathfinder
+Environment=OPENAI_API_KEY=sk-...
+Environment=PATHFINDER_CONFIG=/opt/pathfinder/pathfinder.yaml
+Environment=WORKSPACE_DIR=/var/lib/pathfinder/workspaces
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target</div>
+
+    <h3>nginx reverse proxy</h3>
+
+    <div class="code-block"><span class="comment"># /etc/nginx/sites-available/pathfinder</span>
+server {
+    listen 443 ssl http2;
+    server_name docs.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/docs.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/docs.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}</div>
+
+    <h2>Environment Variables</h2>
+
+    <table class="env-table">
+        <thead>
+            <tr>
+                <th>Variable</th>
+                <th>Required</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>DATABASE_URL</code></td><td>For search tools</td><td>-</td><td>PostgreSQL connection string (with pgvector)</td></tr>
+            <tr><td><code>OPENAI_API_KEY</code></td><td>For search tools</td><td>-</td><td>OpenAI API key for computing embeddings</td></tr>
+            <tr><td><code>GITHUB_TOKEN</code></td><td>For private repos</td><td>-</td><td>GitHub PAT for cloning private repositories</td></tr>
+            <tr><td><code>GITHUB_WEBHOOK_SECRET</code></td><td>For webhooks</td><td>-</td><td>Secret for validating GitHub webhook payloads</td></tr>
+            <tr><td><code>PORT</code></td><td>No</td><td><code>3001</code></td><td>HTTP port the server listens on</td></tr>
+            <tr><td><code>PATHFINDER_CONFIG</code></td><td>No</td><td><code>pathfinder.yaml</code></td><td>Path to the config file</td></tr>
+            <tr><td><code>WORKSPACE_DIR</code></td><td>No</td><td><code>/tmp/pathfinder-workspaces</code></td><td>Directory for agent workspace storage</td></tr>
+            <tr><td><code>NODE_ENV</code></td><td>No</td><td><code>development</code></td><td>Set to <code>production</code> for deployed instances</td></tr>
+            <tr><td><code>LOG_LEVEL</code></td><td>No</td><td><code>info</code></td><td>Logging verbosity (debug, info, warn, error)</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Volume Mounts</h2>
+
+    <p>What you mount depends on your source configuration:</p>
+
+    <ul>
+        <li><strong>Local docs</strong> — If your source uses a <code>path</code> without a <code>repo</code>, you need to mount the docs directory into the container (e.g., <code>-v ./docs:/app/docs:ro</code>).</li>
+        <li><strong>Git-backed sources</strong> — If your source specifies a <code>repo</code>, Pathfinder clones it automatically. No volume mount needed for the docs themselves.</li>
+        <li><strong>Config file</strong> — Always mount your <code>pathfinder.yaml</code> (e.g., <code>-v ./pathfinder.yaml:/app/pathfinder.yaml:ro</code>).</li>
+        <li><strong>Workspace persistence</strong> — If agents use writable workspaces (<code>workspace: true</code> in bash tools), mount a persistent volume at the <code>WORKSPACE_DIR</code> path. Without this, workspace files are lost on restart.</li>
+        <li><strong>Database persistence</strong> — The Postgres data directory should always be on a persistent volume.</li>
+    </ul>
+
+</article>
+
+<aside id="page-sidebar"></aside>
+<script src="sidebar.js"></script>
+
+<footer>
+  <div class="container">
+    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; MIT License</div>
+    <ul class="footer-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
+        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
+    </ul>
+  </div>
+</footer>
+
+</body>
+</html>
