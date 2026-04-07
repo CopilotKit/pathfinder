@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configuration Reference — Pathfinder</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta name="description" content="Full annotated pathfinder.yaml reference — server, sources, tools, embedding, indexing, and webhooks.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://pathfinder.copilotkit.dev/config.html">
+<meta property="og:title" content="Configuration Reference — Pathfinder">
+<meta property="og:description" content="Full annotated pathfinder.yaml reference with example configs.">
+<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Configuration Reference — Pathfinder">
+<meta name="twitter:description" content="Full annotated pathfinder.yaml reference with example configs.">
+<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+    --bg-deep: #0a0a0f;
+    --bg-surface: #111118;
+    --bg-card: #16161f;
+    --border: #222233;
+    --text-primary: #e8e8f0;
+    --text-secondary: #8888a0;
+    --text-dim: #555570;
+    --accent: #00ccff;
+    --accent-dim: #00aadd;
+    --accent-glow: rgba(0,204,255,0.15);
+    --blue: #4488ff;
+    --purple: #aa66ff;
+    --warning: #ffaa00;
+    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
+body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
+code, pre, kbd { font-feature-settings: "liga" 0, "calt" 0; }
+
+/* Noise overlay */
+body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+}
+
+/* Container */
+.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+
+/* Nav */
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
+    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
+nav .container { display:flex; align-items:center; justify-content:space-between; }
+.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
+.nav-brand span { color: var(--accent); }
+.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
+.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
+.nav-links a:hover { color: var(--text-primary); }
+.nav-links a.active { color: var(--accent); }
+.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
+.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+
+/* Article layout */
+.article { max-width: 1120px; margin: 0 auto; padding: 100px 2rem 80px; }
+.article h1 { font-size: 42px; font-weight: 700; line-height: 1.15; margin-bottom: 16px; letter-spacing: -0.02em; }
+.article h1 .accent { color: var(--accent); }
+.article .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 48px; }
+.article h2 { font-size: 28px; font-weight: 600; margin: 48px 0 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.article h2:first-of-type { border-top: none; }
+.article h3 { font-size: 20px; font-weight: 600; margin: 32px 0 12px; }
+.article p { color: var(--text-secondary); margin-bottom: 16px; font-size: 15px; }
+.article ul, .article ol { color: var(--text-secondary); margin: 0 0 16px 24px; font-size: 15px; }
+.article li { margin-bottom: 8px; }
+.article li strong { color: var(--text-primary); }
+.article a { color: var(--accent); text-decoration: none; }
+.article a:hover { text-decoration: underline; }
+
+/* Code blocks */
+.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
+.code-block .comment { color: var(--text-dim); }
+.code-block .key { color: var(--warning); }
+.code-block .value { color: var(--blue); }
+.code-block .cmd { color: var(--accent); }
+
+/* Inline code */
+.article code { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-family: var(--mono); font-size: 13px; color: var(--accent); }
+
+/* Footer */
+footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
+.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
+.footer-brand .prompt { color: var(--accent); }
+.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
+.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text-primary); }
+
+/* Responsive: Tablet */
+@media (max-width: 768px) {
+    .article h1 { font-size: 32px; }
+    .article { padding: 90px 16px 60px; }
+    .nav-links { gap: 1rem; }
+}
+
+/* Responsive: Mobile */
+@media (max-width: 480px) {
+    .article h1 { font-size: 26px; }
+    .article .lead { font-size: 15px; }
+    .article h2 { font-size: 22px; }
+    .nav-links a:not(.gh-btn) { display: none; }
+    .code-block { font-size: 11px; padding: 12px 14px; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
+    <div class="nav-links">
+        <a href="index.html">Home</a>
+        <a href="usage.html">Docs</a>
+        <a href="config.html" class="active">Config</a>
+        <a href="deploy.html">Deploy</a>
+        <a href="clients.html">Clients</a>
+        <a href="search.html">Search</a>
+        <a href="migrate-from-mintlify.html">Migrate</a>
+        <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<article class="article">
+    <h1>Configuration <span class="accent">Reference</span></h1>
+    <p class="lead">Everything in Pathfinder is driven by a single <code>pathfinder.yaml</code> file. This is the full annotated reference.</p>
+
+    <h2>server</h2>
+
+    <p>Top-level server identity and session management.</p>
+
+    <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">my-project-docs</span>           <span class="comment"># Server name, exposed in MCP metadata</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>                    <span class="comment"># Server version string</span>
+  <span class="key">max_sessions_per_ip:</span> <span class="value">20</span>          <span class="comment"># Max concurrent MCP sessions per IP (default: 20)</span>
+  <span class="key">session_ttl_minutes:</span> <span class="value">30</span>          <span class="comment"># Idle session timeout in minutes (default: 30)</span></div>
+
+    <ul>
+        <li><strong>name</strong> — Identifies the server in MCP tool descriptions. Required.</li>
+        <li><strong>version</strong> — Semantic version string. Required.</li>
+        <li><strong>max_sessions_per_ip</strong> — Rate limiting. Prevents a single IP from opening too many concurrent sessions. Optional, defaults to 20.</li>
+        <li><strong>session_ttl_minutes</strong> — Sessions with no activity for this many minutes are cleaned up. Optional, defaults to 30.</li>
+    </ul>
+
+    <h2>sources</h2>
+
+    <p>Define where your content lives. Each source becomes a virtual filesystem that agents can explore.</p>
+
+    <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs</span>                        <span class="comment"># Unique name, referenced by tools</span>
+    <span class="key">type:</span> <span class="value">markdown</span>                    <span class="comment"># markdown | code | raw-text</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>  <span class="comment"># Git repo URL (optional for local paths)</span>
+    <span class="key">branch:</span> <span class="value">main</span>                      <span class="comment"># Git branch to track (default: default branch)</span>
+    <span class="key">path:</span> <span class="value">docs/</span>                       <span class="comment"># Directory within the repo to index</span>
+    <span class="key">version:</span> <span class="value">v2</span>                      <span class="comment"># Version tag for multi-version docs (optional)</span>
+    <span class="key">file_patterns:</span>                      <span class="comment"># Glob patterns for files to include</span>
+      - <span class="value">"**/*.mdx"</span>
+      - <span class="value">"**/*.md"</span>
+    <span class="key">exclude_patterns:</span>                   <span class="comment"># Glob patterns to exclude (optional)</span>
+      - <span class="value">"**/node_modules/**"</span>
+      - <span class="value">"**/_internal/**"</span>
+    <span class="key">skip_dirs:</span>                          <span class="comment"># Directory names to skip entirely (optional)</span>
+      - <span class="value">.git</span>
+      - <span class="value">node_modules</span>
+    <span class="key">max_file_size:</span> <span class="value">100000</span>              <span class="comment"># Max file size in bytes to index (optional)</span>
+    <span class="key">base_url:</span> <span class="value">https://docs.example.com</span>  <span class="comment"># Base URL for generating doc links (optional)</span>
+    <span class="key">url_derivation:</span>                     <span class="comment"># How to derive URLs from file paths (optional)</span>
+      <span class="key">strip_prefix:</span> <span class="value">docs/</span>
+      <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
+      <span class="key">strip_route_groups:</span> <span class="value">true</span>
+      <span class="key">strip_index:</span> <span class="value">true</span>
+    <span class="key">chunk:</span>                              <span class="comment"># How to split content for embeddings</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>              <span class="comment"># For markdown/raw-text sources</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span>              <span class="comment"># Token overlap between chunks</span>
+      <span class="key">target_lines:</span> <span class="value">100</span>              <span class="comment"># For code sources</span>
+      <span class="key">overlap_lines:</span> <span class="value">10</span>              <span class="comment"># Line overlap between chunks</span></div>
+
+    <ul>
+        <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks.</li>
+        <li><strong>repo</strong> — If provided, Pathfinder clones and updates from this repo. Omit for local directories.</li>
+        <li><strong>version</strong> — Tags all indexed chunks with this version string. Used for version-filtered search queries.</li>
+        <li><strong>chunk</strong> — Use <code>target_tokens</code>/<code>overlap_tokens</code> for markdown and raw-text sources. Use <code>target_lines</code>/<code>overlap_lines</code> for code sources.</li>
+    </ul>
+
+    <h2>tools</h2>
+
+    <p>Tools are what agents actually call. Three types: <code>search</code>, <code>bash</code>, and <code>collect</code>.</p>
+
+    <h3>search</h3>
+
+    <p>Semantic search over embedded content. Requires a database and embedding config.</p>
+
+    <div class="code-block"><span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-docs</span>                <span class="comment"># Tool name exposed to agents</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search the docs</span>      <span class="comment"># Description shown to agents</span>
+    <span class="key">source:</span> <span class="value">docs</span>                      <span class="comment"># Which source to search</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>                  <span class="comment"># Default number of results</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>                     <span class="comment"># Maximum results an agent can request</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>               <span class="comment"># docs | code | raw</span>
+    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Minimum cosine similarity threshold (0-1, optional)</span></div>
+
+    <h3>bash</h3>
+
+    <p>Filesystem exploration with find, grep, cat, ls, head. Works with no database.</p>
+
+    <div class="code-block"><span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">explore-docs</span>               <span class="comment"># Tool name exposed to agents</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore the docs</span>     <span class="comment"># Description shown to agents</span>
+    <span class="key">sources:</span> [<span class="value">docs</span>]                    <span class="comment"># Sources to mount (can be multiple)</span>
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span>              <span class="comment"># Persist CWD across commands</span>
+      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>           <span class="comment"># memory | vector | hybrid</span>
+      <span class="key">virtual_files:</span> <span class="value">true</span>             <span class="comment"># Expose qmd and related as virtual commands</span>
+      <span class="key">workspace:</span> <span class="value">true</span>                 <span class="comment"># Enable writable /workspace directory</span>
+      <span class="key">max_file_size:</span> <span class="value">100000</span>           <span class="comment"># Max file size for cat output (bytes)</span>
+      <span class="key">cache:</span>
+        <span class="key">max_entries:</span> <span class="value">100</span>              <span class="comment"># Max cached command results</span>
+        <span class="key">ttl_seconds:</span> <span class="value">300</span>             <span class="comment"># Cache TTL in seconds</span></div>
+
+    <ul>
+        <li><strong>grep_strategy</strong> — <code>memory</code> passes grep through to bash unchanged. <code>vector</code> intercepts grep and runs semantic search. <code>hybrid</code> runs bash grep first, falls back to semantic if no results.</li>
+        <li><strong>workspace</strong> — When true, agents can write files to <code>/workspace/</code>. Requires a persistent volume in production (see <a href="deploy.html">Deploy Guide</a>).</li>
+        <li><strong>session_state</strong> — When true, <code>cd</code> persists across tool calls within a session.</li>
+    </ul>
+
+    <h3>collect</h3>
+
+    <p>Feedback collection tools. Agents submit structured data based on a schema you define.</p>
+
+    <div class="code-block"><span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">submit-feedback</span>
+    <span class="key">type:</span> <span class="value">collect</span>
+    <span class="key">description:</span> <span class="value">Report search quality or broken links</span>
+    <span class="key">response:</span> <span class="value">Thanks for the feedback!</span>
+    <span class="key">schema:</span>
+      <span class="key">rating:</span>
+        <span class="key">type:</span> <span class="value">enum</span>
+        <span class="key">description:</span> <span class="value">How helpful was the result?</span>
+        <span class="key">required:</span> <span class="value">true</span>
+        <span class="key">values:</span> [<span class="value">helpful</span>, <span class="value">somewhat</span>, <span class="value">not_helpful</span>]
+      <span class="key">comment:</span>
+        <span class="key">type:</span> <span class="value">string</span>
+        <span class="key">description:</span> <span class="value">Optional details</span></div>
+
+    <h2>embedding</h2>
+
+    <p>Required when using search tools. Configures how content is embedded for vector search.</p>
+
+    <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>                    <span class="comment"># Currently only openai is supported</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>       <span class="comment"># OpenAI embedding model</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>                    <span class="comment"># Vector dimensions (must match model)</span></div>
+
+    <h2>indexing</h2>
+
+    <p>Required when using search tools. Controls automatic reindexing behavior.</p>
+
+    <div class="code-block"><span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>                  <span class="comment"># Enable daily automatic reindexing</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>                <span class="comment"># Hour (0-23 UTC) to run daily reindex</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span>           <span class="comment"># Re-embed chunks older than this</span></div>
+
+    <h2>webhook</h2>
+
+    <p>Optional. Triggers targeted reindexing when you push to GitHub.</p>
+
+    <div class="code-block"><span class="key">webhook:</span>
+  <span class="key">repo_sources:</span>                         <span class="comment"># Map GitHub repo to source names</span>
+    <span class="value">"your-org/your-repo"</span>: [<span class="value">docs</span>]
+  <span class="key">path_triggers:</span>                        <span class="comment"># Only reindex when these paths change</span>
+    <span class="key">docs:</span> [<span class="value">"docs/"</span>]</div>
+
+    <p>Point a GitHub webhook at <code>https://your-server/webhooks/github</code> with the <code>push</code> event. Set <code>GITHUB_WEBHOOK_SECRET</code> to match the webhook secret.</p>
+
+    <h2>Example Configs</h2>
+
+    <h3>Bash-only (no database)</h3>
+
+    <p>The simplest setup. No API keys, no database. Agents explore docs with shell commands.</p>
+
+    <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">my-docs</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>
+
+<span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">path:</span> <span class="value">./docs</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.md"</span>, <span class="value">"**/*.mdx"</span>]
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span>
+
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">explore-docs</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore project documentation</span>
+    <span class="key">sources:</span> [<span class="value">docs</span>]
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span></div>
+
+    <h3>Full stack with semantic search</h3>
+
+    <p>Bash exploration plus RAG search. Requires Postgres and an OpenAI API key.</p>
+
+    <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">my-docs</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>
+
+<span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>, <span class="value">"**/*.md"</span>]
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span>
+
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-docs</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Semantic search over documentation</span>
+    <span class="key">source:</span> <span class="value">docs</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
+
+  - <span class="key">name:</span> <span class="value">explore-docs</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore documentation with shell commands</span>
+    <span class="key">sources:</span> [<span class="value">docs</span>]
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span>
+      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>
+      <span class="key">workspace:</span> <span class="value">true</span>
+
+<span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>
+
+<span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
+
+    <h3>Multi-repo</h3>
+
+    <p>Index docs from multiple repositories into a single Pathfinder instance.</p>
+
+    <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">platform-docs</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>
+
+<span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">api-docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/api.git</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.md"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
+
+  - <span class="key">name:</span> <span class="value">sdk-docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/sdk.git</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
+
+  - <span class="key">name:</span> <span class="value">sdk-source</span>
+    <span class="key">type:</span> <span class="value">code</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/sdk.git</span>
+    <span class="key">path:</span> <span class="value">src/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.ts"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_lines:</span> <span class="value">100</span>, <span class="key">overlap_lines:</span> <span class="value">10</span> }
+
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-api</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search API documentation</span>
+    <span class="key">source:</span> <span class="value">api-docs</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
+
+  - <span class="key">name:</span> <span class="value">search-sdk</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search SDK documentation and source</span>
+    <span class="key">source:</span> <span class="value">sdk-docs</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
+
+  - <span class="key">name:</span> <span class="value">explore-all</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore all documentation and source</span>
+    <span class="key">sources:</span> [<span class="value">api-docs</span>, <span class="value">sdk-docs</span>, <span class="value">sdk-source</span>]
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span>
+      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>
+
+<span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>
+
+<span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
+
+    <h3>Multi-version</h3>
+
+    <p>Serve multiple versions of the same docs. Agents can filter search results by version.</p>
+
+    <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">versioned-docs</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>
+
+<span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs-v1</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
+    <span class="key">branch:</span> <span class="value">v1</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">version:</span> <span class="value">v1</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
+
+  - <span class="key">name:</span> <span class="value">docs-v2</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
+    <span class="key">branch:</span> <span class="value">v2</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">version:</span> <span class="value">v2</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
+
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-docs</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search docs (specify version parameter to filter)</span>
+    <span class="key">source:</span> <span class="value">docs-v2</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
+
+  - <span class="key">name:</span> <span class="value">explore-docs</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore documentation filesystem</span>
+    <span class="key">sources:</span> [<span class="value">docs-v1</span>, <span class="value">docs-v2</span>]
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span>
+
+<span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>
+
+<span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
+
+</article>
+
+<footer>
+  <div class="container">
+    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; MIT License</div>
+    <ul class="footer-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
+        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
+    </ul>
+  </div>
+</footer>
+
+</body>
+</html>
