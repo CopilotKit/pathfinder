@@ -23,6 +23,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist/ ./dist/
 COPY pathfinder.yaml ./pathfinder.yaml
+COPY pathfinder-docs.yaml ./pathfinder-docs.yaml
 COPY pathfinder.example.yaml ./pathfinder.example.yaml
 COPY .env.example ./.env.example
 CMD ["node", "dist/cli.js", "serve"]
