@@ -351,6 +351,47 @@ app.get("/health", async (_req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// llms.txt and llms-full.txt — cached, invalidated on reindex
+// ---------------------------------------------------------------------------
+
+let cachedLlmsTxt: string | null = null;
+let cachedLlmsFullTxt: string | null = null;
+
+app.get('/llms.txt', async (_req: Request, res: Response) => {
+    try {
+        if (!cachedLlmsTxt) {
+            const chunks = await getAllChunksForLlms();
+            cachedLlmsTxt = generateLlmsTxt(chunks, getServerConfig().server.name);
+        }
+        res.type('text/plain').send(cachedLlmsTxt);
+    } catch (err) {
+        console.error("[llms.txt] Generation failed:", err);
+        res.status(503).type('text/plain').send('# Service unavailable\nIndex not ready.');
+    }
+});
+
+app.get('/llms-full.txt', async (_req: Request, res: Response) => {
+    try {
+        if (!cachedLlmsFullTxt) {
+            const chunks = await getAllChunksForLlms();
+            cachedLlmsFullTxt = generateLlmsFullTxt(chunks);
+        }
+        res.type('text/plain').send(cachedLlmsFullTxt);
+    } catch (err) {
+        console.error("[llms-full.txt] Generation failed:", err);
+        res.status(503).type('text/plain').send('Service unavailable — index not ready.');
+    }
+});
+
+// ---------------------------------------------------------------------------
+// skill.md — dynamically generated from server config
+// ---------------------------------------------------------------------------
+
+app.get('/.well-known/skills/default/skill.md', (_req: Request, res: Response) => {
+    res.type('text/markdown').send(generateSkillMd(getServerConfig()));
+});
+
+// ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
@@ -422,6 +463,9 @@ export async function startServer(options?: ServerOptions): Promise<void> {
         webhookHandler = createWebhookHandler(orchestrator);
 
         orchestrator.onReindexComplete = (sourceNames) => {
+            // Invalidate llms.txt caches so next request regenerates
+            cachedLlmsTxt = null;
+            cachedLlmsFullTxt = null;
             refreshBashInstances(sourceNames, "reindex").catch((err) => {
                 console.error("[reindex] Bash refresh failed:", err);
             });
