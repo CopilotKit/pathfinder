@@ -73,11 +73,11 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .hero .subtitle { font-size: 1.2rem; color: var(--text-secondary); max-width: 700px; line-height: 1.7; margin-bottom: 40px; }
 
 /* Install box */
-.install-box { display: inline-flex; align-items:center; gap: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 0.9rem; margin-bottom: 48px; }
+.install-box { display: inline-flex; flex-direction: column; gap: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 0.9rem; margin-bottom: 48px; }
 .install-box .prompt { color: var(--accent); }
 .install-box .cmd { color: var(--text-primary); }
-.install-box .copy-btn { background:none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; color: var(--text-dim); cursor:pointer; font-size: 12px; font-family: var(--mono); }
-.install-box .copy-btn:hover { color: var(--text-secondary); border-color: var(--text-dim); }
+.install-line { display: flex; align-items: center; gap: 12px; }
+.install-divider { color: var(--text-dim); font-size: 0.75rem; text-align: center; padding: 4px 0; }
 
 /* Demo grid */
 .demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1120px; }
@@ -169,6 +169,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <a href="#features">Features</a>
         <a href="#comparison">vs ChromaFS</a>
         <a href="#migration">Migrate</a>
+        <a href="usage.html">Docs</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
   </div>
@@ -180,9 +181,15 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <p class="subtitle">Your AI already knows find, grep, and cat. Give it a virtual filesystem over your docs — plus semantic search when it needs meaning, not just matches. Self-hosted. Open source. Zero lock-in.</p>
 
     <div class="install-box">
-        <span class="prompt">$</span>
-        <span class="cmd">npm install @copilotkit/pathfinder</span>
-        <button class="copy-btn">Copy</button>
+        <div class="install-line">
+            <span class="prompt">$</span>
+            <span class="cmd">npx @copilotkit/pathfinder init</span>
+        </div>
+        <div class="install-divider">or</div>
+        <div class="install-line">
+            <span class="prompt">$</span>
+            <span class="cmd">docker pull ghcr.io/copilotkit/pathfinder</span>
+        </div>
     </div>
 
     <div class="demo-grid">
@@ -366,26 +373,6 @@ async function runTerminal() {
     await new Promise(r => setTimeout(r, 3000));
     runTerminal(); // loop
 }
-
-// Copy button
-document.querySelector('.copy-btn').addEventListener('click', async function() {
-    const text = 'npm install @copilotkit/pathfinder';
-    try {
-        await navigator.clipboard.writeText(text);
-        this.textContent = 'Copied!';
-    } catch {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        this.textContent = 'Copied!';
-    }
-    setTimeout(() => this.textContent = 'Copy', 2000);
-});
 
 // Start animation when visible
 const observer = new IntersectionObserver(entries => {
