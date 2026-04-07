@@ -7,6 +7,7 @@ import { parseGrepCommand, parseQmdCommand, vectorGrep } from './bash-grep.js';
 import { parseRelatedCommand, handleRelatedCommand, formatGrepMissSuggestion } from './bash-related.js';
 import { searchChunks, textSearchChunks } from '../../db/queries.js';
 import type { EmbeddingClient } from '../../indexing/embeddings.js';
+import type { BashTelemetry } from './bash-telemetry.js';
 
 interface ExecResult {
     stdout: string;
@@ -39,6 +40,8 @@ export interface BashToolOptions {
     embeddingClient?: EmbeddingClient;
     /** Names of search tools, used for grep-miss suggestions. */
     searchToolNames?: string[];
+    /** Telemetry recorder for commands, file accesses, and grep misses. */
+    telemetry?: BashTelemetry;
 }
 
 export function registerBashTool(
@@ -141,10 +144,21 @@ export function registerBashTool(
 
                 const result = await bash.exec(command, { cwd });
 
+                // Record command telemetry (fire-and-forget)
+                options?.telemetry?.recordCommand(command);
+
+                // Detect file access commands (cat/head/tail) for telemetry
+                const fileAccessMatch = command.match(/^(cat|head|tail)\s+(.+)/);
+                if (fileAccessMatch) {
+                    const filePath = fileAccessMatch[2].trim().replace(/^["']|["']$/g, '');
+                    options?.telemetry?.recordFileAccess(filePath, command);
+                }
+
                 // Append grep-miss suggestion when grep returns no results
                 if (options?.searchToolNames && options.searchToolNames.length > 0) {
                     const parsed = parseGrepCommand(command);
                     if (parsed.isGrep && result.exitCode === 1 && !result.stdout.trim()) {
+                        options?.telemetry?.recordGrepMiss(parsed.pattern ?? command, command);
                         const suggestion = formatGrepMissSuggestion(options.searchToolNames);
                         return {
                             content: [{ type: "text" as const, text: formatBashResult(command, { ...result, stderr: (result.stderr || '') + suggestion }) }],

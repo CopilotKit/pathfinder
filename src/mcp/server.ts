@@ -6,6 +6,7 @@ import { registerSearchTool } from './tools/search.js';
 import { registerCollectTool } from './tools/collect.js';
 import { registerBashTool } from './tools/bash.js';
 import { SessionStateManager } from './tools/bash-session.js';
+import type { BashTelemetry } from './tools/bash-telemetry.js';
 
 /**
  * Creates a new McpServer instance with all tools registered.
@@ -16,6 +17,7 @@ export function createMcpServer(
     bashInstances?: Map<string, Bash>,
     sessionStateManager?: SessionStateManager,
     getSessionId?: () => string | undefined,
+    telemetry?: BashTelemetry,
 ): McpServer {
     const cfg = getConfig();
     const serverCfg = getServerConfig();
@@ -67,6 +69,7 @@ export function createMcpServer(
                     getSessionState,
                     embeddingClient: needsEmbedding ? getEmbeddingClient() : undefined,
                     searchToolNames,
+                    telemetry,
                 });
                 break;
             }

@@ -13,6 +13,8 @@ import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
 import { SessionStateManager } from "./mcp/tools/bash-session.js";
+import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
+import { insertCollectedData } from "./db/queries.js";
 
 export interface ServerOptions {
     port?: number;
@@ -40,6 +42,8 @@ let orchestratorRef: IndexingOrchestrator | null = null;
 const startedAt = new Date();
 const bashInstances = new Map<string, Bash>();
 const sessionStateManager = new SessionStateManager();
+let bashTelemetry: BashTelemetry | undefined;
+let telemetryFlushInterval: ReturnType<typeof setInterval> | undefined;
 
 async function refreshBashInstances(sourceNames: string[], logPrefix = "webhook"): Promise<void> {
     const serverCfg = getServerConfig();
@@ -203,7 +207,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
                     console.log(`[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`);
                 }
             };
-            const server = createMcpServer(bashInstances, sessionStateManager, () => transport.sessionId ?? undefined);
+            const server = createMcpServer(bashInstances, sessionStateManager, () => transport.sessionId ?? undefined, bashTelemetry);
             await server.connect(transport);
             await transport.handleRequest(req, res, req.body);
             return;
@@ -333,6 +337,15 @@ export async function startServer(options?: ServerOptions): Promise<void> {
         console.log("[startup] Initializing database schema...");
         await initializeSchema();
         console.log("[startup] Database schema ready.");
+
+        // Set up bash telemetry with periodic flush
+        bashTelemetry = new BashTelemetry(insertCollectedData);
+        telemetryFlushInterval = setInterval(() => {
+            bashTelemetry?.flush().catch(err =>
+                console.error('[telemetry] Periodic flush failed:', err instanceof Error ? err.message : String(err)),
+            );
+        }, 60_000);
+        console.log("[startup] Bash telemetry enabled (60s flush interval).");
     }
 
     // Log active sources from config
@@ -397,9 +410,16 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     async function shutdown(signal: string): Promise<void> {
         console.log(`\n[shutdown] Received ${signal}, shutting down...`);
         try {
+            if (telemetryFlushInterval) {
+                clearInterval(telemetryFlushInterval);
+            }
+            if (bashTelemetry) {
+                await bashTelemetry.flush();
+                console.log("[shutdown] Telemetry flushed.");
+            }
             await closePool();
         } catch (err) {
-            console.error("[shutdown] Error closing pool:", err);
+            console.error("[shutdown] Error during shutdown:", err);
         }
         process.exit(0);
     }
