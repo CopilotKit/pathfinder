@@ -276,7 +276,7 @@ https://docs.example.com/getting-started</div>
 
     <h3>collect</h3>
 
-    <p>Feedback collection tools. Agents submit structured data based on a schema you define.</p>
+    <p>Data collection tools. Agents submit structured data based on a JSON schema you define. Submitted data is stored in the local PostgreSQL database in the <code>collected_data</code> table, with a <code>tool_name</code> column and a <code>data</code> JSONB column containing the fields from your schema. What you do with the collected data is up to you — query it directly, build dashboards, pipe it to analytics, or export it. Pathfinder stores it; you decide how to use it.</p>
 
     <div class="code-block"><span class="key">tools:</span>
   - <span class="key">name:</span> <span class="value">submit-feedback</span>
