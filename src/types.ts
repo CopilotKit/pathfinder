@@ -13,8 +13,8 @@ export const UrlDerivationConfigSchema = z.object({
 });
 
 // ChunkConfig field applicability by source type:
-//   markdown/raw-text: target_tokens, overlap_tokens
-//   code:              target_lines, overlap_lines
+//   markdown/raw-text/html: target_tokens, overlap_tokens
+//   code:                   target_lines, overlap_lines
 export const ChunkConfigSchema = z.object({
     target_tokens: z.number().int().positive().optional(),
     overlap_tokens: z.number().int().nonnegative().optional(),
@@ -24,7 +24,7 @@ export const ChunkConfigSchema = z.object({
 
 export const SourceConfigSchema = z.object({
     name: z.string().min(1),
-    type: z.enum(['markdown', 'code', 'raw-text']),
+    type: z.enum(['markdown', 'code', 'raw-text', 'html']),
     repo: z.string().url().optional(),
     branch: z.string().optional(),
     path: z.string().min(1),
