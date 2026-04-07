@@ -86,4 +86,25 @@ describe('WorkspaceManager', () => {
         const ok = mgr.writeFile('sess-1', 'subdir/../../../etc/passwd', 'pwned');
         expect(ok).toBe(false);
     });
+
+    it('writes file to subdirectory (creates intermediate dirs)', () => {
+        mgr.ensureSession('sess-1');
+        const ok = mgr.writeFile('sess-1', 'deep/nested/file.txt', 'content');
+        expect(ok).toBe(true);
+        expect(mgr.readFile('sess-1', 'deep/nested/file.txt')).toBe('content');
+    });
+
+    it('returns null for nonexistent file', () => {
+        mgr.ensureSession('sess-1');
+        expect(mgr.readFile('sess-1', 'missing.txt')).toBeNull();
+    });
+
+    it('rejects write to uninitialized session', () => {
+        const ok = mgr.writeFile('no-session', 'file.txt', 'data');
+        expect(ok).toBe(false);
+    });
+
+    it('cleanupAll with no sessions is a no-op', () => {
+        expect(() => mgr.cleanupAll()).not.toThrow();
+    });
 });

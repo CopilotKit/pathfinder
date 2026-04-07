@@ -59,6 +59,40 @@ describe('Search enhancements schema', () => {
         });
         expect(result.success).toBe(true);
     });
+
+    it('accepts min_score of exactly 0', () => {
+        const result = SearchToolConfigSchema.safeParse({
+            name: 'test',
+            type: 'search',
+            description: 'test search',
+            source: 'docs',
+            default_limit: 5,
+            max_limit: 20,
+            result_format: 'docs',
+            min_score: 0,
+        });
+        expect(result.success).toBe(true);
+        if (result.success) {
+            expect(result.data.min_score).toBe(0);
+        }
+    });
+
+    it('accepts min_score of exactly 1', () => {
+        const result = SearchToolConfigSchema.safeParse({
+            name: 'test',
+            type: 'search',
+            description: 'test search',
+            source: 'docs',
+            default_limit: 5,
+            max_limit: 20,
+            result_format: 'docs',
+            min_score: 1,
+        });
+        expect(result.success).toBe(true);
+        if (result.success) {
+            expect(result.data.min_score).toBe(1);
+        }
+    });
 });
 
 describe('Version filtering schema', () => {

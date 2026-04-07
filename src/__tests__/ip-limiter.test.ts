@@ -45,4 +45,18 @@ describe('IpSessionLimiter', () => {
     it('returns 0 for unknown IPs', () => {
         expect(limiter.getSessionCount('9.9.9.9')).toBe(0);
     });
+
+    it('does not double-count duplicate session IDs', () => {
+        limiter.tryAdd('1.2.3.4', 'sess-1');
+        limiter.tryAdd('1.2.3.4', 'sess-1');
+        expect(limiter.getSessionCount('1.2.3.4')).toBe(1);
+    });
+
+    it('getMax returns configured limit', () => {
+        expect(limiter.getMax()).toBe(3);
+    });
+
+    it('remove with unknown session is a no-op', () => {
+        expect(() => limiter.remove('nonexistent')).not.toThrow();
+    });
 });
