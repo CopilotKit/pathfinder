@@ -34,7 +34,7 @@ This documentation is indexed by a live Pathfinder instance. Connect your agent 
 
 ```bash
 # Claude Code
-claude mcp add pathfinder-docs --transport http https://pathfinder-docs-production.up.railway.app/mcp
+claude mcp add pathfinder-docs --transport http https://mcp.pathfinder.copilotkit.dev/mcp
 ```
 
 ```json
@@ -42,7 +42,7 @@ claude mcp add pathfinder-docs --transport http https://pathfinder-docs-producti
 {
   "mcpServers": {
     "pathfinder-docs": {
-      "url": "https://pathfinder-docs-production.up.railway.app/mcp"
+      "url": "https://mcp.pathfinder.copilotkit.dev/mcp"
     }
   }
 }
