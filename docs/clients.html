@@ -145,10 +145,24 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
     <div class="client-card">
         <h3>Claude Desktop</h3>
-        <div class="config-path">~/.claude/mcp.json</div>
-        <p>Claude Desktop and Claude Code both use the same MCP config file.</p>
+        <div class="config-path">~/Library/Application Support/Claude/claude_desktop_config.json (macOS)</div>
+        <p>Claude Desktop uses its own config file with <code>mcpServers</code> as the top-level key.</p>
         <div class="code-block">{
   <span class="key">"mcpServers"</span>: {
+    <span class="key">"docs"</span>: {
+      <span class="key">"type"</span>: <span class="value">"http"</span>,
+      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
+    }
+  }
+}</div>
+    </div>
+
+    <div class="client-card">
+        <h3>Claude Code</h3>
+        <div class="config-path">~/.claude/mcp.json</div>
+        <p>Claude Code uses a separate config file with <code>mcp-servers</code> as the key.</p>
+        <div class="code-block">{
+  <span class="key">"mcp-servers"</span>: {
     <span class="key">"docs"</span>: {
       <span class="key">"type"</span>: <span class="value">"http"</span>,
       <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>

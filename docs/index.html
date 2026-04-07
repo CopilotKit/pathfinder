@@ -60,6 +60,7 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
 .nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
 .nav-links a:hover { color: var(--text-primary); }
+.nav-links a.active { color: var(--accent); }
 .nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
 .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
 
@@ -166,7 +167,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
   <div class="container">
     <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
-        <a href="index.html">Home</a>
+        <a href="index.html" class="active">Home</a>
         <a href="usage.html">Docs</a>
         <a href="config.html">Config</a>
         <a href="deploy.html">Deploy</a>

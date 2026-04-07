@@ -171,6 +171,18 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         </div>
     </div>
 
+    <h2>Auto-Generated Endpoints</h2>
+
+    <p>Pathfinder automatically generates and serves several discovery endpoints. These are cached and invalidated whenever sources are reindexed.</p>
+
+    <ul>
+        <li><strong><code>/llms.txt</code></strong> — A concise index of all indexed documentation, following the <a href="https://llmstxt.org/">llms.txt convention</a>. Useful for agents that want a quick overview of available content.</li>
+        <li><strong><code>/llms-full.txt</code></strong> — The complete content of all indexed docs in plain text. Larger, but gives agents full context without multiple tool calls.</li>
+        <li><strong><code>/.well-known/skills/default/skill.md</code></strong> — A dynamic agent capability description that reflects your current tool configuration. Agents can read this to understand what Pathfinder can do.</li>
+    </ul>
+
+    <p>All HTTP responses include a <code>Link</code> header pointing to <code>/llms.txt</code>, so clients that follow the convention can discover the index automatically.</p>
+
     <h2>Learn More</h2>
 
     <div class="quick-start-paths">

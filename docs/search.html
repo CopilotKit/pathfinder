@@ -220,11 +220,12 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <tbody>
             <tr><td><code>query</code></td><td>string</td><td>-</td><td>The search query (required)</td></tr>
             <tr><td><code>limit</code></td><td>number</td><td>Config default</td><td>Max results to return (capped at <code>max_limit</code>)</td></tr>
-            <tr><td><code>result_format</code></td><td>string</td><td>Config default</td><td>Output format: <code>docs</code>, <code>code</code>, or <code>raw</code></td></tr>
             <tr><td><code>min_score</code></td><td>number</td><td>Config default</td><td>Minimum cosine similarity (0-1). Results below this threshold are filtered out.</td></tr>
             <tr><td><code>version</code></td><td>string</td><td>-</td><td>Filter results to a specific version tag (matches the <code>version</code> field on sources)</td></tr>
         </tbody>
     </table>
+
+    <p><strong>Note:</strong> The output format (<code>docs</code>, <code>code</code>, or <code>raw</code>) is configured at the tool level via <code>result_format</code> in your <a href="config.html">pathfinder.yaml</a>, not as a per-query parameter.</p>
 
     <h2>Configuring Search</h2>
 
