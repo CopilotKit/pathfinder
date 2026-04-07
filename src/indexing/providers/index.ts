@@ -17,3 +17,10 @@ export function getProvider(type: string): DataProviderFactory {
 }
 
 export type { DataProvider, DataProviderFactory, ProviderOptions, ContentItem, AcquisitionResult } from './types.js';
+
+// Register built-in providers
+import { FileDataProvider } from './file.js';
+
+for (const type of ['markdown', 'code', 'raw-text', 'html']) {
+    registerProvider(type, (config, options) => new FileDataProvider(config, options));
+}
