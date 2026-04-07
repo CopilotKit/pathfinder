@@ -43,7 +43,6 @@ CREATE TABLE IF NOT EXISTS index_state (
 CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_chunks_source_name ON chunks (source_name);
 CREATE INDEX IF NOT EXISTS idx_chunks_repo_url ON chunks (repo_url);
-CREATE INDEX IF NOT EXISTS idx_chunks_version ON chunks (version);
 
 CREATE TABLE IF NOT EXISTS collected_data (
     id          SERIAL PRIMARY KEY,
