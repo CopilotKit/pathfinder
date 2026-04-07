@@ -91,7 +91,10 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .quick-start-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 32px; }
 .path-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
 .path-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 18px; }
+.path-card h3 a { color: var(--accent); text-decoration: none; }
+.path-card h3 a:hover { text-decoration: underline; }
 .path-card .subtitle { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
+.path-card .subtitle code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-family: var(--mono); font-size: 12px; color: var(--accent); }
 
 /* Env table */
 .env-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
@@ -135,6 +138,10 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <div class="nav-links">
         <a href="index.html">Home</a>
         <a href="usage.html" class="active">Docs</a>
+        <a href="config.html">Config</a>
+        <a href="deploy.html">Deploy</a>
+        <a href="clients.html">Clients</a>
+        <a href="search.html">Search</a>
         <a href="migrate-from-mintlify.html">Migrate</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
@@ -164,144 +171,30 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         </div>
     </div>
 
-    <h2>Configuration</h2>
+    <h2>Learn More</h2>
 
-    <p>Pathfinder is configured via a single <code>pathfinder.yaml</code> file. Here is an annotated example:</p>
-
-    <div class="code-block"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">my-project-docs</span>
-
-<span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/your-org/your-repo.git</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>, <span class="value">"**/*.md"</span>]
-    <span class="key">chunk:</span>
-      <span class="key">target_tokens:</span> <span class="value">600</span>
-      <span class="key">overlap_tokens:</span> <span class="value">50</span>
-
-<span class="key">tools:</span>
-  <span class="comment"># Bash tools work without any database or API keys</span>
-  - <span class="key">name:</span> <span class="value">explore-docs</span>
-    <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">sources:</span> [<span class="value">docs</span>]
-    <span class="key">bash:</span>
-      <span class="key">session_state:</span> <span class="value">true</span>
-      <span class="key">grep_strategy:</span> <span class="value">passthrough</span>  <span class="comment"># change to hybrid or vector for semantic grep</span>
-
-  <span class="comment"># Search tools require Postgres + OpenAI embeddings</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">source:</span> <span class="value">docs</span>
-    <span class="key">default_limit:</span> <span class="value">5</span></div>
-
-    <p>Bash tools (<code>find</code>, <code>grep</code>, <code>cat</code>, <code>ls</code>, <code>head</code>) work immediately with no external dependencies. Search tools require a Postgres database with pgvector and an OpenAI API key for computing embeddings.</p>
-
-    <h2>Adding Semantic Search</h2>
-
-    <p>To enable search tools and vector-backed grep, add Postgres and an OpenAI API key:</p>
-
-    <h3>1. Set environment variables</h3>
-    <div class="code-block"><span class="key">DATABASE_URL</span>=<span class="value">postgresql://user:pass@localhost:5432/pathfinder</span>
-<span class="key">OPENAI_API_KEY</span>=<span class="value">sk-...</span></div>
-
-    <h3>2. Add embedding config to your YAML</h3>
-    <div class="code-block"><span class="key">embedding:</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
-  <span class="key">dimensions:</span> <span class="value">1536</span></div>
-
-    <h3>3. Add a search tool</h3>
-    <div class="code-block"><span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">source:</span> <span class="value">docs</span></div>
-
-    <h3>4. Use docker-compose for the full stack</h3>
-    <div class="code-block"><span class="comment"># docker-compose.yml</span>
-<span class="key">services:</span>
-  <span class="key">pathfinder:</span>
-    <span class="key">image:</span> <span class="value">ghcr.io/copilotkit/pathfinder</span>
-    <span class="key">ports:</span>
-      - <span class="value">"3001:3001"</span>
-    <span class="key">volumes:</span>
-      - <span class="value">./pathfinder.yaml:/app/pathfinder.yaml</span>
-      - <span class="value">./docs:/app/docs</span>
-    <span class="key">environment:</span>
-      - <span class="value">DATABASE_URL=postgresql://pathfinder:pathfinder@postgres:5432/pathfinder</span>
-      - <span class="value">OPENAI_API_KEY=${OPENAI_API_KEY}</span>
-    <span class="key">depends_on:</span>
-      - <span class="value">postgres</span>
-
-  <span class="key">postgres:</span>
-    <span class="key">image:</span> <span class="value">pgvector/pgvector:pg16</span>
-    <span class="key">environment:</span>
-      <span class="key">POSTGRES_USER:</span> <span class="value">pathfinder</span>
-      <span class="key">POSTGRES_PASSWORD:</span> <span class="value">pathfinder</span>
-      <span class="key">POSTGRES_DB:</span> <span class="value">pathfinder</span>
-    <span class="key">volumes:</span>
-      - <span class="value">pgdata:/var/lib/postgresql/data</span>
-
-<span class="key">volumes:</span>
-  <span class="key">pgdata:</span></div>
-
-    <h2>MCP Client Setup</h2>
-
-    <p>Point your AI agent's MCP configuration at Pathfinder. The server exposes a single HTTP endpoint.</p>
-
-    <h3>Claude Desktop</h3>
-    <p>Add to <code>~/.claude/mcp.json</code>:</p>
-    <div class="code-block">{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"docs"</span>: {
-      <span class="key">"type"</span>: <span class="value">"http"</span>,
-      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
-    }
-  }
-}</div>
-
-    <h3>Cursor</h3>
-    <p>Add to <code>.cursor/mcp.json</code>:</p>
-    <div class="code-block">{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"docs"</span>: {
-      <span class="key">"type"</span>: <span class="value">"http"</span>,
-      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
-    }
-  }
-}</div>
-
-    <h2>Environment Variables</h2>
-
-    <table class="env-table">
-        <thead>
-            <tr>
-                <th>Variable</th>
-                <th>Required</th>
-                <th>Description</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr><td><code>DATABASE_URL</code></td><td>For search tools</td><td>Postgres connection string</td></tr>
-            <tr><td><code>OPENAI_API_KEY</code></td><td>For search tools</td><td>OpenAI API key for embeddings</td></tr>
-            <tr><td><code>GITHUB_TOKEN</code></td><td>For private repos</td><td>GitHub PAT for cloning</td></tr>
-            <tr><td><code>PORT</code></td><td>No (default 3001)</td><td>Server port</td></tr>
-            <tr><td><code>PATHFINDER_CONFIG</code></td><td>No</td><td>Path to config file</td></tr>
-        </tbody>
-    </table>
-
-    <h2>qmd</h2>
-
-    <p>When <code>grep_strategy</code> is set to <code>vector</code> or <code>hybrid</code> in your bash tool config, Pathfinder exposes a <code>qmd</code> command inside the bash sandbox. This is a semantic search command that agents can use alongside regular shell tools.</p>
-
-    <div class="code-block"><span class="cmd">$</span> qmd "how do I handle errors"
-/docs/guides/error-handling.mdx (0.94)
-/docs/reference/hooks.mdx (0.87)
-/docs/guides/streaming.mdx (0.81)</div>
-
-    <p><code>qmd</code> searches your embedded docs using vector similarity, returning ranked results with relevance scores. Regular <code>grep</code> passes through to real bash unchanged -- it is never intercepted or replaced.</p>
-
-    <p>When an agent runs <code>grep</code> and gets no results, Pathfinder appends a hint suggesting <code>qmd</code> as an alternative. This nudges agents toward semantic search when exact-match grep misses, without forcing a workflow change.</p>
+    <div class="quick-start-paths">
+        <div class="path-card">
+            <h3><a href="config.html">Configuration Reference</a></h3>
+            <p class="subtitle">Full annotated <code>pathfinder.yaml</code> — server, sources, tools, embedding, indexing, and webhooks. Includes example configs for bash-only, full-stack, multi-repo, and multi-version setups.</p>
+        </div>
+        <div class="path-card">
+            <h3><a href="deploy.html">Deployment Guide</a></h3>
+            <p class="subtitle">Docker, Docker Compose, Railway, and generic VPS deployment. Environment variables, volume mounts, and production setup.</p>
+        </div>
+        <div class="path-card">
+            <h3><a href="clients.html">MCP Client Setup</a></h3>
+            <p class="subtitle">Connect Claude Desktop, Cursor, Codex, VS Code (Continue), or any Streamable HTTP client to your Pathfinder instance.</p>
+        </div>
+        <div class="path-card">
+            <h3><a href="search.html">Search Features</a></h3>
+            <p class="subtitle">How semantic search works, the <code>qmd</code> command, related files, grep-miss suggestions, and search tool parameters.</p>
+        </div>
+        <div class="path-card">
+            <h3><a href="migrate-from-mintlify.html">Migrate from Mintlify</a></h3>
+            <p class="subtitle">Step-by-step guide from ChromaFS to Pathfinder. Concept mapping, walkthrough, and what's different.</p>
+        </div>
+    </div>
 
 </article>
 
