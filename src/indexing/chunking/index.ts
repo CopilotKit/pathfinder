@@ -26,3 +26,7 @@ registerChunker('markdown', chunkMarkdown);
 registerChunker('code', chunkCode);
 registerChunker('raw-text', chunkRawText);
 registerChunker('html', chunkHtml);
+
+import { chunkSlack } from './slack.js';
+
+registerChunker('slack', chunkSlack);
