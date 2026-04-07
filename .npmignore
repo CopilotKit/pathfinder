@@ -12,6 +12,9 @@ scripts/
 # Docs and website
 docs/
 
+# Claude Code plugin
+plugin/
+
 # CI/CD
 .github/
 
