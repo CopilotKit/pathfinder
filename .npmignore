@@ -21,7 +21,6 @@ docker-compose*.yml
 docker-compose*.yaml
 
 # Config examples and operations
-*.example.yaml
 mcp-docs.example.yaml
 pathfinder.yaml
 OPERATIONS.md
@@ -31,5 +30,6 @@ railway.toml
 .superpowers/
 
 # Dev files
-.env*
-!.env.example
+.env
+.env.local
+.env.*.local
