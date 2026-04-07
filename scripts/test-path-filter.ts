@@ -2,7 +2,7 @@
 //
 // Usage: npx tsx scripts/test-path-filter.ts
 
-import { globToRegex, matchesPatterns, hasLowSemanticValue } from '../src/indexing/source-indexer.js';
+import { globToRegex, matchesPatterns, hasLowSemanticValue } from '../src/indexing/utils.js';
 import type { SourceConfig } from '../src/types.js';
 
 let passed = 0;
