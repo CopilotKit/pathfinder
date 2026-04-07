@@ -23,12 +23,12 @@ describe('handleRelatedCommand', () => {
     ]);
 
     it('returns related files excluding self', async () => {
-        const result = await handleRelatedCommand('/quickstart.mdx', '# Quickstart', mockEmbed as any, mockSearch);
+        const result = await handleRelatedCommand('/docs/quickstart.mdx', '# Quickstart', mockEmbed as any, mockSearch);
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toContain('guides/related.mdx');
         expect(result.stdout).toContain('0.92');
         // Self file (quickstart.mdx) appears in header but NOT as a result line
-        expect(result.stdout).not.toMatch(/\d+\.\d+\s+\/quickstart\.mdx/);
+        expect(result.stdout).not.toMatch(/\d+\.\d+\s+\/docs\/quickstart\.mdx/);
     });
 
     it('returns error for missing file', async () => {

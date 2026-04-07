@@ -4,18 +4,22 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pathfinder — Agentic Docs Retrieval</title>
-<meta name="description" content="Your AI already knows find, grep, and cat. Give it a virtual filesystem over your docs — plus semantic search when it needs meaning, not just matches. Self-hosted. Open source. Zero lock-in.">
-<meta property="og:title" content="Pathfinder — Agentic Docs Retrieval">
-<meta property="og:description" content="Your AI already knows find, grep, and cat. Give it a virtual filesystem over your docs — plus semantic search when it needs meaning, not just matches.">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta name="description" content="Self-hosted MCP server with semantic search + filesystem exploration for AI agents. Open source, MIT licensed.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://pathfinder.copilotkit.dev">
-<meta property="og:site_name" content="Pathfinder">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Pathfinder — Agentic Docs Retrieval">
-<meta name="twitter:description" content="Your AI already knows find, grep, and cat. Give it a virtual filesystem over your docs — plus semantic search when it needs meaning, not just matches.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>">
+<meta property="og:url" content="https://pathfinder.copilotkit.dev/">
+<meta property="og:title" content="Pathfinder — Agentic docs retrieval for AI agents">
+<meta property="og:description" content="Self-hosted MCP server with semantic search + filesystem exploration. Your AI already knows find, grep, and cat.">
+<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pathfinder — Agentic docs retrieval for AI agents">
+<meta name="twitter:description" content="Give AI agents both semantic search and filesystem exploration over your docs. Open source, self-hosted, MIT licensed.">
+<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
     --bg-deep: #0a0a0f;
@@ -25,51 +29,59 @@
     --text-primary: #e8e8f0;
     --text-secondary: #8888a0;
     --text-dim: #555570;
-    --accent: #00cc66;
-    --accent-glow: rgba(0,204,102,0.15);
+    --accent: #00ccff;
+    --accent-dim: #00aadd;
+    --accent-glow: rgba(0,204,255,0.15);
     --blue: #4488ff;
     --purple: #aa66ff;
     --warning: #ffaa00;
-    --mono: 'JetBrains Mono', monospace;
-    --sans: 'Instrument Sans', system-ui, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
 body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
+code, pre, kbd, .demo-body, .install-command { font-feature-settings: "liga" 0, "calt" 0; }
 
 /* Noise overlay */
 body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
     background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
+/* Container */
+.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+
 /* Nav */
-nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 12px 32px; display:flex; align-items:center; justify-content:space-between;
-    background: rgba(10,10,15,0.8); backdrop-filter: blur(20px) saturate(1.8); border-bottom: 1px solid var(--border); }
-.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--accent); }
-.nav-brand span { color: var(--text-dim); }
-.nav-links { display:flex; gap: 24px; align-items:center; }
-.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 14px; transition: color 0.2s; }
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
+    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
+nav .container { display:flex; align-items:center; justify-content:space-between; }
+.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
+.nav-brand span { color: var(--accent); }
+.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
+.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
 .nav-links a:hover { color: var(--text-primary); }
-.nav-links .gh-btn { display:inline-flex; align-items:center; gap:6px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
-.nav-links .gh-btn:hover { border-color: var(--text-dim); }
+.nav-links a.active { color: var(--accent); }
+.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
+.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
 
 /* Hero */
-.hero { padding: 140px 32px 80px; max-width: 1000px; margin: 0 auto; text-align: center; }
-.badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-size: 13px; color: var(--text-secondary); margin-bottom: 32px; }
+.hero { padding: 140px 0 80px; max-width: 1120px; margin: 0 auto; padding-left: 2rem; padding-right: 2rem; }
+.badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 32px; }
 .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-.hero h1 { font-size: 52px; font-weight: 700; line-height: 1.15; margin-bottom: 20px; letter-spacing: -0.02em; }
+.hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; line-height: 1.08; margin-bottom: 24px; letter-spacing: -0.03em; }
 .hero h1 .accent { color: var(--accent); }
-.hero .subtitle { font-size: 18px; color: var(--text-secondary); max-width: 640px; margin: 0 auto 40px; }
+.hero .subtitle { font-size: 1.2rem; color: var(--text-secondary); max-width: 700px; line-height: 1.7; margin-bottom: 40px; }
 
 /* Install box */
-.install-box { display: inline-flex; align-items:center; gap: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 14px; margin-bottom: 48px; }
+.install-box { display: inline-flex; flex-direction: column; gap: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 0.9rem; margin-bottom: 48px; }
 .install-box .prompt { color: var(--accent); }
 .install-box .cmd { color: var(--text-primary); }
-.install-box .copy-btn { background:none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; color: var(--text-dim); cursor:pointer; font-size: 12px; }
-.install-box .copy-btn:hover { color: var(--text-secondary); border-color: var(--text-dim); }
+.install-line { display: flex; align-items: center; gap: 12px; }
+.install-divider { color: var(--text-dim); font-size: 0.75rem; text-align: center; padding: 4px 0; }
 
 /* Demo grid */
-.demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 900px; margin: 0 auto; }
+.demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1120px; }
 .demo-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-align: left; }
 .demo-header { padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--text-dim); display:flex; gap:8px; align-items:center; }
 .demo-header .dot-r { width:10px; height:10px; border-radius:50%; background:#ff5f57; }
@@ -84,20 +96,20 @@ nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 12px 32px; d
 @keyframes fadeInLine { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
 
 /* Features */
-.features { padding: 80px 32px; max-width: 1000px; margin: 0 auto; }
-.features h2 { text-align:center; font-size: 36px; margin-bottom: 12px; }
-.features .section-sub { text-align:center; color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
+.features { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; }
+.features h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
+.features .section-sub { color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
 .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; transition: transform 0.2s, border-color 0.2s; }
-.feature-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.feature-card:hover { transform: translateY(-2px); border-color: var(--accent-dim); }
 .feature-card .icon { font-size: 28px; margin-bottom: 12px; }
 .feature-card h3 { font-size: 16px; margin-bottom: 8px; }
 .feature-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
 
 /* Comparison */
-.comparison { padding: 80px 32px; max-width: 1000px; margin: 0 auto; }
-.comparison h2 { text-align:center; font-size: 36px; margin-bottom: 12px; }
-.comparison .section-sub { text-align:center; color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
+.comparison { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; }
+.comparison h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
+.comparison .section-sub { color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
 .comp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .comp-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
 .comp-table th.highlight-col { color: var(--accent); border-bottom-color: var(--accent); }
@@ -108,15 +120,19 @@ nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 12px 32px; d
 .comp-table .partial { color: var(--warning); }
 
 /* Migration CTA */
-.migration { padding: 80px 32px; max-width: 800px; margin: 0 auto; text-align: center; }
-.migration h2 { font-size: 36px; margin-bottom: 12px; }
+.migration { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; text-align: center; }
+.migration h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
 .migration .section-sub { color: var(--text-secondary); margin-bottom: 32px; font-size: 16px; }
-.migration .cta-btn { display: inline-flex; align-items:center; gap: 8px; padding: 14px 28px; background: var(--accent); color: var(--bg-deep); font-weight: 600; font-size: 15px; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; transition: opacity 0.2s; }
-.migration .cta-btn:hover { opacity: 0.9; }
+.migration .cta-btn { display: inline-flex; align-items:center; gap: 8px; padding: 14px 28px; background: var(--accent); color: var(--bg-deep); font-family: var(--mono); font-weight: 600; font-size: 0.875rem; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; transition: opacity 0.2s; }
+.migration .cta-btn:hover { opacity: 0.9; background: var(--accent-dim); }
 
 /* Footer */
-footer { padding: 40px 32px; border-top: 1px solid var(--border); text-align:center; color: var(--text-dim); font-size: 13px; }
-footer a { color: var(--text-secondary); text-decoration:none; }
+footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
+.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
+.footer-brand .prompt { color: var(--accent); }
+.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
+.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text-primary); }
 
 /* Responsive: Tablet */
 @media (max-width: 768px) {
@@ -127,10 +143,9 @@ footer a { color: var(--text-secondary); text-decoration:none; }
     .install-box { flex-wrap: wrap; justify-content: center; font-size: 12px; }
     .comp-table { font-size: 12px; }
     .comp-table th, .comp-table td { padding: 8px 10px; }
-    nav { padding: 12px 16px; }
-    .nav-links { gap: 12px; }
+    .nav-links { gap: 1rem; }
     .hero { padding: 120px 16px 60px; }
-    .features, .comparison, .migration { padding: 60px 16px; }
+    .hero, .features, .comparison, .migration { padding-left: 1rem; padding-right: 1rem; }
 }
 
 /* Responsive: Mobile */
@@ -138,35 +153,82 @@ footer a { color: var(--text-secondary); text-decoration:none; }
     .hero h1 { font-size: 28px; }
     .hero .subtitle { font-size: 14px; }
     .feature-grid { grid-template-columns: 1fr; }
-    .nav-links a:not(.gh-btn) { display: none; }
     .install-box { padding: 10px 14px; font-size: 11px; }
     .install-box .cmd { word-break: break-all; }
     .demo-body { font-size: 11px; min-height: 360px; }
-    .migration h2, .features h2, .comparison h2 { font-size: 28px; }
+    .migration h2, .features h2, .comparison h2 { font-size: 1.75rem; }
+}
+
+/* Hamburger menu */
+.hamburger { display:none; background:none; border:none; cursor:pointer; padding:0.5rem; z-index:101; }
+.hamburger span { display:block; width:22px; height:2px; background:var(--text-primary); margin:5px 0; transition: transform 0.3s, opacity 0.3s; border-radius:1px; }
+.hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.hamburger.open span:nth-child(2) { opacity:0; }
+.hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+.mobile-menu { display:none; position:fixed; top:57px; left:0; right:0; background:var(--bg-surface); border-bottom:1px solid var(--border); padding:1rem 2rem 1.5rem; z-index:99; flex-direction:column; gap:0.25rem; }
+.mobile-menu.open { display:flex; }
+@media (min-width: 769px) { .mobile-menu { display:none !important; } }
+.mobile-menu a { color:var(--text-secondary); text-decoration:none; font-size:1rem; font-weight:500; padding:0.6rem 0; border-bottom:1px solid var(--border); transition:color 0.2s; }
+.mobile-menu a:last-child { border-bottom:none; }
+.mobile-menu a:hover { color:var(--text-primary); }
+.mobile-menu a.active { color:var(--accent); }
+.mobile-menu .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; margin-top:0.5rem; padding:0.5rem 1rem; border:1px solid var(--border); border-radius:6px; width:fit-content; }
+.mobile-menu .gh-btn:hover { border-color:var(--text-dim); background:var(--bg-card); }
+@media (max-width: 768px) {
+    .hamburger { display:block; }
+    .nav-links { display:none !important; }
 }
 </style>
 </head>
 <body>
 
 <nav>
-    <div class="nav-brand"><span>$</span> pathfinder</div>
+  <div class="container">
+    <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
-        <a href="#features">Features</a>
-        <a href="#comparison">vs ChromaFS</a>
-        <a href="#migration">Migrate</a>
+        <a href="index.html" class="active">Home</a>
+        <a href="usage.html">Docs</a>
+        <a href="config.html">Config</a>
+        <a href="deploy.html">Deploy</a>
+        <a href="clients.html">Clients</a>
+        <a href="search.html">Search</a>
+        <a href="migrate-from-mintlify.html">Migrate</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
+    <button class="hamburger" aria-label="Menu">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+  </div>
 </nav>
 
+<div class="mobile-menu">
+    <a href="index.html" class="active">Home</a>
+    <a href="usage.html">Docs</a>
+    <a href="config.html">Config</a>
+    <a href="deploy.html">Deploy</a>
+    <a href="clients.html">Clients</a>
+    <a href="search.html">Search</a>
+    <a href="migrate-from-mintlify.html">Migrate</a>
+    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+</div>
+
 <section class="hero">
-    <div class="badge"><span class="dot"></span> Open Source &middot; MIT License</div>
-    <h1><span class="accent">Pathfinder</span><br>Agentic docs retrieval for AI agents</h1>
+    <div class="badge"><span class="dot"></span> pathfinder — docs retrieval built for AI agents</div>
+    <h1>The <span class="accent">agentic docs server</span> for AI agents</h1>
     <p class="subtitle">Your AI already knows find, grep, and cat. Give it a virtual filesystem over your docs — plus semantic search when it needs meaning, not just matches. Self-hosted. Open source. Zero lock-in.</p>
 
     <div class="install-box">
-        <span class="prompt">$</span>
-        <span class="cmd">git clone https://github.com/CopilotKit/pathfinder && cd pathfinder</span>
-        <button class="copy-btn">Copy</button>
+        <div class="install-line">
+            <span class="prompt">$</span>
+            <span class="cmd">npx @copilotkit/pathfinder init</span>
+        </div>
+        <div class="install-divider">or</div>
+        <div class="install-line">
+            <span class="prompt">$</span>
+            <span class="cmd">docker pull ghcr.io/copilotkit/pathfinder</span>
+        </div>
     </div>
 
     <div class="demo-grid">
@@ -242,7 +304,7 @@ footer a { color: var(--text-secondary); text-decoration:none; }
 
 <section class="comparison" id="comparison">
     <h2>Pathfinder vs ChromaFS</h2>
-    <p class="section-sub">Mintlify replaced RAG with a filesystem. We compose both.</p>
+    <p class="section-sub">Mintlify hides RAG behind a filesystem. We give agents both directly.</p>
 
     <table class="comp-table">
         <thead>
@@ -275,7 +337,14 @@ footer a { color: var(--text-secondary); text-decoration:none; }
 </section>
 
 <footer>
-    <p>Pathfinder is MIT Licensed &middot; <a href="https://github.com/CopilotKit/pathfinder">GitHub</a> &middot; <a href="https://github.com/CopilotKit/pathfinder">Docs</a> &middot; Built by <a href="https://copilotkit.ai">CopilotKit</a></p>
+  <div class="container">
+    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; Elastic License 2.0</div>
+    <ul class="footer-links">
+        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
+        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
+    </ul>
+  </div>
 </footer>
 
 <script>
@@ -289,18 +358,18 @@ const lines = [
     { type: 'output', text: '/docs/reference/hooks.mdx' },
     { type: 'output', text: '/docs/reference/config.mdx' },
     { type: 'pause', ms: 800 },
+    { type: 'prompt', text: '$ qmd "how do I handle errors"' },
+    { type: 'output', text: '/docs/guides/error-handling.mdx (0.94)' },
+    { type: 'output', text: '/docs/reference/hooks.mdx (0.87)' },
+    { type: 'output', text: '/docs/guides/streaming.mdx (0.81)' },
+    { type: 'pause', ms: 600 },
+    { type: 'prompt', text: '$ cat /docs/guides/error-handling.mdx' },
+    { type: 'output', text: '# Error Handling' },
+    { type: 'output', text: 'Wrap your action in a try/catch...' },
+    { type: 'pause', ms: 600 },
     { type: 'prompt', text: '$ grep -rl "useAction" /docs' },
     { type: 'output', text: '/docs/hooks/useAction.mdx' },
     { type: 'output', text: '/docs/guides/actions.mdx' },
-    { type: 'pause', ms: 600 },
-    { type: 'prompt', text: '$ related /docs/hooks/useAction.mdx' },
-    { type: 'output', text: '  0.92  /docs/guides/actions.mdx' },
-    { type: 'output', text: '  0.87  /code/src/hooks/useAction.ts' },
-    { type: 'output', text: '  0.81  /docs/reference/hooks.mdx' },
-    { type: 'pause', ms: 600 },
-    { type: 'prompt', text: '$ search-docs("async action handling")' },
-    { type: 'output', text: 'SNIPPET 1: /docs/guides/actions.mdx' },
-    { type: 'output', text: '  The useAction hook provides...' },
 ];
 
 async function typeText(el, text, speed = 30) {
@@ -344,13 +413,6 @@ async function runTerminal() {
     runTerminal(); // loop
 }
 
-// Copy button
-document.querySelector('.copy-btn').addEventListener('click', function() {
-    navigator.clipboard.writeText('git clone https://github.com/CopilotKit/pathfinder && cd pathfinder');
-    this.textContent = 'Copied!';
-    setTimeout(() => this.textContent = 'Copy', 2000);
-});
-
 // Start animation when visible
 const observer = new IntersectionObserver(entries => {
     if (entries[0].isIntersecting) {
@@ -361,5 +423,22 @@ const observer = new IntersectionObserver(entries => {
 observer.observe(terminal);
 </script>
 
+<script>
+(function(){
+  var btn=document.querySelector(".hamburger");
+  var menu=document.querySelector(".mobile-menu");
+  if(!btn||!menu)return;
+  btn.addEventListener("click",function(){
+    btn.classList.toggle("open");
+    menu.classList.toggle("open");
+  });
+  menu.addEventListener("click",function(e){
+    if(e.target.tagName==="A"){
+      btn.classList.remove("open");
+      menu.classList.remove("open");
+    }
+  });
+})();
+</script>
 </body>
 </html>

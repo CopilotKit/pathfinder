@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getting Started — Pathfinder</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta name="description" content="Install and configure Pathfinder — CLI or Docker. Add semantic search with Postgres and OpenAI when you're ready.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://pathfinder.copilotkit.dev/usage.html">
+<meta property="og:title" content="Getting Started with Pathfinder">
+<meta property="og:description" content="Two install paths. Same server. Choose what fits your workflow.">
+<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Getting Started with Pathfinder">
+<meta name="twitter:description" content="Install and configure Pathfinder — CLI or Docker.">
+<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+    --bg-deep: #0a0a0f;
+    --bg-surface: #111118;
+    --bg-card: #16161f;
+    --border: #222233;
+    --text-primary: #e8e8f0;
+    --text-secondary: #8888a0;
+    --text-dim: #555570;
+    --accent: #00ccff;
+    --accent-dim: #00aadd;
+    --accent-glow: rgba(0,204,255,0.15);
+    --blue: #4488ff;
+    --purple: #aa66ff;
+    --warning: #ffaa00;
+    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
+body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
+code, pre, kbd { font-feature-settings: "liga" 0, "calt" 0; }
+
+/* Noise overlay */
+body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+}
+
+/* Container */
+.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+
+/* Nav */
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
+    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
+nav .container { display:flex; align-items:center; justify-content:space-between; }
+.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
+.nav-brand span { color: var(--accent); }
+.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
+.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
+.nav-links a:hover { color: var(--text-primary); }
+.nav-links a.active { color: var(--accent); }
+.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
+.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+
+/* Sidebar */
+:root { --sb-width: 220px; }
+#page-sidebar {
+    position: fixed;
+    top: 60px;
+    right: 0;
+    width: var(--sb-width);
+    height: calc(100vh - 60px);
+    overflow-y: auto;
+    padding: 2rem 1.5rem 2rem 1.5rem;
+    border-left: 1px solid var(--border);
+}
+#page-sidebar .sb-title {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    margin-bottom: 0.75rem;
+}
+#page-sidebar a {
+    display: block;
+    padding: 0.25rem 0;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.15s;
+    line-height: 1.4;
+}
+#page-sidebar a:hover { color: var(--text-primary); }
+#page-sidebar a.active { color: var(--accent); }
+#page-sidebar a.sb-indent { padding-left: 0.75rem; font-size: 0.75rem; }
+
+/* Article layout */
+.article {
+    max-width: 860px;
+    padding: 100px 2rem 80px;
+    margin-right: calc(var(--sb-width) + max(0px, (100vw - var(--sb-width) - 860px) / 2));
+    margin-left: max(2rem, calc((100vw - var(--sb-width) - 860px) / 2));
+}
+@media (max-width: 1200px) {
+    #page-sidebar { display: none; }
+    .article { max-width: 1120px; margin: 0 auto; }
+}
+.article h1 { font-size: 42px; font-weight: 700; line-height: 1.15; margin-bottom: 16px; letter-spacing: -0.02em; }
+.article h1 .accent { color: var(--accent); }
+.article .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 48px; }
+.article h2 { font-size: 28px; font-weight: 600; margin: 48px 0 16px; padding-top: 16px; border-top: 1px solid var(--border); scroll-margin-top: 80px; }
+.article h2:first-of-type { border-top: none; }
+.article h3 { font-size: 20px; font-weight: 600; margin: 32px 0 12px; scroll-margin-top: 80px; }
+.article p { color: var(--text-secondary); margin-bottom: 16px; font-size: 1rem; line-height: 1.7; }
+.article ul, .article ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; font-size: 1rem; line-height: 1.7; }
+.article li { margin-bottom: 0.35rem; line-height: 1.6; }
+.article li strong { color: var(--text-primary); }
+.article a { color: var(--accent); text-decoration: none; }
+.article a:hover { text-decoration: underline; }
+
+/* Code blocks */
+.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
+.code-block .comment { color: var(--text-dim); }
+.code-block .key { color: var(--warning); }
+.code-block .value { color: var(--blue); }
+.code-block .cmd { color: var(--accent); }
+
+/* Inline code */
+.article code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
+
+/* Quick start cards */
+.quick-start-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 32px; }
+.path-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
+.path-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 18px; }
+.path-card h3 a { color: var(--accent); text-decoration: none; }
+.path-card h3 a:hover { text-decoration: underline; }
+.path-card .subtitle { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
+.path-card .subtitle code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-family: var(--mono); font-size: 12px; color: var(--accent); }
+
+/* Env table */
+.env-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
+.env-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
+.env-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.env-table td code { font-size: 12px; }
+
+/* Footer */
+footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
+.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
+.footer-brand .prompt { color: var(--accent); }
+.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
+.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text-primary); }
+
+/* Responsive: Tablet */
+@media (max-width: 768px) {
+    .article h1 { font-size: 32px; }
+    .article { padding: 90px 16px 60px; }
+    .quick-start-paths { grid-template-columns: 1fr; }
+    .env-table { font-size: 12px; }
+    .env-table th, .env-table td { padding: 8px 10px; }
+    .nav-links { gap: 1rem; }
+}
+
+/* Responsive: Mobile */
+@media (max-width: 480px) {
+    .article h1 { font-size: 26px; }
+    .article .lead { font-size: 15px; }
+    .article h2 { font-size: 22px; }
+    .code-block { font-size: 11px; padding: 12px 14px; }
+}
+
+/* Hamburger menu */
+.hamburger { display:none; background:none; border:none; cursor:pointer; padding:0.5rem; z-index:101; }
+.hamburger span { display:block; width:22px; height:2px; background:var(--text-primary); margin:5px 0; transition: transform 0.3s, opacity 0.3s; border-radius:1px; }
+.hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.hamburger.open span:nth-child(2) { opacity:0; }
+.hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+.mobile-menu { display:none; position:fixed; top:57px; left:0; right:0; background:var(--bg-surface); border-bottom:1px solid var(--border); padding:1rem 2rem 1.5rem; z-index:99; flex-direction:column; gap:0.25rem; }
+.mobile-menu.open { display:flex; }
+@media (min-width: 769px) { .mobile-menu { display:none !important; } }
+.mobile-menu a { color:var(--text-secondary); text-decoration:none; font-size:1rem; font-weight:500; padding:0.6rem 0; border-bottom:1px solid var(--border); transition:color 0.2s; }
+.mobile-menu a:last-child { border-bottom:none; }
+.mobile-menu a:hover { color:var(--text-primary); }
+.mobile-menu a.active { color:var(--accent); }
+.mobile-menu .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; margin-top:0.5rem; padding:0.5rem 1rem; border:1px solid var(--border); border-radius:6px; width:fit-content; }
+.mobile-menu .gh-btn:hover { border-color:var(--text-dim); background:var(--bg-card); }
+@media (max-width: 768px) {
+    .hamburger { display:block; }
+    .nav-links { display:none !important; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
+    <div class="nav-links">
+        <a href="index.html">Home</a>
+        <a href="usage.html" class="active">Docs</a>
+        <a href="config.html">Config</a>
+        <a href="deploy.html">Deploy</a>
+        <a href="clients.html">Clients</a>
+        <a href="search.html">Search</a>
+        <a href="migrate-from-mintlify.html">Migrate</a>
+        <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+    </div>
+    <button class="hamburger" aria-label="Menu">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+  </div>
+</nav>
+
+<div class="mobile-menu">
+    <a href="index.html">Home</a>
+    <a href="usage.html" class="active">Docs</a>
+    <a href="config.html">Config</a>
+    <a href="deploy.html">Deploy</a>
+    <a href="clients.html">Clients</a>
+    <a href="search.html">Search</a>
+    <a href="migrate-from-mintlify.html">Migrate</a>
+    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+</div>
+
+<article class="article">
+    <h1>Getting <span class="accent">Started</span></h1>
+    <p class="lead">Two install paths. Same server. Choose what fits your workflow.</p>
+
+    <h2>Quick Start</h2>
+
+    <div class="quick-start-paths">
+        <div class="path-card">
+            <h3>CLI</h3>
+            <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder init
+<span class="cmd">$</span> npx @copilotkit/pathfinder serve</div>
+            <p class="subtitle">Quickest start. No Docker needed. Add Postgres later for semantic search.</p>
+        </div>
+        <div class="path-card">
+            <h3>Docker</h3>
+            <div class="code-block"><span class="cmd">$</span> docker pull ghcr.io/copilotkit/pathfinder
+<span class="cmd">$</span> docker run -v ./pathfinder.yaml:/app/pathfinder.yaml \
+  -v ./docs:/app/docs -p 3001:3001 \
+  ghcr.io/copilotkit/pathfinder</div>
+            <p class="subtitle">Production-ready. Use docker-compose to add Postgres for full semantic search.</p>
+        </div>
+    </div>
+
+    <h2>Try It — Pathfinder on Its Own Docs</h2>
+
+    <p>This documentation site is indexed by a live Pathfinder instance. Connect your AI agent to search and explore these docs via MCP:</p>
+
+    <div class="path-card" style="margin-bottom: 2rem;">
+        <h3>Claude Code</h3>
+        <div class="code-block"><span class="cmd">$</span> claude mcp add pathfinder-docs \
+  --transport http \
+  https://mcp.pathfinder.copilotkit.dev/mcp</div>
+    </div>
+
+    <div class="path-card" style="margin-bottom: 2rem;">
+        <h3>Claude Desktop / Cursor / Any MCP Client</h3>
+        <div class="code-block">{
+  "mcpServers": {
+    "pathfinder-docs": {
+      "url": "https://mcp.pathfinder.copilotkit.dev/mcp"
+    }
+  }
+}</div>
+    </div>
+
+    <p>Once connected, your agent can <code>search-docs("how to configure sources")</code> or <code>explore-docs("cat /config.html")</code> to get answers from these pages.</p>
+
+    <h2>Auto-Generated Endpoints</h2>
+
+    <p>Pathfinder automatically generates and serves several discovery endpoints. These are cached and invalidated whenever sources are reindexed.</p>
+
+    <ul>
+        <li><strong><code>/llms.txt</code></strong> — A concise index of all indexed documentation, following the <a href="https://llmstxt.org/">llms.txt convention</a>. Useful for agents that want a quick overview of available content.</li>
+        <li><strong><code>/llms-full.txt</code></strong> — The complete content of all indexed docs in plain text. Larger, but gives agents full context without multiple tool calls.</li>
+        <li><strong><code>/.well-known/skills/default/skill.md</code></strong> — A dynamic agent capability description that reflects your current tool configuration. Agents can read this to understand what Pathfinder can do.</li>
+    </ul>
+
+    <p>All HTTP responses include a <code>Link</code> header pointing to <code>/llms.txt</code>, so clients that follow the convention can discover the index automatically.</p>
+
+    <h2>Learn More</h2>
+
+    <div class="quick-start-paths">
+        <div class="path-card">
+            <h3><a href="config.html">Configuration Reference</a></h3>
+            <p class="subtitle">Full annotated <code>pathfinder.yaml</code> — server, sources, tools, embedding, indexing, and webhooks. Includes example configs for bash-only, full-stack, multi-repo, and multi-version setups.</p>
+        </div>
+        <div class="path-card">
+            <h3><a href="deploy.html">Deployment Guide</a></h3>
+            <p class="subtitle">Docker, Docker Compose, Railway, and generic VPS deployment. Environment variables, volume mounts, and production setup.</p>
+        </div>
+        <div class="path-card">
+            <h3><a href="clients.html">MCP Client Setup</a></h3>
+            <p class="subtitle">Connect Claude Desktop, Cursor, Codex, VS Code (Continue), or any Streamable HTTP client to your Pathfinder instance.</p>
+        </div>
+        <div class="path-card">
+            <h3><a href="search.html">Search Features</a></h3>
+            <p class="subtitle">How semantic search works, the <code>qmd</code> command, related files, grep-miss suggestions, and search tool parameters.</p>
+        </div>
+        <div class="path-card">
+            <h3><a href="migrate-from-mintlify.html">Migrate from Mintlify</a></h3>
+            <p class="subtitle">Step-by-step guide from ChromaFS to Pathfinder. Concept mapping, walkthrough, and what's different.</p>
+        </div>
+    </div>
+
+</article>
+
+<aside id="page-sidebar"></aside>
+<script src="sidebar.js"></script>
+
+<footer>
+  <div class="container">
+    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; Elastic License 2.0</div>
+    <ul class="footer-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
+        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var btn=document.querySelector(".hamburger");
+  var menu=document.querySelector(".mobile-menu");
+  if(!btn||!menu)return;
+  btn.addEventListener("click",function(){
+    btn.classList.toggle("open");
+    menu.classList.toggle("open");
+  });
+  menu.addEventListener("click",function(e){
+    if(e.target.tagName==="A"){
+      btn.classList.remove("open");
+      menu.classList.remove("open");
+    }
+  });
+})();
+</script>
+</body>
+</html>

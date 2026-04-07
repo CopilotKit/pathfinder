@@ -54,19 +54,27 @@ export function registerSearchTool(
         limit: z.number().min(1).max(toolConfig.max_limit)
             .default(toolConfig.default_limit).optional()
             .describe(`Maximum number of results (default: ${toolConfig.default_limit})`),
+        min_score: z.number().min(0).max(1).optional()
+            .describe("Minimum similarity score (0-1). Results below this threshold are filtered out."),
+        version: z.string().optional()
+            .describe("Filter results to a specific documentation version"),
     };
 
     server.tool(
         toolConfig.name,
         toolConfig.description,
         inputSchema,
-        async ({ query, limit }) => {
+        async ({ query, limit, min_score, version }) => {
             const effectiveLimit = limit ?? toolConfig.default_limit;
             try {
                 const embedding = await embeddingClient.embed(query);
-                const results = await searchChunks(embedding, effectiveLimit, toolConfig.source);
+                const results = await searchChunks(embedding, effectiveLimit, toolConfig.source, version);
+                const minScore = min_score ?? toolConfig.min_score;
+                const filtered = minScore != null
+                    ? results.filter(r => r.similarity >= minScore)
+                    : results;
                 return {
-                    content: [{ type: "text" as const, text: formatResults(results, toolConfig.result_format) }],
+                    content: [{ type: "text" as const, text: formatResults(filtered, toolConfig.result_format) }],
                 };
             } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);

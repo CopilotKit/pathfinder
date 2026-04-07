@@ -1,0 +1,38 @@
+# Source (dist/ is the published artifact)
+src/
+tsconfig.json
+
+# Tests and fixtures
+**/__tests__/
+fixtures/
+
+# Scripts
+scripts/
+
+# Docs and website
+docs/
+
+# Claude Code plugin
+plugin/
+
+# CI/CD
+.github/
+
+# Docker
+Dockerfile
+docker-compose*.yml
+docker-compose*.yaml
+
+# Config examples and operations
+mcp-docs.example.yaml
+pathfinder.yaml
+OPERATIONS.md
+railway.toml
+
+# Superpowers artifacts
+.superpowers/
+
+# Dev files
+.env
+.env.local
+.env.*.local

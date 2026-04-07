@@ -1,4 +1,22 @@
-# Changelog
+# @copilotkit/pathfinder
+
+## 1.4.0
+
+### Minor Changes
+
+- Add HTML source type for indexing static HTML documentation sites (cheerio-based parser)
+- Content container auto-detection (main, article, [role="main"], .content, #content)
+- Heading-boundary chunking with headingPath tracking (h1-h3)
+- Code block preservation, list formatting, table formatting in HTML extraction
+- Add pathfinder-docs.yaml for dogfooding Pathfinder on its own documentation
+
+### Patch Changes
+
+- Generalize smoke test script for any Pathfinder instance
+- Add mobile hamburger nav menu to all docs pages
+- Simplify README to match aimock style, add npm metadata (repository, homepage, keywords)
+- Fix Dockerfile to copy pathfinder.yaml for production deploy
+- Fix schema migration: remove version index from generateSchema (was failing on existing databases)
 
 ## 1.1.0
 
