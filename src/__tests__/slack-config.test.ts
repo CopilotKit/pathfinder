@@ -155,7 +155,7 @@ describe('SourceConfig discriminated union', () => {
             chunk: { target_tokens: 600, overlap_tokens: 50 },
         };
         const result = SourceConfigSchema.parse(config);
-        if (result.type !== 'slack') {
+        if (result.type !== 'slack' && result.type !== 'discord') {
             // TypeScript should know this is FileSourceConfig
             expect(result.path).toBe('docs/');
             expect(result.file_patterns).toEqual(['**/*.md']);
