@@ -154,6 +154,14 @@ describe('NotionApiClient', () => {
             expect(md).toContain('> **💡** Important note');
         });
 
+        it('converts callout with no icon', async () => {
+            mockBlocksChildrenList.mockResolvedValueOnce(blocksResponse([
+                block('callout', { callout: { rich_text: richText('No icon callout'), icon: null } }),
+            ]));
+            const md = await client.getPageContent('page-1');
+            expect(md).toContain('> **** No icon callout');
+        });
+
         it('converts code block with language', async () => {
             mockBlocksChildrenList.mockResolvedValueOnce(blocksResponse([
                 block('code', { code: { rich_text: richText('const x = 1;'), language: 'typescript' } }),
@@ -178,12 +186,28 @@ describe('NotionApiClient', () => {
             expect(md).toContain('[Example](https://example.com)');
         });
 
+        it('converts bookmark with no caption to [url](url)', async () => {
+            mockBlocksChildrenList.mockResolvedValueOnce(blocksResponse([
+                block('bookmark', { bookmark: { url: 'https://example.com' } }),
+            ]));
+            const md = await client.getPageContent('page-1');
+            expect(md).toContain('[https://example.com](https://example.com)');
+        });
+
         it('converts equation to $$expression$$', async () => {
             mockBlocksChildrenList.mockResolvedValueOnce(blocksResponse([
                 block('equation', { equation: { expression: 'E = mc^2' } }),
             ]));
             const md = await client.getPageContent('page-1');
             expect(md).toContain('$$E = mc^2$$');
+        });
+
+        it('converts image with file URL', async () => {
+            mockBlocksChildrenList.mockResolvedValueOnce(blocksResponse([
+                block('image', { image: { type: 'file', file: { url: 'https://s3.aws.com/notion/pic.png' }, caption: richText('Uploaded pic') } }),
+            ]));
+            const md = await client.getPageContent('page-1');
+            expect(md).toContain('![Uploaded pic](https://s3.aws.com/notion/pic.png)');
         });
 
         it('converts image with external URL', async () => {
@@ -249,6 +273,22 @@ describe('NotionApiClient', () => {
             expect(md).toContain('| Header A | Header B |');
             expect(md).toContain('| --- | --- |');
             expect(md).toContain('| Cell 1 | Cell 2 |');
+        });
+
+        it('converts table without column header (no separator row)', async () => {
+            const tableBlock = block('table', {
+                table: { has_column_header: false, has_row_header: false, table_width: 2 },
+            }, true);
+            mockBlocksChildrenList
+                .mockResolvedValueOnce(blocksResponse([tableBlock]))
+                .mockResolvedValueOnce(blocksResponse([
+                    block('table_row', { table_row: { cells: [richText('A1'), richText('B1')] } }),
+                    block('table_row', { table_row: { cells: [richText('A2'), richText('B2')] } }),
+                ]));
+            const md = await client.getPageContent('page-1');
+            expect(md).toContain('| A1 | B1 |');
+            expect(md).toContain('| A2 | B2 |');
+            expect(md).not.toContain('| --- | --- |');
         });
     });
 
@@ -668,6 +708,114 @@ describe('NotionApiClient', () => {
             expect(result).not.toHaveProperty('Relation');
             expect(result).not.toHaveProperty('CreatedBy');
             expect(result).not.toHaveProperty('EditedBy');
+        });
+    });
+
+    // ── MAX_PAGES safety bound ───────────────────────────────────────────
+
+    describe('MAX_PAGES safety bound', () => {
+        it('searchPages stops paginating at MAX_PAGES (100)', async () => {
+            // Return has_more=true for 100 pages, then it should stop
+            for (let i = 0; i < 100; i++) {
+                mockSearch.mockResolvedValueOnce({
+                    results: [notionPage(`p${i}`, `Page ${i}`, '2024-06-01T00:00:00Z')],
+                    has_more: true,
+                    next_cursor: `cursor-${i + 1}`,
+                });
+            }
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+            const pages = await client.searchPages();
+
+            expect(pages).toHaveLength(100);
+            expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('searchPages hit max pages'));
+            // Should NOT have made a 101st call
+            expect(mockSearch).toHaveBeenCalledTimes(100);
+            warnSpy.mockRestore();
+        });
+
+        it('queryDatabase stops paginating at MAX_PAGES (100)', async () => {
+            for (let i = 0; i < 100; i++) {
+                mockDatabasesQuery.mockResolvedValueOnce({
+                    results: [notionPage(`p${i}`, `Entry ${i}`, '2024-06-01T00:00:00Z', 'database_id', 'db1')],
+                    has_more: true,
+                    next_cursor: `cursor-${i + 1}`,
+                });
+            }
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+            const entries = await client.queryDatabase('db1');
+
+            expect(entries).toHaveLength(100);
+            expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('queryDatabase hit max pages'));
+            expect(mockDatabasesQuery).toHaveBeenCalledTimes(100);
+            warnSpy.mockRestore();
+        });
+
+        it('paginateBlockChildren stops at MAX_PAGES (100)', async () => {
+            // Use a fresh client to avoid leftover mocks from other tests
+            const freshClient = new NotionApiClient('test-token', { minRequestInterval: 0 });
+            mockBlocksChildrenList.mockReset();
+
+            for (let i = 0; i < 100; i++) {
+                mockBlocksChildrenList.mockResolvedValueOnce(blocksResponse(
+                    [block('paragraph', { paragraph: { rich_text: richText(`Block ${i}`) } })],
+                    true, `cursor-${i + 1}`,
+                ));
+            }
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+            const md = await freshClient.getPageContent('page-1');
+
+            expect(md).toContain('Block 0');
+            expect(md).toContain('Block 99');
+            expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('paginateBlockChildren hit max pages'));
+            expect(mockBlocksChildrenList).toHaveBeenCalledTimes(100);
+            warnSpy.mockRestore();
+        });
+    });
+
+    // ── extractTitle edge case ─────────────────────────────────────────────
+
+    describe('extractTitle', () => {
+        it('returns empty string when page has no title property', async () => {
+            mockSearch.mockResolvedValueOnce({
+                results: [{
+                    object: 'page',
+                    id: 'no-title',
+                    url: 'https://www.notion.so/notitle',
+                    last_edited_time: '2024-06-01T00:00:00Z',
+                    parent: { type: 'workspace', workspace: true },
+                    properties: {
+                        Description: { type: 'rich_text', rich_text: richText('Just a description') },
+                    },
+                }],
+                has_more: false,
+                next_cursor: null,
+            });
+
+            const pages = await client.searchPages();
+            expect(pages).toHaveLength(1);
+            expect(pages[0].title).toBe('');
+        });
+
+        it('returns empty string when page has no properties at all', async () => {
+            mockSearch.mockResolvedValueOnce({
+                results: [{
+                    object: 'page',
+                    id: 'no-props',
+                    url: 'https://www.notion.so/noprops',
+                    last_edited_time: '2024-06-01T00:00:00Z',
+                    parent: { type: 'workspace', workspace: true },
+                    properties: {},
+                }],
+                has_more: false,
+                next_cursor: null,
+            });
+
+            const pages = await client.searchPages();
+            expect(pages).toHaveLength(1);
+            expect(pages[0].title).toBe('');
         });
     });
 

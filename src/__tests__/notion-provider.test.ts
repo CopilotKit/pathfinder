@@ -295,6 +295,123 @@ describe('NotionDataProvider', () => {
         expect(result.items[0].id).toBe('p2');
     });
 
+    // ── discoverAllPages error handling ──────────────────────────────
+
+    it('fullAcquire continues when root page fetch fails in discoverAllPages', async () => {
+        mockGetPageMeta
+            .mockRejectedValueOnce(new Error('Page not found'))
+            .mockResolvedValueOnce(makePage('rp2', 'Good Page', '2025-01-01T00:00:00Z'));
+        mockGetPageContent.mockResolvedValue('Content');
+
+        const provider = await createProvider(makeConfig({ root_pages: ['bad-id', 'rp2'] }));
+        const result = await provider.fullAcquire();
+
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0].id).toBe('rp2');
+    });
+
+    it('fullAcquire continues when database query fails in discoverAllPages', async () => {
+        mockQueryDatabase
+            .mockRejectedValueOnce(new Error('DB access denied'))
+            .mockResolvedValueOnce([makePage('dp1', 'DB Page', '2025-01-01T00:00:00Z')]);
+        mockGetPageContent.mockResolvedValue('Content');
+
+        const provider = await createProvider(makeConfig({ databases: ['bad-db', 'good-db'] }));
+        const result = await provider.fullAcquire();
+
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0].id).toBe('dp1');
+    });
+
+    // ── discoverEditedPages with root_pages ────────────────────────────
+
+    it('incrementalAcquire with root_pages filters to recently edited', async () => {
+        const oldPage = makePage('rp1', 'Old Root', '2025-01-01T00:00:00Z');
+        const newPage = makePage('rp2', 'New Root', '2025-06-01T00:00:00Z');
+
+        // discoverAllPages: getPageMeta called for each root page
+        mockGetPageMeta
+            .mockResolvedValueOnce(oldPage)   // discoverAllPages rp1
+            .mockResolvedValueOnce(newPage)   // discoverAllPages rp2
+            .mockResolvedValueOnce(oldPage)   // discoverEditedPages rp1 (filtered out by time)
+            .mockResolvedValueOnce(newPage);  // discoverEditedPages rp2 (passes time filter)
+        mockGetPageContent.mockResolvedValue('Updated content');
+        mockGetIndexedItemIds.mockResolvedValue(new Set(['rp1', 'rp2']));
+
+        const provider = await createProvider(makeConfig({ root_pages: ['rp1', 'rp2'] }));
+        const result = await provider.incrementalAcquire('2025-03-01T00:00:00Z');
+
+        // Only rp2 was edited after the cutoff
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0].id).toBe('rp2');
+        expect(result.removedIds).toHaveLength(0);
+    });
+
+    // ── discoverEditedPages with databases ─────────────────────────────
+
+    it('incrementalAcquire with databases passes editedAfter to queryDatabase', async () => {
+        const dbPage = makePage('dp1', 'DB Entry', '2025-06-01T00:00:00Z', 'database');
+
+        // discoverAllPages: queryDatabase without filter
+        mockQueryDatabase
+            .mockResolvedValueOnce([dbPage])   // discoverAllPages
+            .mockResolvedValueOnce([dbPage]);  // discoverEditedPages
+        mockGetPageContent.mockResolvedValue('Content');
+        mockGetIndexedItemIds.mockResolvedValue(new Set(['dp1']));
+
+        const provider = await createProvider(makeConfig({ databases: ['db1'] }));
+        const result = await provider.incrementalAcquire('2025-03-01T00:00:00Z');
+
+        // discoverEditedPages should call queryDatabase with editedAfter
+        expect(mockQueryDatabase).toHaveBeenCalledTimes(2);
+        expect(mockQueryDatabase).toHaveBeenNthCalledWith(2, 'db1', '2025-03-01T00:00:00Z');
+        expect(result.items).toHaveLength(1);
+    });
+
+    // ── discoverEditedPages error handling ──────────────────────────────
+
+    it('incrementalAcquire continues when root page fetch fails in discoverEditedPages', async () => {
+        const goodPage = makePage('rp2', 'Good Page', '2025-06-01T00:00:00Z');
+
+        // discoverAllPages: both succeed
+        mockGetPageMeta
+            .mockResolvedValueOnce(makePage('rp1', 'Page 1', '2025-06-01T00:00:00Z'))
+            .mockResolvedValueOnce(goodPage)
+            // discoverEditedPages: rp1 fails, rp2 succeeds
+            .mockRejectedValueOnce(new Error('API error'))
+            .mockResolvedValueOnce(goodPage);
+        mockGetPageContent.mockResolvedValue('Content');
+        mockGetIndexedItemIds.mockResolvedValue(new Set(['rp1', 'rp2']));
+
+        const provider = await createProvider(makeConfig({ root_pages: ['rp1', 'rp2'] }));
+        const result = await provider.incrementalAcquire('2025-03-01T00:00:00Z');
+
+        // Only rp2 succeeded in discoverEditedPages
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0].id).toBe('rp2');
+    });
+
+    it('incrementalAcquire continues when database query fails in discoverEditedPages', async () => {
+        const dbPage = makePage('dp1', 'DB Entry', '2025-06-01T00:00:00Z', 'database');
+
+        // discoverAllPages: both DBs succeed
+        mockQueryDatabase
+            .mockResolvedValueOnce([dbPage])                 // discoverAllPages db1
+            .mockResolvedValueOnce([])                       // discoverAllPages db2
+            // discoverEditedPages: db1 fails, db2 succeeds
+            .mockRejectedValueOnce(new Error('DB error'))
+            .mockResolvedValueOnce([]);
+        mockGetPageContent.mockResolvedValue('Content');
+        mockGetIndexedItemIds.mockResolvedValue(new Set(['dp1']));
+
+        const provider = await createProvider(makeConfig({ databases: ['db1', 'db2'] }));
+        const result = await provider.incrementalAcquire('2025-03-01T00:00:00Z');
+
+        // db1 failed in discoverEditedPages, but dp1 is still in allPages so not removed
+        expect(mockQueryDatabase).toHaveBeenCalledTimes(4);
+        expect(result.removedIds).toHaveLength(0);
+    });
+
     it('all pages fail: throws', async () => {
         mockSearchPages.mockResolvedValue([
             makePage('p1', 'One', '2025-01-01T00:00:00Z'),
