@@ -1,6 +1,6 @@
 // Shared indexing utilities — used by providers, bash-fs, and test scripts.
 
-import type { SourceConfig } from '../types.js';
+import type { FileSourceConfig } from '../types.js';
 
 /**
  * Check if file content has low semantic value (SVG paths, base64, minified code).
@@ -52,7 +52,7 @@ export function globToRegex(pattern: string): RegExp {
  * Check if a relative file path matches the source's file_patterns (include)
  * and does not match exclude_patterns.
  */
-export function matchesPatterns(relPath: string, sourceConfig: SourceConfig): boolean {
+export function matchesPatterns(relPath: string, sourceConfig: FileSourceConfig): boolean {
     const normalized = relPath.replace(/\\/g, '/');
 
     // Check excludes first (takes precedence)

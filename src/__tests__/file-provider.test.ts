@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { FileDataProvider } from '../indexing/providers/file.js';
-import type { SourceConfig } from '../types.js';
+import type { FileSourceConfig } from '../types.js';
 
 describe('FileDataProvider', () => {
     let tmpDir: string;
@@ -21,7 +21,7 @@ describe('FileDataProvider', () => {
         await fs.promises.rm(tmpDir, { recursive: true, force: true });
     });
 
-    function makeConfig(overrides?: Partial<SourceConfig>): SourceConfig {
+    function makeConfig(overrides?: Partial<FileSourceConfig>): FileSourceConfig {
         return {
             name: 'test',
             type: 'markdown',

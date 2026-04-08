@@ -26,3 +26,8 @@ registerChunker('markdown', chunkMarkdown);
 registerChunker('code', chunkCode);
 registerChunker('raw-text', chunkRawText);
 registerChunker('html', chunkHtml);
+
+import { chunkQa } from './qa.js';
+
+registerChunker('slack', chunkQa);
+registerChunker('discord', chunkQa);

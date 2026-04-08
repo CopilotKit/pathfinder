@@ -24,3 +24,11 @@ import { FileDataProvider } from './file.js';
 for (const type of ['markdown', 'code', 'raw-text', 'html']) {
     registerProvider(type, (config, options) => new FileDataProvider(config, options));
 }
+
+import { SlackDataProvider } from './slack.js';
+
+registerProvider('slack', (config, options) => new SlackDataProvider(config, options));
+
+import { DiscordDataProvider } from './discord.js';
+
+registerProvider('discord', (config, options) => new DiscordDataProvider(config, options));
