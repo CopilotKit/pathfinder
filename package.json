@@ -8,7 +8,16 @@
         "url": "https://github.com/CopilotKit/pathfinder"
     },
     "homepage": "https://pathfinder.copilotkit.dev",
-    "keywords": ["mcp", "ai", "agents", "documentation", "search", "rag", "embeddings", "copilotkit"],
+    "keywords": [
+        "mcp",
+        "ai",
+        "agents",
+        "documentation",
+        "search",
+        "rag",
+        "embeddings",
+        "copilotkit"
+    ],
     "license": "MIT",
     "main": "dist/index.js",
     "bin": {
@@ -34,6 +43,7 @@
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.25.2",
+        "@slack/web-api": "^7.15.0",
         "cheerio": "^1.2.0",
         "commander": "^14.0.3",
         "cors": "^2.8.5",
