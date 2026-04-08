@@ -1,6 +1,6 @@
 {
     "name": "@copilotkit/pathfinder",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Agentic docs retrieval for AI agents — semantic search and filesystem exploration over your documentation and code via MCP.",
     "type": "module",
     "repository": {
