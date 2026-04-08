@@ -1,6 +1,9 @@
 // Job queue and coordination for indexing pipelines.
 // Fully config-driven: indexes sources referenced by search tools in mcp-docs.yaml.
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { getConfig, getServerConfig, getIndexableSourceNames } from '../config.js';
 import { EmbeddingClient } from './embeddings.js';
 import { getProvider } from './providers/index.js';
@@ -148,6 +151,20 @@ export class IndexingOrchestrator {
                     console.log(`[orchestrator] Index for ${source.name} is stale — queuing full reindex`);
                     this.queueFullReindex();
                 }
+            }
+        }
+
+        // Ensure git repos are cloned even when index is current.
+        // On fresh deploys, the container has no local clones but the DB may have valid state.
+        // Bash tools need the clone directories to build their filesystem.
+        const cloneDir = getConfig().cloneDir;
+        for (const source of gitSourcesOk) {
+            if (!isFileSourceConfig(source) || !source.repo) continue;
+            const repoName = source.repo.replace(/\.git$/, '').split('/').pop()!;
+            const repoDir = path.join(cloneDir, repoName);
+            if (!fs.existsSync(repoDir)) {
+                console.log(`[orchestrator] Clone directory missing for ${source.name}, queuing reindex to populate`);
+                this.queueIncrementalReindex(source.repo);
             }
         }
     }
