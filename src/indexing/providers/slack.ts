@@ -186,29 +186,24 @@ export class SlackDataProvider implements DataProvider {
             client: this.openaiClient,
         });
 
-        // Filter by confidence threshold and create ContentItems
+        // Create ContentItems for ALL pairs — confidence filtering happens at query time
         const items: ContentItem[] = [];
         let permalink: string | undefined;
 
+        if (distillerResult.pairs.length > 0) {
+            try {
+                permalink = await this.apiClient.getChannelPermalink(channelId, parentMessage.ts);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.warn(`${this.logPrefix} Failed to get permalink for ${channelId}/${parentMessage.ts}: ${msg}`);
+                permalink = undefined;
+            }
+        }
+
+        const participants = [...new Set(threadMessages.map(m => m.author))];
+
         for (let i = 0; i < distillerResult.pairs.length; i++) {
             const pair = distillerResult.pairs[i];
-
-            if (pair.confidence < this.config.confidence_threshold) {
-                continue;
-            }
-
-            // Lazy-fetch permalink (only if we have qualifying pairs)
-            if (!permalink) {
-                try {
-                    permalink = await this.apiClient.getChannelPermalink(channelId, parentMessage.ts);
-                } catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-                    console.warn(`${this.logPrefix} Failed to get permalink for ${channelId}/${parentMessage.ts}: ${msg}`);
-                    permalink = undefined;
-                }
-            }
-
-            const participants = [...new Set(threadMessages.map(m => m.author))];
 
             items.push({
                 id: `${channelId}:${parentMessage.ts}:${i}`,

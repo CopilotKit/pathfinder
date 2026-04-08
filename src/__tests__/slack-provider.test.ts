@@ -43,6 +43,7 @@ const slackConfig: SlackSourceConfig = {
     trigger_emoji: 'pathfinder',
     min_thread_replies: 2,
     chunk: { target_tokens: 600, overlap_tokens: 0 },
+    category: 'faq',
 };
 
 describe('SlackDataProvider', () => {
@@ -101,7 +102,7 @@ describe('SlackDataProvider', () => {
             expect(mockApiClient.fetchThreadReplies).not.toHaveBeenCalled();
         });
 
-        it('filters Q&A pairs below confidence threshold', async () => {
+        it('stores all Q&A pairs regardless of confidence (filtering at query time)', async () => {
             mockApiClient.fetchChannelHistory.mockResolvedValue([
                 { ts: '1000.0001', thread_ts: '1000.0001', reply_count: 3, user: 'U001' },
             ]);
@@ -119,8 +120,11 @@ describe('SlackDataProvider', () => {
             mockApiClient.getChannelPermalink.mockResolvedValue('https://slack.com/link');
 
             const result = await provider.fullAcquire();
-            expect(result.items).toHaveLength(1);
+            expect(result.items).toHaveLength(2);
             expect(result.items[0].title).toBe('High conf');
+            expect(result.items[0].metadata?.confidence).toBe(0.9);
+            expect(result.items[1].title).toBe('Low conf');
+            expect(result.items[1].metadata?.confidence).toBe(0.3);
         });
 
         it('handles empty channel gracefully', async () => {
