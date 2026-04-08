@@ -10,6 +10,7 @@ const mockSearchPages = vi.fn();
 const mockGetPageContent = vi.fn();
 const mockGetPageMeta = vi.fn();
 const mockQueryDatabase = vi.fn();
+const mockConstructorArgs = vi.fn();
 
 vi.mock('../indexing/providers/notion-api.js', () => ({
     NotionApiClient: class {
@@ -17,7 +18,9 @@ vi.mock('../indexing/providers/notion-api.js', () => ({
         getPageContent = mockGetPageContent;
         getPageMeta = mockGetPageMeta;
         queryDatabase = mockQueryDatabase;
-        constructor(_token: string) {}
+        constructor(token: string, options?: any) {
+            mockConstructorArgs(token, options);
+        }
     },
 }));
 
@@ -92,6 +95,12 @@ describe('NotionDataProvider', () => {
             makeConfig(),
             { cloneDir: '/tmp' },
         )).toThrow('notionToken');
+    });
+
+    it('passes max_depth from config to API client', async () => {
+        mockConstructorArgs.mockClear();
+        await createProvider(makeConfig({ max_depth: 15 }), 'tok-123');
+        expect(mockConstructorArgs).toHaveBeenCalledWith('tok-123', { maxDepth: 15 });
     });
 
     // ── fullAcquire ─────────────────────────────────────────────────────

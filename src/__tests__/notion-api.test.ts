@@ -315,6 +315,28 @@ describe('NotionApiClient', () => {
             // (we allow the toggle text at level 10 but don't recurse into it)
             expect(md).not.toContain('Too deep');
         });
+
+        it('respects custom maxDepth from constructor options', async () => {
+            const shallowClient = new NotionApiClient('test-token', { minRequestInterval: 0, maxDepth: 3 });
+            mockBlocksChildrenList.mockReset();
+
+            // Build a chain of deeply nested toggles (depth 5)
+            for (let i = 0; i < 5; i++) {
+                const nestedToggle = block('toggle', {
+                    toggle: { rich_text: richText(`Level ${i}`) },
+                }, true);
+                mockBlocksChildrenList.mockResolvedValueOnce(blocksResponse([nestedToggle]));
+            }
+            mockBlocksChildrenList.mockResolvedValueOnce(blocksResponse([
+                block('paragraph', { paragraph: { rich_text: richText('Too deep for shallow') } }),
+            ]));
+
+            const md = await shallowClient.getPageContent('page-1');
+            // Depth 0-2 should be present (3 levels), depth 3+ should not recurse
+            expect(md).toContain('Level 0');
+            expect(md).toContain('Level 2');
+            expect(md).not.toContain('Too deep for shallow');
+        });
     });
 
     // ── searchPages ─────────────────────────────────────────────────────────
@@ -414,6 +436,45 @@ describe('NotionApiClient', () => {
             const entries = await client.queryDatabase('db1', '2024-06-01T00:00:00Z');
             expect(entries).toHaveLength(1);
             expect(entries[0].id).toBe('p2');
+        });
+
+        it('returns serialized properties for database entries', async () => {
+            const dbPage = {
+                object: 'page',
+                id: 'dp1',
+                url: 'https://www.notion.so/dp1',
+                last_edited_time: '2024-06-01T00:00:00Z',
+                parent: { type: 'database_id', database_id: 'db1' },
+                properties: {
+                    Name: { type: 'title', title: richText('Task Name') },
+                    Status: { type: 'select', select: { name: 'In Progress' } },
+                    Priority: { type: 'number', number: 3 },
+                },
+            };
+            mockDatabasesQuery.mockResolvedValueOnce({
+                results: [dbPage],
+                has_more: false,
+                next_cursor: null,
+            });
+
+            const entries = await client.queryDatabase('db1');
+            expect(entries).toHaveLength(1);
+            expect(entries[0].properties).toBeDefined();
+            expect(entries[0].properties!['Name']).toBe('Task Name');
+            expect(entries[0].properties!['Status']).toBe('In Progress');
+            expect(entries[0].properties!['Priority']).toBe('3');
+        });
+
+        it('does not return properties for non-database pages', async () => {
+            mockSearch.mockResolvedValueOnce({
+                results: [notionPage('p1', 'Regular Page', '2024-06-01T00:00:00Z', 'workspace')],
+                has_more: false,
+                next_cursor: null,
+            });
+
+            const pages = await client.searchPages();
+            expect(pages).toHaveLength(1);
+            expect(pages[0].properties).toBeUndefined();
         });
     });
 

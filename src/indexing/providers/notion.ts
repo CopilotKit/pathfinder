@@ -21,7 +21,9 @@ export class NotionDataProvider implements DataProvider {
         if (!token) {
             throw new Error('NotionDataProvider requires a notionToken in provider options');
         }
-        this.apiClient = new NotionApiClient(token);
+        this.apiClient = new NotionApiClient(token, {
+            maxDepth: this.config.max_depth,
+        });
         this.logPrefix = `[notion-provider:${config.name}]`;
     }
 

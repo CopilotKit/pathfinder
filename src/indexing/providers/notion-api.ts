@@ -25,6 +25,8 @@ export interface NotionDatabaseMeta {
 export interface NotionApiClientOptions {
     /** Minimum ms between API requests (default: 340 for Notion's 3 req/s limit) */
     minRequestInterval?: number;
+    /** Maximum block recursion depth (default: 10) */
+    maxDepth?: number;
 }
 
 // ── Rate limit helpers ───────────────────────────────────────────────────────
@@ -43,12 +45,14 @@ export class NotionApiClient {
     private client: Client;
     private userCache = new Map<string, string>();
     private minRequestInterval: number;
+    private maxDepth: number;
     private lastRequestTime = 0;
     private logPrefix = '[notion-api]';
 
     constructor(token: string, options?: NotionApiClientOptions) {
         this.client = new Client({ auth: token });
         this.minRequestInterval = options?.minRequestInterval ?? DEFAULT_MIN_REQUEST_INTERVAL;
+        this.maxDepth = options?.maxDepth ?? MAX_RECURSION_DEPTH;
     }
 
     // ── Public methods ──────────────────────────────────────────────────────
@@ -208,7 +212,7 @@ export class NotionApiClient {
      * Fetch all blocks for a parent and convert to markdown lines.
      */
     private async fetchBlocks(parentId: string, depth: number, indent: string = ''): Promise<string[]> {
-        if (depth >= MAX_RECURSION_DEPTH) return [];
+        if (depth >= this.maxDepth) return [];
 
         const blocks = await this.paginateBlockChildren(parentId);
         const lines: string[] = [];
@@ -469,6 +473,11 @@ export class NotionApiClient {
         // Extract title from properties
         const title = this.extractTitle(page.properties);
 
+        // Serialize database entry properties for YAML frontmatter
+        const properties = parentType === 'database'
+            ? this.serializeProperties(page.properties)
+            : undefined;
+
         return {
             id: page.id,
             title,
@@ -476,6 +485,7 @@ export class NotionApiClient {
             url: page.url ?? '',
             parentType,
             parentId,
+            properties,
         };
     }
 
