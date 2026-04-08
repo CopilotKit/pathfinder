@@ -415,8 +415,13 @@ app.get('/faq.txt', async (_req: Request, res: Response) => {
                 // Fetch FAQ chunks per source with its confidence threshold
                 const allChunks = [];
                 for (const src of faqSources) {
-                    const chunks = await getFaqChunks([src.name], src.confidenceThreshold);
-                    allChunks.push(...chunks);
+                    try {
+                        const chunks = await getFaqChunks([src.name], src.confidenceThreshold);
+                        allChunks.push(...chunks);
+                    } catch (err) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        console.error(`[faq.txt] Failed to fetch chunks for source "${src.name}": ${msg}`);
+                    }
                 }
                 cachedFaqTxt = generateFaqTxt(allChunks, serverCfg.server.name, faqSources);
             }

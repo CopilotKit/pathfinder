@@ -332,9 +332,10 @@ export async function getFaqChunks(
             language,
             0.0 AS similarity,
             metadata,
-            (metadata->>'confidence')::float AS confidence
+            COALESCE((metadata->>'confidence')::float, 0.0) AS confidence
         FROM chunks
         WHERE source_name IN (${placeholders})
+          AND metadata ? 'confidence'
           AND (metadata->>'confidence')::float >= $${confidenceParam}
         ORDER BY source_name, indexed_at DESC
     `;
@@ -360,7 +361,7 @@ export async function getFaqChunks(
         language: (r.language as string) ?? null,
         similarity: parseFloat(r.similarity as string),
         metadata: (r.metadata as Record<string, unknown>) ?? {},
-        confidence: parseFloat(r.confidence as string),
+        confidence: parseFloat(r.confidence as string) || 0.0,
     }));
 }
 

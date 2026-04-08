@@ -82,7 +82,7 @@ export function registerKnowledgeTool(
 
                     // Now get FAQ chunks (with confidence) for the same sources to cross-reference
                     // Use a very low confidence threshold (0) to get all, then filter
-                    const faqChunks = await getFaqChunks(toolConfig.sources, 0);
+                    const faqChunks = await getFaqChunks(toolConfig.sources, 0, effectiveLimit * 5);
                     const faqById = new Map(faqChunks.map(c => [c.id, c]));
 
                     // Merge: keep search results that have FAQ metadata and meet confidence threshold
@@ -102,10 +102,10 @@ export function registerKnowledgeTool(
                     };
                 }
             } catch (error) {
+                console.error(`[${toolConfig.name}] Knowledge query failed:`, error);
                 const detail = error instanceof Error ? error.message : String(error);
-                console.error(`[${toolConfig.name}] Error: ${detail}`);
                 return {
-                    content: [{ type: "text" as const, text: "Error: Knowledge query failed. Please try again later." }],
+                    content: [{ type: "text" as const, text: `Error querying FAQ: ${detail}` }],
                     isError: true,
                 };
             }

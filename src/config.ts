@@ -29,6 +29,13 @@ export function hasSearchTools(): boolean {
 }
 
 /**
+ * Check whether any knowledge tools are configured (requires embeddings + indexing).
+ */
+export function hasKnowledgeTools(): boolean {
+    return getServerConfig().tools.some(t => t.type === 'knowledge');
+}
+
+/**
  * Check whether any collect tools are configured (requires database).
  */
 export function hasCollectTools(): boolean {
@@ -49,8 +56,10 @@ export function hasBashSemanticSearch(): boolean {
  * Get the set of source names that need indexing (only those referenced by search tools).
  */
 export function getIndexableSourceNames(): Set<string> {
-    const searchTools = getServerConfig().tools.filter(t => t.type === 'search');
-    return new Set(searchTools.map(t => t.source));
+    const cfg = getServerConfig();
+    const searchSources = cfg.tools.filter(t => t.type === 'search').map(t => t.source);
+    const knowledgeSources = cfg.tools.filter(t => t.type === 'knowledge').flatMap(t => t.sources);
+    return new Set([...searchSources, ...knowledgeSources]);
 }
 
 let cachedConfig: Config | null = null;
@@ -58,7 +67,7 @@ let cachedConfig: Config | null = null;
 function parseConfig(): Config {
     const missing: string[] = [];
 
-    const needsRag = hasSearchTools();
+    const needsRag = hasSearchTools() || hasKnowledgeTools();
     const needsDb = needsRag || hasCollectTools() || hasBashSemanticSearch();
 
     const databaseUrl = process.env.DATABASE_URL;
@@ -204,6 +213,18 @@ function loadServerConfig(): ServerConfig {
         }
     }
 
+    // Cross-validate: every knowledge tool's sources must reference existing source names
+    const knowledgeTools = result.data.tools.filter(t => t.type === 'knowledge');
+    for (const tool of knowledgeTools) {
+        for (const src of tool.sources) {
+            if (!sourceNames.has(src)) {
+                throw new Error(
+                    `Knowledge tool "${tool.name}" references source "${src}" which is not defined in sources.`
+                );
+            }
+        }
+    }
+
     // Cross-validate: webhook repo_sources and path_triggers must reference valid source names
     if (result.data.webhook) {
         const wh = result.data.webhook;
@@ -221,6 +242,18 @@ function loadServerConfig(): ServerConfig {
                 throw new Error(
                     `Webhook path_triggers key "${triggerKey}" does not match any defined source name.`
                 );
+            }
+        }
+    }
+
+    // Warn if knowledge tools reference non-FAQ sources
+    for (const tool of result.data.tools) {
+        if (tool.type === 'knowledge') {
+            for (const srcName of tool.sources) {
+                const src = result.data.sources.find(s => s.name === srcName);
+                if (src && (!('category' in src) || src.category !== 'faq')) {
+                    console.warn(`[config] Knowledge tool "${tool.name}" references source "${srcName}" which does not have category: "faq" — queries may return empty results`);
+                }
             }
         }
     }
