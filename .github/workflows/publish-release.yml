@@ -19,6 +19,16 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - run: npm ci
 
+      - name: Verify CLI version matches package version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          CLI_VERSION=$(grep -oP '\.version\("\K[^"]+' src/cli.ts)
+          if [ "$PKG_VERSION" != "$CLI_VERSION" ]; then
+            echo "::error::Version mismatch: package.json=$PKG_VERSION, cli.ts=$CLI_VERSION"
+            exit 1
+          fi
+          echo "Versions match: $PKG_VERSION"
+
       - name: Check if version is already published
         id: check
         run: |

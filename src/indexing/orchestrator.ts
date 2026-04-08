@@ -1,23 +1,26 @@
 // Job queue and coordination for indexing pipelines.
 // Fully config-driven: indexes sources referenced by search tools in mcp-docs.yaml.
 
-import fs from 'fs';
-import path from 'path';
-import { simpleGit } from 'simple-git';
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { getConfig, getServerConfig, getIndexableSourceNames } from '../config.js';
 import { EmbeddingClient } from './embeddings.js';
-import { SourceIndexer } from './source-indexer.js';
+import { getProvider } from './providers/index.js';
+import { IndexingPipeline } from './pipeline.js';
 import {
     getIndexState,
     upsertIndexState,
 } from '../db/queries.js';
+import { isFileSourceConfig } from '../types.js';
 import type { IndexState, IndexStatus, SourceConfig } from '../types.js';
+import type { ProviderOptions } from './providers/types.js';
 
 /**
  * Find all source configs that reference a given repo URL.
  */
 function getSourcesByRepo(repoUrl: string): SourceConfig[] {
-    return getServerConfig().sources.filter(s => s.repo === repoUrl);
+    return getServerConfig().sources.filter(s => isFileSourceConfig(s) && s.repo === repoUrl);
 }
 
 function getStaleThresholdMs(): number {
@@ -26,9 +29,10 @@ function getStaleThresholdMs(): number {
 }
 
 interface Job {
-    type: 'full-reindex' | 'incremental-reindex' | 'full-reindex-local';
+    type: 'full-reindex' | 'incremental-reindex' | 'full-reindex-local' | 'source-reindex';
     repoUrl?: string; // for incremental
     sources?: SourceConfig[]; // for full-reindex-local
+    sourceName?: string; // for source-reindex
 }
 
 export class IndexingOrchestrator {
@@ -89,24 +93,31 @@ export class IndexingOrchestrator {
                 return;
             }
             // Queue incremental reindexes for each affected git-backed repo
-            const reposToReindex = new Set(
-                sourcesNeedingFullReindex.filter(s => s.repo).map(s => s.repo!),
-            );
+            const reposToReindex = new Set<string>();
+            for (const s of sourcesNeedingFullReindex) {
+                if (isFileSourceConfig(s) && s.repo) reposToReindex.add(s.repo);
+            }
             for (const repoUrl of reposToReindex) {
                 this.queueIncrementalReindex(repoUrl);
             }
             // Local sources (no repo) get queued as a full reindex of just those sources
-            const localSources = sourcesNeedingFullReindex.filter(s => !s.repo);
+            const localSources = sourcesNeedingFullReindex.filter(s => isFileSourceConfig(s) && !s.repo);
             if (localSources.length > 0) {
                 this.queue.push({ type: 'full-reindex-local', sources: localSources });
                 this.drain().catch(err => console.error('[orchestrator] drain() failed:', err));
+            }
+
+            // Non-file sources (e.g., Slack) that need reindexing
+            const nonFileSources = sourcesNeedingFullReindex.filter(s => !isFileSourceConfig(s));
+            for (const source of nonFileSources) {
+                this.queueSourceReindex(source.name);
             }
         }
 
         if (sourcesOk.length === 0) return;
 
         // Local sources in sourcesOk have no remote to check — always reindex on startup
-        const localSourcesOk = sourcesOk.filter(s => !s.repo);
+        const localSourcesOk = sourcesOk.filter(s => isFileSourceConfig(s) && !s.repo);
         if (localSourcesOk.length > 0) {
             console.log(`[orchestrator] Queuing reindex for ${localSourcesOk.length} local source(s)`);
             this.queue.push({ type: 'full-reindex-local', sources: localSourcesOk });
@@ -115,68 +126,63 @@ export class IndexingOrchestrator {
 
         console.log('[orchestrator] Checking remotes for changes on indexed sources...');
 
-        // Only check remotes for git-backed sources
-        const repos = [...new Set(sourcesOk.filter(s => s.repo).map(s => s.repo!))];
-        for (const repoUrl of repos) {
+        // Check each git-backed source for changes
+        const gitSourcesOk = sourcesOk.filter(s => isFileSourceConfig(s) && s.repo);
+        for (const source of gitSourcesOk) {
             try {
-                const remoteHead = await this.getRemoteHead(repoUrl);
-                const sources = getSourcesByRepo(repoUrl).filter(s => indexableNames.has(s.name));
+                const currentToken = await this.getSourceStateToken(source);
+                const state = await getIndexState(source.type, source.name);
 
-                let anyChanged = false;
-                for (const source of sources) {
-                    const state = await getIndexState(source.type, source.name);
-                    if (state?.last_commit_sha !== remoteHead) {
-                        anyChanged = true;
-                        break;
+                if (currentToken === null || state?.last_commit_sha !== currentToken) {
+                    const reason = currentToken === null
+                        ? 'source unavailable (clone missing?)'
+                        : `remote ${currentToken.slice(0, 8)} differs from indexed`;
+                    console.log(`[orchestrator] ${reason} for ${source.name} — queuing reindex`);
+                    if (isFileSourceConfig(source) && source.repo) {
+                        this.queueIncrementalReindex(source.repo);
                     }
-                }
-
-                // Even if DB says current, verify clone dir exists (fresh container = empty /tmp)
-                const repoName = repoUrl.split('/').pop()?.replace(/\.git$/, '') ?? '';
-                const cloneDir = getConfig().cloneDir;
-                const repoDir = path.join(cloneDir, repoName);
-                const cloneMissing = !fs.existsSync(repoDir);
-
-                if (anyChanged || cloneMissing) {
-                    const reason = cloneMissing
-                        ? `clone dir missing at ${repoDir}`
-                        : `remote HEAD ${remoteHead.slice(0, 8)} differs from indexed`;
-                    console.log(`[orchestrator] ${reason} for ${repoUrl} — queuing incremental reindex`);
-                    this.queueIncrementalReindex(repoUrl);
                 } else {
-                    console.log(`[orchestrator] Index current at ${remoteHead.slice(0, 8)}`);
+                    console.log(`[orchestrator] ${source.name} index current at ${currentToken.slice(0, 8)}`);
                 }
             } catch (err) {
-                // If we can't check remote, fall back to age-based staleness
-                console.warn(`[orchestrator] Failed to check remote HEAD for ${repoUrl}, falling back to age check:`, err);
-                const repoSources = getSourcesByRepo(repoUrl);
-                const firstState = await getIndexState(repoSources[0].type, repoSources[0].name);
-                if (this.isStale(firstState)) {
-                    const thresholdHours = getServerConfig().indexing?.stale_threshold_hours ?? 24;
-                    console.log(`[orchestrator] Index for ${repoUrl} is stale (>${thresholdHours}h) — queuing full reindex`);
+                console.warn(`[orchestrator] Failed to check state for ${source.name}, falling back to age check:`, err);
+                const state = await getIndexState(source.type, source.name);
+                if (this.isStale(state)) {
+                    console.log(`[orchestrator] Index for ${source.name} is stale — queuing full reindex`);
                     this.queueFullReindex();
-                } else {
-                    console.log(`[orchestrator] Index for ${repoUrl} appears fresh, skipping`);
                 }
+            }
+        }
+
+        // Ensure git repos are cloned even when index is current.
+        // On fresh deploys, the container has no local clones but the DB may have valid state.
+        // Bash tools need the clone directories to build their filesystem.
+        const cloneDir = getConfig().cloneDir;
+        for (const source of gitSourcesOk) {
+            if (!isFileSourceConfig(source) || !source.repo) continue;
+            const repoName = source.repo.replace(/\.git$/, '').split('/').pop()!;
+            const repoDir = path.join(cloneDir, repoName);
+            if (!fs.existsSync(repoDir)) {
+                console.log(`[orchestrator] Clone directory missing for ${source.name}, queuing reindex to populate`);
+                this.queueIncrementalReindex(source.repo);
             }
         }
     }
 
     /**
-     * Get the HEAD SHA of a remote repo without cloning.
-     * Uses `git ls-remote` which only fetches refs.
+     * Get the current state token for a source without acquiring items.
+     * Returns null if the source is unavailable.
      */
-    private async getRemoteHead(repoUrl: string): Promise<string> {
+    private async getSourceStateToken(source: SourceConfig): Promise<string | null> {
         const config = getConfig();
-        let url = repoUrl;
-        if (config.githubToken) {
-            url = repoUrl.replace('https://github.com/', `https://x-access-token:${config.githubToken}@github.com/`);
-        }
-        const git = simpleGit();
-        const result = await git.listRemote([url, 'HEAD']);
-        const sha = result.split('\t')[0]?.trim();
-        if (!sha) throw new Error(`Could not resolve HEAD for ${repoUrl}`);
-        return sha;
+        const providerOptions: ProviderOptions = {
+            cloneDir: config.cloneDir,
+            githubToken: config.githubToken,
+            slackBotToken: config.slackBotToken,
+            discordBotToken: config.discordBotToken,
+        };
+        const provider = getProvider(source.type)(source, providerOptions);
+        return provider.getCurrentStateToken();
     }
 
     /**
@@ -198,6 +204,18 @@ export class IndexingOrchestrator {
         console.log(
             `[orchestrator] Incremental re-index queued for ${repoUrl}`,
         );
+        this.drain().catch((err) => {
+            console.error('[orchestrator] drain() failed:', err);
+        });
+    }
+
+    /**
+     * Queue a reindex for a single named source. Returns immediately.
+     * Used by webhook handlers to trigger reindexing of specific sources.
+     */
+    queueSourceReindex(sourceName: string): void {
+        this.queue.push({ type: 'source-reindex', sourceName });
+        console.log(`[orchestrator] Source re-index queued for ${sourceName}`);
         this.drain().catch((err) => {
             console.error('[orchestrator] drain() failed:', err);
         });
@@ -323,6 +341,18 @@ export class IndexingOrchestrator {
                 job.repoUrl,
             );
             affectedSourceNames = getSourcesByRepo(job.repoUrl).map(s => s.name);
+        } else if (job.type === 'source-reindex') {
+            if (!job.sourceName) {
+                console.warn('[orchestrator] source-reindex job has no sourceName, skipping');
+                return;
+            }
+            const sourceConfig = serverCfg2.sources.find(s => s.name === job.sourceName);
+            if (!sourceConfig) {
+                console.warn(`[orchestrator] source-reindex: source "${job.sourceName}" not found in config`);
+                return;
+            }
+            await this.indexSourceWithState(sourceConfig, embeddingClient, config.cloneDir);
+            affectedSourceNames = [job.sourceName];
         }
 
         if (affectedSourceNames.length > 0 && this.onReindexComplete) {
@@ -367,47 +397,12 @@ export class IndexingOrchestrator {
         githubToken: string | undefined,
         repoUrl: string,
     ): Promise<void> {
-        console.log(
-            `[orchestrator] Starting incremental re-index for ${repoUrl}`,
-        );
+        console.log(`[orchestrator] Starting incremental re-index for ${repoUrl}`);
 
         const indexableNames = getIndexableSourceNames();
         const sources = getSourcesByRepo(repoUrl).filter(s => indexableNames.has(s.name));
         for (const sourceConfig of sources) {
-            const state = await getIndexState(sourceConfig.type, sourceConfig.name);
-            if (state?.last_commit_sha) {
-                await this.withSourceLock(`${sourceConfig.type}:${sourceConfig.name}`, async () => {
-                    await this.setIndexStatus(sourceConfig.type, sourceConfig.name, 'indexing');
-                    try {
-                        const indexer = new SourceIndexer(sourceConfig, embeddingClient, cloneDir, githubToken);
-                        await indexer.incrementalIndex(state.last_commit_sha!);
-                        const headSha = await indexer.getHeadSha();
-                        await upsertIndexState({
-                            source_type: sourceConfig.type,
-                            source_key: sourceConfig.name,
-                            last_commit_sha: headSha,
-                            last_indexed_at: new Date(),
-                            status: 'idle',
-                        });
-                    } catch (err) {
-                        console.error(`[orchestrator] Incremental reindex failed for ${sourceConfig.name}:`, err);
-                        try {
-                            await this.setIndexStatus(
-                                sourceConfig.type,
-                                sourceConfig.name,
-                                'error',
-                                err instanceof Error ? err.message : String(err),
-                            );
-                        } catch (statusErr) {
-                            console.error('[orchestrator] Failed to update index status:', statusErr);
-                        }
-                        // Don't rethrow — continue with remaining sources
-                    }
-                });
-            } else {
-                // No previous state — do a full index for this source
-                await this.indexSourceWithState(sourceConfig, embeddingClient, cloneDir, githubToken);
-            }
+            await this.indexSourceWithState(sourceConfig, embeddingClient, cloneDir, githubToken);
         }
 
         console.log(`[orchestrator] Incremental re-index complete for ${repoUrl}`);
@@ -424,31 +419,38 @@ export class IndexingOrchestrator {
     ): Promise<void> {
         const lockKey = `${sourceConfig.type}:${sourceConfig.name}`;
         await this.withSourceLock(lockKey, async () => {
-            const indexer = new SourceIndexer(sourceConfig, embeddingClient, cloneDir, githubToken);
+            const providerOptions: ProviderOptions = { cloneDir, githubToken, slackBotToken: getConfig().slackBotToken, discordBotToken: getConfig().discordBotToken };
+            const provider = getProvider(sourceConfig.type)(sourceConfig, providerOptions);
+            const pipeline = new IndexingPipeline(embeddingClient, sourceConfig);
+
             await this.setIndexStatus(sourceConfig.type, sourceConfig.name, 'indexing');
 
             try {
                 const state = await getIndexState(sourceConfig.type, sourceConfig.name);
+                let result;
                 if (state?.last_commit_sha) {
-                    await indexer.incrementalIndex(state.last_commit_sha);
+                    result = await provider.incrementalAcquire(state.last_commit_sha);
                 } else {
-                    await indexer.fullIndex();
+                    result = await provider.fullAcquire();
                 }
 
-                const headSha = await indexer.getHeadSha();
+                if (result.removedIds.length > 0) {
+                    await pipeline.removeItems(result.removedIds);
+                }
+                if (result.items.length > 0) {
+                    await pipeline.indexItems(result.items, result.stateToken);
+                }
+
                 await upsertIndexState({
                     source_type: sourceConfig.type,
                     source_key: sourceConfig.name,
-                    last_commit_sha: headSha,
+                    last_commit_sha: result.stateToken,
                     last_indexed_at: new Date(),
                     status: 'idle',
                 });
                 console.log(`[orchestrator] Indexing complete for ${sourceConfig.name}`);
             } catch (err) {
-                console.error(
-                    `[orchestrator] Indexing failed for ${sourceConfig.name}:`,
-                    err,
-                );
+                console.error(`[orchestrator] Indexing failed for ${sourceConfig.name}:`, err);
                 try {
                     await this.setIndexStatus(
                         sourceConfig.type,
@@ -459,7 +461,6 @@ export class IndexingOrchestrator {
                 } catch (statusErr) {
                     console.error('[orchestrator] Failed to update index status:', statusErr);
                 }
-                // Don't rethrow — continue with remaining sources
             }
         });
     }

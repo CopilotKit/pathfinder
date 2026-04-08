@@ -22,8 +22,17 @@ export const ChunkConfigSchema = z.object({
     overlap_lines: z.number().int().nonnegative().optional(),
 });
 
-export const SourceConfigSchema = z.object({
+// Base fields shared by all source types
+const BaseSourceFields = {
     name: z.string().min(1),
+    chunk: ChunkConfigSchema,
+    version: z.string().optional(),
+    category: z.enum(['faq']).optional(),
+};
+
+// File-based source schema (markdown, code, raw-text, html) — unchanged fields from today
+export const FileSourceConfigSchema = z.object({
+    ...BaseSourceFields,
     type: z.enum(['markdown', 'code', 'raw-text', 'html']),
     repo: z.string().url().optional(),
     branch: z.string().optional(),
@@ -34,9 +43,43 @@ export const SourceConfigSchema = z.object({
     exclude_patterns: z.array(z.string()).optional(),
     skip_dirs: z.array(z.string()).optional(),
     max_file_size: z.number().int().positive().optional(),
-    chunk: ChunkConfigSchema,
-    version: z.string().optional(),
 });
+
+// Slack source schema — different required fields
+export const SlackSourceConfigSchema = z.object({
+    ...BaseSourceFields,
+    type: z.literal('slack'),
+    category: z.enum(['faq']).default('faq'),  // override base optional with default
+    channels: z.array(z.string()).min(1),
+    confidence_threshold: z.number().min(0).max(1).default(0.7),
+    trigger_emoji: z.string().default('pathfinder'),
+    min_thread_replies: z.number().int().positive().default(2),
+    distiller_model: z.string().optional(),
+});
+
+// Discord source schema — channel-based with forum thread support
+export const DiscordChannelConfigSchema = z.object({
+    id: z.string().min(1),
+    type: z.enum(['text', 'forum']),
+});
+
+export const DiscordSourceConfigSchema = z.object({
+    ...BaseSourceFields,
+    type: z.literal('discord'),
+    category: z.enum(['faq']).default('faq'),
+    guild_id: z.string().min(1),
+    channels: z.array(DiscordChannelConfigSchema).min(1),
+    confidence_threshold: z.number().min(0).max(1).default(0.7),
+    min_thread_replies: z.number().int().positive().default(2),
+    distiller_model: z.string().optional(),
+});
+
+// Union: TypeScript infers the right shape based on `type`
+export const SourceConfigSchema = z.discriminatedUnion('type', [
+    FileSourceConfigSchema,
+    SlackSourceConfigSchema,
+    DiscordSourceConfigSchema,
+]);
 
 // ── Tool configuration schemas ────────────────────────────────────────────────
 
@@ -97,12 +140,23 @@ export const CollectToolConfigSchema = z.object({
     ),
 });
 
+export const KnowledgeToolConfigSchema = z.object({
+    name: z.string().min(1),
+    type: z.literal('knowledge'),
+    description: z.string().min(1),
+    sources: z.array(z.string().min(1)).min(1),
+    min_confidence: z.number().min(0).max(1).default(0.7),
+    default_limit: z.number().int().positive().default(20),
+    max_limit: z.number().int().positive().default(100),
+});
+
 // Cross-field constraints (e.g. default_limit <= max_limit for search tools)
 // are enforced in ServerConfigSchema.superRefine, not here.
 export const AnyToolConfigSchema = z.discriminatedUnion('type', [
     SearchToolConfigObjectSchema,
     CollectToolConfigSchema,
     BashToolConfigSchema,
+    KnowledgeToolConfigSchema,
 ]);
 
 // ── Embedding configuration schemas ───────────────────────────────────────────
@@ -143,7 +197,7 @@ export const ServerConfigSchema = z.object({
     indexing: IndexingConfigSchema.optional(),
     webhook: WebhookConfigSchema.optional(),
 }).superRefine((cfg, ctx) => {
-    const hasRag = cfg.tools.some(t => t.type === 'search');
+    const hasRag = cfg.tools.some(t => t.type === 'search' || t.type === 'knowledge');
     if (hasRag && !cfg.embedding) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -186,6 +240,25 @@ export const ServerConfigSchema = z.object({
                 });
             }
         }
+        // Cross-validate: knowledge tool sources must reference existing source names
+        if (tool.type === 'knowledge') {
+            for (const src of tool.sources) {
+                if (!sourceNames.has(src)) {
+                    ctx.addIssue({
+                        code: z.ZodIssueCode.custom,
+                        message: `Knowledge tool "${tool.name}" references source "${src}" which is not defined in sources.`,
+                        path: ['tools'],
+                    });
+                }
+            }
+            if (tool.default_limit > tool.max_limit) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: `Tool "${tool.name}": default_limit must not exceed max_limit`,
+                    path: ['tools'],
+                });
+            }
+        }
     }
 });
 
@@ -194,15 +267,35 @@ export const ServerConfigSchema = z.object({
 export type UrlDerivationConfig = z.infer<typeof UrlDerivationConfigSchema>;
 export type ChunkConfig = z.infer<typeof ChunkConfigSchema>;
 export type SourceConfig = z.infer<typeof SourceConfigSchema>;
+export type FileSourceConfig = z.infer<typeof FileSourceConfigSchema>;
+export type SlackSourceConfig = z.infer<typeof SlackSourceConfigSchema>;
+export type DiscordChannelConfig = z.infer<typeof DiscordChannelConfigSchema>;
+export type DiscordSourceConfig = z.infer<typeof DiscordSourceConfigSchema>;
 export type SearchToolConfig = z.infer<typeof SearchToolConfigSchema>;
 export type BashToolConfig = z.infer<typeof BashToolConfigSchema>;
 export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
+export type KnowledgeToolConfig = z.infer<typeof KnowledgeToolConfigSchema>;
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type BashCacheConfig = z.infer<typeof BashCacheConfigSchema>;
 export type BashOptions = z.infer<typeof BashOptionsSchema>;
+
+// ── Source config type guards ────────────────────────────────────────────────
+
+const FILE_SOURCE_TYPES = new Set(['markdown', 'code', 'raw-text', 'html']);
+export function isFileSourceConfig(config: SourceConfig): config is FileSourceConfig {
+    return FILE_SOURCE_TYPES.has(config.type);
+}
+
+export function isSlackSourceConfig(config: SourceConfig): config is SlackSourceConfig {
+    return config.type === 'slack';
+}
+
+export function isDiscordSourceConfig(config: SourceConfig): config is DiscordSourceConfig {
+    return config.type === 'discord';
+}
 
 // ── Data types: unified chunk ─────────────────────────────────────────────────
 
@@ -235,6 +328,11 @@ export interface ChunkResult {
     end_line: number | null;
     language: string | null;
     similarity: number;
+}
+
+export interface FaqChunkResult extends ChunkResult {
+    metadata: Record<string, unknown>;
+    confidence: number;  // extracted from metadata->>'confidence'
 }
 
 // Chunker output: what chunkers produce before embedding
