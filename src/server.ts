@@ -12,6 +12,7 @@ import { getConfig, getServerConfig, hasSearchTools, hasCollectTools, hasBashSem
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
+import { createSlackWebhookHandler } from "./webhooks/slack.js";
 import { SessionStateManager } from "./mcp/tools/bash-session.js";
 import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
 import { insertCollectedData } from "./db/queries.js";
@@ -48,6 +49,7 @@ app.use((_req, res, next) => {
 // ---------------------------------------------------------------------------
 
 let webhookHandler: ((req: Request, res: Response) => Promise<void>) | null = null;
+let slackWebhookHandler: ((req: Request, res: Response) => Promise<void>) | null = null;
 let orchestratorRef: IndexingOrchestrator | null = null;
 const startedAt = new Date();
 const bashInstances = new Map<string, Bash>();
@@ -98,6 +100,23 @@ app.post("/webhooks/github", express.raw({ type: "application/json" }), async (r
         }
     } catch (err) {
         console.error("[webhook] Handler error:", err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Internal webhook handler error" });
+        }
+    }
+});
+
+// Slack webhook endpoint — also before express.json() for raw body signature verification
+app.post("/webhooks/slack", express.raw({ type: "application/json" }), async (req: Request, res: Response) => {
+    const handler = slackWebhookHandler;
+    if (!handler) {
+        res.status(503).json({ error: "Server still initializing" });
+        return;
+    }
+    try {
+        await handler(req, res);
+    } catch (err) {
+        console.error("[slack-webhook] Handler error:", err);
         if (!res.headersSent) {
             res.status(500).json({ error: "Internal webhook handler error" });
         }
@@ -458,6 +477,13 @@ export async function startServer(options?: ServerOptions): Promise<void> {
         const orchestrator = new IndexingOrchestrator();
         orchestratorRef = orchestrator;
         webhookHandler = createWebhookHandler(orchestrator);
+
+        // Wire up Slack webhook if any slack sources are configured
+        const hasSlackSources = serverCfg.sources.some(s => s.type === 'slack');
+        if (hasSlackSources) {
+            slackWebhookHandler = createSlackWebhookHandler(orchestrator);
+            console.log('[startup] Slack webhook handler enabled');
+        }
 
         orchestrator.onReindexComplete = (sourceNames) => {
             // Invalidate llms.txt caches so next request regenerates
