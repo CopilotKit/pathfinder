@@ -33,4 +33,6 @@ import { DiscordDataProvider } from './discord.js';
 
 registerProvider('discord', (config, options) => new DiscordDataProvider(config, options));
 
-// Notion provider registered after implementation (see notion.ts)
+import { NotionDataProvider } from './notion.js';
+
+registerProvider('notion', (config, options) => new NotionDataProvider(config, options));
