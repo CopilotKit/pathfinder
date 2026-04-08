@@ -199,7 +199,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <a href="deploy.html" class="active">Deploy</a>
         <a href="clients.html">Clients</a>
         <a href="search.html">Search</a>
-        <a href="migrate-from-mintlify.html">Migrate</a>
+        <a href="migrate-from-mintlify.html">Switch</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
     <button class="hamburger" aria-label="Menu">
@@ -217,7 +217,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="deploy.html" class="active">Deploy</a>
     <a href="clients.html">Clients</a>
     <a href="search.html">Search</a>
-    <a href="migrate-from-mintlify.html">Migrate</a>
+    <a href="migrate-from-mintlify.html">Switch</a>
     <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
 </div>
 
@@ -369,6 +369,10 @@ server {
             <tr><td><code>OPENAI_API_KEY</code></td><td>For search tools</td><td>-</td><td>OpenAI API key for computing embeddings</td></tr>
             <tr><td><code>GITHUB_TOKEN</code></td><td>For private repos</td><td>-</td><td>GitHub PAT for cloning private repositories</td></tr>
             <tr><td><code>GITHUB_WEBHOOK_SECRET</code></td><td>For webhooks</td><td>-</td><td>Secret for validating GitHub webhook payloads</td></tr>
+            <tr><td><code>SLACK_BOT_TOKEN</code></td><td>When slack sources configured</td><td>-</td><td>Slack bot OAuth token (xoxb-...)</td></tr>
+            <tr><td><code>SLACK_SIGNING_SECRET</code></td><td>When using emoji-trigger</td><td>-</td><td>For Slack webhook signature verification</td></tr>
+            <tr><td><code>DISCORD_BOT_TOKEN</code></td><td>When discord sources configured</td><td>-</td><td>Discord bot token</td></tr>
+            <tr><td><code>DISCORD_PUBLIC_KEY</code></td><td>When discord sources configured</td><td>-</td><td>For Discord webhook Ed25519 verification</td></tr>
             <tr><td><code>PORT</code></td><td>No</td><td><code>3001</code></td><td>HTTP port the server listens on</td></tr>
             <tr><td><code>PATHFINDER_CONFIG</code></td><td>No</td><td><code>pathfinder.yaml</code></td><td>Path to the config file</td></tr>
             <tr><td><code>WORKSPACE_DIR</code></td><td>No</td><td><code>/tmp/pathfinder-workspaces</code></td><td>Directory for agent workspace storage</td></tr>
