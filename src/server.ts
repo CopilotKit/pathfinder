@@ -562,9 +562,19 @@ export async function startServer(options?: ServerOptions): Promise<void> {
             });
         };
 
-        orchestrator.checkAndIndex().catch((err) => {
-            console.error("[startup] Initial index check failed:", err);
-        });
+        orchestrator.checkAndIndex()
+            .then(() => {
+                // Always refresh bash instances after startup index check.
+                // The initial bash build (above) runs before repos are cloned,
+                // so the filesystem may be empty. If checkAndIndex skipped
+                // reindexing (DB already current), onReindexComplete won't fire
+                // and the bash filesystem would stay empty without this.
+                const allSourceNames = serverCfg.sources.map(s => s.name);
+                return refreshBashInstances(allSourceNames, "startup-refresh");
+            })
+            .catch((err) => {
+                console.error("[startup] Initial index check failed:", err);
+            });
 
         orchestrator.startNightlyReindex();
     } else {
