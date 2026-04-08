@@ -32,3 +32,5 @@ registerProvider('slack', (config, options) => new SlackDataProvider(config, opt
 import { DiscordDataProvider } from './discord.js';
 
 registerProvider('discord', (config, options) => new DiscordDataProvider(config, options));
+
+// Notion provider registered after implementation (see notion.ts)
