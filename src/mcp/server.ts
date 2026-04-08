@@ -4,6 +4,7 @@ import { EmbeddingClient } from '../indexing/embeddings.js';
 import { getConfig, getServerConfig } from '../config.js';
 import { registerSearchTool } from './tools/search.js';
 import { registerCollectTool } from './tools/collect.js';
+import { registerKnowledgeTool } from './tools/knowledge.js';
 import { registerBashTool } from './tools/bash.js';
 import { SessionStateManager } from './tools/bash-session.js';
 import type { BashTelemetry } from './tools/bash-telemetry.js';
@@ -78,6 +79,9 @@ export function createMcpServer(
                 });
                 break;
             }
+            case 'knowledge':
+                registerKnowledgeTool(server, getEmbeddingClient(), tool);
+                break;
             default: {
                 const _exhaustive: never = tool;
                 throw new Error(`Unknown tool type: ${(_exhaustive as { type: string }).type}`);
