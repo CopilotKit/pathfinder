@@ -34,6 +34,8 @@ function sleep(ms: number): Promise<void> {
 
 // ── Client ───────────────────────────────────────────────────────────────────
 
+const MAX_PAGES = 100;
+
 export class SlackApiClient {
     private client: WebClient;
     private maxRetries: number;
@@ -53,17 +55,20 @@ export class SlackApiClient {
      * Fetch channel message history, paginated. Returns all top-level messages.
      * If `oldest` is provided, only messages after that timestamp are returned.
      */
-    async fetchChannelHistory(channelId: string, oldest?: string): Promise<SlackMessage[]> {
+    async fetchChannelHistory(channelId: string, oldest?: string, limit?: number): Promise<SlackMessage[]> {
         const messages: SlackMessage[] = [];
         let cursor: string | undefined;
+        const pageLimit = limit ?? 200;
+        let pages = 0;
 
         do {
+            pages++;
             const result = await this.callWithRetry(() =>
                 this.client.conversations.history({
                     channel: channelId,
                     oldest,
                     cursor,
-                    limit: 200,
+                    limit: pageLimit,
                 }),
             );
 
@@ -72,7 +77,15 @@ export class SlackApiClient {
                 messages.push(...rawMessages);
             }
 
+            // When an explicit limit is provided, don't paginate — return just the first page
+            if (limit !== undefined) break;
+
             cursor = (result as any).response_metadata?.next_cursor;
+
+            if (pages >= MAX_PAGES) {
+                console.warn(`${this.logPrefix} fetchChannelHistory hit max pages (${MAX_PAGES}) for channel ${channelId}`);
+                break;
+            }
         } while (cursor);
 
         return messages;
@@ -84,8 +97,10 @@ export class SlackApiClient {
     async fetchThreadReplies(channelId: string, threadTs: string): Promise<SlackMessage[]> {
         const messages: SlackMessage[] = [];
         let cursor: string | undefined;
+        let pages = 0;
 
         do {
+            pages++;
             const result = await this.callWithRetry(() =>
                 this.client.conversations.replies({
                     channel: channelId,
@@ -101,6 +116,11 @@ export class SlackApiClient {
             }
 
             cursor = (result as any).response_metadata?.next_cursor;
+
+            if (pages >= MAX_PAGES) {
+                console.warn(`${this.logPrefix} fetchThreadReplies hit max pages (${MAX_PAGES}) for thread ${threadTs}`);
+                break;
+            }
         } while (cursor);
 
         return messages;
@@ -195,9 +215,9 @@ export class SlackApiClient {
             }
 
             const retryAfter = (error as any)?.data?.retryAfter
-                ?? (error as any)?.retryAfter
-                ?? Math.pow(2, attempt);
-            const delayMs = retryAfter * 1000;
+                || (error as any)?.retryAfter
+                || Math.pow(2, attempt);
+            const delayMs = Math.max(retryAfter * 1000, 1000);
 
             console.warn(
                 `${this.logPrefix} Rate limited (attempt ${attempt}/${this.maxRetries}), ` +

@@ -2,6 +2,7 @@
 // Implements DataProvider: fetches threads from configured channels, distills
 // them into Q&A pairs, and returns ContentItems for the indexing pipeline.
 
+import OpenAI from 'openai';
 import { SlackApiClient, type SlackMessage } from './slack-api.js';
 import { distillThread, type ThreadMessage } from '../distiller.js';
 import { getConfig } from '../../config.js';
@@ -11,6 +12,7 @@ import type { DataProvider, AcquisitionResult, ContentItem, ProviderOptions } fr
 export class SlackDataProvider implements DataProvider {
     private config: SlackSourceConfig;
     private apiClient: SlackApiClient;
+    private openaiClient: OpenAI;
     private logPrefix: string;
 
     constructor(config: SourceConfig, options: ProviderOptions) {
@@ -18,9 +20,12 @@ export class SlackDataProvider implements DataProvider {
             throw new Error('SlackDataProvider requires a slack source config');
         }
         this.config = config;
-        this.apiClient = new SlackApiClient({
-            token: options.slackBotToken ?? '',
-        });
+        const token = options.slackBotToken;
+        if (!token) {
+            throw new Error('SlackDataProvider requires a slackBotToken in provider options');
+        }
+        this.apiClient = new SlackApiClient({ token });
+        this.openaiClient = new OpenAI({ apiKey: getConfig().openaiApiKey });
         this.logPrefix = `[slack-provider:${config.name}]`;
     }
 
@@ -28,6 +33,7 @@ export class SlackDataProvider implements DataProvider {
         console.log(`${this.logPrefix} Starting full acquire for ${this.config.channels.length} channel(s)`);
         const allItems: ContentItem[] = [];
         let maxTimestamp = '0';
+        let failedChannels = 0;
 
         for (const channelId of this.config.channels) {
             try {
@@ -35,9 +41,14 @@ export class SlackDataProvider implements DataProvider {
                 allItems.push(...items);
                 if (latestTs > maxTimestamp) maxTimestamp = latestTs;
             } catch (err) {
+                failedChannels++;
                 const msg = err instanceof Error ? err.message : String(err);
                 console.error(`${this.logPrefix} Failed to process channel ${channelId}: ${msg}`);
             }
+        }
+
+        if (failedChannels === this.config.channels.length) {
+            throw new Error(`All ${failedChannels} channel(s) failed during acquire`);
         }
 
         console.log(`${this.logPrefix} Full acquire complete: ${allItems.length} Q&A pairs from ${this.config.channels.length} channel(s)`);
@@ -53,6 +64,7 @@ export class SlackDataProvider implements DataProvider {
         console.log(`${this.logPrefix} Starting incremental acquire since ${lastStateToken}`);
         const allItems: ContentItem[] = [];
         let maxTimestamp = lastStateToken;
+        let failedChannels = 0;
 
         for (const channelId of this.config.channels) {
             try {
@@ -60,9 +72,14 @@ export class SlackDataProvider implements DataProvider {
                 allItems.push(...items);
                 if (latestTs > maxTimestamp) maxTimestamp = latestTs;
             } catch (err) {
+                failedChannels++;
                 const msg = err instanceof Error ? err.message : String(err);
                 console.error(`${this.logPrefix} Failed to process channel ${channelId}: ${msg}`);
             }
+        }
+
+        if (failedChannels === this.config.channels.length) {
+            throw new Error(`All ${failedChannels} channel(s) failed during acquire`);
         }
 
         console.log(`${this.logPrefix} Incremental acquire complete: ${allItems.length} Q&A pairs`);
@@ -79,7 +96,7 @@ export class SlackDataProvider implements DataProvider {
 
         for (const channelId of this.config.channels) {
             try {
-                const messages = await this.apiClient.fetchChannelHistory(channelId);
+                const messages = await this.apiClient.fetchChannelHistory(channelId, undefined, 1);
                 if (messages.length > 0) {
                     // Messages are returned newest-first by Slack
                     const latest = messages[0].ts;
@@ -150,8 +167,9 @@ export class SlackDataProvider implements DataProvider {
                     const user = await this.apiClient.fetchUserInfo(reply.user);
                     author = user.displayName;
                 }
-            } catch {
-                // Fall back to user ID
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.warn(`${this.logPrefix} Failed to resolve user ${reply.user}: ${msg}`);
             }
 
             threadMessages.push({
@@ -163,10 +181,9 @@ export class SlackDataProvider implements DataProvider {
         }
 
         // Distill the thread
-        const cfg = getConfig();
         const distillerResult = await distillThread(threadMessages, {
             model: this.config.distiller_model,
-            apiKey: cfg.openaiApiKey,
+            client: this.openaiClient,
         });
 
         // Filter by confidence threshold and create ContentItems
@@ -184,7 +201,9 @@ export class SlackDataProvider implements DataProvider {
             if (!permalink) {
                 try {
                     permalink = await this.apiClient.getChannelPermalink(channelId, parentMessage.ts);
-                } catch {
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    console.warn(`${this.logPrefix} Failed to get permalink for ${channelId}/${parentMessage.ts}: ${msg}`);
                     permalink = undefined;
                 }
             }

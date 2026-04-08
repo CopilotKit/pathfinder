@@ -10,7 +10,7 @@ import {
     upsertIndexState,
 } from '../db/queries.js';
 import { isFileSourceConfig } from '../types.js';
-import type { IndexState, IndexStatus, SourceConfig, FileSourceConfig } from '../types.js';
+import type { IndexState, IndexStatus, SourceConfig } from '../types.js';
 import type { ProviderOptions } from './providers/types.js';
 
 /**
@@ -90,9 +90,10 @@ export class IndexingOrchestrator {
                 return;
             }
             // Queue incremental reindexes for each affected git-backed repo
-            const reposToReindex = new Set(
-                sourcesNeedingFullReindex.filter(s => isFileSourceConfig(s) && s.repo).map(s => (s as FileSourceConfig).repo!),
-            );
+            const reposToReindex = new Set<string>();
+            for (const s of sourcesNeedingFullReindex) {
+                if (isFileSourceConfig(s) && s.repo) reposToReindex.add(s.repo);
+            }
             for (const repoUrl of reposToReindex) {
                 this.queueIncrementalReindex(repoUrl);
             }
@@ -101,6 +102,12 @@ export class IndexingOrchestrator {
             if (localSources.length > 0) {
                 this.queue.push({ type: 'full-reindex-local', sources: localSources });
                 this.drain().catch(err => console.error('[orchestrator] drain() failed:', err));
+            }
+
+            // Non-file sources (e.g., Slack) that need reindexing
+            const nonFileSources = sourcesNeedingFullReindex.filter(s => !isFileSourceConfig(s));
+            for (const source of nonFileSources) {
+                this.queueSourceReindex(source.name);
             }
         }
 

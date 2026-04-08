@@ -231,8 +231,9 @@ export type BashOptions = z.infer<typeof BashOptionsSchema>;
 
 // ── Source config type guards ────────────────────────────────────────────────
 
+const FILE_SOURCE_TYPES = new Set(['markdown', 'code', 'raw-text', 'html']);
 export function isFileSourceConfig(config: SourceConfig): config is FileSourceConfig {
-    return config.type !== 'slack';
+    return FILE_SOURCE_TYPES.has(config.type);
 }
 
 export function isSlackSourceConfig(config: SourceConfig): config is SlackSourceConfig {

@@ -26,6 +26,7 @@ export interface DistillerOptions {
     model?: string;
     maxMessages?: number;
     apiKey?: string;
+    client?: OpenAI;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ export async function distillThread(
         return `[${msg.timestamp}] ${msg.author}: ${msg.content}${reactions}`;
     }).join('\n\n');
 
-    const client = new OpenAI({ apiKey: options?.apiKey });
+    const client = options?.client ?? new OpenAI({ apiKey: options?.apiKey });
 
     try {
         const response = await client.chat.completions.create({
