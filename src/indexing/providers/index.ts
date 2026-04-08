@@ -28,3 +28,7 @@ for (const type of ['markdown', 'code', 'raw-text', 'html']) {
 import { SlackDataProvider } from './slack.js';
 
 registerProvider('slack', (config, options) => new SlackDataProvider(config, options));
+
+import { DiscordDataProvider } from './discord.js';
+
+registerProvider('discord', (config, options) => new DiscordDataProvider(config, options));

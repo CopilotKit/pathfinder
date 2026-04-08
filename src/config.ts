@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { ServerConfigSchema, type ServerConfig } from './types.js';
+import { ServerConfigSchema, type ServerConfig, isDiscordSourceConfig } from './types.js';
 
 // ── Environment variable config (secrets and runtime settings) ────────────────
 
@@ -19,6 +19,8 @@ export interface Config {
     cloneDir: string;
     slackBotToken: string;
     slackSigningSecret: string;
+    discordBotToken: string;
+    discordPublicKey: string;
 }
 
 /**
@@ -85,6 +87,15 @@ function parseConfig(): Config {
     if (hasSlackSource && !slackBotToken) missing.push('SLACK_BOT_TOKEN');
     if (hasSlackSource && !openaiApiKey) missing.push('OPENAI_API_KEY (required for Slack distillation)');
 
+    // Discord credentials — required when any discord source is configured
+    const hasDiscordSource = getServerConfig().sources.some(s => s.type === 'discord');
+    const hasDiscordTextChannels = getServerConfig().sources.some(s => isDiscordSourceConfig(s) && s.channels.some(c => c.type === 'text'));
+    const discordBotToken = process.env.DISCORD_BOT_TOKEN ?? '';
+    const discordPublicKey = process.env.DISCORD_PUBLIC_KEY ?? '';
+    if (hasDiscordSource && !discordBotToken) missing.push('DISCORD_BOT_TOKEN');
+    if (hasDiscordSource && !discordPublicKey) missing.push('DISCORD_PUBLIC_KEY');
+    if (hasDiscordTextChannels && !openaiApiKey) missing.push('OPENAI_API_KEY (required for Discord text channel distillation)');
+
     if (missing.length > 0) {
         throw new Error(
             `Missing required environment variables: ${missing.join(', ')}. ` +
@@ -108,6 +119,8 @@ function parseConfig(): Config {
         cloneDir: process.env.CLONE_DIR || '/tmp/mcp-repos',
         slackBotToken,
         slackSigningSecret,
+        discordBotToken,
+        discordPublicKey,
     };
 }
 
@@ -260,7 +273,7 @@ function loadServerConfig(): ServerConfig {
 
     // Validate local source paths exist (file-based sources only)
     for (const source of result.data.sources) {
-        if (source.type === 'slack') continue;
+        if (source.type === 'slack' || source.type === 'discord') continue;
         if (!source.repo) {
             const resolved = resolve(source.path);
             if (!existsSync(resolved)) {

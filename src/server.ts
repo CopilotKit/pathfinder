@@ -9,11 +9,12 @@ import { buildBashFilesMap, rebuildBashInstance } from "./mcp/tools/bash-fs.js";
 import { initializeSchema, closePool } from "./db/client.js";
 import { getIndexStats, getAllChunksForLlms, getFaqChunks } from "./db/queries.js";
 import { getConfig, getServerConfig, hasSearchTools, hasKnowledgeTools, hasCollectTools, hasBashSemanticSearch } from "./config.js";
-import type { SlackSourceConfig } from "./types.js";
+import { isSlackSourceConfig, isDiscordSourceConfig } from "./types.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
 import { createSlackWebhookHandler } from "./webhooks/slack.js";
+import { createDiscordWebhookHandler } from "./webhooks/discord.js";
 import { SessionStateManager } from "./mcp/tools/bash-session.js";
 import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
 import { insertCollectedData } from "./db/queries.js";
@@ -52,6 +53,7 @@ app.use((_req, res, next) => {
 
 let webhookHandler: ((req: Request, res: Response) => Promise<void>) | null = null;
 let slackWebhookHandler: ((req: Request, res: Response) => Promise<void>) | null = null;
+let discordWebhookHandler: ((req: Request, res: Response) => Promise<void>) | null = null;
 let orchestratorRef: IndexingOrchestrator | null = null;
 const startedAt = new Date();
 const bashInstances = new Map<string, Bash>();
@@ -119,6 +121,23 @@ app.post("/webhooks/slack", express.raw({ type: "application/json" }), async (re
         await handler(req, res);
     } catch (err) {
         console.error("[slack-webhook] Handler error:", err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Internal webhook handler error" });
+        }
+    }
+});
+
+// Discord webhook endpoint — also before express.json() for raw body signature verification
+app.post("/webhooks/discord", express.raw({ type: "application/json" }), async (req: Request, res: Response) => {
+    const handler = discordWebhookHandler;
+    if (!handler) {
+        res.status(503).json({ error: "Server still initializing" });
+        return;
+    }
+    try {
+        await handler(req, res);
+    } catch (err) {
+        console.error("[discord-webhook] Handler error:", err);
         if (!res.headersSent) {
             res.status(500).json({ error: "Internal webhook handler error" });
         }
@@ -406,7 +425,9 @@ app.get('/faq.txt', async (_req: Request, res: Response) => {
                 .filter(s => ('category' in s) && s.category === 'faq')
                 .map(s => ({
                     name: s.name,
-                    confidenceThreshold: s.type === 'slack' ? (s as SlackSourceConfig).confidence_threshold : 0.7,
+                    confidenceThreshold: isSlackSourceConfig(s) ? s.confidence_threshold
+                        : isDiscordSourceConfig(s) ? s.confidence_threshold
+                        : 0.7,
                 }));
 
             if (faqSources.length === 0) {
@@ -522,6 +543,13 @@ export async function startServer(options?: ServerOptions): Promise<void> {
         if (hasSlackSources) {
             slackWebhookHandler = createSlackWebhookHandler(orchestrator);
             console.log('[startup] Slack webhook handler enabled');
+        }
+
+        // Wire up Discord webhook if any discord sources are configured
+        const hasDiscordSources = serverCfg.sources.some(s => s.type === 'discord');
+        if (hasDiscordSources) {
+            discordWebhookHandler = createDiscordWebhookHandler(orchestrator);
+            console.log('[startup] Discord webhook handler enabled');
         }
 
         orchestrator.onReindexComplete = (sourceNames) => {
