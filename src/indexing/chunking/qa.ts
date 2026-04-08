@@ -1,14 +1,14 @@
-// Slack chunker — formats distilled Q&A pairs for embedding.
-// Minimal: each Q&A pair is already a self-contained chunk from the distiller.
+// Q&A chunker — formats distilled Q&A pairs for embedding.
+// Source-agnostic: used by any source that produces Q&A-formatted content.
 
 import type { ChunkOutput, SourceConfig } from '../../types.js';
 
 /**
- * Chunk Slack Q&A content. Each content item from the SlackDataProvider
- * is a single Q&A pair, already sized appropriately by the LLM distiller.
+ * Chunk Q&A content. Each content item from a FAQ-category provider
+ * is a single Q&A pair, already sized appropriately.
  * The chunker formats it and returns a single ChunkOutput.
  */
-export function chunkSlack(content: string, filePath: string, config: SourceConfig): ChunkOutput[] {
+export function chunkQa(content: string, filePath: string, config: SourceConfig): ChunkOutput[] {
     if (!content || !content.trim()) {
         return [];
     }
