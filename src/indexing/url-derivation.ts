@@ -1,12 +1,12 @@
 // Configurable URL derivation from file paths based on source config.
 
-import type { SourceConfig } from '../types.js';
+import type { FileSourceConfig } from '../types.js';
 
 /**
  * Derive a public URL from a relative file path using the source's URL derivation rules.
  * Returns null if the source has no base_url or url_derivation configured.
  */
-export function deriveUrl(filePath: string, sourceConfig: SourceConfig): string | null {
+export function deriveUrl(filePath: string, sourceConfig: FileSourceConfig): string | null {
     if (!sourceConfig.base_url || !sourceConfig.url_derivation) return null;
 
     const d = sourceConfig.url_derivation;

@@ -57,16 +57,18 @@ Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source c
 | **Search** | Semantic search over indexed content | `search-docs("how to authenticate")` |
 | **Bash** | Virtual filesystem with find, grep, cat, ls | `explore-docs("cat /docs/quickstart.mdx")` |
 | **Collect** | Structured data collection from agents | `submit-feedback(rating: "helpful")` |
+| **Knowledge** | Browse/search FAQ pairs from conversational sources | `knowledge-base("how to deploy")` |
 
 ## Features
 
 - **[Semantic Search](https://pathfinder.copilotkit.dev/search)** — pgvector RAG with configurable chunk sizes, overlap, and score thresholds
 - **[Filesystem Exploration](https://pathfinder.copilotkit.dev/search)** — QuickJS WASM sandbox with session state, `qmd` semantic grep, `related` files
-- **[4 Source Types](https://pathfinder.copilotkit.dev/config)** — Markdown, code, raw-text, HTML — with pluggable chunker registry
+- **[6 Source Types](https://pathfinder.copilotkit.dev/config)** — Markdown, code, raw-text, HTML, Slack, Discord — with pluggable chunker registry
 - **[Config-Driven](https://pathfinder.copilotkit.dev/config)** — Everything in one `pathfinder.yaml`: sources, tools, embedding, indexing, webhooks
 - **[Client Setup](https://pathfinder.copilotkit.dev/clients)** — Claude Desktop, Claude Code, Cursor, Codex, VS Code, any Streamable HTTP client
 - **[Docker + Railway](https://pathfinder.copilotkit.dev/deploy)** — Container image, docker-compose, Railway one-click
-- **[Auto-Generated Endpoints](https://pathfinder.copilotkit.dev/usage)** — `/llms.txt`, `/llms-full.txt`, `/.well-known/skills/default/skill.md`
+- **[Conversational Sources](https://pathfinder.copilotkit.dev/config)** — Slack threads and Discord forums distilled into searchable Q&A pairs
+- **[Auto-Generated Endpoints](https://pathfinder.copilotkit.dev/usage)** — `/llms.txt`, `/llms-full.txt`, `/faq.txt`, `/.well-known/skills/default/skill.md`
 - **[Webhook Reindexing](https://pathfinder.copilotkit.dev/deploy)** — GitHub push triggers incremental reindex
 - **[IP Rate Limiting](https://pathfinder.copilotkit.dev/config)** — Per-IP session caps and configurable TTL
 
@@ -78,6 +80,9 @@ npx @copilotkit/pathfinder init
 
 # Start server (uses PGlite if no DATABASE_URL)
 npx @copilotkit/pathfinder serve
+
+# Validate config, env vars, and source connectivity
+npx @copilotkit/pathfinder validate
 
 # Docker with Postgres
 docker compose up

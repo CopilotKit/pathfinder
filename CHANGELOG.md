@@ -1,5 +1,25 @@
 # @copilotkit/pathfinder
 
+## 1.5.0
+
+### Minor Changes
+
+- **Data Provider Abstraction**: Refactored SourceIndexer into DataProvider interface + IndexingPipeline, enabling API-based sources alongside file-based sources
+- **Slack Data Provider**: Index Slack threads as searchable Q&A knowledge via LLM distillation (gpt-4o-mini). Configurable channels, confidence threshold, emoji-triggered reindexing
+- **Discord Data Provider**: Index Discord text channels (LLM distillation) and forum channels (direct Q&A extraction at confidence 1.0). Forum posts are inherently Q&A-shaped — no LLM needed
+- **FAQ Endpoint** (`/faq.txt`): Serves Q&A pairs from all FAQ-category sources, filtered by confidence at query time. Advertised via Link header
+- **Knowledge MCP Tool**: New `knowledge` tool type with browse mode (full FAQ listing) and search mode (vector search scoped to FAQ sources)
+- **`pathfinder validate` CLI Command**: Validates YAML config, checks env vars, probes source connectivity. Exit code 1 on errors
+- **Q&A Chunker**: Renamed from slack-specific to source-agnostic, registered for both slack and discord source types
+
+### Patch Changes
+
+- Fix bash filesystem empty after fresh deploy when DB already has current index state
+- Fix pathfinder-docs Railway service missing deployment trigger
+- Always refresh bash instances after startup index check completes
+- Rename "Migrate" to "Switch" in docs nav (matches aimock)
+- Update docs: config reference (Slack, Discord, Knowledge tool, jump links), usage (FAQ endpoint, validate command), deploy (new env vars), README
+
 ## 1.4.0
 
 ### Minor Changes

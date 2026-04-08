@@ -204,7 +204,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <a href="deploy.html">Deploy</a>
         <a href="clients.html">Clients</a>
         <a href="search.html">Search</a>
-        <a href="migrate-from-mintlify.html">Migrate</a>
+        <a href="migrate-from-mintlify.html">Switch</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
     <button class="hamburger" aria-label="Menu">
@@ -222,7 +222,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="deploy.html">Deploy</a>
     <a href="clients.html">Clients</a>
     <a href="search.html">Search</a>
-    <a href="migrate-from-mintlify.html">Migrate</a>
+    <a href="migrate-from-mintlify.html">Switch</a>
     <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
 </div>
 
@@ -281,9 +281,22 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <li><strong><code>/llms.txt</code></strong> — A concise index of all indexed documentation, following the <a href="https://llmstxt.org/">llms.txt convention</a>. Useful for agents that want a quick overview of available content.</li>
         <li><strong><code>/llms-full.txt</code></strong> — The complete content of all indexed docs in plain text. Larger, but gives agents full context without multiple tool calls.</li>
         <li><strong><code>/.well-known/skills/default/skill.md</code></strong> — A dynamic agent capability description that reflects your current tool configuration. Agents can read this to understand what Pathfinder can do.</li>
+        <li><strong><code>/faq.txt</code></strong> — Q&amp;A pairs from FAQ-category sources (Slack threads, Discord forums), filtered by confidence. Only generated when sources with <code>category: faq</code> are configured.</li>
     </ul>
 
-    <p>All HTTP responses include a <code>Link</code> header pointing to <code>/llms.txt</code>, so clients that follow the convention can discover the index automatically.</p>
+    <p>All HTTP responses include <code>Link</code> headers pointing to <code>/llms.txt</code> and, when available, <code>&lt;/faq.txt&gt;; rel="faq"</code>, so clients can discover these endpoints automatically.</p>
+
+    <h2>CLI Commands</h2>
+
+    <ul>
+        <li><strong><code>pathfinder init</code></strong> — Scaffold a new <code>pathfinder.yaml</code> config file interactively.</li>
+        <li><strong><code>pathfinder serve</code></strong> — Start the MCP server. Uses PGlite if no <code>DATABASE_URL</code> is set.</li>
+        <li><strong><code>pathfinder validate</code></strong> — Validate config schema, check that required environment variables are set, and probe source connectivity. Returns pass/fail per source with actionable error messages. Exits with code 1 on errors.</li>
+    </ul>
+
+    <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder validate
+<span class="comment"># or with a custom config path:</span>
+<span class="cmd">$</span> npx @copilotkit/pathfinder validate -c custom.yaml</div>
 
     <h2>Learn More</h2>
 
@@ -305,7 +318,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
             <p class="subtitle">How semantic search works, the <code>qmd</code> command, related files, grep-miss suggestions, and search tool parameters.</p>
         </div>
         <div class="path-card">
-            <h3><a href="migrate-from-mintlify.html">Migrate from Mintlify</a></h3>
+            <h3><a href="migrate-from-mintlify.html">Switch from Mintlify</a></h3>
             <p class="subtitle">Step-by-step guide from ChromaFS to Pathfinder. Concept mapping, walkthrough, and what's different.</p>
         </div>
     </div>

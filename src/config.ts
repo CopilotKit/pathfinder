@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { ServerConfigSchema, type ServerConfig } from './types.js';
+import { ServerConfigSchema, type ServerConfig, isDiscordSourceConfig } from './types.js';
 
 // ── Environment variable config (secrets and runtime settings) ────────────────
 
@@ -17,6 +17,10 @@ export interface Config {
     nodeEnv: string;
     logLevel: string;
     cloneDir: string;
+    slackBotToken: string;
+    slackSigningSecret: string;
+    discordBotToken: string;
+    discordPublicKey: string;
 }
 
 /**
@@ -24,6 +28,13 @@ export interface Config {
  */
 export function hasSearchTools(): boolean {
     return getServerConfig().tools.some(t => t.type === 'search');
+}
+
+/**
+ * Check whether any knowledge tools are configured (requires embeddings + indexing).
+ */
+export function hasKnowledgeTools(): boolean {
+    return getServerConfig().tools.some(t => t.type === 'knowledge');
 }
 
 /**
@@ -47,8 +58,10 @@ export function hasBashSemanticSearch(): boolean {
  * Get the set of source names that need indexing (only those referenced by search tools).
  */
 export function getIndexableSourceNames(): Set<string> {
-    const searchTools = getServerConfig().tools.filter(t => t.type === 'search');
-    return new Set(searchTools.map(t => t.source));
+    const cfg = getServerConfig();
+    const searchSources = cfg.tools.filter(t => t.type === 'search').map(t => t.source);
+    const knowledgeSources = cfg.tools.filter(t => t.type === 'knowledge').flatMap(t => t.sources);
+    return new Set([...searchSources, ...knowledgeSources]);
 }
 
 let cachedConfig: Config | null = null;
@@ -56,7 +69,7 @@ let cachedConfig: Config | null = null;
 function parseConfig(): Config {
     const missing: string[] = [];
 
-    const needsRag = hasSearchTools();
+    const needsRag = hasSearchTools() || hasKnowledgeTools();
     const needsDb = needsRag || hasCollectTools() || hasBashSemanticSearch();
 
     const databaseUrl = process.env.DATABASE_URL;
@@ -66,6 +79,22 @@ function parseConfig(): Config {
     if (!openaiApiKey && needsRag) missing.push('OPENAI_API_KEY');
 
     const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
+
+    // Slack credentials — required when any slack source is configured
+    const hasSlackSource = getServerConfig().sources.some(s => s.type === 'slack');
+    const slackBotToken = process.env.SLACK_BOT_TOKEN ?? '';
+    const slackSigningSecret = process.env.SLACK_SIGNING_SECRET ?? '';
+    if (hasSlackSource && !slackBotToken) missing.push('SLACK_BOT_TOKEN');
+    if (hasSlackSource && !openaiApiKey) missing.push('OPENAI_API_KEY (required for Slack distillation)');
+
+    // Discord credentials — required when any discord source is configured
+    const hasDiscordSource = getServerConfig().sources.some(s => s.type === 'discord');
+    const hasDiscordTextChannels = getServerConfig().sources.some(s => isDiscordSourceConfig(s) && s.channels.some(c => c.type === 'text'));
+    const discordBotToken = process.env.DISCORD_BOT_TOKEN ?? '';
+    const discordPublicKey = process.env.DISCORD_PUBLIC_KEY ?? '';
+    if (hasDiscordSource && !discordBotToken) missing.push('DISCORD_BOT_TOKEN');
+    if (hasDiscordSource && !discordPublicKey) missing.push('DISCORD_PUBLIC_KEY');
+    if (hasDiscordTextChannels && !openaiApiKey) missing.push('OPENAI_API_KEY (required for Discord text channel distillation)');
 
     if (missing.length > 0) {
         throw new Error(
@@ -88,6 +117,10 @@ function parseConfig(): Config {
         nodeEnv: process.env.NODE_ENV || 'development',
         logLevel: process.env.LOG_LEVEL || 'info',
         cloneDir: process.env.CLONE_DIR || '/tmp/mcp-repos',
+        slackBotToken,
+        slackSigningSecret,
+        discordBotToken,
+        discordPublicKey,
     };
 }
 
@@ -193,6 +226,18 @@ function loadServerConfig(): ServerConfig {
         }
     }
 
+    // Cross-validate: every knowledge tool's sources must reference existing source names
+    const knowledgeTools = result.data.tools.filter(t => t.type === 'knowledge');
+    for (const tool of knowledgeTools) {
+        for (const src of tool.sources) {
+            if (!sourceNames.has(src)) {
+                throw new Error(
+                    `Knowledge tool "${tool.name}" references source "${src}" which is not defined in sources.`
+                );
+            }
+        }
+    }
+
     // Cross-validate: webhook repo_sources and path_triggers must reference valid source names
     if (result.data.webhook) {
         const wh = result.data.webhook;
@@ -214,8 +259,21 @@ function loadServerConfig(): ServerConfig {
         }
     }
 
-    // Validate local source paths exist
+    // Warn if knowledge tools reference non-FAQ sources
+    for (const tool of result.data.tools) {
+        if (tool.type === 'knowledge') {
+            for (const srcName of tool.sources) {
+                const src = result.data.sources.find(s => s.name === srcName);
+                if (src && (!('category' in src) || src.category !== 'faq')) {
+                    console.warn(`[config] Knowledge tool "${tool.name}" references source "${srcName}" which does not have category: "faq" — queries may return empty results`);
+                }
+            }
+        }
+    }
+
+    // Validate local source paths exist (file-based sources only)
     for (const source of result.data.sources) {
+        if (source.type === 'slack' || source.type === 'discord') continue;
         if (!source.repo) {
             const resolved = resolve(source.path);
             if (!existsSync(resolved)) {

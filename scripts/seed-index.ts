@@ -8,7 +8,8 @@
 import { initializeSchema, getPool } from '../src/db/client.js';
 import { getConfig, getServerConfig } from '../src/config.js';
 import { EmbeddingClient } from '../src/indexing/embeddings.js';
-import { SourceIndexer } from '../src/indexing/source-indexer.js';
+import { getProvider } from '../src/indexing/providers/index.js';
+import { IndexingPipeline } from '../src/indexing/pipeline.js';
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -76,17 +77,18 @@ async function main(): Promise<void> {
         const start = Date.now();
         console.log(`--- Indexing source: ${sourceConfig.name} (${sourceConfig.type}) ---`);
 
-        const indexer = new SourceIndexer(
-            sourceConfig,
-            embeddingClient,
-            config.cloneDir,
-            config.githubToken || undefined,
-        );
-
-        await indexer.fullIndex();
+        const provider = getProvider(sourceConfig.type)(sourceConfig, {
+            cloneDir: config.cloneDir,
+            githubToken: config.githubToken || undefined,
+        });
+        const pipeline = new IndexingPipeline(embeddingClient, sourceConfig);
+        const result = await provider.fullAcquire();
+        if (result.items.length > 0) {
+            await pipeline.indexItems(result.items, result.stateToken);
+        }
 
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-        console.log(`Source "${sourceConfig.name}" complete in ${elapsed}s\n`);
+        console.log(`Source "${sourceConfig.name}" indexed ${result.items.length} items in ${elapsed}s\n`);
     }
 
     const totalElapsed = ((Date.now() - overallStart) / 1000).toFixed(1);

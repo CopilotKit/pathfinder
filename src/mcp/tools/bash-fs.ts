@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Bash } from 'just-bash';
-import { matchesPatterns } from '../../indexing/source-indexer.js';
+import { matchesPatterns } from '../../indexing/utils.js';
+import { isFileSourceConfig } from '../../types.js';
 import type { SourceConfig } from '../../types.js';
 import { generateIndexMd, generateSearchTipsMd } from './bash-virtual-files.js';
 
@@ -53,6 +54,7 @@ export async function buildBashFilesMap(
     const multiSource = sources.length > 1;
 
     for (const source of sources) {
+        if (!isFileSourceConfig(source)) continue; // Slack sources don't have filesystem paths
         let rootDir: string;
         if (source.repo && options?.cloneDir) {
             // Git-based source: the orchestrator clones into cloneDir/<repoName>/

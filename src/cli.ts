@@ -11,7 +11,7 @@ const program = new Command();
 program
     .name("pathfinder")
     .description("Agentic docs retrieval for AI agents")
-    .version("1.1.0");
+    .version("1.5.0");
 
 program
     .command("init")
@@ -60,6 +60,17 @@ program
             port: opts.port,
             configPath: opts.config,
         });
+    });
+
+program
+    .command('validate')
+    .description('Validate config and probe source connectivity')
+    .option('-c, --config <path>', 'Path to pathfinder.yaml')
+    .action(async (opts) => {
+        const { validateConfig, formatValidationResult } = await import('./validate.js');
+        const result = await validateConfig(opts.config);
+        console.log(formatValidationResult(result));
+        process.exit(result.errors.length > 0 ? 1 : 0);
     });
 
 program.parse();

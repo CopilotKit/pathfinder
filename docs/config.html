@@ -130,6 +130,14 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 /* Inline code */
 .article code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
 
+/* Page TOC */
+.page-toc { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin-bottom: 32px; }
+.page-toc h4 { font-size: 13px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+.page-toc ul { list-style: none; padding: 0; margin: 0; columns: 2; column-gap: 2rem; }
+.page-toc li { margin-bottom: 4px; }
+.page-toc a { color: var(--text-secondary); text-decoration: none; font-size: 0.875rem; transition: color 0.15s; }
+.page-toc a:hover { color: var(--accent); }
+
 /* Footer */
 footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
 .footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
@@ -186,7 +194,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <a href="deploy.html">Deploy</a>
         <a href="clients.html">Clients</a>
         <a href="search.html">Search</a>
-        <a href="migrate-from-mintlify.html">Migrate</a>
+        <a href="migrate-from-mintlify.html">Switch</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
     <button class="hamburger" aria-label="Menu">
@@ -204,7 +212,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="deploy.html">Deploy</a>
     <a href="clients.html">Clients</a>
     <a href="search.html">Search</a>
-    <a href="migrate-from-mintlify.html">Migrate</a>
+    <a href="migrate-from-mintlify.html">Switch</a>
     <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
 </div>
 
@@ -212,7 +220,29 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <h1>Configuration <span class="accent">Reference</span></h1>
     <p class="lead">Everything in Pathfinder is driven by a single <code>pathfinder.yaml</code> file. This is the full annotated reference.</p>
 
-    <h2>server</h2>
+    <nav class="page-toc">
+        <h4>On this page</h4>
+        <ul>
+            <li><a href="#server">Server</a></li>
+            <li><a href="#sources">Sources</a></li>
+            <li><a href="#source-markdown">Markdown</a></li>
+            <li><a href="#source-code">Code</a></li>
+            <li><a href="#source-raw-text">Raw Text</a></li>
+            <li><a href="#source-html">HTML</a></li>
+            <li><a href="#source-slack">Slack</a></li>
+            <li><a href="#source-discord">Discord</a></li>
+            <li><a href="#tools">Tools</a></li>
+            <li><a href="#tool-search">Search</a></li>
+            <li><a href="#tool-bash">Bash</a></li>
+            <li><a href="#tool-collect">Collect</a></li>
+            <li><a href="#tool-knowledge">Knowledge</a></li>
+            <li><a href="#embedding">Embedding</a></li>
+            <li><a href="#indexing">Indexing</a></li>
+            <li><a href="#webhook">Webhook</a></li>
+        </ul>
+    </nav>
+
+    <h2 id="server">server</h2>
 
     <p>Top-level server identity and session management.</p>
 
@@ -229,13 +259,13 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <li><strong>session_ttl_minutes</strong> — Sessions with no activity for this many minutes are cleaned up. Optional, defaults to 30.</li>
     </ul>
 
-    <h2>sources</h2>
+    <h2 id="sources">sources</h2>
 
     <p>Define where your content lives. Each source becomes a virtual filesystem that agents can explore.</p>
 
     <div class="code-block"><span class="key">sources:</span>
   - <span class="key">name:</span> <span class="value">docs</span>                        <span class="comment"># Unique name, referenced by tools</span>
-    <span class="key">type:</span> <span class="value">markdown</span>                    <span class="comment"># markdown | code | raw-text</span>
+    <span class="key">type:</span> <span class="value">markdown</span>                    <span class="comment"># markdown | code | raw-text | html</span>
     <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>  <span class="comment"># Git repo URL (optional for local paths)</span>
     <span class="key">branch:</span> <span class="value">main</span>                      <span class="comment"># Git branch to track (default: default branch)</span>
     <span class="key">path:</span> <span class="value">docs/</span>                       <span class="comment"># Directory within the repo to index</span>
@@ -250,6 +280,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
       - <span class="value">.git</span>
       - <span class="value">node_modules</span>
     <span class="key">max_file_size:</span> <span class="value">100000</span>              <span class="comment"># Max file size in bytes to index (optional)</span>
+    <span class="key">category:</span> <span class="value">faq</span>                      <span class="comment"># Optional. Marks content as FAQ for /faq.txt and knowledge tools</span>
     <span class="key">base_url:</span> <span class="value">https://docs.example.com</span>  <span class="comment"># Base URL for generating doc links (optional)</span>
     <span class="key">url_derivation:</span>                     <span class="comment"># How to derive URLs from file paths (optional)</span>
       <span class="key">strip_prefix:</span> <span class="value">docs/</span>
@@ -263,7 +294,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
       <span class="key">overlap_lines:</span> <span class="value">10</span>              <span class="comment"># Line overlap between chunks</span></div>
 
     <ul>
-        <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks.</li>
+        <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks. <code>html</code> parses HTML structure and extracts text content with token-based chunks.</li>
+        <li><strong>category</strong> — Optional tag applied to all chunks from this source. Sources with <code>category: faq</code> contribute to the <code>/faq.txt</code> endpoint and can be queried via knowledge tools.</li>
         <li><strong>repo</strong> — If provided, Pathfinder clones and updates from this repo. Omit for local directories.</li>
         <li><strong>version</strong> — Tags all indexed chunks with this version string. Used for version-filtered search queries.</li>
         <li><strong>base_url</strong> — Base URL prepended to the derived slug when generating document links. Works together with <code>url_derivation</code>.</li>
@@ -277,6 +309,78 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         </li>
         <li><strong>chunk</strong> — Use <code>target_tokens</code>/<code>overlap_tokens</code> for markdown and raw-text sources. Use <code>target_lines</code>/<code>overlap_lines</code> for code sources.</li>
     </ul>
+
+    <h3 id="source-markdown">Source type: markdown</h3>
+
+    <p>Splits content on Markdown headings and uses token-based chunks. Best for documentation written in <code>.md</code> or <code>.mdx</code> files. Configure with <code>target_tokens</code> and <code>overlap_tokens</code>.</p>
+
+    <h3 id="source-code">Source type: code</h3>
+
+    <p>Splits on function/class boundaries and uses line-based chunks. Best for source code. Configure with <code>target_lines</code> and <code>overlap_lines</code>.</p>
+
+    <h3 id="source-raw-text">Source type: raw-text</h3>
+
+    <p>Treats content as unstructured plain text with token-based chunks. Use when content has no Markdown or code structure.</p>
+
+    <h3 id="source-html">Source type: html</h3>
+
+    <p>Parses HTML structure, extracts text content, and uses token-based chunks. Added in v1.4. Best for static sites, rendered documentation, or any HTML content.</p>
+
+    <h3 id="source-slack">Source type: slack</h3>
+
+    <p>Indexes Slack threads as Q&amp;A pairs. An LLM distills each qualifying thread into a question-answer pair with a confidence score. All pairs are stored; confidence filtering happens at query time.</p>
+
+    <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">community-support</span>
+    <span class="key">type:</span> <span class="value">slack</span>
+    <span class="key">category:</span> <span class="value">faq</span>
+    <span class="key">channels:</span>
+      - <span class="value">C06ABC123</span>                       <span class="comment"># Channel IDs to index</span>
+      - <span class="value">C06DEF456</span>
+    <span class="key">confidence_threshold:</span> <span class="value">0.7</span>            <span class="comment"># Min confidence for query results (0-1)</span>
+    <span class="key">trigger_emoji:</span> <span class="value">white_check_mark</span>     <span class="comment"># Emoji reaction triggers immediate reindex of thread</span>
+    <span class="key">min_thread_replies:</span> <span class="value">2</span>               <span class="comment"># Minimum replies for a thread to be indexed</span>
+    <span class="key">distiller_model:</span> <span class="value">gpt-4o-mini</span>        <span class="comment"># LLM model for distillation (default: gpt-4o-mini)</span></div>
+
+    <ul>
+        <li><strong>channels</strong> — Array of Slack channel IDs to monitor. The bot must be a member of each channel.</li>
+        <li><strong>confidence_threshold</strong> — Minimum confidence score (0-1) for Q&amp;A pairs to appear in query results. Pairs below this threshold are still stored but filtered out at query time.</li>
+        <li><strong>trigger_emoji</strong> — When a user reacts with this emoji on a thread, it triggers immediate reindexing of that thread. Useful for curating high-quality answers.</li>
+        <li><strong>min_thread_replies</strong> — Threads with fewer replies are skipped during indexing.</li>
+        <li><strong>distiller_model</strong> — The OpenAI model used to distill threads into Q&amp;A pairs. Defaults to <code>gpt-4o-mini</code>.</li>
+    </ul>
+
+    <p>Required environment variables: <code>SLACK_BOT_TOKEN</code>, <code>SLACK_SIGNING_SECRET</code> (for emoji-triggered webhook verification).</p>
+
+    <h3 id="source-discord">Source type: discord</h3>
+
+    <p>Indexes Discord channels as Q&amp;A pairs. Supports two channel types with different extraction strategies.</p>
+
+    <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">discord-support</span>
+    <span class="key">type:</span> <span class="value">discord</span>
+    <span class="key">category:</span> <span class="value">faq</span>
+    <span class="key">guild_id:</span> <span class="value">"1234567890"</span>               <span class="comment"># Discord server (guild) ID</span>
+    <span class="key">channels:</span>
+      - <span class="key">id:</span> <span class="value">"1111111111"</span>                 <span class="comment"># Text channel — LLM distillation</span>
+        <span class="key">type:</span> <span class="value">text</span>
+      - <span class="key">id:</span> <span class="value">"2222222222"</span>                 <span class="comment"># Forum channel — direct Q&amp;A extraction</span>
+        <span class="key">type:</span> <span class="value">forum</span>
+    <span class="key">confidence_threshold:</span> <span class="value">0.7</span>            <span class="comment"># Min confidence for query results (0-1)</span>
+    <span class="key">min_thread_replies:</span> <span class="value">2</span>               <span class="comment"># Minimum replies for text threads</span></div>
+
+    <ul>
+        <li><strong>guild_id</strong> — The Discord server ID.</li>
+        <li><strong>channels</strong> — Array of channel objects, each with an <code>id</code> and <code>type</code>.</li>
+        <li><strong>type: text</strong> — Text channels use LLM distillation (same as Slack). Threads are distilled into Q&amp;A pairs with confidence scores.</li>
+        <li><strong>type: forum</strong> — Forum channels extract Q&amp;A directly from the post title (question) and replies (answer). Confidence is always 1.0 since the structure is explicit.</li>
+        <li><strong>confidence_threshold</strong> — Minimum confidence for query results. Forum posts always pass (confidence 1.0).</li>
+        <li><strong>min_thread_replies</strong> — Applies to text channel threads only.</li>
+    </ul>
+
+    <p>Discord does not support emoji-triggered reindexing (requires Gateway WebSocket, which Pathfinder does not maintain).</p>
+
+    <p>Required environment variables: <code>DISCORD_BOT_TOKEN</code>, <code>DISCORD_PUBLIC_KEY</code> (for webhook Ed25519 verification). The bot needs the <code>MESSAGE_CONTENT</code> privileged intent and <code>Read Message History</code> + <code>View Channels</code> permissions.</p>
 
     <h3>url_derivation example</h3>
 
@@ -309,11 +413,11 @@ getting-started
 <span class="comment"># Final URL = base_url + slug</span>
 https://docs.example.com/getting-started</div>
 
-    <h2>tools</h2>
+    <h2 id="tools">tools</h2>
 
-    <p>Tools are what agents actually call. Three types: <code>search</code>, <code>bash</code>, and <code>collect</code>.</p>
+    <p>Tools are what agents actually call. Four types: <code>search</code>, <code>bash</code>, <code>collect</code>, and <code>knowledge</code>.</p>
 
-    <h3>search</h3>
+    <h3 id="tool-search">search</h3>
 
     <p>Semantic search over embedded content. Requires a database and embedding config.</p>
 
@@ -327,7 +431,7 @@ https://docs.example.com/getting-started</div>
     <span class="key">result_format:</span> <span class="value">docs</span>               <span class="comment"># docs | code | raw</span>
     <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Minimum cosine similarity threshold (0-1, optional)</span></div>
 
-    <h3>bash</h3>
+    <h3 id="tool-bash">bash</h3>
 
     <p>Filesystem exploration with find, grep, cat, ls, head. Works with no database.</p>
 
@@ -352,7 +456,7 @@ https://docs.example.com/getting-started</div>
         <li><strong>session_state</strong> — When true, <code>cd</code> persists across tool calls within a session.</li>
     </ul>
 
-    <h3>collect</h3>
+    <h3 id="tool-collect">collect</h3>
 
     <p>Data collection tools. Agents submit structured data based on a JSON schema you define. Submitted data is stored in the local PostgreSQL database in the <code>collected_data</code> table, with a <code>tool_name</code> column and a <code>data</code> JSONB column containing the fields from your schema. What you do with the collected data is up to you — query it directly, build dashboards, pipe it to analytics, or export it. Pathfinder stores it; you decide how to use it.</p>
 
@@ -371,7 +475,29 @@ https://docs.example.com/getting-started</div>
         <span class="key">type:</span> <span class="value">string</span>
         <span class="key">description:</span> <span class="value">Optional details</span></div>
 
-    <h2>embedding</h2>
+    <h3 id="tool-knowledge">knowledge</h3>
+
+    <p>FAQ and knowledge base tool. Exposes Q&amp;A pairs from FAQ-category sources (Slack, Discord) to agents. Supports two modes: browse (no query, returns recent pairs) and search (semantic query over pairs).</p>
+
+    <div class="code-block"><span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">knowledge-base</span>
+    <span class="key">type:</span> <span class="value">knowledge</span>
+    <span class="key">description:</span> <span class="value">Search community Q&amp;A knowledge base</span>
+    <span class="key">sources:</span> [<span class="value">community-support</span>, <span class="value">discord-support</span>]  <span class="comment"># Sources with category: faq</span>
+    <span class="key">min_confidence:</span> <span class="value">0.7</span>                <span class="comment"># Override source-level confidence threshold</span>
+    <span class="key">default_limit:</span> <span class="value">10</span>                 <span class="comment"># Default number of results</span>
+    <span class="key">max_limit:</span> <span class="value">50</span>                     <span class="comment"># Maximum results an agent can request</span></div>
+
+    <ul>
+        <li><strong>sources</strong> — Array of source names. These sources should have <code>category: faq</code> set.</li>
+        <li><strong>min_confidence</strong> — Override the per-source confidence threshold for this tool. Q&amp;A pairs below this score are filtered from results.</li>
+        <li><strong>default_limit</strong> — Number of results returned when the agent doesn't specify a limit.</li>
+        <li><strong>max_limit</strong> — Upper bound on results the agent can request.</li>
+    </ul>
+
+    <p>When called without a query, the tool returns recent Q&amp;A pairs (browse mode). When called with a query, it performs semantic search over the pairs.</p>
+
+    <h2 id="embedding">embedding</h2>
 
     <p>Required when using search tools. Configures how content is embedded for vector search.</p>
 
@@ -380,7 +506,7 @@ https://docs.example.com/getting-started</div>
   <span class="key">model:</span> <span class="value">text-embedding-3-small</span>       <span class="comment"># OpenAI embedding model</span>
   <span class="key">dimensions:</span> <span class="value">1536</span>                    <span class="comment"># Vector dimensions (must match model)</span></div>
 
-    <h2>indexing</h2>
+    <h2 id="indexing">indexing</h2>
 
     <p>Required when using search tools. Controls automatic reindexing behavior.</p>
 
@@ -389,7 +515,7 @@ https://docs.example.com/getting-started</div>
   <span class="key">reindex_hour_utc:</span> <span class="value">3</span>                <span class="comment"># Hour (0-23 UTC) to run daily reindex</span>
   <span class="key">stale_threshold_hours:</span> <span class="value">24</span>           <span class="comment"># Re-embed chunks older than this</span></div>
 
-    <h2>webhook</h2>
+    <h2 id="webhook">webhook</h2>
 
     <p>Optional. Triggers targeted reindexing when you push to GitHub.</p>
 
