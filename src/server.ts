@@ -7,8 +7,9 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
 import { buildBashFilesMap, rebuildBashInstance } from "./mcp/tools/bash-fs.js";
 import { initializeSchema, closePool } from "./db/client.js";
-import { getIndexStats, getAllChunksForLlms } from "./db/queries.js";
-import { getConfig, getServerConfig, hasSearchTools, hasCollectTools, hasBashSemanticSearch } from "./config.js";
+import { getIndexStats, getAllChunksForLlms, getFaqChunks } from "./db/queries.js";
+import { getConfig, getServerConfig, hasSearchTools, hasKnowledgeTools, hasCollectTools, hasBashSemanticSearch } from "./config.js";
+import type { SlackSourceConfig } from "./types.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
@@ -19,6 +20,7 @@ import { insertCollectedData } from "./db/queries.js";
 import { IpSessionLimiter } from "./ip-limiter.js";
 import { WorkspaceManager } from "./workspace.js";
 import { generateLlmsTxt, generateLlmsFullTxt } from "./llms-txt.js";
+import { generateFaqTxt } from "./faq-txt.js";
 import { generateSkillMd } from "./skill-md.js";
 
 export interface ServerOptions {
@@ -36,7 +38,7 @@ app.use(
 
 // Advertise llms.txt via Link header on all responses
 app.use((_req, res, next) => {
-    res.setHeader('Link', '</llms.txt>; rel="llms-txt"');
+    res.setHeader('Link', '</llms.txt>; rel="llms-txt", </faq.txt>; rel="faq"');
     next();
 });
 
@@ -312,7 +314,7 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 
 app.get("/health", async (_req: Request, res: Response) => {
     const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
-    const needsDb = hasSearchTools() || hasCollectTools() || hasBashSemanticSearch();
+    const needsDb = hasSearchTools() || hasKnowledgeTools() || hasCollectTools() || hasBashSemanticSearch();
 
     if (!needsDb) {
         res.json({
@@ -367,6 +369,7 @@ app.get("/health", async (_req: Request, res: Response) => {
 
 let cachedLlmsTxt: string | null = null;
 let cachedLlmsFullTxt: string | null = null;
+let cachedFaqTxt: string | null = null;
 
 app.get('/llms.txt', async (_req: Request, res: Response) => {
     try {
@@ -391,6 +394,37 @@ app.get('/llms-full.txt', async (_req: Request, res: Response) => {
     } catch (err) {
         console.error("[llms-full.txt] Generation failed:", err);
         res.status(503).type('text/plain').send('Service unavailable — index not ready.');
+    }
+});
+
+app.get('/faq.txt', async (_req: Request, res: Response) => {
+    try {
+        if (!cachedFaqTxt) {
+            const serverCfg = getServerConfig();
+            // Find FAQ sources: sources with category === 'faq'
+            const faqSources = serverCfg.sources
+                .filter(s => ('category' in s) && s.category === 'faq')
+                .map(s => ({
+                    name: s.name,
+                    confidenceThreshold: s.type === 'slack' ? (s as SlackSourceConfig).confidence_threshold : 0.7,
+                }));
+
+            if (faqSources.length === 0) {
+                cachedFaqTxt = generateFaqTxt([], serverCfg.server.name, []);
+            } else {
+                // Fetch FAQ chunks per source with its confidence threshold
+                const allChunks = [];
+                for (const src of faqSources) {
+                    const chunks = await getFaqChunks([src.name], src.confidenceThreshold);
+                    allChunks.push(...chunks);
+                }
+                cachedFaqTxt = generateFaqTxt(allChunks, serverCfg.server.name, faqSources);
+            }
+        }
+        res.type('text/plain').send(cachedFaqTxt);
+    } catch (err) {
+        console.error("[faq.txt] Generation failed:", err);
+        res.status(503).type('text/plain').send('# Service unavailable\nFAQ index not ready.');
     }
 });
 
@@ -435,7 +469,7 @@ export async function startServer(options?: ServerOptions): Promise<void> {
         console.log(`[startup] Workspace manager enabled (dir: ${workspaceDir})`);
     }
 
-    const needsDb = hasSearchTools() || hasCollectTools() || hasBashSemanticSearch();
+    const needsDb = hasSearchTools() || hasKnowledgeTools() || hasCollectTools() || hasBashSemanticSearch();
 
     if (needsDb) {
         console.log("[startup] Initializing database schema...");
@@ -473,7 +507,7 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     }
 
     // Indexing and webhooks only needed when search tools are configured
-    if (hasSearchTools()) {
+    if (hasSearchTools() || hasKnowledgeTools()) {
         const orchestrator = new IndexingOrchestrator();
         orchestratorRef = orchestrator;
         webhookHandler = createWebhookHandler(orchestrator);
@@ -486,9 +520,10 @@ export async function startServer(options?: ServerOptions): Promise<void> {
         }
 
         orchestrator.onReindexComplete = (sourceNames) => {
-            // Invalidate llms.txt caches so next request regenerates
+            // Invalidate caches so next request regenerates
             cachedLlmsTxt = null;
             cachedLlmsFullTxt = null;
+            cachedFaqTxt = null;
             refreshBashInstances(sourceNames, "reindex").catch((err) => {
                 console.error("[reindex] Bash refresh failed:", err);
             });
