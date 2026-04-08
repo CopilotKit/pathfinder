@@ -3,7 +3,7 @@
 // Usage: npx tsx scripts/test-path-filter.ts
 
 import { globToRegex, matchesPatterns, hasLowSemanticValue } from '../src/indexing/utils.js';
-import type { SourceConfig } from '../src/types.js';
+import type { FileSourceConfig } from '../src/types.js';
 
 let passed = 0;
 let failed = 0;
@@ -19,13 +19,13 @@ function assert(condition: boolean, description: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: build a minimal SourceConfig for testing patterns
+// Helper: build a minimal FileSourceConfig for testing patterns
 // ---------------------------------------------------------------------------
 
-function makeSourceConfig(
+function makeFileSourceConfig(
     filePatterns: string[],
     excludePatterns?: string[],
-): SourceConfig {
+): FileSourceConfig {
     return {
         name: 'test',
         type: 'code',
@@ -38,7 +38,7 @@ function makeSourceConfig(
 }
 
 // Code source config — matches the real mcp-docs.yaml code source patterns
-const codeConfig = makeSourceConfig(
+const codeConfig = makeFileSourceConfig(
     ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.py'],
     [
         'packages/v1/**',
@@ -52,7 +52,7 @@ const codeConfig = makeSourceConfig(
 );
 
 // Docs source config — only *.mdx, no excludes
-const docsConfig = makeSourceConfig(['**/*.mdx']);
+const docsConfig = makeFileSourceConfig(['**/*.mdx']);
 
 console.log('=== Path Filter Tests ===\n');
 
