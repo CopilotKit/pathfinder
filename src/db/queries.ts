@@ -1,6 +1,6 @@
 import pgvector from "pgvector";
 import { getPool } from "./client.js";
-import type { Chunk, ChunkResult, IndexState, IndexStatus } from "../types.js";
+import type { Chunk, ChunkResult, FaqChunkResult, IndexState, IndexStatus } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Search
@@ -298,6 +298,70 @@ export async function getAllChunksForLlms(): Promise<{ source_name: string; file
         'SELECT source_name, file_path, title, content, chunk_index FROM chunks ORDER BY source_name, file_path, chunk_index'
     );
     return result.rows;
+}
+
+/**
+ * Fetch FAQ chunks filtered by source name and minimum confidence.
+ * Confidence is stored in chunk metadata JSONB; this query extracts and filters it.
+ * Results are ordered by source_name, then indexed_at DESC (most recent first).
+ */
+export async function getFaqChunks(
+    sourceNames: string[],
+    minConfidence: number,
+    limit?: number,
+): Promise<FaqChunkResult[]> {
+    const pool = getPool();
+
+    if (sourceNames.length === 0) return [];
+
+    // Build parameterized source_name IN clause
+    const placeholders = sourceNames.map((_, i) => `$${i + 1}`).join(', ');
+    const confidenceParam = sourceNames.length + 1;
+
+    let sql = `
+        SELECT
+            id,
+            source_name,
+            source_url,
+            title,
+            content,
+            repo_url,
+            file_path,
+            start_line,
+            end_line,
+            language,
+            0.0 AS similarity,
+            metadata,
+            (metadata->>'confidence')::float AS confidence
+        FROM chunks
+        WHERE source_name IN (${placeholders})
+          AND (metadata->>'confidence')::float >= $${confidenceParam}
+        ORDER BY source_name, indexed_at DESC
+    `;
+
+    const params: unknown[] = [...sourceNames, minConfidence];
+
+    if (limit != null) {
+        sql += ` LIMIT $${confidenceParam + 1}`;
+        params.push(limit);
+    }
+
+    const { rows } = await pool.query(sql, params);
+    return rows.map((r: Record<string, unknown>) => ({
+        id: r.id as number,
+        source_name: r.source_name as string,
+        source_url: (r.source_url as string) ?? null,
+        title: (r.title as string) ?? null,
+        content: r.content as string,
+        repo_url: (r.repo_url as string) ?? null,
+        file_path: r.file_path as string,
+        start_line: (r.start_line as number) ?? null,
+        end_line: (r.end_line as number) ?? null,
+        language: (r.language as string) ?? null,
+        similarity: parseFloat(r.similarity as string),
+        metadata: (r.metadata as Record<string, unknown>) ?? {},
+        confidence: parseFloat(r.confidence as string),
+    }));
 }
 
 /**
