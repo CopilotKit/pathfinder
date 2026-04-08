@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { ServerConfigSchema, type ServerConfig, isDiscordSourceConfig, isNotionSourceConfig, isFileSourceConfig } from './types.js';
+import { ServerConfigSchema, type ServerConfig, isDiscordSourceConfig, isFileSourceConfig } from './types.js';
 
 // ── Environment variable config (secrets and runtime settings) ────────────────
 
