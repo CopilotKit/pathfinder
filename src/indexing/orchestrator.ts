@@ -26,9 +26,10 @@ function getStaleThresholdMs(): number {
 }
 
 interface Job {
-    type: 'full-reindex' | 'incremental-reindex' | 'full-reindex-local';
+    type: 'full-reindex' | 'incremental-reindex' | 'full-reindex-local' | 'source-reindex';
     repoUrl?: string; // for incremental
     sources?: SourceConfig[]; // for full-reindex-local
+    sourceName?: string; // for source-reindex
 }
 
 export class IndexingOrchestrator {
@@ -184,6 +185,18 @@ export class IndexingOrchestrator {
     }
 
     /**
+     * Queue a reindex for a single named source. Returns immediately.
+     * Used by webhook handlers to trigger reindexing of specific sources.
+     */
+    queueSourceReindex(sourceName: string): void {
+        this.queue.push({ type: 'source-reindex', sourceName });
+        console.log(`[orchestrator] Source re-index queued for ${sourceName}`);
+        this.drain().catch((err) => {
+            console.error('[orchestrator] drain() failed:', err);
+        });
+    }
+
+    /**
      * Returns true if any indexing job is currently running.
      */
     isIndexing(): boolean {
@@ -303,6 +316,18 @@ export class IndexingOrchestrator {
                 job.repoUrl,
             );
             affectedSourceNames = getSourcesByRepo(job.repoUrl).map(s => s.name);
+        } else if (job.type === 'source-reindex') {
+            if (!job.sourceName) {
+                console.warn('[orchestrator] source-reindex job has no sourceName, skipping');
+                return;
+            }
+            const sourceConfig = serverCfg2.sources.find(s => s.name === job.sourceName);
+            if (!sourceConfig) {
+                console.warn(`[orchestrator] source-reindex: source "${job.sourceName}" not found in config`);
+                return;
+            }
+            await this.indexSourceWithState(sourceConfig, embeddingClient, config.cloneDir);
+            affectedSourceNames = [job.sourceName];
         }
 
         if (affectedSourceNames.length > 0 && this.onReindexComplete) {
