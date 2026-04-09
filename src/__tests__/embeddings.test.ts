@@ -1,22 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // We need a reference to the mock create fn that persists across the mock factory
-let mockCreate: ReturnType<typeof vi.fn> = vi.fn();
+let mockCreate = vi.fn();
 
 // Mock OpenAI before importing the module under test
 vi.mock('openai', () => {
-    class MockOpenAI {
-        embeddings = { create: (...args: unknown[]) => mockCreate(...args) };
-        constructor(_opts: Record<string, unknown>) {}
-    }
-    // Attach error classes so instanceof checks work in embeddings.ts
-    (MockOpenAI as any).RateLimitError = class RateLimitError extends Error {
+    const MockOpenAI = function (this: any, _opts: Record<string, unknown>) {
+        this.embeddings = { create: (...args: unknown[]) => mockCreate(...args) };
+    } as any;
+    MockOpenAI.RateLimitError = class RateLimitError extends Error {
         constructor(msg = 'rate limit') { super(msg); this.name = 'RateLimitError'; }
     };
-    (MockOpenAI as any).InternalServerError = class InternalServerError extends Error {
+    MockOpenAI.InternalServerError = class InternalServerError extends Error {
         constructor(msg = 'internal') { super(msg); this.name = 'InternalServerError'; }
     };
-    (MockOpenAI as any).APIConnectionError = class APIConnectionError extends Error {
+    MockOpenAI.APIConnectionError = class APIConnectionError extends Error {
         constructor(msg = 'connection') { super(msg); this.name = 'APIConnectionError'; }
     };
     return { default: MockOpenAI };
