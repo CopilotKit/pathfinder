@@ -18,7 +18,7 @@
         "embeddings",
         "copilotkit"
     ],
-    "license": "MIT",
+    "license": "Elastic-2.0",
     "main": "dist/index.js",
     "bin": {
         "pathfinder": "dist/cli.js"
