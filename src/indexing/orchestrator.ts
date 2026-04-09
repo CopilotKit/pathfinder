@@ -180,6 +180,7 @@ export class IndexingOrchestrator {
             githubToken: config.githubToken,
             slackBotToken: config.slackBotToken,
             discordBotToken: config.discordBotToken,
+            notionToken: config.notionToken,
         };
         const provider = getProvider(source.type)(source, providerOptions);
         return provider.getCurrentStateToken();
@@ -419,7 +420,7 @@ export class IndexingOrchestrator {
     ): Promise<void> {
         const lockKey = `${sourceConfig.type}:${sourceConfig.name}`;
         await this.withSourceLock(lockKey, async () => {
-            const providerOptions: ProviderOptions = { cloneDir, githubToken, slackBotToken: getConfig().slackBotToken, discordBotToken: getConfig().discordBotToken };
+            const providerOptions: ProviderOptions = { cloneDir, githubToken, slackBotToken: getConfig().slackBotToken, discordBotToken: getConfig().discordBotToken, notionToken: getConfig().notionToken };
             const provider = getProvider(sourceConfig.type)(sourceConfig, providerOptions);
             const pipeline = new IndexingPipeline(embeddingClient, sourceConfig);
 

@@ -1,5 +1,20 @@
 # @copilotkit/pathfinder
 
+## 1.6.0
+
+### Minor Changes
+
+- **Notion Data Provider**: Index Notion pages and database entries as searchable markdown documents. Recursive block-to-markdown conversion, database property serialization as YAML frontmatter, configurable page depth, self-throttled API client (340ms/req)
+- **Deleted Page Detection**: Two-pass incremental acquire detects pages that were deleted, archived, or had integration access revoked — removes stale chunks automatically
+- **License Change**: Switched from MIT to Elastic License 2.0 (ELv2) — free to use, modify, and self-host; one restriction on reselling as a hosted service
+
+### Patch Changes
+
+- Improve test coverage from 53% to 75% lines across the project (1044 → 1698 tests)
+- Add comprehensive tests for markdown, code, and raw-text chunkers, file provider, config, validation, search/knowledge tools, webhooks, schema, url-derivation, embeddings
+- Update homepage hero text and license references across all docs pages
+- Add `getIndexedItemIds` query for provider-level deletion detection
+
 ## 1.5.0
 
 ### Minor Changes

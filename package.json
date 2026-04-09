@@ -1,6 +1,6 @@
 {
     "name": "@copilotkit/pathfinder",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "description": "Agentic docs retrieval for AI agents — semantic search and filesystem exploration over your documentation and code via MCP.",
     "type": "module",
     "repository": {
@@ -18,7 +18,7 @@
         "embeddings",
         "copilotkit"
     ],
-    "license": "MIT",
+    "license": "Elastic-2.0",
     "main": "dist/index.js",
     "bin": {
         "pathfinder": "dist/cli.js"
@@ -44,6 +44,7 @@
     "dependencies": {
         "@discordjs/rest": "^2.6.1",
         "@modelcontextprotocol/sdk": "^1.25.2",
+        "@notionhq/client": "^5.17.0",
         "@slack/web-api": "^7.15.0",
         "cheerio": "^1.2.0",
         "commander": "^14.0.3",

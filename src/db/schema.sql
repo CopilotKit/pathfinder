@@ -1,2 +1,0 @@
--- pgvector schema — applied automatically by docker-entrypoint-initdb.d
--- Implementation in Task 2

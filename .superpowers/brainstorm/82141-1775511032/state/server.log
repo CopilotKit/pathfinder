@@ -1,4 +1,0 @@
-{"type":"server-started","port":58651,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:58651","screen_dir":"/proj/cpk/mcp-docs/.superpowers/brainstorm/82141-1775511032/content","state_dir":"/proj/cpk/mcp-docs/.superpowers/brainstorm/82141-1775511032/state"}
-{"type":"screen-added","file":"/proj/cpk/mcp-docs/.superpowers/brainstorm/82141-1775511032/content/migration.html"}
-{"type":"screen-added","file":"/proj/cpk/mcp-docs/.superpowers/brainstorm/82141-1775511032/content/migration-v2.html"}
-{"type":"server-stopped","reason":"idle timeout"}

@@ -3,19 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pathfinder — Agentic Docs Retrieval</title>
+<title>Pathfinder — Knowledge Retrieval for AI Agents</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<meta name="description" content="Self-hosted MCP server with semantic search + filesystem exploration for AI agents. Open source, MIT licensed.">
+<meta name="description" content="Self-hosted MCP server with semantic search + filesystem exploration for AI agents. Source-available, self-hosted, free to use.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pathfinder.copilotkit.dev/">
-<meta property="og:title" content="Pathfinder — Agentic docs retrieval for AI agents">
-<meta property="og:description" content="Self-hosted MCP server with semantic search + filesystem exploration. Your AI already knows find, grep, and cat.">
+<meta property="og:title" content="Pathfinder — Knowledge retrieval for AI agents">
+<meta property="og:description" content="Docs, code, and conversations — one knowledge server for AI agents. Source-available, self-hosted, free to use.">
 <meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pathfinder — Agentic docs retrieval for AI agents">
-<meta name="twitter:description" content="Give AI agents both semantic search and filesystem exploration over your docs. Open source, self-hosted, MIT licensed.">
+<meta name="twitter:title" content="Pathfinder — Knowledge retrieval for AI agents">
+<meta name="twitter:description" content="Docs, code, and conversations — one knowledge server for AI agents. Source-available, self-hosted, free to use.">
 <meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -65,16 +65,18 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
 
 /* Hero */
-.hero { padding: 140px 0 80px; max-width: 1120px; margin: 0 auto; padding-left: 2rem; padding-right: 2rem; }
+.hero { padding: 120px 0 3rem; max-width: 1120px; margin: 0 auto; padding-left: 2rem; padding-right: 2rem; }
 .badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 32px; }
 .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 .hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; line-height: 1.08; margin-bottom: 24px; letter-spacing: -0.03em; }
+.hero-break { display: none; }
+@media (min-width: 769px) { .hero-break { display: block; } }
 .hero h1 .accent { color: var(--accent); }
 .hero .subtitle { font-size: 1.2rem; color: var(--text-secondary); max-width: 700px; line-height: 1.7; margin-bottom: 40px; }
 
 /* Install box */
-.install-box { display: inline-flex; flex-direction: column; gap: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 0.9rem; margin-bottom: 48px; }
+.install-box { display: inline-flex; flex-direction: column; gap: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 0.9rem; margin-bottom: 2.5rem; }
 .install-box .prompt { color: var(--accent); }
 .install-box .cmd { color: var(--text-primary); }
 .install-line { display: flex; align-items: center; gap: 12px; }
@@ -96,20 +98,21 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 @keyframes fadeInLine { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
 
 /* Features */
-.features { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; }
-.features h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
-.features .section-sub { color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
+.features { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; }
+.features h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; text-align: center; }
+.features .section-sub { color: var(--text-secondary); margin-bottom: 2rem; font-size: 16px; text-align: center; }
+
+/* Feature cards (3x2 grid) */
 .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; transition: transform 0.2s, border-color 0.2s; }
 .feature-card:hover { transform: translateY(-2px); border-color: var(--accent-dim); }
-.feature-card .icon { font-size: 28px; margin-bottom: 12px; }
 .feature-card h3 { font-size: 16px; margin-bottom: 8px; }
 .feature-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
 
 /* Comparison */
-.comparison { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; }
-.comparison h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
-.comparison .section-sub { color: var(--text-secondary); margin-bottom: 48px; font-size: 16px; }
+.comparison { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; }
+.comparison h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; text-align: center; }
+.comparison .section-sub { color: var(--text-secondary); margin-bottom: 2rem; font-size: 16px; text-align: center; }
 .comp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .comp-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
 .comp-table th.highlight-col { color: var(--accent); border-bottom-color: var(--accent); }
@@ -120,8 +123,8 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .comp-table .partial { color: var(--warning); }
 
 /* Migration CTA */
-.migration { padding: 80px 2rem; max-width: 1120px; margin: 0 auto; text-align: center; }
-.migration h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 12px; letter-spacing: -0.02em; }
+.migration { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; text-align: center; }
+.migration h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; }
 .migration .section-sub { color: var(--text-secondary); margin-bottom: 32px; font-size: 16px; }
 .migration .cta-btn { display: inline-flex; align-items:center; gap: 8px; padding: 14px 28px; background: var(--accent); color: var(--bg-deep); font-family: var(--mono); font-weight: 600; font-size: 0.875rem; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; transition: opacity 0.2s; }
 .migration .cta-btn:hover { opacity: 0.9; background: var(--accent-dim); }
@@ -144,7 +147,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     .comp-table { font-size: 12px; }
     .comp-table th, .comp-table td { padding: 8px 10px; }
     .nav-links { gap: 1rem; }
-    .hero { padding: 120px 16px 60px; }
+    .hero { padding: 100px 16px 2rem; }
     .hero, .features, .comparison, .migration { padding-left: 1rem; padding-right: 1rem; }
 }
 
@@ -184,15 +187,15 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
 <nav>
   <div class="container">
-    <a href="index.html" class="nav-brand"><span>$</span> pathfinder</a>
+    <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
-        <a href="index.html" class="active">Home</a>
-        <a href="usage.html">Docs</a>
-        <a href="config.html">Config</a>
-        <a href="deploy.html">Deploy</a>
-        <a href="clients.html">Clients</a>
-        <a href="search.html">Search</a>
-        <a href="migrate-from-mintlify.html">Switch</a>
+        <a href="/">Home</a>
+        <a href="/usage">Docs</a>
+        <a href="/config">Config</a>
+        <a href="/deploy">Deploy</a>
+        <a href="/clients">Clients</a>
+        <a href="/search">Search</a>
+        <a href="/migrate-from-mintlify">Switch</a>
         <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
     </div>
     <button class="hamburger" aria-label="Menu">
@@ -204,20 +207,20 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </nav>
 
 <div class="mobile-menu">
-    <a href="index.html" class="active">Home</a>
-    <a href="usage.html">Docs</a>
-    <a href="config.html">Config</a>
-    <a href="deploy.html">Deploy</a>
-    <a href="clients.html">Clients</a>
-    <a href="search.html">Search</a>
-    <a href="migrate-from-mintlify.html">Switch</a>
+    <a href="/">Home</a>
+    <a href="/usage">Docs</a>
+    <a href="/config">Config</a>
+    <a href="/deploy">Deploy</a>
+    <a href="/clients">Clients</a>
+    <a href="/search">Search</a>
+    <a href="/migrate-from-mintlify">Switch</a>
     <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
 </div>
 
 <section class="hero">
-    <div class="badge"><span class="dot"></span> pathfinder — docs retrieval built for AI agents</div>
-    <h1>The <span class="accent">agentic docs server</span> for AI agents</h1>
-    <p class="subtitle">Your AI already knows find, grep, and cat. Give it a virtual filesystem over your docs — plus semantic search when it needs meaning, not just matches. Self-hosted. Open source. Zero lock-in.</p>
+    <div class="badge"><span class="dot"></span> pathfinder — knowledge retrieval for AI agents</div>
+    <h1>The <span class="accent">knowledge server</span><br class="hero-break"> for <span class="accent">AI agents</span></h1>
+    <p class="subtitle">Index your documentation, codebase, and conversations — from Slack threads to Discord forums. Pathfinder turns everything your team knows into searchable, agent-accessible knowledge. Self-hosted, open source, zero lock-in.</p>
 
     <div class="install-box">
         <div class="install-line">
@@ -235,7 +238,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <div class="demo-panel">
             <div class="demo-header"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span> pathfinder.yaml</div>
             <div class="demo-body"><pre style="margin:0; font:inherit; color:inherit; white-space:pre;"><span class="highlight">server:</span>
-  name: my-project-docs
+  name: my-project
 
 <span class="highlight">sources:</span>
   - name: docs
@@ -243,21 +246,25 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     repo: <span class="file">github.com/you/project</span>
     path: docs/
 
+  - name: community
+    type: discord
+    guild_id: <span class="file">"123456789"</span>
+    channels:
+      - id: <span class="file">"111111111"</span>
+        type: forum
+
 <span class="highlight">tools:</span>
   - name: search-docs
     type: search
     source: docs
 
-  - name: explore-docs
-    type: bash
-    sources: [docs]
-    bash:
-      session_state: <span class="file">true</span>
-      grep_strategy: <span class="file">hybrid</span></pre>
+  - name: get-faq
+    type: knowledge
+    sources: <span class="file">[community]</span></pre>
             </div>
         </div>
         <div class="demo-panel">
-            <div class="demo-header"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span> Agent exploring your docs</div>
+            <div class="demo-header"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span> Agent exploring your knowledge</div>
             <div class="demo-body" id="terminal">
             </div>
         </div>
@@ -265,39 +272,39 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </section>
 
 <section class="features" id="features">
-    <h2>Two retrieval paradigms, one server</h2>
-    <p class="section-sub">Agents choose the right tool for each sub-task — no other MCP server does both</p>
+    <h2>What's in the box</h2>
+    <p class="section-sub">A complete system enabling agents to discover and learn what's important.</p>
 
     <div class="feature-grid">
         <div class="feature-card">
             <div class="icon">🔍</div>
-            <h3>Semantic Search (RAG)</h3>
-            <p>pgvector embeddings with cosine similarity. Ask conceptual questions: "how do I configure auth?"</p>
+            <h3>Semantic + Filesystem</h3>
+            <p>Agents choose the right tool: vector search for conceptual questions, grep and cat for precise lookups. Both paradigms, composable.</p>
         </div>
         <div class="feature-card">
-            <div class="icon">📁</div>
-            <h3>Filesystem Exploration</h3>
-            <p>find, grep, cat, ls, head — agents explore docs like a developer would. Sandboxed via just-bash.</p>
-        </div>
-        <div class="feature-card">
-            <div class="icon">🧭</div>
-            <h3>Session State</h3>
-            <p>cd persists across commands. Agents navigate naturally: cd docs/guides && ls && cat auth.mdx</p>
-        </div>
-        <div class="feature-card">
-            <div class="icon">⚡</div>
-            <h3>Vector Grep</h3>
-            <p>3-pass search: semantic embeddings + ILIKE text + dedup. Falls back gracefully when infra is down.</p>
+            <div class="icon">💬</div>
+            <h3>Automatic Q&amp;A Extraction</h3>
+            <p>Slack threads and Discord forums are distilled into Q&amp;A pairs automatically. Forum posts need no LLM — they're already questions and answers.</p>
         </div>
         <div class="feature-card">
             <div class="icon">🔗</div>
-            <h3>Cross-Paradigm Hints</h3>
-            <p>`related /path` finds similar files across sources. Grep misses suggest companion search tools.</p>
+            <h3>Cross-Source Intelligence</h3>
+            <p>Search docs and Q&amp;A together. Grep misses suggest semantic search. related finds similar files across sources.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">📋</div>
+            <h3>Knowledge on Tap</h3>
+            <p>/faq.txt and /llms.txt give agents instant context at session start. No search required — your best answers are already loaded.</p>
         </div>
         <div class="feature-card">
             <div class="icon">🚀</div>
             <h3>Zero-Infra Mode</h3>
             <p>Bash-only tools work with no database, no API keys. Add RAG when you're ready — it's just config.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🔄</div>
+            <h3>Always Current</h3>
+            <p>Webhook-triggered reindexing on every push. Nightly full reindex on schedule. Confidence thresholds adjust without re-processing.</p>
         </div>
     </div>
 </section>
@@ -320,11 +327,13 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
             <tr><td>Both paradigms composable</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span> FS-only</td></tr>
             <tr><td>Session state (persistent CWD)</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span></td></tr>
             <tr><td>Vector-backed grep</td><td class="highlight-col"><span class="check">&#10003;</span> Configurable</td><td><span class="check">&#10003;</span> Chroma-backed</td></tr>
+            <tr><td>Conversational sources</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span></td></tr>
+            <tr><td>FAQ endpoint</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span></td></tr>
             <tr><td>Writable workspace</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span> EROFS</td></tr>
             <tr><td>Multi-source</td><td class="highlight-col"><span class="check">&#10003;</span> Config-driven</td><td><span class="cross">&#10007;</span> Single collection</td></tr>
             <tr><td>Feedback collection</td><td class="highlight-col"><span class="check">&#10003;</span> Collect tools</td><td><span class="cross">&#10007;</span></td></tr>
             <tr><td>Zero-infra mode</td><td class="highlight-col"><span class="check">&#10003;</span> Bash-only</td><td><span class="cross">&#10007;</span> Needs Chroma+Redis</td></tr>
-            <tr><td>Open source</td><td class="highlight-col"><span class="check">&#10003;</span> MIT</td><td><span class="cross">&#10007;</span> Proprietary</td></tr>
+            <tr><td>Source-available</td><td class="highlight-col"><span class="check">&#10003;</span> ELv2 (free to use &amp; self-host)</td><td><span class="cross">&#10007;</span> Proprietary</td></tr>
             <tr><td>Auto-refresh on webhook</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="partial">~</span> Manual reingestion</td></tr>
         </tbody>
     </table>
@@ -332,13 +341,13 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
 <section class="migration" id="migration">
     <h2>Switching from Mintlify?</h2>
-    <p class="section-sub">Your docs are already structured for it. Our migration guide takes 15 minutes.</p>
-    <a href="migrate-from-mintlify.html" class="cta-btn">Migration Guide →</a>
+    <p class="section-sub">Your docs are already structured for it. Our migration guide takes less than 15 minutes.</p>
+    <a href="/migrate-from-mintlify" class="cta-btn">Migration Guide &#8594;</a>
 </section>
 
 <footer>
   <div class="container">
-    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; MIT License</div>
+    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a> &mdash; free to use, modify, and self-host</div>
     <ul class="footer-links">
         <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
         <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
@@ -351,25 +360,23 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 // Terminal animation
 const terminal = document.getElementById('terminal');
 const lines = [
-    { type: 'prompt', text: '$ find / -name "*.mdx" | head -5' },
+    { type: 'prompt', text: '$ find / -name "*.mdx" | head -3' },
     { type: 'output', text: '/docs/quickstart.mdx' },
-    { type: 'output', text: '/docs/guides/streaming.mdx' },
     { type: 'output', text: '/docs/guides/auth.mdx' },
     { type: 'output', text: '/docs/reference/hooks.mdx' },
-    { type: 'output', text: '/docs/reference/config.mdx' },
-    { type: 'pause', ms: 800 },
+    { type: 'pause', ms: 600 },
     { type: 'prompt', text: '$ qmd "how do I handle errors"' },
     { type: 'output', text: '/docs/guides/error-handling.mdx (0.94)' },
     { type: 'output', text: '/docs/reference/hooks.mdx (0.87)' },
-    { type: 'output', text: '/docs/guides/streaming.mdx (0.81)' },
     { type: 'pause', ms: 600 },
-    { type: 'prompt', text: '$ cat /docs/guides/error-handling.mdx' },
-    { type: 'output', text: '# Error Handling' },
-    { type: 'output', text: 'Wrap your action in a try/catch...' },
-    { type: 'pause', ms: 600 },
-    { type: 'prompt', text: '$ grep -rl "useAction" /docs' },
-    { type: 'output', text: '/docs/hooks/useAction.mdx' },
-    { type: 'output', text: '/docs/guides/actions.mdx' },
+    { type: 'prompt', text: '> get-faq("rate limiting")' },
+    { type: 'output', text: 'Q: Does the API have rate limits?' },
+    { type: 'output', text: 'A: Yes, 100 req/min per API key...' },
+    { type: 'output', text: 'CONFIDENCE: 0.92  SOURCE: #help-forum' },
+    { type: 'pause', ms: 800 },
+    { type: 'prompt', text: '$ grep -rl "rateLimit" /docs' },
+    { type: 'output', text: '/docs/reference/config.mdx' },
+    { type: 'output', text: '/docs/guides/production.mdx' },
 ];
 
 async function typeText(el, text, speed = 30) {
