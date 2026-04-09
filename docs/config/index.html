@@ -192,7 +192,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="/">Home</a>
-        <a href="/usage">Docs</a>
+        <a href="/usage">Usage</a>
         <a href="/config" class="active">Config</a>
         <a href="/deploy">Deploy</a>
         <a href="/clients">Clients</a>
@@ -210,7 +210,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
 <div class="mobile-menu">
     <a href="/">Home</a>
-    <a href="/usage">Docs</a>
+    <a href="/usage">Usage</a>
     <a href="/config" class="active">Config</a>
     <a href="/deploy">Deploy</a>
     <a href="/clients">Clients</a>
@@ -234,6 +234,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
             <li><a href="#source-html">HTML</a></li>
             <li><a href="#source-slack">Slack</a></li>
             <li><a href="#source-discord">Discord</a></li>
+            <li><a href="#source-notion">Notion</a></li>
             <li><a href="#tools">Tools</a></li>
             <li><a href="#tool-search">Search</a></li>
             <li><a href="#tool-bash">Bash</a></li>
@@ -268,7 +269,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
     <div class="code-block"><span class="key">sources:</span>
   - <span class="key">name:</span> <span class="value">docs</span>                        <span class="comment"># Unique name, referenced by tools</span>
-    <span class="key">type:</span> <span class="value">markdown</span>                    <span class="comment"># markdown | code | raw-text | html</span>
+    <span class="key">type:</span> <span class="value">markdown</span>                    <span class="comment"># markdown | code | raw-text | html | slack | discord | notion</span>
     <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>  <span class="comment"># Git repo URL (optional for local paths)</span>
     <span class="key">branch:</span> <span class="value">main</span>                      <span class="comment"># Git branch to track (default: default branch)</span>
     <span class="key">path:</span> <span class="value">docs/</span>                       <span class="comment"># Directory within the repo to index</span>
@@ -379,11 +380,42 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <li><strong>type: forum</strong> — Forum channels extract Q&amp;A directly from the post title (question) and replies (answer). Confidence is always 1.0 since the structure is explicit.</li>
         <li><strong>confidence_threshold</strong> — Minimum confidence for query results. Forum posts always pass (confidence 1.0).</li>
         <li><strong>min_thread_replies</strong> — Applies to text channel threads only.</li>
+        <li><strong>distiller_model</strong> — OpenAI model for thread distillation on text channels. Optional, defaults to <code>gpt-4o-mini</code>.</li>
     </ul>
 
     <p>Discord does not support emoji-triggered reindexing (requires Gateway WebSocket, which Pathfinder does not maintain).</p>
 
     <p>Required environment variables: <code>DISCORD_BOT_TOKEN</code>, <code>DISCORD_PUBLIC_KEY</code> (for webhook Ed25519 verification). The bot needs the <code>MESSAGE_CONTENT</code> privileged intent and <code>Read Message History</code> + <code>View Channels</code> permissions.</p>
+
+    <h3 id="source-notion">Source type: notion</h3>
+
+    <p>Index Notion pages and database entries as searchable markdown documents. Blocks are recursively converted to markdown, and database entry properties are serialized as YAML frontmatter.</p>
+
+    <div class="code-block"><span class="key">sources:</span>
+  - name: notion-wiki
+    type: notion
+    <span class="key">root_pages:</span>
+      - <span class="value">"abc123def456..."</span>    <span class="comment"># Notion page IDs to index (including children)</span>
+    <span class="key">databases:</span>
+      - <span class="value">"789xyz..."</span>           <span class="comment"># Database IDs — all entries indexed</span>
+    <span class="key">max_depth:</span> <span class="value">5</span>               <span class="comment"># How deep to recurse into child pages (1-20, default: 5)</span>
+    <span class="key">include_properties:</span> <span class="value">true</span>  <span class="comment"># Serialize database properties as YAML frontmatter (default: true)</span>
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span></div>
+
+    <ul>
+        <li><strong>root_pages</strong> — Array of Notion page IDs. Each page and its children (up to <code>max_depth</code>) are indexed. Optional, defaults to <code>[]</code>.</li>
+        <li><strong>databases</strong> — Array of Notion database IDs. All entries in each database are indexed with their properties. Optional, defaults to <code>[]</code>.</li>
+        <li><strong>max_depth</strong> — Maximum depth for recursive child page discovery. Range 1-20, default 5.</li>
+        <li><strong>include_properties</strong> — When true, database entry properties (Status, Priority, Tags, etc.) are prepended as YAML frontmatter to the page content. Default true.</li>
+    </ul>
+
+    <p>If both <code>root_pages</code> and <code>databases</code> are empty, all pages accessible to the integration token are indexed. Requires <code>NOTION_TOKEN</code> environment variable.</p>
+
+    <p>By default, Notion sources are indexed as documents and referenced by <code>search</code> tools. To also make them available via <code>knowledge</code> tools and the <code>/faq.txt</code> endpoint, add <code>category: faq</code> to the source config — useful for Notion databases structured as Q&amp;A or FAQ collections.</p>
+
+    <p><em>Note: The <code>chunk</code> config is available on all source types. For Slack and Discord, the Q&amp;A chunker produces one chunk per Q&amp;A pair (chunk settings have no effect). For Notion, the markdown chunker respects <code>target_tokens</code> and <code>overlap_tokens</code>.</em></p>
 
     <h3>url_derivation example</h3>
 

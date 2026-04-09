@@ -4,7 +4,7 @@ Pathfinder is an agentic docs retrieval server. It provides semantic search over
 
 ## Available Tools
 
-Pathfinder exposes three tool types via MCP. The exact tool names depend on the server's configuration, but they follow these patterns:
+Pathfinder exposes four tool types via MCP. The exact tool names depend on the server's configuration, but they follow these patterns:
 
 ### search (semantic search)
 
@@ -51,6 +51,20 @@ A sandboxed bash shell for browsing the indexed filesystem. Files are read-only 
 
 Submits structured feedback or data back to the server. The exact schema depends on configuration. Use this when you want to report issues, rate content quality, or provide other structured feedback.
 
+### knowledge (FAQ / Q&A)
+
+Browse and search Q&A knowledge extracted from conversational sources (Slack threads, Discord forums, Notion databases with `category: faq`). Use this for questions that are likely answered in community discussions rather than formal documentation.
+
+**Parameters:**
+- `query` (string, optional) — Search query. If empty, returns a browsable list of all Q&A pairs.
+- `limit` (number, optional) — Maximum number of results
+- `min_confidence` (number, optional) — Minimum confidence threshold (0-1)
+
+**Example queries:**
+- "How do I handle rate limiting?"
+- "What's the recommended way to deploy?"
+- "" (empty = browse all FAQ entries)
+
 ## When to Use Search vs Explore
 
 | Situation | Tool | Why |
@@ -62,6 +76,7 @@ Submits structured feedback or data back to the server. The exact schema depends
 | "What files are related to auth.ts?" | **explore** (`related`) | Vector-similarity file discovery |
 | "List all TypeScript files" | **explore** (`find`) | Structural filesystem query |
 | grep returned nothing useful | **explore** (`qmd`) or **search** | Fall back to semantic matching |
+| "What have people asked about X?" | **knowledge** | Q&A from community conversations |
 | Need to save notes for later | **explore** (write to `/workspace/`) | Workspace supports writes |
 
 ## Workspace

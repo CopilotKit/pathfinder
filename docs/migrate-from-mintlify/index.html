@@ -216,7 +216,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="/">Home</a>
-        <a href="/usage">Docs</a>
+        <a href="/usage">Usage</a>
         <a href="/config">Config</a>
         <a href="/deploy">Deploy</a>
         <a href="/clients">Clients</a>
@@ -234,7 +234,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
 <div class="mobile-menu">
     <a href="/">Home</a>
-    <a href="/usage">Docs</a>
+    <a href="/usage">Usage</a>
     <a href="/config">Config</a>
     <a href="/deploy">Deploy</a>
     <a href="/clients">Clients</a>
@@ -249,11 +249,51 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
     <h2>Why Migrate</h2>
     <ul>
+        <li><strong>Index more than just docs.</strong> Mintlify only indexes your published documentation. Pathfinder indexes docs, Notion pages, Slack threads, and Discord forums — your agents search everything your team knows, not just what's published.</li>
         <li><strong>Own your infrastructure.</strong> No vendor lock-in, no per-seat pricing, no surprise deprecations. Your docs live in your repo, your search runs on your Postgres.</li>
         <li><strong>Both retrieval paradigms.</strong> Mintlify's ChromaFS replaced RAG with filesystem access. Pathfinder composes both — agents pick the right tool for each sub-task.</li>
         <li><strong>Agentic features out of the box.</strong> Session state, vector grep, writable workspaces, cross-source <code>related</code> commands, and telemetry — all config-driven.</li>
         <li><strong>Zero-infra option.</strong> Start with bash-only tools (no database, no API keys) and add RAG when you're ready. Mintlify's ChromaFS always requires Chroma + Redis.</li>
     </ul>
+
+    <h2>What You Gain</h2>
+    <div class="callout-grid">
+        <div class="callout-card">
+            <div class="icon">🔍</div>
+            <h4>Beyond Just Docs</h4>
+            <p>Mintlify indexes your docs. Pathfinder indexes your docs, Notion wikis, Slack threads, and Discord forums — all in one server. Your agents search everything your team knows, not just what's published.</p>
+        </div>
+        <div class="callout-card">
+            <div class="icon">🧭</div>
+            <h4>Session State</h4>
+            <p>Agents <code>cd</code> into directories and stay there across commands. No more repeating full paths every tool call.</p>
+        </div>
+        <div class="callout-card">
+            <div class="icon">⚡</div>
+            <h4>Vector Grep &amp; qmd</h4>
+            <p>When <code>grep</code> misses, Pathfinder suggests <code>qmd</code> — a semantic search command that finds docs by meaning, not just text matches.</p>
+        </div>
+        <div class="callout-card">
+            <div class="icon">📝</div>
+            <h4>Writable Workspace</h4>
+            <p>Agents save notes, grep results, and intermediate files to <code>/workspace/</code> during a session.</p>
+        </div>
+        <div class="callout-card">
+            <div class="icon">🔗</div>
+            <h4>Cross-Source Related</h4>
+            <p>Run <code>related /docs/auth.mdx</code> to discover semantically similar files across all sources.</p>
+        </div>
+        <div class="callout-card">
+            <div class="icon">📊</div>
+            <h4>Feedback Collection</h4>
+            <p>Define collect tools with YAML schemas. Agents report search quality, broken links, or anything you define.</p>
+        </div>
+        <div class="callout-card">
+            <div class="icon">🚀</div>
+            <h4>Zero-Infra Start</h4>
+            <p>Bash-only mode needs no database or API keys. Add RAG later with a config change — no code edits.</p>
+        </div>
+    </div>
 
     <h2>Concept Mapping</h2>
     <p>How Mintlify concepts translate to Pathfinder:</p>
@@ -275,6 +315,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
             <tr><td>Chroma embeddings</td><td class="highlight-col">OpenAI embeddings</td><td>Configurable model and dimensions</td></tr>
             <tr><td>Chroma + Redis infra</td><td class="highlight-col">PostgreSQL + pgvector</td><td>Single database, no Redis needed</td></tr>
             <tr><td>Manual reingestion</td><td class="highlight-col">Webhook auto-reindex</td><td>GitHub push triggers targeted reindex</td></tr>
+            <tr><td>Docs only</td><td class="highlight-col">Multiple source types</td><td>Markdown, HTML, Notion, Slack, Discord — index everything in one server</td></tr>
         </tbody>
     </table>
 
@@ -384,40 +425,6 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
   <span class="key">path_triggers:</span>
     <span class="key">docs:</span> [<span class="value">"docs/"</span>]</div>
             <p>Then add a GitHub webhook pointing to <code>https://your-server/webhooks/github</code> with the push event.</p>
-        </div>
-    </div>
-
-    <h2>What You Gain</h2>
-    <div class="callout-grid">
-        <div class="callout-card">
-            <div class="icon">🧭</div>
-            <h4>Session State</h4>
-            <p>Agents <code>cd</code> into directories and stay there across commands. No more repeating full paths every tool call.</p>
-        </div>
-        <div class="callout-card">
-            <div class="icon">⚡</div>
-            <h4>Vector Grep &amp; qmd</h4>
-            <p>When <code>grep</code> misses, Pathfinder suggests <code>qmd</code> — a semantic search command that finds docs by meaning, not just text matches.</p>
-        </div>
-        <div class="callout-card">
-            <div class="icon">📝</div>
-            <h4>Writable Workspace</h4>
-            <p>Agents save notes, grep results, and intermediate files to <code>/workspace/</code> during a session.</p>
-        </div>
-        <div class="callout-card">
-            <div class="icon">🔗</div>
-            <h4>Cross-Source Related</h4>
-            <p>Run <code>related /docs/auth.mdx</code> to discover semantically similar files across all sources.</p>
-        </div>
-        <div class="callout-card">
-            <div class="icon">📊</div>
-            <h4>Feedback Collection</h4>
-            <p>Define collect tools with YAML schemas. Agents report search quality, broken links, or anything you define.</p>
-        </div>
-        <div class="callout-card">
-            <div class="icon">🚀</div>
-            <h4>Zero-Infra Start</h4>
-            <p>Bash-only mode needs no database or API keys. Add RAG later with a config change — no code edits.</p>
         </div>
     </div>
 

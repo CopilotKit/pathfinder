@@ -1,4 +1,4 @@
-// Unified type definitions for mcp-docs server configuration and data models.
+// Unified type definitions for pathfinder server configuration and data models.
 // Zod schemas provide runtime validation; TypeScript types are inferred from them.
 
 import { z } from 'zod';

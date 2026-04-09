@@ -1,5 +1,5 @@
 // Job queue and coordination for indexing pipelines.
-// Fully config-driven: indexes sources referenced by search tools in mcp-docs.yaml.
+// Fully config-driven: indexes sources referenced by search tools in pathfinder.yaml.
 
 import fs from 'node:fs';
 import path from 'node:path';

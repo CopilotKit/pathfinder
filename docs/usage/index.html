@@ -201,7 +201,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="/">Home</a>
-        <a href="/usage" class="active">Docs</a>
+        <a href="/usage" class="active">Usage</a>
         <a href="/config">Config</a>
         <a href="/deploy">Deploy</a>
         <a href="/clients">Clients</a>
@@ -219,7 +219,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
 <div class="mobile-menu">
     <a href="/">Home</a>
-    <a href="/usage" class="active">Docs</a>
+    <a href="/usage" class="active">Usage</a>
     <a href="/config">Config</a>
     <a href="/deploy">Deploy</a>
     <a href="/clients">Clients</a>
@@ -273,7 +273,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 }</div>
     </div>
 
-    <p>Once connected, your agent can <code>search-docs("how to configure sources")</code> or <code>explore-docs("cat /config.html")</code> to get answers from these pages.</p>
+    <p>Once connected, your agent can <code>search-docs("how to configure sources")</code> or <code>explore-docs("cat /docs/quickstart.mdx")</code> to get answers from these pages.</p>
 
     <h2>Auto-Generated Endpoints</h2>
 
@@ -284,6 +284,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <li><strong><code>/llms-full.txt</code></strong> — The complete content of all indexed docs in plain text. Larger, but gives agents full context without multiple tool calls.</li>
         <li><strong><code>/.well-known/skills/default/skill.md</code></strong> — A dynamic agent capability description that reflects your current tool configuration. Agents can read this to understand what Pathfinder can do.</li>
         <li><strong><code>/faq.txt</code></strong> — Q&amp;A pairs from FAQ-category sources (Slack threads, Discord forums), filtered by confidence. Only generated when sources with <code>category: faq</code> are configured.</li>
+        <li><strong><code>/health</code></strong> — JSON health check with uptime, indexing status, and chunk counts per source.</li>
     </ul>
 
     <p>All HTTP responses include <code>Link</code> headers pointing to <code>/llms.txt</code> and, when available, <code>&lt;/faq.txt&gt;; rel="faq"</code>, so clients can discover these endpoints automatically.</p>
@@ -292,7 +293,12 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
     <ul>
         <li><strong><code>pathfinder init</code></strong> — Scaffold a new <code>pathfinder.yaml</code> config file interactively.</li>
-        <li><strong><code>pathfinder serve</code></strong> — Start the MCP server. Uses PGlite if no <code>DATABASE_URL</code> is set.</li>
+        <li><strong><code>pathfinder serve</code></strong> — Start the MCP server. Uses PGlite if no <code>DATABASE_URL</code> is set. Options:
+            <ul>
+                <li><code>-p, --port &lt;number&gt;</code> — Override the default port (3001)</li>
+                <li><code>-c, --config &lt;path&gt;</code> — Path to pathfinder.yaml config file</li>
+            </ul>
+        </li>
         <li><strong><code>pathfinder validate</code></strong> — Validate config schema, check that required environment variables are set, and probe source connectivity. Returns pass/fail per source with actionable error messages. Exits with code 1 on errors.</li>
     </ul>
 

@@ -37,7 +37,7 @@ function makeFileSourceConfig(
     };
 }
 
-// Code source config — matches the real mcp-docs.yaml code source patterns
+// Code source config — matches the real pathfinder.yaml code source patterns
 const codeConfig = makeFileSourceConfig(
     ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.py'],
     [

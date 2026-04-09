@@ -196,7 +196,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="/">Home</a>
-        <a href="/usage">Docs</a>
+        <a href="/usage">Usage</a>
         <a href="/config">Config</a>
         <a href="/deploy" class="active">Deploy</a>
         <a href="/clients">Clients</a>
@@ -214,7 +214,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
 <div class="mobile-menu">
     <a href="/">Home</a>
-    <a href="/usage">Docs</a>
+    <a href="/usage">Usage</a>
     <a href="/config">Config</a>
     <a href="/deploy" class="active">Deploy</a>
     <a href="/clients">Clients</a>
@@ -375,13 +375,23 @@ server {
             <tr><td><code>SLACK_SIGNING_SECRET</code></td><td>When using emoji-trigger</td><td>-</td><td>For Slack webhook signature verification</td></tr>
             <tr><td><code>DISCORD_BOT_TOKEN</code></td><td>When discord sources configured</td><td>-</td><td>Discord bot token</td></tr>
             <tr><td><code>DISCORD_PUBLIC_KEY</code></td><td>When discord sources configured</td><td>-</td><td>For Discord webhook Ed25519 verification</td></tr>
+            <tr><td><code>NOTION_TOKEN</code></td><td>When notion sources configured</td><td>-</td><td>Notion internal integration token</td></tr>
             <tr><td><code>PORT</code></td><td>No</td><td><code>3001</code></td><td>HTTP port the server listens on</td></tr>
             <tr><td><code>PATHFINDER_CONFIG</code></td><td>No</td><td><code>pathfinder.yaml</code></td><td>Path to the config file</td></tr>
             <tr><td><code>WORKSPACE_DIR</code></td><td>No</td><td><code>/tmp/pathfinder-workspaces</code></td><td>Directory for agent workspace storage</td></tr>
             <tr><td><code>NODE_ENV</code></td><td>No</td><td><code>development</code></td><td>Set to <code>production</code> for deployed instances</td></tr>
             <tr><td><code>LOG_LEVEL</code></td><td>No</td><td><code>info</code></td><td>Logging verbosity (debug, info, warn, error)</td></tr>
+            <tr><td><code>CLONE_DIR</code></td><td>No</td><td><code>/tmp/mcp-repos</code></td><td>Directory for git repo clones</td></tr>
         </tbody>
     </table>
+
+    <h3 id="health-endpoint">Health endpoint</h3>
+    <p>Pathfinder exposes <code>GET /health</code> for monitoring. It returns JSON with uptime, indexing status, chunk counts per source, and index state (last indexed time, commit SHA, errors). Use it for load balancer health checks and deployment verification.</p>
+
+    <h3 id="webhook-urls">Webhook URLs</h3>
+    <p><strong>GitHub:</strong> Set your GitHub webhook's Payload URL to <code>https://your-domain/webhooks/github</code>.</p>
+    <p><strong>Slack:</strong> Set your Slack app's Event Subscriptions Request URL to <code>https://your-domain/webhooks/slack</code>.</p>
+    <p><strong>Discord:</strong> Set your Discord application's Interactions Endpoint URL to <code>https://your-domain/webhooks/discord</code>.</p>
 
     <h2>Volume Mounts</h2>
 

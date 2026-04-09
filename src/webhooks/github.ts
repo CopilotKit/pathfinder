@@ -1,6 +1,6 @@
 // GitHub webhook handler for push-event-driven incremental re-indexing.
 // Fully config-driven: uses webhook.repo_sources and webhook.path_triggers
-// from mcp-docs.yaml to determine which pushes trigger reindexing.
+// from pathfinder.yaml to determine which pushes trigger reindexing.
 
 import crypto from "node:crypto";
 import type { Request, Response } from "express";

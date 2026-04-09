@@ -16,6 +16,25 @@ sources:
       target_tokens: 600
       overlap_tokens: 50
 
+# ── Notion source (requires NOTION_TOKEN) ──
+#  - name: wiki
+#    type: notion
+#    root_pages: ["your-page-id"]
+#    databases: ["your-db-id"]
+#    max_depth: 5
+#    include_properties: true
+#    chunk:
+#      target_tokens: 600
+#      overlap_tokens: 50
+
+# ── Slack source (requires SLACK_BOT_TOKEN + OPENAI_API_KEY) ──
+#  - name: community
+#    type: slack
+#    channels: ["C0123456789"]
+#    min_thread_replies: 2
+#    chunk:
+#      target_tokens: 600
+
 tools:
   # Semantic search (RAG) — requires embedding config below
   - name: search-docs
@@ -35,6 +54,12 @@ tools:
       session_state: true
       grep_strategy: hybrid  # memory | vector | hybrid
       virtual_files: true
+
+  # ── Knowledge tool (for FAQ/Q&A sources) ──
+  #  - name: get-faq
+  #    type: knowledge
+  #    description: "Browse and search community Q&A"
+  #    sources: [community]
 
 # Required for search tools (omit for bash-only mode)
 embedding:

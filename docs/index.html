@@ -3,18 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pathfinder — Knowledge Retrieval for AI Agents</title>
-<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Pathfinder — The Knowledge Server for AI Agents</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="description" content="Self-hosted MCP server with semantic search + filesystem exploration for AI agents. Source-available, self-hosted, free to use.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pathfinder.copilotkit.dev/">
-<meta property="og:title" content="Pathfinder — Knowledge retrieval for AI agents">
+<meta property="og:title" content="Pathfinder — The knowledge server for AI agents">
 <meta property="og:description" content="Docs, code, and conversations — one knowledge server for AI agents. Source-available, self-hosted, free to use.">
 <meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pathfinder — Knowledge retrieval for AI agents">
+<meta name="twitter:title" content="Pathfinder — The knowledge server for AI agents">
 <meta name="twitter:description" content="Docs, code, and conversations — one knowledge server for AI agents. Source-available, self-hosted, free to use.">
 <meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -189,8 +189,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
   <div class="container">
     <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
-        <a href="/">Home</a>
-        <a href="/usage">Docs</a>
+        <a href="/" class="active">Home</a>
+        <a href="/usage">Usage</a>
         <a href="/config">Config</a>
         <a href="/deploy">Deploy</a>
         <a href="/clients">Clients</a>
@@ -207,8 +207,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </nav>
 
 <div class="mobile-menu">
-    <a href="/">Home</a>
-    <a href="/usage">Docs</a>
+    <a href="/" class="active">Home</a>
+    <a href="/usage">Usage</a>
     <a href="/config">Config</a>
     <a href="/deploy">Deploy</a>
     <a href="/clients">Clients</a>
@@ -218,9 +218,9 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </div>
 
 <section class="hero">
-    <div class="badge"><span class="dot"></span> pathfinder — knowledge retrieval for AI agents</div>
+    <div class="badge"><span class="dot"></span> pathfinder — the knowledge server for AI agents</div>
     <h1>The <span class="accent">knowledge server</span><br class="hero-break"> for <span class="accent">AI agents</span></h1>
-    <p class="subtitle">Index your documentation, codebase, and conversations — from Slack threads to Discord forums. Pathfinder turns everything your team knows into searchable, agent-accessible knowledge. Self-hosted, open source, zero lock-in.</p>
+    <p class="subtitle">Index your documentation, codebase, and conversations — from Slack threads to Discord forums. Pathfinder turns everything your team knows into searchable, agent-accessible knowledge. Self-hosted, source-available, zero lock-in.</p>
 
     <div class="install-box">
         <div class="install-line">
@@ -258,7 +258,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     type: search
     source: docs
 
-  - name: get-faq
+  - name: ask-community
     type: knowledge
     sources: <span class="file">[community]</span></pre>
             </div>
@@ -349,6 +349,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
   <div class="container">
     <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a> &mdash; free to use, modify, and self-host</div>
     <ul class="footer-links">
+        <li><a href="/">Home</a></li>
         <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
         <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
         <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
@@ -369,7 +370,7 @@ const lines = [
     { type: 'output', text: '/docs/guides/error-handling.mdx (0.94)' },
     { type: 'output', text: '/docs/reference/hooks.mdx (0.87)' },
     { type: 'pause', ms: 600 },
-    { type: 'prompt', text: '> get-faq("rate limiting")' },
+    { type: 'prompt', text: '> ask-community("rate limiting")' },
     { type: 'output', text: 'Q: Does the API have rate limits?' },
     { type: 'output', text: 'A: Yes, 100 req/min per API key...' },
     { type: 'output', text: 'CONFIDENCE: 0.92  SOURCE: #help-forum' },

@@ -1,6 +1,6 @@
 # pathfinder [![npm version](https://img.shields.io/npm/v/@copilotkit/pathfinder)](https://www.npmjs.com/package/@copilotkit/pathfinder)
 
-Agentic docs retrieval for AI agents — semantic search and filesystem exploration over your documentation and code via MCP. One config file, one command, works with any AI coding agent.
+The knowledge server for AI agents — index your docs, code, Notion pages, Slack threads, and Discord forums into searchable, agent-accessible knowledge via MCP. One config file, one command, works with any AI coding agent.
 
 ## Quick Start
 
@@ -63,7 +63,7 @@ Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source c
 
 - **[Semantic Search](https://pathfinder.copilotkit.dev/search)** — pgvector RAG with configurable chunk sizes, overlap, and score thresholds
 - **[Filesystem Exploration](https://pathfinder.copilotkit.dev/search)** — QuickJS WASM sandbox with session state, `qmd` semantic grep, `related` files
-- **[6 Source Types](https://pathfinder.copilotkit.dev/config)** — Markdown, code, raw-text, HTML, Slack, Discord — with pluggable chunker registry
+- **[7 Source Types](https://pathfinder.copilotkit.dev/config)** — Markdown, code, raw-text, HTML, Slack, Discord, Notion — with pluggable chunker registry
 - **[Config-Driven](https://pathfinder.copilotkit.dev/config)** — Everything in one `pathfinder.yaml`: sources, tools, embedding, indexing, webhooks
 - **[Client Setup](https://pathfinder.copilotkit.dev/clients)** — Claude Desktop, Claude Code, Cursor, Codex, VS Code, any Streamable HTTP client
 - **[Docker + Railway](https://pathfinder.copilotkit.dev/deploy)** — Container image, docker-compose, Railway one-click

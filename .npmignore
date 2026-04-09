@@ -29,6 +29,9 @@ pathfinder.yaml
 OPERATIONS.md
 railway.toml
 
+# Deployment configs
+deploy/
+
 # Superpowers artifacts
 .superpowers/
 
