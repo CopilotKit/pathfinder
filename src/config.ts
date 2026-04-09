@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { ServerConfigSchema, type ServerConfig, isDiscordSourceConfig } from './types.js';
+import { ServerConfigSchema, type ServerConfig, isDiscordSourceConfig, isFileSourceConfig } from './types.js';
 
 // ── Environment variable config (secrets and runtime settings) ────────────────
 
@@ -21,6 +21,7 @@ export interface Config {
     slackSigningSecret: string;
     discordBotToken: string;
     discordPublicKey: string;
+    notionToken: string;
 }
 
 /**
@@ -96,6 +97,11 @@ function parseConfig(): Config {
     if (hasDiscordSource && !discordPublicKey) missing.push('DISCORD_PUBLIC_KEY');
     if (hasDiscordTextChannels && !openaiApiKey) missing.push('OPENAI_API_KEY (required for Discord text channel distillation)');
 
+    // Notion credentials — required when any notion source is configured
+    const hasNotionSource = getServerConfig().sources.some(s => s.type === 'notion');
+    const notionToken = process.env.NOTION_TOKEN ?? '';
+    if (hasNotionSource && !notionToken) missing.push('NOTION_TOKEN');
+
     if (missing.length > 0) {
         throw new Error(
             `Missing required environment variables: ${missing.join(', ')}. ` +
@@ -121,6 +127,7 @@ function parseConfig(): Config {
         slackSigningSecret,
         discordBotToken,
         discordPublicKey,
+        notionToken,
     };
 }
 
@@ -273,7 +280,7 @@ function loadServerConfig(): ServerConfig {
 
     // Validate local source paths exist (file-based sources only)
     for (const source of result.data.sources) {
-        if (source.type === 'slack' || source.type === 'discord') continue;
+        if (!isFileSourceConfig(source)) continue;
         if (!source.repo) {
             const resolved = resolve(source.path);
             if (!existsSync(resolved)) {

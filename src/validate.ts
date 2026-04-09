@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getConfig, getServerConfig } from './config.js';
-import { isFileSourceConfig, isSlackSourceConfig, isDiscordSourceConfig } from './types.js';
+import { isFileSourceConfig, isSlackSourceConfig, isDiscordSourceConfig, isNotionSourceConfig } from './types.js';
 import type { SourceConfig } from './types.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -55,6 +55,7 @@ export async function validateConfig(configPath?: string): Promise<ValidationRes
     const hasDiscordTextChannels = serverCfg.sources.some(
         s => isDiscordSourceConfig(s) && s.channels.some(c => c.type === 'text')
     );
+    const hasNotionSource = serverCfg.sources.some(s => s.type === 'notion');
     const needsRag = serverCfg.tools.some(t => t.type === 'search' || t.type === 'knowledge');
 
     const envChecks = [
@@ -63,6 +64,7 @@ export async function validateConfig(configPath?: string): Promise<ValidationRes
         { name: 'SLACK_BOT_TOKEN', present: !!cfg.slackBotToken, required: hasSlackSource },
         { name: 'DISCORD_BOT_TOKEN', present: !!cfg.discordBotToken, required: hasDiscordSource },
         { name: 'DISCORD_PUBLIC_KEY', present: !!cfg.discordPublicKey, required: hasDiscordSource },
+        { name: 'NOTION_TOKEN', present: !!cfg.notionToken, required: hasNotionSource },
     ];
     result.envVars = envChecks;
 
@@ -145,6 +147,9 @@ async function validateSource(source: SourceConfig): Promise<ValidationResult['s
     }
     if (isDiscordSourceConfig(source)) {
         return { name: source.name, type: 'discord', valid: true, details: 'Discord validation requires live API probe — skipped in offline mode' };
+    }
+    if (isNotionSourceConfig(source)) {
+        return { name: source.name, type: 'notion', valid: true, details: 'Notion validation requires live API probe — skipped in offline mode' };
     }
     // Exhaustive fallback — should not be reachable with current discriminated union
     const s = source as SourceConfig;

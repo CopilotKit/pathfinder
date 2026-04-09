@@ -202,6 +202,19 @@ export async function deleteChunksBySource(sourceName: string): Promise<void> {
     await pool.query("DELETE FROM chunks WHERE source_name = $1", [sourceName]);
 }
 
+/**
+ * Get all unique item IDs (stored as file_path) for a given source.
+ * Used by providers that support deleted-item detection during incremental acquire.
+ */
+export async function getIndexedItemIds(sourceName: string): Promise<Set<string>> {
+    const pool = getPool();
+    const { rows } = await pool.query(
+        "SELECT DISTINCT file_path FROM chunks WHERE source_name = $1",
+        [sourceName],
+    );
+    return new Set(rows.map((r: Record<string, unknown>) => r.file_path as string));
+}
+
 // ---------------------------------------------------------------------------
 // Index state
 // ---------------------------------------------------------------------------
