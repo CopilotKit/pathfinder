@@ -74,11 +74,21 @@ export const DiscordSourceConfigSchema = z.object({
     distiller_model: z.string().optional(),
 });
 
+export const NotionSourceConfigSchema = z.object({
+    ...BaseSourceFields,
+    type: z.literal('notion'),
+    root_pages: z.array(z.string().min(1)).optional().default([]),
+    databases: z.array(z.string().min(1)).optional().default([]),
+    max_depth: z.number().int().min(1).max(20).optional().default(5),
+    include_properties: z.boolean().optional().default(true),
+});
+
 // Union: TypeScript infers the right shape based on `type`
 export const SourceConfigSchema = z.discriminatedUnion('type', [
     FileSourceConfigSchema,
     SlackSourceConfigSchema,
     DiscordSourceConfigSchema,
+    NotionSourceConfigSchema,
 ]);
 
 // ── Tool configuration schemas ────────────────────────────────────────────────
@@ -271,6 +281,7 @@ export type FileSourceConfig = z.infer<typeof FileSourceConfigSchema>;
 export type SlackSourceConfig = z.infer<typeof SlackSourceConfigSchema>;
 export type DiscordChannelConfig = z.infer<typeof DiscordChannelConfigSchema>;
 export type DiscordSourceConfig = z.infer<typeof DiscordSourceConfigSchema>;
+export type NotionSourceConfig = z.infer<typeof NotionSourceConfigSchema>;
 export type SearchToolConfig = z.infer<typeof SearchToolConfigSchema>;
 export type BashToolConfig = z.infer<typeof BashToolConfigSchema>;
 export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
@@ -295,6 +306,10 @@ export function isSlackSourceConfig(config: SourceConfig): config is SlackSource
 
 export function isDiscordSourceConfig(config: SourceConfig): config is DiscordSourceConfig {
     return config.type === 'discord';
+}
+
+export function isNotionSourceConfig(config: SourceConfig): config is NotionSourceConfig {
+    return config.type === 'notion';
 }
 
 // ── Data types: unified chunk ─────────────────────────────────────────────────

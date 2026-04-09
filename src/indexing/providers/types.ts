@@ -58,6 +58,7 @@ export interface ProviderOptions {
     githubToken?: string;
     slackBotToken?: string;
     discordBotToken?: string;
+    notionToken?: string;
 }
 
 /** Factory function that creates a DataProvider for a given source config. */

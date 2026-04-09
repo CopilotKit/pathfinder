@@ -1,5 +1,34 @@
 # @copilotkit/pathfinder
 
+## 1.6.2
+
+### Patch Changes
+
+- Move CopilotKit deployment configs to deploy/ directory
+- Rename fixture configs from mcp-docs to pathfinder
+- Remove internal operations runbook from repo
+- Clean up stale mcp-docs references in comments and scripts
+
+## 1.6.1
+
+### Patch Changes
+
+- Add Additional Use Grant — explicitly permits hosting Pathfinder for your own or your organization's documentation
+- Add LICENSING.md with plain-English license summary
+
+## 1.6.0
+
+### Minor Changes
+
+- **Notion Data Provider**: Index Notion pages and database entries as searchable markdown documents. Recursive block-to-markdown conversion, database property serialization as YAML frontmatter, configurable page depth, self-throttled API client (340ms/req)
+- **Deleted Page Detection**: Two-pass incremental acquire detects pages that were deleted, archived, or had integration access revoked — removes stale chunks automatically
+### Patch Changes
+
+- Improve test coverage from 53% to 75% lines across the project (1044 → 1698 tests)
+- Add comprehensive tests for markdown, code, and raw-text chunkers, file provider, config, validation, search/knowledge tools, webhooks, schema, url-derivation, embeddings
+- Update homepage hero text and docs site styling
+- Add `getIndexedItemIds` query for provider-level deletion detection
+
 ## 1.5.0
 
 ### Minor Changes

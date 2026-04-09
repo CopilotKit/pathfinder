@@ -32,3 +32,7 @@ registerProvider('slack', (config, options) => new SlackDataProvider(config, opt
 import { DiscordDataProvider } from './discord.js';
 
 registerProvider('discord', (config, options) => new DiscordDataProvider(config, options));
+
+import { NotionDataProvider } from './notion.js';
+
+registerProvider('notion', (config, options) => new NotionDataProvider(config, options));
