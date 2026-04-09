@@ -1,5 +1,14 @@
 # @copilotkit/pathfinder
 
+## 1.6.2
+
+### Patch Changes
+
+- Move CopilotKit deployment configs to deploy/ directory
+- Rename fixture configs from mcp-docs to pathfinder
+- Remove internal operations runbook from repo
+- Clean up stale mcp-docs references in comments and scripts
+
 ## 1.6.1
 
 ### Patch Changes

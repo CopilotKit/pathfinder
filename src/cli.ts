@@ -11,7 +11,7 @@ const program = new Command();
 program
     .name("pathfinder")
     .description("Agentic docs retrieval for AI agents")
-    .version("1.6.1");
+    .version("1.6.2");
 
 program
     .command("init")

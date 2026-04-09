@@ -6,3 +6,4 @@ pgdata/
 tmp/
 .superpowers/
 .claude/
+.ruff_cache/
