@@ -98,10 +98,10 @@ Step-by-step migration guide: **[Migrate from Mintlify](https://pathfinder.copil
 
 ## License
 
-Pathfinder is source-available under the [Elastic License 2.0 (ELv2)](LICENSE).
+Pathfinder is source-available under the [Elastic License 2.0 (ELv2)](LICENSE) with an **Additional Use Grant**.
 
-**You can:** use it, modify it, self-host it, embed it in your product, run it for your company, contribute to it — all free.
+**You can:** use it, modify it, self-host it, host it for your project's docs, run it for your company, contribute to it — all free.
 
-**One restriction:** you can't take Pathfinder and sell it as a hosted service. That's it.
+**One restriction:** you can't sell Pathfinder as a standalone product or service. That's it.
 
-If you're using Pathfinder to power your own docs, your own product, or your own internal tools — you're good. The license only kicks in if you're reselling Pathfinder itself as a managed service to third parties.
+See [LICENSING.md](LICENSING.md) for plain-English details.

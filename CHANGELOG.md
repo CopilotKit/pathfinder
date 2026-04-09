@@ -1,5 +1,13 @@
 # @copilotkit/pathfinder
 
+## 1.6.1
+
+### Patch Changes
+
+- Add Additional Use Grant to ELv2 license — explicitly permits hosting Pathfinder for your own project's documentation
+- Add LICENSING.md with plain-English license summary
+- Update README license section to reference Additional Use Grant and LICENSING.md
+
 ## 1.6.0
 
 ### Minor Changes
