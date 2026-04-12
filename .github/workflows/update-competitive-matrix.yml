@@ -1,0 +1,32 @@
+name: Update Competitive Matrix
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Monday 9am UTC
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npx tsx scripts/update-competitive-matrix.ts --summary /tmp/matrix-summary.md
+      - name: Check for changes
+        id: changes
+        run: |
+          if [ -n "$(git diff --name-only)" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+      - name: Create PR
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git checkout -b auto/competitive-matrix-update
+          git add -A
+          git commit -m "Update competitive matrix from weekly scan"
+          git push -u origin auto/competitive-matrix-update
+          gh pr create --title "Update competitive matrix" --body "$(cat /tmp/matrix-summary.md)" --base main
