@@ -1,5 +1,19 @@
 # @copilotkit/pathfinder
 
+## 1.7.0
+
+### Minor Changes
+
+- **Local Embedding Support**: Drop the OpenAI dependency — use Ollama or local transformers.js for embeddings. Three providers: openai (existing), ollama (HTTP API), local (@xenova/transformers, zero external deps)
+- **EmbeddingProvider Interface**: Abstracted embedding generation behind a provider interface with factory. Pluggable architecture for future providers
+- **Conditional API Keys**: OPENAI_API_KEY only required when embedding.provider is "openai" — Ollama and local providers need no API keys
+- **Dimension Mismatch Detection**: Startup check warns when configured dimensions don't match existing vector index
+
+### Patch Changes
+
+- Format all source files with prettier
+- Make Slack webhook notifications non-fatal in CI
+
 ## 1.6.2
 
 ### Patch Changes

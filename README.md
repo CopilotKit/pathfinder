@@ -50,7 +50,7 @@ claude mcp add pathfinder-docs --transport http https://mcp.pathfinder.copilotki
 
 ## What It Does
 
-Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source code — into a PostgreSQL vector database using OpenAI embeddings. It serves configurable search and filesystem exploration tools via [MCP](https://modelcontextprotocol.io), so AI agents can search your docs semantically and browse files with bash commands.
+Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source code — into a PostgreSQL vector database. Supports OpenAI, Ollama, and local transformers.js embeddings — no API key required for local providers. It serves configurable search and filesystem exploration tools via [MCP](https://modelcontextprotocol.io), so AI agents can search your docs semantically and browse files with bash commands.
 
 | Tool Type | What It Does | Example |
 |-----------|-------------|---------|
@@ -64,6 +64,7 @@ Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source c
 - **[Semantic Search](https://pathfinder.copilotkit.dev/search)** — pgvector RAG with configurable chunk sizes, overlap, and score thresholds
 - **[Filesystem Exploration](https://pathfinder.copilotkit.dev/search)** — QuickJS WASM sandbox with session state, `qmd` semantic grep, `related` files
 - **[7 Source Types](https://pathfinder.copilotkit.dev/config)** — Markdown, code, raw-text, HTML, Slack, Discord, Notion — with pluggable chunker registry
+- **[Multiple Embedding Providers](https://pathfinder.copilotkit.dev/config)** — OpenAI, Ollama (local HTTP), or transformers.js (zero external deps, CPU-only)
 - **[Config-Driven](https://pathfinder.copilotkit.dev/config)** — Everything in one `pathfinder.yaml`: sources, tools, embedding, indexing, webhooks
 - **[Client Setup](https://pathfinder.copilotkit.dev/clients)** — Claude Desktop, Claude Code, Cursor, Codex, VS Code, any Streamable HTTP client
 - **[Docker + Railway](https://pathfinder.copilotkit.dev/deploy)** — Container image, docker-compose, Railway one-click

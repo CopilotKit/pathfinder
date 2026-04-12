@@ -67,6 +67,19 @@ embedding:
   model: text-embedding-3-small
   dimensions: 1536
 
+# ── Ollama (local, requires ollama running with model pulled) ──
+# embedding:
+#   provider: ollama
+#   model: nomic-embed-text
+#   dimensions: 768
+#   base_url: http://localhost:11434
+
+# ── Local transformers.js (zero external deps, CPU-only) ──
+# embedding:
+#   provider: local
+#   model: Xenova/all-MiniLM-L6-v2
+#   dimensions: 384
+
 indexing:
   auto_reindex: true
   reindex_hour_utc: 3

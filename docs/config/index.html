@@ -537,9 +537,40 @@ https://docs.example.com/getting-started</div>
     <p>Required when using search tools. Configures how content is embedded for vector search.</p>
 
     <div class="code-block"><span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">openai</span>                    <span class="comment"># Currently only openai is supported</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>       <span class="comment"># OpenAI embedding model</span>
+  <span class="key">provider:</span> <span class="value">openai</span>                    <span class="comment"># openai | ollama | local</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>       <span class="comment"># Model name (provider-specific)</span>
   <span class="key">dimensions:</span> <span class="value">1536</span>                    <span class="comment"># Vector dimensions (must match model)</span></div>
+
+    <h3>Provider options</h3>
+
+    <p>Three embedding providers are supported. <code>OPENAI_API_KEY</code> is only required when using the <code>openai</code> provider.</p>
+
+    <p><strong>OpenAI</strong> (default) — uses the OpenAI embeddings API. Requires <code>OPENAI_API_KEY</code>.</p>
+
+    <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span></div>
+
+    <p><strong>Ollama</strong> — calls a local Ollama instance over HTTP. No API key needed. Requires <a href="https://ollama.ai">Ollama</a> running with the model pulled (<code>ollama pull nomic-embed-text</code>).</p>
+
+    <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">ollama</span>
+  <span class="key">model:</span> <span class="value">nomic-embed-text</span>
+  <span class="key">dimensions:</span> <span class="value">768</span>
+  <span class="key">base_url:</span> <span class="value">http://localhost:11434</span>   <span class="comment"># Optional, this is the default</span></div>
+
+    <p><strong>Local</strong> — runs <code>@xenova/transformers</code> in-process. Zero external dependencies, CPU-only. Install the optional peer dependency: <code>npm install @xenova/transformers</code>.</p>
+
+    <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">local</span>
+  <span class="key">model:</span> <span class="value">Xenova/all-MiniLM-L6-v2</span>
+  <span class="key">dimensions:</span> <span class="value">384</span></div>
+
+    <div class="gap-card">
+        <h4>Dimension mismatch detection</h4>
+        <p>If you change embedding providers or models on an existing database, Pathfinder warns at startup when the configured dimensions don't match the existing vector index. You'll need to reindex to use the new dimensions.</p>
+    </div>
 
     <h2 id="indexing">indexing</h2>
 

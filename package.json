@@ -1,7 +1,7 @@
 {
     "name": "@copilotkit/pathfinder",
-    "version": "1.6.2",
-    "description": "The knowledge server for AI agents — index docs, code, Notion, Slack, and Discord into searchable, agent-accessible knowledge via MCP.",
+    "version": "1.7.0",
+    "description": "The knowledge server for AI agents — index docs, code, Notion, Slack, and Discord into searchable, agent-accessible knowledge via MCP. Supports OpenAI, Ollama, and local transformers.js embeddings.",
     "type": "module",
     "repository": {
         "type": "git",
