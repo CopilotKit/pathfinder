@@ -265,8 +265,11 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
     if (this.loadingPromise) return this.loadingPromise;
 
     this.loadingPromise = this.loadModel();
-    this.extractor = await this.loadingPromise;
-    this.loadingPromise = null;
+    try {
+      this.extractor = await this.loadingPromise;
+    } finally {
+      this.loadingPromise = null;
+    }
     return this.extractor;
   }
 
