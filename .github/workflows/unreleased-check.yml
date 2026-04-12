@@ -41,7 +41,7 @@ jobs:
       - name: Notify Slack — unreleased changes
         if: steps.unreleased.outputs.count
         run: |
-          curl -sf -X POST "$SLACK_WEBHOOK" \
+          curl -sf -X POST "$SLACK_WEBHOOK" \ || true
             -H 'Content-Type: application/json' \
             -d "{\"text\":\"Unreleased changes on main — ${{ steps.unreleased.outputs.count }} commits since ${{ steps.unreleased.outputs.tag }}\n<https://github.com/${{ github.repository }}/compare/${{ steps.unreleased.outputs.tag }}...main|View compare>\"}"
         env:

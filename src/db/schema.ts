@@ -6,7 +6,7 @@
  * The vector dimension is parameterized from config.
  */
 export function generateSchema(dimensions: number): string {
-    return `
+  return `
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS chunks (
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS collected_data (
  * Safe to run even if they don't exist (IF EXISTS).
  */
 export function generateMigration(): string {
-    return `
+  return `
 DROP TABLE IF EXISTS doc_chunks CASCADE;
 DROP TABLE IF EXISTS code_chunks CASCADE;
 `;
@@ -69,7 +69,7 @@ DROP TABLE IF EXISTS code_chunks CASCADE;
  * Safe to run repeatedly — uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
  */
 export function generatePostSchemaMigration(): string {
-    return `
+  return `
 ALTER TABLE chunks ADD COLUMN IF NOT EXISTS version TEXT;
 CREATE INDEX IF NOT EXISTS idx_chunks_version ON chunks (version);
 `;

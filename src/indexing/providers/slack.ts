@@ -2,223 +2,270 @@
 // Implements DataProvider: fetches threads from configured channels, distills
 // them into Q&A pairs, and returns ContentItems for the indexing pipeline.
 
-import OpenAI from 'openai';
-import { SlackApiClient, type SlackMessage } from './slack-api.js';
-import { distillThread, type ThreadMessage } from '../distiller.js';
-import { getConfig } from '../../config.js';
-import type { SourceConfig, SlackSourceConfig } from '../../types.js';
-import type { DataProvider, AcquisitionResult, ContentItem, ProviderOptions } from './types.js';
+import OpenAI from "openai";
+import { SlackApiClient, type SlackMessage } from "./slack-api.js";
+import { distillThread, type ThreadMessage } from "../distiller.js";
+import { getConfig } from "../../config.js";
+import type { SourceConfig, SlackSourceConfig } from "../../types.js";
+import type {
+  DataProvider,
+  AcquisitionResult,
+  ContentItem,
+  ProviderOptions,
+} from "./types.js";
 
 export class SlackDataProvider implements DataProvider {
-    private config: SlackSourceConfig;
-    private apiClient: SlackApiClient;
-    private openaiClient: OpenAI;
-    private logPrefix: string;
+  private config: SlackSourceConfig;
+  private apiClient: SlackApiClient;
+  private openaiClient: OpenAI;
+  private logPrefix: string;
 
-    constructor(config: SourceConfig, options: ProviderOptions) {
-        if (config.type !== 'slack') {
-            throw new Error('SlackDataProvider requires a slack source config');
-        }
-        this.config = config;
-        const token = options.slackBotToken;
-        if (!token) {
-            throw new Error('SlackDataProvider requires a slackBotToken in provider options');
-        }
-        this.apiClient = new SlackApiClient({ token });
-        this.openaiClient = new OpenAI({ apiKey: getConfig().openaiApiKey });
-        this.logPrefix = `[slack-provider:${config.name}]`;
+  constructor(config: SourceConfig, options: ProviderOptions) {
+    if (config.type !== "slack") {
+      throw new Error("SlackDataProvider requires a slack source config");
     }
-
-    async fullAcquire(): Promise<AcquisitionResult> {
-        console.log(`${this.logPrefix} Starting full acquire for ${this.config.channels.length} channel(s)`);
-        const allItems: ContentItem[] = [];
-        let maxTimestamp = '0';
-        let failedChannels = 0;
-
-        for (const channelId of this.config.channels) {
-            try {
-                const { items, latestTs } = await this.processChannel(channelId);
-                allItems.push(...items);
-                if (latestTs > maxTimestamp) maxTimestamp = latestTs;
-            } catch (err) {
-                failedChannels++;
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error(`${this.logPrefix} Failed to process channel ${channelId}: ${msg}`);
-            }
-        }
-
-        if (failedChannels === this.config.channels.length) {
-            throw new Error(`All ${failedChannels} channel(s) failed during acquire`);
-        }
-
-        console.log(`${this.logPrefix} Full acquire complete: ${allItems.length} Q&A pairs from ${this.config.channels.length} channel(s)`);
-
-        return {
-            items: allItems,
-            removedIds: [],
-            stateToken: maxTimestamp,
-        };
+    this.config = config;
+    const token = options.slackBotToken;
+    if (!token) {
+      throw new Error(
+        "SlackDataProvider requires a slackBotToken in provider options",
+      );
     }
+    this.apiClient = new SlackApiClient({ token });
+    this.openaiClient = new OpenAI({ apiKey: getConfig().openaiApiKey });
+    this.logPrefix = `[slack-provider:${config.name}]`;
+  }
 
-    async incrementalAcquire(lastStateToken: string): Promise<AcquisitionResult> {
-        console.log(`${this.logPrefix} Starting incremental acquire since ${lastStateToken}`);
-        const allItems: ContentItem[] = [];
-        let maxTimestamp = lastStateToken;
-        let failedChannels = 0;
+  async fullAcquire(): Promise<AcquisitionResult> {
+    console.log(
+      `${this.logPrefix} Starting full acquire for ${this.config.channels.length} channel(s)`,
+    );
+    const allItems: ContentItem[] = [];
+    let maxTimestamp = "0";
+    let failedChannels = 0;
 
-        for (const channelId of this.config.channels) {
-            try {
-                const { items, latestTs } = await this.processChannel(channelId, lastStateToken);
-                allItems.push(...items);
-                if (latestTs > maxTimestamp) maxTimestamp = latestTs;
-            } catch (err) {
-                failedChannels++;
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error(`${this.logPrefix} Failed to process channel ${channelId}: ${msg}`);
-            }
-        }
-
-        if (failedChannels === this.config.channels.length) {
-            throw new Error(`All ${failedChannels} channel(s) failed during acquire`);
-        }
-
-        console.log(`${this.logPrefix} Incremental acquire complete: ${allItems.length} Q&A pairs`);
-
-        return {
-            items: allItems,
-            removedIds: [], // Slack API doesn't surface deletions; caught on next full acquire
-            stateToken: maxTimestamp,
-        };
-    }
-
-    async getCurrentStateToken(): Promise<string | null> {
-        let maxTimestamp = '0';
-
-        for (const channelId of this.config.channels) {
-            try {
-                const messages = await this.apiClient.fetchChannelHistory(channelId, undefined, 1);
-                if (messages.length > 0) {
-                    // Messages are returned newest-first by Slack
-                    const latest = messages[0].ts;
-                    if (latest > maxTimestamp) maxTimestamp = latest;
-                }
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.warn(`${this.logPrefix} Failed to check channel ${channelId}: ${msg}`);
-            }
-        }
-
-        return maxTimestamp === '0' ? null : maxTimestamp;
-    }
-
-    // -----------------------------------------------------------------------
-    // Private helpers
-    // -----------------------------------------------------------------------
-
-    /**
-     * Process a single channel: fetch threads, distill, return items.
-     */
-    private async processChannel(
-        channelId: string,
-        oldest?: string,
-    ): Promise<{ items: ContentItem[]; latestTs: string }> {
-        const messages = await this.apiClient.fetchChannelHistory(channelId, oldest);
-        const items: ContentItem[] = [];
-        let latestTs = oldest ?? '0';
-
-        // Filter to threaded messages with sufficient replies
-        const threads = messages.filter(
-            m => m.thread_ts === m.ts && (m.reply_count ?? 0) >= this.config.min_thread_replies,
+    for (const channelId of this.config.channels) {
+      try {
+        const { items, latestTs } = await this.processChannel(channelId);
+        allItems.push(...items);
+        if (latestTs > maxTimestamp) maxTimestamp = latestTs;
+      } catch (err) {
+        failedChannels++;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(
+          `${this.logPrefix} Failed to process channel ${channelId}: ${msg}`,
         );
-
-        console.log(`${this.logPrefix} Channel ${channelId}: ${messages.length} messages, ${threads.length} qualifying threads`);
-
-        // Process threads sequentially to avoid OpenAI rate limits
-        for (const thread of threads) {
-            try {
-                const threadItems = await this.processThread(channelId, thread);
-                items.push(...threadItems);
-
-                if (thread.ts > latestTs) latestTs = thread.ts;
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error(`${this.logPrefix} Failed to distill thread ${thread.ts}: ${msg}`);
-            }
-        }
-
-        return { items, latestTs };
+      }
     }
 
-    /**
-     * Process a single thread: fetch replies, resolve users, distill, create items.
-     */
-    private async processThread(
-        channelId: string,
-        parentMessage: SlackMessage,
-    ): Promise<ContentItem[]> {
-        const replies = await this.apiClient.fetchThreadReplies(channelId, parentMessage.ts);
-
-        // Resolve user display names
-        const threadMessages: ThreadMessage[] = [];
-        for (const reply of replies) {
-            let author = reply.user ?? 'unknown';
-            try {
-                if (reply.user) {
-                    const user = await this.apiClient.fetchUserInfo(reply.user);
-                    author = user.displayName;
-                }
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.warn(`${this.logPrefix} Failed to resolve user ${reply.user}: ${msg}`);
-            }
-
-            threadMessages.push({
-                author,
-                content: reply.text ?? '',
-                timestamp: reply.ts,
-                reactions: reply.reactions,
-            });
-        }
-
-        // Distill the thread
-        const distillerResult = await distillThread(threadMessages, {
-            model: this.config.distiller_model,
-            client: this.openaiClient,
-        });
-
-        // Create ContentItems for ALL pairs — confidence filtering happens at query time
-        const items: ContentItem[] = [];
-        let permalink: string | undefined;
-
-        if (distillerResult.pairs.length > 0) {
-            try {
-                permalink = await this.apiClient.getChannelPermalink(channelId, parentMessage.ts);
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.warn(`${this.logPrefix} Failed to get permalink for ${channelId}/${parentMessage.ts}: ${msg}`);
-                permalink = undefined;
-            }
-        }
-
-        const participants = [...new Set(threadMessages.map(m => m.author))];
-
-        for (let i = 0; i < distillerResult.pairs.length; i++) {
-            const pair = distillerResult.pairs[i];
-
-            items.push({
-                id: `${channelId}:${parentMessage.ts}:${i}`,
-                content: `Q: ${pair.question}\n\nA: ${pair.answer}`,
-                title: pair.question,
-                sourceUrl: permalink,
-                metadata: {
-                    channel: channelId,
-                    participants,
-                    confidence: pair.confidence,
-                    emojiTriggered: false,
-                },
-            });
-        }
-
-        return items;
+    if (failedChannels === this.config.channels.length) {
+      throw new Error(`All ${failedChannels} channel(s) failed during acquire`);
     }
+
+    console.log(
+      `${this.logPrefix} Full acquire complete: ${allItems.length} Q&A pairs from ${this.config.channels.length} channel(s)`,
+    );
+
+    return {
+      items: allItems,
+      removedIds: [],
+      stateToken: maxTimestamp,
+    };
+  }
+
+  async incrementalAcquire(lastStateToken: string): Promise<AcquisitionResult> {
+    console.log(
+      `${this.logPrefix} Starting incremental acquire since ${lastStateToken}`,
+    );
+    const allItems: ContentItem[] = [];
+    let maxTimestamp = lastStateToken;
+    let failedChannels = 0;
+
+    for (const channelId of this.config.channels) {
+      try {
+        const { items, latestTs } = await this.processChannel(
+          channelId,
+          lastStateToken,
+        );
+        allItems.push(...items);
+        if (latestTs > maxTimestamp) maxTimestamp = latestTs;
+      } catch (err) {
+        failedChannels++;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(
+          `${this.logPrefix} Failed to process channel ${channelId}: ${msg}`,
+        );
+      }
+    }
+
+    if (failedChannels === this.config.channels.length) {
+      throw new Error(`All ${failedChannels} channel(s) failed during acquire`);
+    }
+
+    console.log(
+      `${this.logPrefix} Incremental acquire complete: ${allItems.length} Q&A pairs`,
+    );
+
+    return {
+      items: allItems,
+      removedIds: [], // Slack API doesn't surface deletions; caught on next full acquire
+      stateToken: maxTimestamp,
+    };
+  }
+
+  async getCurrentStateToken(): Promise<string | null> {
+    let maxTimestamp = "0";
+
+    for (const channelId of this.config.channels) {
+      try {
+        const messages = await this.apiClient.fetchChannelHistory(
+          channelId,
+          undefined,
+          1,
+        );
+        if (messages.length > 0) {
+          // Messages are returned newest-first by Slack
+          const latest = messages[0].ts;
+          if (latest > maxTimestamp) maxTimestamp = latest;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `${this.logPrefix} Failed to check channel ${channelId}: ${msg}`,
+        );
+      }
+    }
+
+    return maxTimestamp === "0" ? null : maxTimestamp;
+  }
+
+  // -----------------------------------------------------------------------
+  // Private helpers
+  // -----------------------------------------------------------------------
+
+  /**
+   * Process a single channel: fetch threads, distill, return items.
+   */
+  private async processChannel(
+    channelId: string,
+    oldest?: string,
+  ): Promise<{ items: ContentItem[]; latestTs: string }> {
+    const messages = await this.apiClient.fetchChannelHistory(
+      channelId,
+      oldest,
+    );
+    const items: ContentItem[] = [];
+    let latestTs = oldest ?? "0";
+
+    // Filter to threaded messages with sufficient replies
+    const threads = messages.filter(
+      (m) =>
+        m.thread_ts === m.ts &&
+        (m.reply_count ?? 0) >= this.config.min_thread_replies,
+    );
+
+    console.log(
+      `${this.logPrefix} Channel ${channelId}: ${messages.length} messages, ${threads.length} qualifying threads`,
+    );
+
+    // Process threads sequentially to avoid OpenAI rate limits
+    for (const thread of threads) {
+      try {
+        const threadItems = await this.processThread(channelId, thread);
+        items.push(...threadItems);
+
+        if (thread.ts > latestTs) latestTs = thread.ts;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(
+          `${this.logPrefix} Failed to distill thread ${thread.ts}: ${msg}`,
+        );
+      }
+    }
+
+    return { items, latestTs };
+  }
+
+  /**
+   * Process a single thread: fetch replies, resolve users, distill, create items.
+   */
+  private async processThread(
+    channelId: string,
+    parentMessage: SlackMessage,
+  ): Promise<ContentItem[]> {
+    const replies = await this.apiClient.fetchThreadReplies(
+      channelId,
+      parentMessage.ts,
+    );
+
+    // Resolve user display names
+    const threadMessages: ThreadMessage[] = [];
+    for (const reply of replies) {
+      let author = reply.user ?? "unknown";
+      try {
+        if (reply.user) {
+          const user = await this.apiClient.fetchUserInfo(reply.user);
+          author = user.displayName;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `${this.logPrefix} Failed to resolve user ${reply.user}: ${msg}`,
+        );
+      }
+
+      threadMessages.push({
+        author,
+        content: reply.text ?? "",
+        timestamp: reply.ts,
+        reactions: reply.reactions,
+      });
+    }
+
+    // Distill the thread
+    const distillerResult = await distillThread(threadMessages, {
+      model: this.config.distiller_model,
+      client: this.openaiClient,
+    });
+
+    // Create ContentItems for ALL pairs — confidence filtering happens at query time
+    const items: ContentItem[] = [];
+    let permalink: string | undefined;
+
+    if (distillerResult.pairs.length > 0) {
+      try {
+        permalink = await this.apiClient.getChannelPermalink(
+          channelId,
+          parentMessage.ts,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `${this.logPrefix} Failed to get permalink for ${channelId}/${parentMessage.ts}: ${msg}`,
+        );
+        permalink = undefined;
+      }
+    }
+
+    const participants = [...new Set(threadMessages.map((m) => m.author))];
+
+    for (let i = 0; i < distillerResult.pairs.length; i++) {
+      const pair = distillerResult.pairs[i];
+
+      items.push({
+        id: `${channelId}:${parentMessage.ts}:${i}`,
+        content: `Q: ${pair.question}\n\nA: ${pair.answer}`,
+        title: pair.question,
+        sourceUrl: permalink,
+        metadata: {
+          channel: channelId,
+          participants,
+          confidence: pair.confidence,
+          emojiTriggered: false,
+        },
+      });
+    }
+
+    return items;
+  }
 }

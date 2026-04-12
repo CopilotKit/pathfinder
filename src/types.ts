@@ -1,107 +1,107 @@
 // Unified type definitions for pathfinder server configuration and data models.
 // Zod schemas provide runtime validation; TypeScript types are inferred from them.
 
-import { z } from 'zod';
+import { z } from "zod";
 
 // ── Source configuration schemas ──────────────────────────────────────────────
 
 export const UrlDerivationConfigSchema = z.object({
-    strip_prefix: z.string().optional(),
-    strip_suffix: z.string().optional(),
-    strip_route_groups: z.boolean().optional(),
-    strip_index: z.boolean().optional(),
+  strip_prefix: z.string().optional(),
+  strip_suffix: z.string().optional(),
+  strip_route_groups: z.boolean().optional(),
+  strip_index: z.boolean().optional(),
 });
 
 // ChunkConfig field applicability by source type:
 //   markdown/raw-text/html: target_tokens, overlap_tokens
 //   code:                   target_lines, overlap_lines
 export const ChunkConfigSchema = z.object({
-    target_tokens: z.number().int().positive().optional(),
-    overlap_tokens: z.number().int().nonnegative().optional(),
-    target_lines: z.number().int().positive().optional(),
-    overlap_lines: z.number().int().nonnegative().optional(),
+  target_tokens: z.number().int().positive().optional(),
+  overlap_tokens: z.number().int().nonnegative().optional(),
+  target_lines: z.number().int().positive().optional(),
+  overlap_lines: z.number().int().nonnegative().optional(),
 });
 
 // Base fields shared by all source types
 const BaseSourceFields = {
-    name: z.string().min(1),
-    chunk: ChunkConfigSchema,
-    version: z.string().optional(),
-    category: z.enum(['faq']).optional(),
+  name: z.string().min(1),
+  chunk: ChunkConfigSchema,
+  version: z.string().optional(),
+  category: z.enum(["faq"]).optional(),
 };
 
 // File-based source schema (markdown, code, raw-text, html) — unchanged fields from today
 export const FileSourceConfigSchema = z.object({
-    ...BaseSourceFields,
-    type: z.enum(['markdown', 'code', 'raw-text', 'html']),
-    repo: z.string().url().optional(),
-    branch: z.string().optional(),
-    path: z.string().min(1),
-    base_url: z.string().url().optional(),
-    url_derivation: UrlDerivationConfigSchema.optional(),
-    file_patterns: z.array(z.string()).min(1),
-    exclude_patterns: z.array(z.string()).optional(),
-    skip_dirs: z.array(z.string()).optional(),
-    max_file_size: z.number().int().positive().optional(),
+  ...BaseSourceFields,
+  type: z.enum(["markdown", "code", "raw-text", "html"]),
+  repo: z.string().url().optional(),
+  branch: z.string().optional(),
+  path: z.string().min(1),
+  base_url: z.string().url().optional(),
+  url_derivation: UrlDerivationConfigSchema.optional(),
+  file_patterns: z.array(z.string()).min(1),
+  exclude_patterns: z.array(z.string()).optional(),
+  skip_dirs: z.array(z.string()).optional(),
+  max_file_size: z.number().int().positive().optional(),
 });
 
 // Slack source schema — different required fields
 export const SlackSourceConfigSchema = z.object({
-    ...BaseSourceFields,
-    type: z.literal('slack'),
-    category: z.enum(['faq']).default('faq'),  // override base optional with default
-    channels: z.array(z.string()).min(1),
-    confidence_threshold: z.number().min(0).max(1).default(0.7),
-    trigger_emoji: z.string().default('pathfinder'),
-    min_thread_replies: z.number().int().positive().default(2),
-    distiller_model: z.string().optional(),
+  ...BaseSourceFields,
+  type: z.literal("slack"),
+  category: z.enum(["faq"]).default("faq"), // override base optional with default
+  channels: z.array(z.string()).min(1),
+  confidence_threshold: z.number().min(0).max(1).default(0.7),
+  trigger_emoji: z.string().default("pathfinder"),
+  min_thread_replies: z.number().int().positive().default(2),
+  distiller_model: z.string().optional(),
 });
 
 // Discord source schema — channel-based with forum thread support
 export const DiscordChannelConfigSchema = z.object({
-    id: z.string().min(1),
-    type: z.enum(['text', 'forum']),
+  id: z.string().min(1),
+  type: z.enum(["text", "forum"]),
 });
 
 export const DiscordSourceConfigSchema = z.object({
-    ...BaseSourceFields,
-    type: z.literal('discord'),
-    category: z.enum(['faq']).default('faq'),
-    guild_id: z.string().min(1),
-    channels: z.array(DiscordChannelConfigSchema).min(1),
-    confidence_threshold: z.number().min(0).max(1).default(0.7),
-    min_thread_replies: z.number().int().positive().default(2),
-    distiller_model: z.string().optional(),
+  ...BaseSourceFields,
+  type: z.literal("discord"),
+  category: z.enum(["faq"]).default("faq"),
+  guild_id: z.string().min(1),
+  channels: z.array(DiscordChannelConfigSchema).min(1),
+  confidence_threshold: z.number().min(0).max(1).default(0.7),
+  min_thread_replies: z.number().int().positive().default(2),
+  distiller_model: z.string().optional(),
 });
 
 export const NotionSourceConfigSchema = z.object({
-    ...BaseSourceFields,
-    type: z.literal('notion'),
-    root_pages: z.array(z.string().min(1)).optional().default([]),
-    databases: z.array(z.string().min(1)).optional().default([]),
-    max_depth: z.number().int().min(1).max(20).optional().default(5),
-    include_properties: z.boolean().optional().default(true),
+  ...BaseSourceFields,
+  type: z.literal("notion"),
+  root_pages: z.array(z.string().min(1)).optional().default([]),
+  databases: z.array(z.string().min(1)).optional().default([]),
+  max_depth: z.number().int().min(1).max(20).optional().default(5),
+  include_properties: z.boolean().optional().default(true),
 });
 
 // Union: TypeScript infers the right shape based on `type`
-export const SourceConfigSchema = z.discriminatedUnion('type', [
-    FileSourceConfigSchema,
-    SlackSourceConfigSchema,
-    DiscordSourceConfigSchema,
-    NotionSourceConfigSchema,
+export const SourceConfigSchema = z.discriminatedUnion("type", [
+  FileSourceConfigSchema,
+  SlackSourceConfigSchema,
+  DiscordSourceConfigSchema,
+  NotionSourceConfigSchema,
 ]);
 
 // ── Tool configuration schemas ────────────────────────────────────────────────
 
 const SearchToolConfigObjectSchema = z.object({
-    name: z.string().min(1),
-    type: z.literal('search'),
-    description: z.string().min(1),
-    source: z.string().min(1),
-    default_limit: z.number().int().positive(),
-    max_limit: z.number().int().positive(),
-    result_format: z.enum(['docs', 'code', 'raw']),
-    min_score: z.number().min(0).max(1).optional(),
+  name: z.string().min(1),
+  type: z.literal("search"),
+  description: z.string().min(1),
+  source: z.string().min(1),
+  default_limit: z.number().int().positive(),
+  max_limit: z.number().int().positive(),
+  result_format: z.enum(["docs", "code", "raw"]),
+  min_score: z.number().min(0).max(1).optional(),
 });
 
 // SearchToolConfig type is inferred from the object schema directly.
@@ -109,168 +109,186 @@ const SearchToolConfigObjectSchema = z.object({
 export const SearchToolConfigSchema = SearchToolConfigObjectSchema;
 
 export const BashCacheConfigSchema = z.object({
-    max_entries: z.number().int().positive(),
-    ttl_seconds: z.number().int().positive(),
+  max_entries: z.number().int().positive(),
+  ttl_seconds: z.number().int().positive(),
 });
 
-export const BashOptionsSchema = z.object({
+export const BashOptionsSchema = z
+  .object({
     session_state: z.boolean(),
-    grep_strategy: z.enum(['memory', 'vector', 'hybrid']),
+    grep_strategy: z.enum(["memory", "vector", "hybrid"]),
     workspace: z.boolean(),
     virtual_files: z.boolean(),
     max_file_size: z.number().int().positive(),
     cache: BashCacheConfigSchema,
-}).partial();
+  })
+  .partial();
 
 export const BashToolConfigSchema = z.object({
-    name: z.string().min(1),
-    type: z.literal('bash'),
-    description: z.string().min(1),
-    sources: z.array(z.string().min(1)).min(1),
-    bash: BashOptionsSchema.optional(),
+  name: z.string().min(1),
+  type: z.literal("bash"),
+  description: z.string().min(1),
+  sources: z.array(z.string().min(1)).min(1),
+  bash: BashOptionsSchema.optional(),
 });
 
 export const CollectToolConfigSchema = z.object({
-    name: z.string().min(1),
-    type: z.literal('collect'),
-    description: z.string().min(1),
-    response: z.string().min(1),
-    schema: z.record(z.string(), z.object({
-        type: z.enum(['string', 'number', 'enum']),
-        description: z.string().optional(),
-        required: z.boolean().optional(),
-        values: z.array(z.string()).optional(),
-    }).refine(f => f.type !== 'enum' || (f.values && f.values.length > 0), {
-        message: 'enum fields must have a non-empty values array',
-    }).refine(f => f.type === 'enum' || !f.values, {
-        message: 'values is only valid for enum fields',
-    })).refine(
-        s => Object.keys(s).length > 0,
-        { message: 'collect tool schema must define at least one field' },
-    ),
+  name: z.string().min(1),
+  type: z.literal("collect"),
+  description: z.string().min(1),
+  response: z.string().min(1),
+  schema: z
+    .record(
+      z.string(),
+      z
+        .object({
+          type: z.enum(["string", "number", "enum"]),
+          description: z.string().optional(),
+          required: z.boolean().optional(),
+          values: z.array(z.string()).optional(),
+        })
+        .refine((f) => f.type !== "enum" || (f.values && f.values.length > 0), {
+          message: "enum fields must have a non-empty values array",
+        })
+        .refine((f) => f.type === "enum" || !f.values, {
+          message: "values is only valid for enum fields",
+        }),
+    )
+    .refine((s) => Object.keys(s).length > 0, {
+      message: "collect tool schema must define at least one field",
+    }),
 });
 
 export const KnowledgeToolConfigSchema = z.object({
-    name: z.string().min(1),
-    type: z.literal('knowledge'),
-    description: z.string().min(1),
-    sources: z.array(z.string().min(1)).min(1),
-    min_confidence: z.number().min(0).max(1).default(0.7),
-    default_limit: z.number().int().positive().default(20),
-    max_limit: z.number().int().positive().default(100),
+  name: z.string().min(1),
+  type: z.literal("knowledge"),
+  description: z.string().min(1),
+  sources: z.array(z.string().min(1)).min(1),
+  min_confidence: z.number().min(0).max(1).default(0.7),
+  default_limit: z.number().int().positive().default(20),
+  max_limit: z.number().int().positive().default(100),
 });
 
 // Cross-field constraints (e.g. default_limit <= max_limit for search tools)
 // are enforced in ServerConfigSchema.superRefine, not here.
-export const AnyToolConfigSchema = z.discriminatedUnion('type', [
-    SearchToolConfigObjectSchema,
-    CollectToolConfigSchema,
-    BashToolConfigSchema,
-    KnowledgeToolConfigSchema,
+export const AnyToolConfigSchema = z.discriminatedUnion("type", [
+  SearchToolConfigObjectSchema,
+  CollectToolConfigSchema,
+  BashToolConfigSchema,
+  KnowledgeToolConfigSchema,
 ]);
 
 // ── Embedding configuration schemas ───────────────────────────────────────────
 
 export const EmbeddingConfigSchema = z.object({
-    provider: z.enum(['openai']),
-    model: z.string().min(1),
-    dimensions: z.number().int().positive(),
+  provider: z.enum(["openai"]),
+  model: z.string().min(1),
+  dimensions: z.number().int().positive(),
 });
 
 // ── Indexing configuration schemas ────────────────────────────────────────────
 
 export const IndexingConfigSchema = z.object({
-    auto_reindex: z.boolean(),
-    reindex_hour_utc: z.number().int().min(0).max(23),
-    stale_threshold_hours: z.number().int().positive(),
+  auto_reindex: z.boolean(),
+  reindex_hour_utc: z.number().int().min(0).max(23),
+  stale_threshold_hours: z.number().int().positive(),
 });
 
 // ── Webhook configuration schemas ─────────────────────────────────────────────
 
 export const WebhookConfigSchema = z.object({
-    repo_sources: z.record(z.string(), z.array(z.string())),
-    path_triggers: z.record(z.string(), z.array(z.string())),
+  repo_sources: z.record(z.string(), z.array(z.string())),
+  path_triggers: z.record(z.string(), z.array(z.string())),
 });
 
 // ── Top-level server configuration schema ─────────────────────────────────────
 
-export const ServerConfigSchema = z.object({
+export const ServerConfigSchema = z
+  .object({
     server: z.object({
-        name: z.string().min(1),
-        version: z.string().min(1),
-        max_sessions_per_ip: z.number().int().positive().optional(),
-        session_ttl_minutes: z.number().int().positive().optional(),
+      name: z.string().min(1),
+      version: z.string().min(1),
+      max_sessions_per_ip: z.number().int().positive().optional(),
+      session_ttl_minutes: z.number().int().positive().optional(),
     }),
     sources: z.array(SourceConfigSchema).min(1),
     tools: z.array(AnyToolConfigSchema).min(1),
     embedding: EmbeddingConfigSchema.optional(),
     indexing: IndexingConfigSchema.optional(),
     webhook: WebhookConfigSchema.optional(),
-}).superRefine((cfg, ctx) => {
-    const hasRag = cfg.tools.some(t => t.type === 'search' || t.type === 'knowledge');
+  })
+  .superRefine((cfg, ctx) => {
+    const hasRag = cfg.tools.some(
+      (t) => t.type === "search" || t.type === "knowledge",
+    );
     if (hasRag && !cfg.embedding) {
-        ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: 'embedding config is required when search tools are configured.',
-            path: ['embedding'],
-        });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "embedding config is required when search tools are configured.",
+        path: ["embedding"],
+      });
     }
     if (hasRag && !cfg.indexing) {
-        ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: 'indexing config is required when search tools are configured.',
-            path: ['indexing'],
-        });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "indexing config is required when search tools are configured.",
+        path: ["indexing"],
+      });
     }
-    const sourceNames = new Set(cfg.sources.map(s => s.name));
+    const sourceNames = new Set(cfg.sources.map((s) => s.name));
     for (const tool of cfg.tools) {
-        if (tool.type === 'search' && tool.default_limit > tool.max_limit) {
+      if (tool.type === "search" && tool.default_limit > tool.max_limit) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Tool "${tool.name}": default_limit must not exceed max_limit`,
+          path: ["tools"],
+        });
+      }
+      if (tool.type === "bash") {
+        for (const src of tool.sources) {
+          if (!sourceNames.has(src)) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                message: `Tool "${tool.name}": default_limit must not exceed max_limit`,
-                path: ['tools'],
+              code: z.ZodIssueCode.custom,
+              message: `Bash tool "${tool.name}" references source "${src}" which is not defined in sources.`,
+              path: ["tools"],
             });
+          }
         }
-        if (tool.type === 'bash') {
-            for (const src of tool.sources) {
-                if (!sourceNames.has(src)) {
-                    ctx.addIssue({
-                        code: z.ZodIssueCode.custom,
-                        message: `Bash tool "${tool.name}" references source "${src}" which is not defined in sources.`,
-                        path: ['tools'],
-                    });
-                }
-            }
-            const grepStrategy = tool.bash?.grep_strategy;
-            if ((grepStrategy === 'vector' || grepStrategy === 'hybrid') && !cfg.embedding) {
-                ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
-                    message: `Bash tool "${tool.name}" uses grep_strategy "${grepStrategy}" which requires embedding config.`,
-                    path: ['embedding'],
-                });
-            }
+        const grepStrategy = tool.bash?.grep_strategy;
+        if (
+          (grepStrategy === "vector" || grepStrategy === "hybrid") &&
+          !cfg.embedding
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Bash tool "${tool.name}" uses grep_strategy "${grepStrategy}" which requires embedding config.`,
+            path: ["embedding"],
+          });
         }
-        // Cross-validate: knowledge tool sources must reference existing source names
-        if (tool.type === 'knowledge') {
-            for (const src of tool.sources) {
-                if (!sourceNames.has(src)) {
-                    ctx.addIssue({
-                        code: z.ZodIssueCode.custom,
-                        message: `Knowledge tool "${tool.name}" references source "${src}" which is not defined in sources.`,
-                        path: ['tools'],
-                    });
-                }
-            }
-            if (tool.default_limit > tool.max_limit) {
-                ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
-                    message: `Tool "${tool.name}": default_limit must not exceed max_limit`,
-                    path: ['tools'],
-                });
-            }
+      }
+      // Cross-validate: knowledge tool sources must reference existing source names
+      if (tool.type === "knowledge") {
+        for (const src of tool.sources) {
+          if (!sourceNames.has(src)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Knowledge tool "${tool.name}" references source "${src}" which is not defined in sources.`,
+              path: ["tools"],
+            });
+          }
         }
+        if (tool.default_limit > tool.max_limit) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Tool "${tool.name}": default_limit must not exceed max_limit`,
+            path: ["tools"],
+          });
+        }
+      }
     }
-});
+  });
 
 // ── Inferred TypeScript types from Zod schemas ────────────────────────────────
 
@@ -295,81 +313,89 @@ export type BashOptions = z.infer<typeof BashOptionsSchema>;
 
 // ── Source config type guards ────────────────────────────────────────────────
 
-const FILE_SOURCE_TYPES = new Set(['markdown', 'code', 'raw-text', 'html']);
-export function isFileSourceConfig(config: SourceConfig): config is FileSourceConfig {
-    return FILE_SOURCE_TYPES.has(config.type);
+const FILE_SOURCE_TYPES = new Set(["markdown", "code", "raw-text", "html"]);
+export function isFileSourceConfig(
+  config: SourceConfig,
+): config is FileSourceConfig {
+  return FILE_SOURCE_TYPES.has(config.type);
 }
 
-export function isSlackSourceConfig(config: SourceConfig): config is SlackSourceConfig {
-    return config.type === 'slack';
+export function isSlackSourceConfig(
+  config: SourceConfig,
+): config is SlackSourceConfig {
+  return config.type === "slack";
 }
 
-export function isDiscordSourceConfig(config: SourceConfig): config is DiscordSourceConfig {
-    return config.type === 'discord';
+export function isDiscordSourceConfig(
+  config: SourceConfig,
+): config is DiscordSourceConfig {
+  return config.type === "discord";
 }
 
-export function isNotionSourceConfig(config: SourceConfig): config is NotionSourceConfig {
-    return config.type === 'notion';
+export function isNotionSourceConfig(
+  config: SourceConfig,
+): config is NotionSourceConfig {
+  return config.type === "notion";
 }
 
 // ── Data types: unified chunk ─────────────────────────────────────────────────
 
 export interface Chunk {
-    source_name: string;
-    source_url?: string | null;
-    title?: string | null;
-    content: string;
-    embedding: number[];
-    repo_url: string | null;
-    file_path: string;
-    start_line?: number | null;
-    end_line?: number | null;
-    language?: string | null;
-    chunk_index: number;
-    metadata?: Record<string, unknown>;
-    commit_sha?: string | null;
-    version?: string | null;
+  source_name: string;
+  source_url?: string | null;
+  title?: string | null;
+  content: string;
+  embedding: number[];
+  repo_url: string | null;
+  file_path: string;
+  start_line?: number | null;
+  end_line?: number | null;
+  language?: string | null;
+  chunk_index: number;
+  metadata?: Record<string, unknown>;
+  commit_sha?: string | null;
+  version?: string | null;
 }
 
 export interface ChunkResult {
-    id: number;
-    source_name: string;
-    source_url: string | null;
-    title: string | null;
-    content: string;
-    repo_url: string | null;
-    file_path: string;
-    start_line: number | null;
-    end_line: number | null;
-    language: string | null;
-    similarity: number;
+  id: number;
+  source_name: string;
+  source_url: string | null;
+  title: string | null;
+  content: string;
+  repo_url: string | null;
+  file_path: string;
+  start_line: number | null;
+  end_line: number | null;
+  language: string | null;
+  similarity: number;
 }
 
 export interface FaqChunkResult extends ChunkResult {
-    metadata: Record<string, unknown>;
-    confidence: number;  // extracted from metadata->>'confidence'
+  metadata: Record<string, unknown>;
+  confidence: number; // extracted from metadata->>'confidence'
 }
 
 // Chunker output: what chunkers produce before embedding
 export interface ChunkOutput {
-    content: string;
-    title?: string;
-    headingPath?: string[];
-    startLine?: number;
-    endLine?: number;
-    language?: string;
-    chunkIndex: number;
+  content: string;
+  title?: string;
+  headingPath?: string[];
+  startLine?: number;
+  endLine?: number;
+  language?: string;
+  chunkIndex: number;
 }
 
 // ── Index state types ─────────────────────────────────────────────────────────
 
-export type IndexStatus = 'idle' | 'indexing' | 'error';
+export type IndexStatus = "idle" | "indexing" | "error";
 
 export interface IndexState {
-    source_type: string;
-    source_key: string;
-    last_commit_sha?: string | null;
-    last_indexed_at?: Date | null;
-    status?: IndexStatus;
-    error_message?: string | null;
+  source_type: string;
+  source_key: string;
+  last_commit_sha?: string | null;
+  last_indexed_at?: Date | null;
+  status?: IndexStatus;
+  error_message?: string | null;
 }
