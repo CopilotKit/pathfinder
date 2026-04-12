@@ -142,7 +142,9 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-// ── Ollama provider (stub — implemented in Step 4) ──────────────────────────
+// ── Ollama provider ────────────────────────────────────────────────────────
+
+const OLLAMA_BATCH_SIZE = 512;
 
 export class OllamaEmbeddingProvider implements EmbeddingProvider {
   private model: string;
@@ -152,7 +154,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   constructor(model: string, dimensions: number, baseUrl: string) {
     this.model = model;
     this.dimensions = dimensions;
-    this.baseUrl = baseUrl;
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
   }
 
   async embed(text: string): Promise<number[]> {
@@ -160,16 +162,65 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
     return result[0];
   }
 
-  async embedBatch(_texts: string[]): Promise<number[][]> {
-    throw new Error("OllamaEmbeddingProvider not yet implemented");
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
+    const batches: string[][] = [];
+    for (let i = 0; i < texts.length; i += OLLAMA_BATCH_SIZE) {
+      batches.push(texts.slice(i, i + OLLAMA_BATCH_SIZE));
+    }
+
+    const totalBatches = batches.length;
+    const results: number[][] = [];
+    for (let i = 0; i < batches.length; i++) {
+      if (totalBatches > 1) {
+        console.log(
+          `[ollama] Embedding batch ${i + 1}/${totalBatches} (${batches[i].length} texts)...`,
+        );
+      }
+      const batchResult = await this.callOllamaEmbed(batches[i]);
+      results.push(...batchResult);
+    }
+    return results;
+  }
+
+  private async callOllamaEmbed(texts: string[]): Promise<number[][]> {
+    const url = `${this.baseUrl}/api/embed`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: this.model, input: texts }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Ollama embedding request failed (${response.status}): ${body}`,
+      );
+    }
+
+    const data = (await response.json()) as { embeddings: number[][] };
+    return data.embeddings;
   }
 }
 
-// ── Local provider (stub — implemented in Step 5) ───────────────────────────
+// ── Local provider ─────────────────────────────────────────────────────────
+
+const LOCAL_BATCH_SIZE = 32;
+
+/** Minimal interface for a transformers.js feature-extraction pipeline. */
+interface Extractor {
+  _call(
+    texts: string[],
+    options: { pooling: string; normalize: boolean },
+  ): Promise<{ tolist(): number[][] }>;
+}
 
 export class LocalEmbeddingProvider implements EmbeddingProvider {
   private model: string;
   private dimensions: number;
+  private extractor: Extractor | null = null;
+  private loadingPromise: Promise<Extractor> | null = null;
 
   constructor(model: string, dimensions: number) {
     this.model = model;
@@ -181,8 +232,66 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
     return result[0];
   }
 
-  async embedBatch(_texts: string[]): Promise<number[][]> {
-    throw new Error("LocalEmbeddingProvider not yet implemented");
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
+    const extractor = await this.getExtractor();
+
+    const batches: string[][] = [];
+    for (let i = 0; i < texts.length; i += LOCAL_BATCH_SIZE) {
+      batches.push(texts.slice(i, i + LOCAL_BATCH_SIZE));
+    }
+
+    const totalBatches = batches.length;
+    const results: number[][] = [];
+    for (let i = 0; i < batches.length; i++) {
+      if (totalBatches > 1) {
+        console.log(
+          `[local] Embedding batch ${i + 1}/${totalBatches} (${batches[i].length} texts)...`,
+        );
+      }
+      const output = await extractor._call(batches[i], {
+        pooling: "mean",
+        normalize: true,
+      });
+      const vectors: number[][] = output.tolist();
+      results.push(...vectors);
+    }
+    return results;
+  }
+
+  private async getExtractor(): Promise<Extractor> {
+    if (this.extractor) return this.extractor;
+    if (this.loadingPromise) return this.loadingPromise;
+
+    this.loadingPromise = this.loadModel();
+    this.extractor = await this.loadingPromise;
+    this.loadingPromise = null;
+    return this.extractor;
+  }
+
+  private async loadModel(): Promise<Extractor> {
+    try {
+      const { pipeline } = await import("@xenova/transformers");
+      console.log(`[local] Loading model ${this.model}...`);
+      const extractor = (await pipeline(
+        "feature-extraction",
+        this.model,
+      )) as Extractor;
+      console.log(`[local] Model ${this.model} loaded.`);
+      return extractor;
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (
+        msg.includes("Cannot find module") ||
+        msg.includes("ERR_MODULE_NOT_FOUND")
+      ) {
+        throw new Error(
+          "Install @xenova/transformers to use local embeddings: npm install @xenova/transformers",
+        );
+      }
+      throw error;
+    }
   }
 }
 
