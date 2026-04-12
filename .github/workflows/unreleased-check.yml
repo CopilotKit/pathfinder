@@ -11,6 +11,7 @@ jobs:
         with: { fetch-depth: 0 }
 
       - name: Check for unreleased source changes
+        id: unreleased
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           TAG="v${PKG_VERSION}"
@@ -31,6 +32,17 @@ jobs:
             git log "${TAG}..HEAD" --oneline -- 'src/'
             echo ""
             echo "Run: bump package.json version, update CHANGELOG.md, push to trigger publish."
+            echo "count=$UNRELEASED" >> $GITHUB_OUTPUT
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
           else
             echo "No unreleased source changes since ${TAG}."
           fi
+
+      - name: Notify Slack — unreleased changes
+        if: steps.unreleased.outputs.count
+        run: |
+          curl -sf -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\"Unreleased changes on main — ${{ steps.unreleased.outputs.count }} commits since ${{ steps.unreleased.outputs.tag }}\n<https://github.com/${{ github.repository }}/compare/${{ steps.unreleased.outputs.tag }}...main|View compare>\"}"
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}

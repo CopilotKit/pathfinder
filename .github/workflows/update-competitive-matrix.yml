@@ -22,6 +22,7 @@ jobs:
           fi
       - name: Create PR
         if: steps.changes.outputs.changed == 'true'
+        id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -29,4 +30,21 @@ jobs:
           git add -A
           git commit -m "Update competitive matrix from weekly scan"
           git push -u origin auto/competitive-matrix-update
-          gh pr create --title "Update competitive matrix" --body "$(cat /tmp/matrix-summary.md)" --base main
+          PR_URL=$(gh pr create --title "Update competitive matrix" --body "$(cat /tmp/matrix-summary.md)" --base main)
+          echo "url=$PR_URL" >> $GITHUB_OUTPUT
+      - name: Notify Slack — changes detected
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          curl -sf -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\"Competitive matrix updated — PR created\n<${{ steps.pr.outputs.url }}|View PR>\"}"
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      - name: Notify Slack — failure
+        if: failure()
+        run: |
+          curl -sf -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\"Competitive matrix scan failed\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}"
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
