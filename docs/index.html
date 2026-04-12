@@ -109,18 +109,24 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .feature-card h3 { font-size: 16px; margin-bottom: 8px; }
 .feature-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
 
-/* Comparison */
-.comparison { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; }
-.comparison h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; text-align: center; }
-.comparison .section-sub { color: var(--text-secondary); margin-bottom: 2rem; font-size: 16px; text-align: center; }
-.comp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.comp-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
-.comp-table th.highlight-col { color: var(--accent); border-bottom-color: var(--accent); }
-.comp-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); }
-.comp-table td.highlight-col { background: var(--accent-glow); }
-.comp-table .check { color: var(--accent); }
-.comp-table .cross { color: var(--text-dim); }
-.comp-table .partial { color: var(--warning); }
+/* Comparison matrix */
+.section-comparison { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; }
+.section-comparison h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; text-align: center; }
+.section-comparison .section-sub { color: var(--text-secondary); margin-bottom: 2rem; font-size: 16px; text-align: center; }
+.comparison-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -2rem; padding: 0 2rem; }
+.comp-matrix { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 640px; }
+.comp-matrix thead { position: sticky; top: 0; z-index: 2; }
+.comp-matrix th { padding: 12px 16px; text-align: center; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; background: var(--bg-deep); white-space: nowrap; }
+.comp-matrix th:first-child { text-align: left; }
+.comp-matrix th.col-pathfinder { color: var(--accent); border-bottom-color: var(--accent); background: rgba(0,204,255,0.06); }
+.comp-matrix td { padding: 10px 16px; border-bottom: 1px solid var(--border); text-align: center; }
+.comp-matrix td:first-child { text-align: left; color: var(--text-secondary); font-weight: 500; }
+.comp-matrix td.col-pathfinder { background: rgba(0,204,255,0.06); border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+.comp-matrix tr:last-child td.col-pathfinder { border-bottom: 2px solid var(--accent); }
+.comp-matrix thead th.col-pathfinder { border-top: 2px solid var(--accent); }
+.comp-matrix .yes { color: #22cc88; font-weight: 600; }
+.comp-matrix .no { color: var(--text-dim); }
+.comp-matrix .partial { color: var(--warning); font-weight: 500; }
 
 /* Migration CTA */
 .migration { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; text-align: center; }
@@ -144,11 +150,11 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     .demo-grid { grid-template-columns: 1fr; }
     .feature-grid { grid-template-columns: 1fr 1fr; }
     .install-box { flex-wrap: wrap; justify-content: center; font-size: 12px; }
-    .comp-table { font-size: 12px; }
-    .comp-table th, .comp-table td { padding: 8px 10px; }
+    .comp-matrix { font-size: 12px; }
+    .comp-matrix th, .comp-matrix td { padding: 8px 10px; }
     .nav-links { gap: 1rem; }
     .hero { padding: 100px 16px 2rem; }
-    .hero, .features, .comparison, .migration { padding-left: 1rem; padding-right: 1rem; }
+    .hero, .features, .section-comparison, .migration { padding-left: 1rem; padding-right: 1rem; }
 }
 
 /* Responsive: Mobile */
@@ -159,7 +165,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     .install-box { padding: 10px 14px; font-size: 11px; }
     .install-box .cmd { word-break: break-all; }
     .demo-body { font-size: 11px; min-height: 360px; }
-    .migration h2, .features h2, .comparison h2 { font-size: 1.75rem; }
+    .migration h2, .features h2, .section-comparison h2 { font-size: 1.75rem; }
 }
 
 /* Hamburger menu */
@@ -309,34 +315,130 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     </div>
 </section>
 
-<section class="comparison" id="comparison">
-    <h2>Pathfinder vs ChromaFS</h2>
-    <p class="section-sub">Mintlify hides RAG behind a filesystem. We give agents both directly.</p>
+<section class="section-comparison" id="comparison">
+    <h2>How Pathfinder compares</h2>
+    <p class="section-sub">See how Pathfinder stacks up against other knowledge tools for AI agents.</p>
 
-    <table class="comp-table">
+    <div class="comparison-wrap">
+    <table class="comp-matrix">
         <thead>
             <tr>
-                <th>Capability</th>
-                <th class="highlight-col">Pathfinder</th>
-                <th>ChromaFS</th>
+                <th></th>
+                <th class="col-pathfinder">Pathfinder</th>
+                <th>Mintlify</th>
+                <th>GitBook</th>
+                <th>mcp-ragdocs</th>
+                <th>mcp-local-rag</th>
             </tr>
         </thead>
         <tbody>
-            <tr><td>Semantic search</td><td class="highlight-col"><span class="check">&#10003;</span> pgvector RAG</td><td><span class="check">&#10003;</span> Via Chroma</td></tr>
-            <tr><td>File exploration</td><td class="highlight-col"><span class="check">&#10003;</span> find/grep/cat/ls</td><td><span class="check">&#10003;</span> find/grep/cat/ls</td></tr>
-            <tr><td>Both paradigms composable</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span> FS-only</td></tr>
-            <tr><td>Session state (persistent CWD)</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span></td></tr>
-            <tr><td>Vector-backed grep</td><td class="highlight-col"><span class="check">&#10003;</span> Configurable</td><td><span class="check">&#10003;</span> Chroma-backed</td></tr>
-            <tr><td>Conversational sources</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span></td></tr>
-            <tr><td>FAQ endpoint</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span></td></tr>
-            <tr><td>Writable workspace</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="cross">&#10007;</span> EROFS</td></tr>
-            <tr><td>Multi-source</td><td class="highlight-col"><span class="check">&#10003;</span> Config-driven</td><td><span class="cross">&#10007;</span> Single collection</td></tr>
-            <tr><td>Feedback collection</td><td class="highlight-col"><span class="check">&#10003;</span> Collect tools</td><td><span class="cross">&#10007;</span></td></tr>
-            <tr><td>Zero-infra mode</td><td class="highlight-col"><span class="check">&#10003;</span> Bash-only</td><td><span class="cross">&#10007;</span> Needs Chroma+Redis</td></tr>
-            <tr><td>Source-available</td><td class="highlight-col"><span class="check">&#10003;</span> ELv2 (free to use &amp; self-host)</td><td><span class="cross">&#10007;</span> Proprietary</td></tr>
-            <tr><td>Auto-refresh on webhook</td><td class="highlight-col"><span class="check">&#10003;</span></td><td><span class="partial">~</span> Manual reingestion</td></tr>
+            <tr>
+                <td>Semantic search</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+            </tr>
+            <tr>
+                <td>Filesystem exploration</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="partial">Internal only</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Multi-source (docs + code)</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Slack indexing</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="partial">Via Assistant</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Discord indexing</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="partial">Via Assistant</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Notion indexing</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Config-driven (one YAML)</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Webhook auto-reindex</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="partial">Auto</span></td>
+                <td><span class="partial">Git Sync</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Self-hosted</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+            </tr>
+            <tr>
+                <td>Knowledge / FAQ tool</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Zero-infra mode</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+            </tr>
+            <tr>
+                <td>llms.txt / faq.txt endpoints</td>
+                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
+            <tr>
+                <td>Hosted option</td>
+                <td class="col-pathfinder"><span class="no">&#10007;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+                <td><span class="yes">&#10003;</span></td>
+                <td><span class="no">&#10007;</span></td>
+                <td><span class="no">&#10007;</span></td>
+            </tr>
         </tbody>
     </table>
+    </div>
 </section>
 
 <section class="migration" id="migration">
