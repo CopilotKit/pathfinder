@@ -1089,6 +1089,46 @@ describe("config.ts", () => {
       expect(() => getConfig()).toThrow("OPENAI_API_KEY");
     });
 
+    it("does not require OPENAI_API_KEY when embedding provider is ollama", async () => {
+      process.env.DATABASE_URL = "postgresql://test";
+      delete process.env.OPENAI_API_KEY;
+
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(
+        makeYaml({
+          embedding: {
+            provider: "ollama",
+            model: "nomic-embed-text",
+            dimensions: 768,
+          },
+        }),
+      );
+
+      const { getConfig } = await freshImport();
+      const cfg = getConfig();
+      expect(cfg.openaiApiKey).toBe("");
+    });
+
+    it("does not require OPENAI_API_KEY when embedding provider is local", async () => {
+      process.env.DATABASE_URL = "postgresql://test";
+      delete process.env.OPENAI_API_KEY;
+
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(
+        makeYaml({
+          embedding: {
+            provider: "local",
+            model: "Xenova/all-MiniLM-L6-v2",
+            dimensions: 384,
+          },
+        }),
+      );
+
+      const { getConfig } = await freshImport();
+      const cfg = getConfig();
+      expect(cfg.openaiApiKey).toBe("");
+    });
+
     it("does not require OPENAI_API_KEY for collect-only tools (but requires DATABASE_URL)", async () => {
       process.env.DATABASE_URL = "postgresql://test";
       delete process.env.OPENAI_API_KEY;

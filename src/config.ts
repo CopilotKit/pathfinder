@@ -88,7 +88,10 @@ function parseConfig(): Config {
   if (!databaseUrl && needsDb) missing.push("DATABASE_URL");
 
   const openaiApiKey = process.env.OPENAI_API_KEY;
-  if (!openaiApiKey && needsRag) missing.push("OPENAI_API_KEY");
+  const embeddingProvider = getServerConfig().embedding?.provider;
+  const needsOpenAI =
+    needsRag && (!embeddingProvider || embeddingProvider === "openai");
+  if (!openaiApiKey && needsOpenAI) missing.push("OPENAI_API_KEY");
 
   const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET ?? "";
 
