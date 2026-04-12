@@ -180,11 +180,30 @@ export const AnyToolConfigSchema = z.discriminatedUnion("type", [
 
 // ── Embedding configuration schemas ───────────────────────────────────────────
 
-export const EmbeddingConfigSchema = z.object({
-  provider: z.enum(["openai"]),
+export const OpenAIEmbeddingConfigSchema = z.object({
+  provider: z.literal("openai"),
   model: z.string().min(1),
   dimensions: z.number().int().positive(),
 });
+
+export const OllamaEmbeddingConfigSchema = z.object({
+  provider: z.literal("ollama"),
+  model: z.string().min(1).default("nomic-embed-text"),
+  dimensions: z.number().int().positive().default(768),
+  base_url: z.string().url().default("http://localhost:11434"),
+});
+
+export const LocalEmbeddingConfigSchema = z.object({
+  provider: z.literal("local"),
+  model: z.string().min(1).default("Xenova/all-MiniLM-L6-v2"),
+  dimensions: z.number().int().positive().default(384),
+});
+
+export const EmbeddingConfigSchema = z.discriminatedUnion("provider", [
+  OpenAIEmbeddingConfigSchema,
+  OllamaEmbeddingConfigSchema,
+  LocalEmbeddingConfigSchema,
+]);
 
 // ── Indexing configuration schemas ────────────────────────────────────────────
 
@@ -305,6 +324,11 @@ export type BashToolConfig = z.infer<typeof BashToolConfigSchema>;
 export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
 export type KnowledgeToolConfig = z.infer<typeof KnowledgeToolConfigSchema>;
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
+export type OpenAIEmbeddingConfig = z.infer<typeof OpenAIEmbeddingConfigSchema>;
+export type OllamaEmbeddingConfig = z.infer<
+  typeof OllamaEmbeddingConfigSchema
+>;
+export type LocalEmbeddingConfig = z.infer<typeof LocalEmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;

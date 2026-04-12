@@ -1,20 +1,69 @@
-// OpenAI batch embedding client with automatic batching and retry logic
+// Embedding provider abstraction — supports OpenAI, Ollama, and local (transformers.js)
 
 import OpenAI from "openai";
+import type { EmbeddingConfig } from "../types.js";
 
 const MAX_BATCH_SIZE = 2048;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 
-export class EmbeddingClient {
+// ── Provider interface ──────────────────────────────────────────────────────
+
+export interface EmbeddingProvider {
+  embed(text: string): Promise<number[]>;
+  embedBatch(texts: string[]): Promise<number[][]>;
+}
+
+// ── Factory ─────────────────────────────────────────────────────────────────
+
+export function createEmbeddingProvider(
+  config: EmbeddingConfig,
+  openaiApiKey?: string,
+): EmbeddingProvider {
+  switch (config.provider) {
+    case "openai": {
+      if (!openaiApiKey) {
+        throw new Error(
+          'OPENAI_API_KEY is required when embedding.provider is "openai".',
+        );
+      }
+      return new OpenAIEmbeddingProvider(
+        openaiApiKey,
+        config.model,
+        config.dimensions,
+      );
+    }
+    case "ollama":
+      return new OllamaEmbeddingProvider(
+        config.model,
+        config.dimensions,
+        config.base_url,
+      );
+    case "local":
+      return new LocalEmbeddingProvider(config.model, config.dimensions);
+  }
+}
+
+// ── OpenAI provider ─────────────────────────────────────────────────────────
+
+export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   private client: OpenAI;
   private model: string;
   private dimensions: number;
 
-  constructor(apiKey: string, model?: string, dimensions?: number) {
+  /**
+   * Constructor accepts positional params with defaults so the backwards-compat
+   * alias `EmbeddingClient` works for existing call sites that pass
+   * (apiKey, model, dimensions) directly.
+   */
+  constructor(
+    apiKey: string,
+    model: string = "text-embedding-3-small",
+    dimensions: number = 1536,
+  ) {
     this.client = new OpenAI({ apiKey });
-    this.model = model ?? "text-embedding-3-small";
-    this.dimensions = dimensions ?? 1536;
+    this.model = model;
+    this.dimensions = dimensions;
   }
 
   async embed(text: string): Promise<number[]> {
@@ -27,12 +76,9 @@ export class EmbeddingClient {
 
     // Truncate texts that exceed OpenAI's 8192 token limit (~32K chars with safety margin)
     const MAX_CHARS = 30_000;
-    const truncated = texts.map((t) => {
-      if (t.length > MAX_CHARS) {
-        return t.slice(0, MAX_CHARS);
-      }
-      return t;
-    });
+    const truncated = texts.map((t) =>
+      t.length > MAX_CHARS ? t.slice(0, MAX_CHARS) : t,
+    );
 
     const chunks: string[][] = [];
     for (let i = 0; i < truncated.length; i += MAX_BATCH_SIZE) {
@@ -95,6 +141,55 @@ export class EmbeddingClient {
     }
   }
 }
+
+// ── Ollama provider (stub — implemented in Step 4) ──────────────────────────
+
+export class OllamaEmbeddingProvider implements EmbeddingProvider {
+  private model: string;
+  private dimensions: number;
+  private baseUrl: string;
+
+  constructor(model: string, dimensions: number, baseUrl: string) {
+    this.model = model;
+    this.dimensions = dimensions;
+    this.baseUrl = baseUrl;
+  }
+
+  async embed(text: string): Promise<number[]> {
+    const result = await this.embedBatch([text]);
+    return result[0];
+  }
+
+  async embedBatch(_texts: string[]): Promise<number[][]> {
+    throw new Error("OllamaEmbeddingProvider not yet implemented");
+  }
+}
+
+// ── Local provider (stub — implemented in Step 5) ───────────────────────────
+
+export class LocalEmbeddingProvider implements EmbeddingProvider {
+  private model: string;
+  private dimensions: number;
+
+  constructor(model: string, dimensions: number) {
+    this.model = model;
+    this.dimensions = dimensions;
+  }
+
+  async embed(text: string): Promise<number[]> {
+    const result = await this.embedBatch([text]);
+    return result[0];
+  }
+
+  async embedBatch(_texts: string[]): Promise<number[][]> {
+    throw new Error("LocalEmbeddingProvider not yet implemented");
+  }
+}
+
+// ── Backwards compatibility ─────────────────────────────────────────────────
+// Alias for existing call sites that construct EmbeddingClient directly.
+// TODO: Remove once all call sites use createEmbeddingProvider.
+export const EmbeddingClient = OpenAIEmbeddingProvider;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
