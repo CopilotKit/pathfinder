@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { EmbeddingClient } from "../../indexing/embeddings.js";
+import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type {
   KnowledgeToolConfig,
   FaqChunkResult,
@@ -43,7 +43,7 @@ function extractAnswer(content: string): string {
  */
 export function registerKnowledgeTool(
   server: McpServer,
-  embeddingClient: EmbeddingClient,
+  embeddingClient: EmbeddingProvider,
   toolConfig: KnowledgeToolConfig,
 ): void {
   const inputSchema = {

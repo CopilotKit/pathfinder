@@ -1,6 +1,7 @@
 import type { Bash } from "just-bash";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { EmbeddingClient } from "../indexing/embeddings.js";
+import { createEmbeddingProvider } from "../indexing/embeddings.js";
+import type { EmbeddingProvider } from "../indexing/embeddings.js";
 import { getConfig, getServerConfig } from "../config.js";
 import { registerSearchTool } from "./tools/search.js";
 import { registerCollectTool } from "./tools/collect.js";
@@ -26,19 +27,18 @@ export function createMcpServer(
   const serverCfg = getServerConfig();
 
   // Lazily created — only when a RAG tool needs it
-  let embeddingClient: EmbeddingClient | null = null;
-  function getEmbeddingClient(): EmbeddingClient {
-    if (!embeddingClient) {
+  let embeddingProvider: EmbeddingProvider | null = null;
+  function getEmbeddingProvider(): EmbeddingProvider {
+    if (!embeddingProvider) {
       if (!serverCfg.embedding) {
         throw new Error("embedding config is required for search tools");
       }
-      embeddingClient = new EmbeddingClient(
-        cfg.openaiApiKey,
-        serverCfg.embedding.model,
-        serverCfg.embedding.dimensions,
+      embeddingProvider = createEmbeddingProvider(
+        serverCfg.embedding,
+        cfg.openaiApiKey || undefined,
       );
     }
-    return embeddingClient;
+    return embeddingProvider;
   }
 
   const server = new McpServer({
@@ -52,7 +52,7 @@ export function createMcpServer(
         registerCollectTool(server, tool);
         break;
       case "search":
-        registerSearchTool(server, getEmbeddingClient(), tool);
+        registerSearchTool(server, getEmbeddingProvider(), tool);
         break;
       case "bash": {
         const bash = bashInstances?.get(tool.name);
@@ -77,7 +77,7 @@ export function createMcpServer(
         const needsWorkspace = tool.bash?.workspace === true;
         registerBashTool(server, tool, bash, {
           getSessionState,
-          embeddingClient: needsEmbedding ? getEmbeddingClient() : undefined,
+          embeddingClient: needsEmbedding ? getEmbeddingProvider() : undefined,
           searchToolNames,
           telemetry,
           workspace: needsWorkspace ? workspace : undefined,
@@ -86,7 +86,7 @@ export function createMcpServer(
         break;
       }
       case "knowledge":
-        registerKnowledgeTool(server, getEmbeddingClient(), tool);
+        registerKnowledgeTool(server, getEmbeddingProvider(), tool);
         break;
       default: {
         const _exhaustive: never = tool;

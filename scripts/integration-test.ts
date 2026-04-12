@@ -15,7 +15,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { initializeSchema, getPool } from "../src/db/client.js";
 import { getConfig, getServerConfig } from "../src/config.js";
-import { EmbeddingClient } from "../src/indexing/embeddings.js";
+import { createEmbeddingProvider } from "../src/indexing/embeddings.js";
+import type { EmbeddingProvider } from "../src/indexing/embeddings.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import {
     upsertChunks,
@@ -249,7 +250,7 @@ function assertContains(text: string, substring: string, label: string): void {
 // Phase 1: Index test data into unified chunks table
 // ---------------------------------------------------------------------------
 
-async function indexTestData(embeddingClient: EmbeddingClient): Promise<void> {
+async function indexTestData(embeddingClient: EmbeddingProvider): Promise<void> {
     console.log("\n=== Phase 1: Indexing test data ===\n");
 
     // Generate doc embeddings
@@ -300,7 +301,7 @@ async function indexTestData(embeddingClient: EmbeddingClient): Promise<void> {
 // Phase 2: Direct DB search using unified searchChunks
 // ---------------------------------------------------------------------------
 
-async function testDirectSearch(embeddingClient: EmbeddingClient): Promise<void> {
+async function testDirectSearch(embeddingClient: EmbeddingProvider): Promise<void> {
     console.log("\n=== Phase 2: Direct DB search ===\n");
 
     // Test 1: "how to get started" should return Getting Started doc
@@ -624,10 +625,9 @@ async function main(): Promise<void> {
     await initializeSchema();
     console.log("Schema ready.");
 
-    const embeddingClient = new EmbeddingClient(
+    const embeddingClient = createEmbeddingProvider(
+        serverConfig.embedding,
         config.openaiApiKey,
-        serverConfig.embedding.model,
-        serverConfig.embedding.dimensions,
     );
 
     let httpServer: Server | undefined;

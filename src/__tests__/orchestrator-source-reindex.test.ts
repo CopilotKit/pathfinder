@@ -67,11 +67,13 @@ vi.mock("../db/queries.js", () => ({
 }));
 
 vi.mock("../indexing/embeddings.js", () => {
+  class MockEmbeddingProvider {
+    embed = vi.fn().mockResolvedValue([0.1, 0.2]);
+    embedBatch = vi.fn().mockResolvedValue([[0.1, 0.2]]);
+  }
   return {
-    EmbeddingClient: class MockEmbeddingClient {
-      embed = vi.fn().mockResolvedValue([0.1, 0.2]);
-      embedBatch = vi.fn().mockResolvedValue([[0.1, 0.2]]);
-    },
+    EmbeddingClient: MockEmbeddingProvider,
+    createEmbeddingProvider: () => new MockEmbeddingProvider(),
   };
 });
 
@@ -116,8 +118,11 @@ describe("IndexingOrchestrator.queueSourceReindex", () => {
 
     orchestrator.queueSourceReindex("slack-support");
 
-    // Wait for drain to complete
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Poll until drain completes (up to 5 seconds)
+    for (let i = 0; i < 50; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (completeSpy.mock.calls.length > 0) break;
+    }
 
     expect(completeSpy).toHaveBeenCalledWith(["slack-support"]);
   });
@@ -128,7 +133,7 @@ describe("IndexingOrchestrator.queueSourceReindex", () => {
 
     orchestrator.queueSourceReindex("nonexistent");
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Should not call onReindexComplete for unknown sources
     // (the job executes but returns early)

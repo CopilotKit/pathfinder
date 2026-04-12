@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { EmbeddingClient } from "../../indexing/embeddings.js";
+import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type { SearchToolConfig, ChunkResult } from "../../types.js";
 import { searchChunks } from "../../db/queries.js";
 
@@ -61,7 +61,7 @@ function formatResults(results: ChunkResult[], format: string): string {
 
 export function registerSearchTool(
   server: McpServer,
-  embeddingClient: EmbeddingClient,
+  embeddingClient: EmbeddingProvider,
   toolConfig: SearchToolConfig,
 ): void {
   const inputSchema = {
