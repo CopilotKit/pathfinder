@@ -74,3 +74,16 @@ ALTER TABLE chunks ADD COLUMN IF NOT EXISTS version TEXT;
 CREATE INDEX IF NOT EXISTS idx_chunks_version ON chunks (version);
 `;
 }
+
+/**
+ * SQL to query the current vector dimension of the embedding column.
+ * Uses vector_dims() on actual data instead of pg_attribute (which PGlite may not support).
+ * Returns { dimensions: number } or empty result if table has no rows.
+ */
+export function generateDimensionCheckQuery(): string {
+  return `
+SELECT vector_dims(embedding) AS dimensions
+FROM chunks
+LIMIT 1;
+`;
+}
