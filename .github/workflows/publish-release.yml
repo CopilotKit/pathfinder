@@ -61,3 +61,18 @@ jobs:
           gh release create "${TAG}" --generate-notes --title "${TAG}" --verify-tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Slack on success
+        if: steps.check.outputs.published == 'false'
+        run: |
+          VERSION="v${{ steps.check.outputs.version }}"
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"📦 *@copilotkit/pathfinder ${VERSION} published*\nnpm: https://www.npmjs.com/package/@copilotkit/pathfinder/v/${{ steps.check.outputs.version }}\nRelease: https://github.com/${{ github.repository }}/releases/tag/${VERSION}\"}"
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"❌ *Pathfinder release failed*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}"
