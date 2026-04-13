@@ -15,6 +15,12 @@ import type { SearchToolConfig, ChunkResult } from "../types.js";
 vi.mock("../db/queries.js", () => ({
   searchChunks: vi.fn(),
 }));
+vi.mock("../db/analytics.js", () => ({
+  logQuery: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../config.js", () => ({
+  getServerConfig: vi.fn().mockReturnValue({}),
+}));
 
 import { registerSearchTool } from "../mcp/tools/search.js";
 import { searchChunks } from "../db/queries.js";
