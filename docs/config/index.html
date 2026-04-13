@@ -464,7 +464,18 @@ https://docs.example.com/getting-started</div>
     <span class="key">default_limit:</span> <span class="value">5</span>                  <span class="comment"># Default number of results</span>
     <span class="key">max_limit:</span> <span class="value">20</span>                     <span class="comment"># Maximum results an agent can request</span>
     <span class="key">result_format:</span> <span class="value">docs</span>               <span class="comment"># docs | code | raw</span>
-    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Minimum cosine similarity threshold (0-1, optional)</span></div>
+    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Minimum cosine similarity threshold (0-1, optional)</span>
+    <span class="key">search_mode:</span> <span class="value">vector</span>               <span class="comment"># vector (default) | keyword | hybrid</span></div>
+
+    <h3 id="search-modes">Search Modes</h3>
+
+    <p>The <code>search_mode</code> field controls how search queries are executed:</p>
+
+    <ul>
+      <li><strong>vector</strong> (default) — cosine similarity on embeddings. Best for semantic/conceptual queries.</li>
+      <li><strong>keyword</strong> — PostgreSQL full-text search (tsvector/tsquery). Best for exact terms, error codes, and technical identifiers. Does not require an embedding call at query time.</li>
+      <li><strong>hybrid</strong> — runs both vector and keyword searches in parallel, then merges results using Reciprocal Rank Fusion (RRF, k=60). Best overall recall for mixed query types.</li>
+    </ul>
 
     <h3 id="tool-bash">bash</h3>
 

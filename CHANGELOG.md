@@ -1,5 +1,14 @@
 # @copilotkit/pathfinder
 
+## 1.8.0
+
+### Minor Changes
+
+- **Hybrid Search**: Combine vector similarity and full-text keyword search using Reciprocal Rank Fusion (RRF). Three search modes: `vector` (default, unchanged), `keyword` (tsvector-based full-text), `hybrid` (both + RRF merge)
+- **Keyword Search Upgrade**: Replaced ILIKE with PostgreSQL tsvector/tsquery for proper full-text search with ranking via ts_rank
+- **search_mode Config**: New `search_mode` field on search tools — set to `'vector'`, `'keyword'`, or `'hybrid'` (defaults to `'vector'` for backwards compatibility)
+- **tsvector Schema Migration**: Adds `tsv` tsvector column with GIN index for fast full-text search, with PGlite-safe trigger fallback
+
 ## 1.7.0
 
 ### Minor Changes
