@@ -86,6 +86,22 @@ UPDATE chunks SET tsv = to_tsvector('english', content) WHERE tsv IS NULL;
 
 -- GIN index for fast full-text search
 CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
+
+-- Analytics: query_log table for tracking tool usage
+CREATE TABLE IF NOT EXISTS query_log (
+    id              SERIAL PRIMARY KEY,
+    tool_name       TEXT NOT NULL,
+    query_text      TEXT NOT NULL,
+    result_count    INTEGER NOT NULL,
+    top_score       REAL,
+    latency_ms      INTEGER NOT NULL,
+    source_name     TEXT,
+    session_id      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at);
+CREATE INDEX IF NOT EXISTS idx_query_log_tool_name ON query_log (tool_name);
 `;
 
   return coreSql;
