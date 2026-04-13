@@ -25,6 +25,7 @@ RUN npm ci --omit=dev
 # RUN npm install pdf-parse mammoth        # For type: document (PDF/DOCX)
 # RUN npm install @xenova/transformers     # For embedding.provider: local
 COPY --from=build /app/dist/ ./dist/
+COPY docs/analytics.html ./docs/analytics.html
 COPY deploy/copilotkit-docs.yaml ./copilotkit-docs.yaml
 COPY deploy/pathfinder-docs.yaml ./pathfinder-docs.yaml
 COPY pathfinder.example.yaml ./pathfinder.example.yaml
