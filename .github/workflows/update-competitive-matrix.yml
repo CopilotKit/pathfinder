@@ -35,16 +35,20 @@ jobs:
       - name: Notify Slack — changes detected
         if: steps.changes.outputs.changed == 'true'
         run: |
-          curl -sf -X POST "$SLACK_WEBHOOK" \ || true
-            -H 'Content-Type: application/json' \
-            -d "{\"text\":\"Competitive matrix updated — PR created\n<${{ steps.pr.outputs.url }}|View PR>\"}"
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -sf -X POST "$SLACK_WEBHOOK" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"Competitive matrix updated — PR created\n<${{ steps.pr.outputs.url }}|View PR>\"}" || true
+          fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
       - name: Notify Slack — failure
         if: failure()
         run: |
-          curl -sf -X POST "$SLACK_WEBHOOK" \ || true
-            -H 'Content-Type: application/json' \
-            -d "{\"text\":\"Competitive matrix scan failed\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}"
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -sf -X POST "$SLACK_WEBHOOK" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"Competitive matrix scan failed\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}" || true
+          fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
