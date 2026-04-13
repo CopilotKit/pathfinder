@@ -66,13 +66,17 @@ jobs:
         if: steps.check.outputs.published == 'false'
         run: |
           VERSION="v${{ steps.check.outputs.version }}"
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \ || true
-            -H "Content-Type: application/json" \
-            -d "{\"text\":\"📦 *@copilotkit/pathfinder ${VERSION} published*\nnpm: https://www.npmjs.com/package/@copilotkit/pathfinder/v/${{ steps.check.outputs.version }}\nRelease: https://github.com/${{ github.repository }}/releases/tag/${VERSION}\"}"
+          if [ -n "${{ secrets.SLACK_WEBHOOK }}" ]; then
+            curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\":\"📦 *@copilotkit/pathfinder ${VERSION} published*\nnpm: https://www.npmjs.com/package/@copilotkit/pathfinder/v/${{ steps.check.outputs.version }}\nRelease: https://github.com/${{ github.repository }}/releases/tag/${VERSION}\"}" || true
+          fi
 
       - name: Notify Slack on failure
         if: failure()
         run: |
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \ || true
-            -H "Content-Type: application/json" \
-            -d "{\"text\":\"❌ *Pathfinder release failed*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}"
+          if [ -n "${{ secrets.SLACK_WEBHOOK }}" ]; then
+            curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\":\"❌ *Pathfinder release failed*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}" || true
+          fi

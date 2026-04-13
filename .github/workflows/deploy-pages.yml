@@ -29,6 +29,8 @@ jobs:
       - name: Notify Slack on failure
         if: failure()
         run: |
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \ || true
-            -H "Content-Type: application/json" \
-            -d "{\"text\":\"❌ *Pathfinder GitHub Pages deploy failed*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}"
+          if [ -n "${{ secrets.SLACK_WEBHOOK }}" ]; then
+            curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\":\"❌ *Pathfinder GitHub Pages deploy failed*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}" || true
+          fi
