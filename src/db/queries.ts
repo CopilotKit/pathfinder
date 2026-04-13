@@ -78,26 +78,62 @@ export async function searchChunks(
 }
 
 /**
- * Text search (ILIKE) on the unified chunks table.
- * Optionally filtered by source_name. Returns results ordered by id.
+ * Full-text keyword search using PostgreSQL tsvector/tsquery.
+ * Uses plainto_tsquery for safe query parsing (no operator injection).
+ * Results are ranked by ts_rank (term frequency relevance).
  */
 export async function textSearchChunks(
   pattern: string,
   limit: number,
   sourceName?: string,
+  version?: string,
 ): Promise<ChunkResult[]> {
+  if (!pattern.trim()) return [];
+
   const pool = getPool();
-  const escaped = pattern.replace(/[%_\\]/g, "\\$&");
-  const likePattern = `%${escaped}%`;
-  let sql: string;
-  let params: unknown[];
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  let paramIdx = 1;
+
+  // tsquery from user input — plainto_tsquery handles special chars safely
+  conditions.push(`tsv @@ plainto_tsquery('english', $${paramIdx})`);
+  params.push(pattern);
+  paramIdx++;
+
   if (sourceName) {
-    sql = `SELECT id, source_name, source_url, title, content, repo_url, file_path, start_line, end_line, language, 0.0 AS similarity FROM chunks WHERE source_name = $1 AND content ILIKE $2 ORDER BY id LIMIT $3`;
-    params = [sourceName, likePattern, limit];
-  } else {
-    sql = `SELECT id, source_name, source_url, title, content, repo_url, file_path, start_line, end_line, language, 0.0 AS similarity FROM chunks WHERE content ILIKE $1 ORDER BY id LIMIT $2`;
-    params = [likePattern, limit];
+    conditions.push(`source_name = $${paramIdx}`);
+    params.push(sourceName);
+    paramIdx++;
   }
+
+  if (version) {
+    conditions.push(`version = $${paramIdx++}`);
+    params.push(version);
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  const sql = `
+        SELECT
+            id,
+            source_name,
+            source_url,
+            title,
+            content,
+            repo_url,
+            file_path,
+            start_line,
+            end_line,
+            language,
+            ts_rank(tsv, plainto_tsquery('english', $1)) AS similarity
+        FROM chunks
+        WHERE ${whereClause}
+        ORDER BY ts_rank(tsv, plainto_tsquery('english', $1)) DESC
+        LIMIT $${paramIdx}
+    `;
+  params.push(limit);
+
   const { rows } = await pool.query(sql, params);
   return rows.map((r: Record<string, unknown>) => ({
     id: r.id as number,
@@ -111,6 +147,103 @@ export async function textSearchChunks(
     end_line: (r.end_line as number) ?? null,
     language: (r.language as string) ?? null,
     similarity: parseFloat(r.similarity as string),
+  }));
+}
+
+/**
+ * Hybrid search combining vector similarity and full-text keyword search
+ * using Reciprocal Rank Fusion (RRF) to merge ranked lists.
+ *
+ * Strategy: run two independent indexed queries (vector + keyword),
+ * then merge in application code using RRF scoring.
+ * This is faster than a single SQL query because each query uses its
+ * respective index (HNSW for vector, GIN for tsvector).
+ *
+ * min_score filtering is applied to vector candidates BEFORE merging,
+ * preserving the semantic quality floor per the spec.
+ */
+export async function hybridSearchChunks(
+  embedding: number[],
+  queryText: string,
+  limit: number,
+  sourceName?: string,
+  version?: string,
+  minScore?: number,
+): Promise<ChunkResult[]> {
+  // Fetch 2x candidates from each retriever to ensure good RRF coverage
+  const candidateLimit = limit * 2;
+
+  // Run both searches in parallel
+  const [vectorResults, keywordResults] = await Promise.all([
+    searchChunks(embedding, candidateLimit, sourceName, version),
+    textSearchChunks(queryText, candidateLimit, sourceName, version),
+  ]);
+
+  // Apply min_score filter to vector candidates before merging
+  const filteredVectorResults =
+    minScore != null
+      ? vectorResults.filter((r) => r.similarity >= minScore)
+      : vectorResults;
+
+  return rrfMerge(filteredVectorResults, keywordResults, limit);
+}
+
+/**
+ * Reciprocal Rank Fusion: merges two ranked lists into one.
+ *
+ * RRF_score(doc) = 1/(k + rank_vector) + 1/(k + rank_keyword)
+ *
+ * where k = 60 (standard constant from the original RRF paper).
+ * Documents appearing in only one list get a single-term score.
+ *
+ * Exported for direct unit testing of the merge logic.
+ */
+export const RRF_K = 60;
+
+export function rrfMerge(
+  vectorResults: ChunkResult[],
+  keywordResults: ChunkResult[],
+  limit: number,
+): ChunkResult[] {
+  // Map chunk ID -> { rrfScore, bestResult }
+  const scores = new Map<number, { rrfScore: number; result: ChunkResult }>();
+
+  // Score vector results by rank position
+  for (let i = 0; i < vectorResults.length; i++) {
+    const r = vectorResults[i];
+    if (scores.has(r.id)) continue; // keep first/best-ranked
+    const rank = i + 1; // 1-indexed
+    const rrfScore = 1 / (RRF_K + rank);
+    scores.set(r.id, { rrfScore, result: r });
+  }
+
+  // Score keyword results by rank position, accumulate
+  const seenKeyword = new Set<number>();
+  for (let i = 0; i < keywordResults.length; i++) {
+    const r = keywordResults[i];
+    if (seenKeyword.has(r.id)) continue; // keep first/best-ranked
+    seenKeyword.add(r.id);
+    const rank = i + 1;
+    const rrfContribution = 1 / (RRF_K + rank);
+
+    const existing = scores.get(r.id);
+    if (existing) {
+      existing.rrfScore += rrfContribution;
+      // Keep the vector result (has cosine similarity) as the canonical result
+    } else {
+      scores.set(r.id, { rrfScore: rrfContribution, result: r });
+    }
+  }
+
+  // Sort by RRF score descending, take top N
+  const sorted = Array.from(scores.values())
+    .sort((a, b) => b.rrfScore - a.rrfScore)
+    .slice(0, limit);
+
+  // Return ChunkResult[] with similarity set to the RRF score
+  return sorted.map(({ rrfScore, result }) => ({
+    ...result,
+    similarity: rrfScore,
   }));
 }
 
@@ -135,9 +268,10 @@ export async function upsertChunks(chunks: Chunk[]): Promise<void> {
             INSERT INTO chunks
                 (source_name, source_url, title, content, embedding, repo_url,
                  file_path, start_line, end_line, language, chunk_index,
-                 metadata, commit_sha, version, indexed_at)
+                 metadata, commit_sha, version, indexed_at, tsv)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(),
+                 to_tsvector('english', $4))
             ON CONFLICT (source_name, file_path, chunk_index) DO UPDATE SET
                 source_url = EXCLUDED.source_url,
                 title      = EXCLUDED.title,
@@ -150,7 +284,8 @@ export async function upsertChunks(chunks: Chunk[]): Promise<void> {
                 metadata   = EXCLUDED.metadata,
                 commit_sha = EXCLUDED.commit_sha,
                 version    = EXCLUDED.version,
-                indexed_at = NOW()
+                indexed_at = NOW(),
+                tsv        = EXCLUDED.tsv
         `;
 
     for (const chunk of chunks) {

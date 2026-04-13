@@ -1,7 +1,7 @@
 {
     "name": "@copilotkit/pathfinder",
-    "version": "1.6.2",
-    "description": "The knowledge server for AI agents — index docs, code, Notion, Slack, and Discord into searchable, agent-accessible knowledge via MCP.",
+    "version": "1.11.0",
+    "description": "The knowledge server for AI agents — index docs, code, Notion, Slack, and Discord into searchable, agent-accessible knowledge via MCP. Supports OpenAI, Ollama, and local transformers.js embeddings.",
     "type": "module",
     "repository": {
         "type": "git",
@@ -36,6 +36,7 @@
         "start": "node dist/index.js",
         "dev": "tsx watch src/index.ts",
         "seed-index": "tsx scripts/seed-index.ts",
+        "seed-analytics": "tsx scripts/seed-analytics.ts",
         "test-search": "tsx scripts/test-search.ts",
         "integration-test": "tsx scripts/integration-test.ts",
         "fixture:breeze-api": "node fixtures/breeze-api/server.js",
@@ -65,6 +66,14 @@
         "simple-git": "^3.27.0",
         "yaml": "^2.8.3",
         "zod": "^3.23.8"
+    },
+    "peerDependencies": {
+        "@xenova/transformers": "^2.17.0"
+    },
+    "peerDependenciesMeta": {
+        "@xenova/transformers": {
+            "optional": true
+        }
     },
     "devDependencies": {
         "@electric-sql/pglite": "^0.4.2",

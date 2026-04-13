@@ -10,7 +10,7 @@ import {
   formatGrepMissSuggestion,
 } from "./bash-related.js";
 import { searchChunks, textSearchChunks } from "../../db/queries.js";
-import type { EmbeddingClient } from "../../indexing/embeddings.js";
+import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type { BashTelemetry } from "./bash-telemetry.js";
 import type { WorkspaceManager } from "../../workspace.js";
 
@@ -41,8 +41,8 @@ export interface BashToolOptions {
   sessionState?: BashSessionState;
   /** Lazy resolver for session state — called on first tool invocation. */
   getSessionState?: () => BashSessionState | undefined;
-  /** Embedding client for vector-backed grep. */
-  embeddingClient?: EmbeddingClient;
+  /** Embedding provider for vector-backed grep. */
+  embeddingClient?: EmbeddingProvider;
   /** Names of search tools, used for grep-miss suggestions. */
   searchToolNames?: string[];
   /** Telemetry recorder for commands, file accesses, and grep misses. */

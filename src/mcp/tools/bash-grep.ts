@@ -1,4 +1,4 @@
-import type { EmbeddingClient } from "../../indexing/embeddings.js";
+import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type { ChunkResult } from "../../types.js";
 
 export interface ParsedGrep {
@@ -109,7 +109,7 @@ export function parseQmdCommand(command: string): ParsedQmd {
 export interface VectorGrepOptions {
   pattern: string;
   sourceName?: string;
-  embeddingClient: EmbeddingClient;
+  embeddingClient: EmbeddingProvider;
   searchChunksFn: (
     embedding: number[],
     limit: number,

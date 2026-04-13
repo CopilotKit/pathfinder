@@ -9,10 +9,12 @@ import {
   getServerConfig,
   getIndexableSourceNames,
 } from "../config.js";
-import { EmbeddingClient } from "./embeddings.js";
+import { createEmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.js";
 import { getProvider } from "./providers/index.js";
 import { IndexingPipeline } from "./pipeline.js";
 import { getIndexState, upsertIndexState } from "../db/queries.js";
+import { cleanupOldQueryLogs } from "../db/analytics.js";
 import { isFileSourceConfig } from "../types.js";
 import type { IndexState, IndexStatus, SourceConfig } from "../types.js";
 import type { ProviderOptions } from "./providers/types.js";
@@ -298,6 +300,25 @@ export class IndexingOrchestrator {
           this.lastReindexDate = today;
           console.log("[orchestrator] Starting nightly reindex");
           this.queueFullReindex();
+
+          // Analytics cleanup — run at the same hour as reindex, once per day
+          const analyticsConfig = getServerConfig().analytics;
+          if (analyticsConfig?.enabled) {
+            const retentionDays = analyticsConfig.retention_days ?? 90;
+            cleanupOldQueryLogs(retentionDays)
+              .then((deleted) => {
+                if (deleted > 0) {
+                  console.log(
+                    `[analytics] Cleaned up ${deleted} query_log rows older than ${retentionDays} days`,
+                  );
+                }
+              })
+              .catch((err) => {
+                console.error(
+                  `[analytics] Cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              });
+          }
         }
       }
     }, 60_000);
@@ -352,10 +373,9 @@ export class IndexingOrchestrator {
     if (!serverCfg.embedding) {
       throw new Error("embedding config is required for indexing");
     }
-    const embeddingClient = new EmbeddingClient(
-      config.openaiApiKey,
-      serverCfg.embedding.model,
-      serverCfg.embedding.dimensions,
+    const embeddingProvider = createEmbeddingProvider(
+      serverCfg.embedding,
+      config.openaiApiKey || undefined,
     );
 
     const serverCfg2 = getServerConfig();
@@ -363,7 +383,7 @@ export class IndexingOrchestrator {
 
     if (job.type === "full-reindex") {
       await this.runFullReindex(
-        embeddingClient,
+        embeddingProvider,
         config.cloneDir,
         config.githubToken,
       );
@@ -378,7 +398,7 @@ export class IndexingOrchestrator {
       for (const sourceConfig of job.sources) {
         await this.indexSourceWithState(
           sourceConfig,
-          embeddingClient,
+          embeddingProvider,
           config.cloneDir,
         );
       }
@@ -391,7 +411,7 @@ export class IndexingOrchestrator {
         return;
       }
       await this.runIncrementalReindex(
-        embeddingClient,
+        embeddingProvider,
         config.cloneDir,
         config.githubToken,
         job.repoUrl,
@@ -415,7 +435,7 @@ export class IndexingOrchestrator {
       }
       await this.indexSourceWithState(
         sourceConfig,
-        embeddingClient,
+        embeddingProvider,
         config.cloneDir,
       );
       affectedSourceNames = [job.sourceName];
@@ -434,7 +454,7 @@ export class IndexingOrchestrator {
    * Run a full re-index of all indexable sources (those referenced by search tools).
    */
   private async runFullReindex(
-    embeddingClient: EmbeddingClient,
+    embeddingProvider: EmbeddingProvider,
     cloneDir: string,
     githubToken?: string,
   ): Promise<void> {
@@ -447,7 +467,7 @@ export class IndexingOrchestrator {
     )) {
       await this.indexSourceWithState(
         sourceConfig,
-        embeddingClient,
+        embeddingProvider,
         cloneDir,
         githubToken,
       );
@@ -460,7 +480,7 @@ export class IndexingOrchestrator {
    * Run an incremental re-index for all sources associated with a repo.
    */
   private async runIncrementalReindex(
-    embeddingClient: EmbeddingClient,
+    embeddingProvider: EmbeddingProvider,
     cloneDir: string,
     githubToken: string | undefined,
     repoUrl: string,
@@ -474,7 +494,7 @@ export class IndexingOrchestrator {
     for (const sourceConfig of sources) {
       await this.indexSourceWithState(
         sourceConfig,
-        embeddingClient,
+        embeddingProvider,
         cloneDir,
         githubToken,
       );
@@ -488,7 +508,7 @@ export class IndexingOrchestrator {
    */
   private async indexSourceWithState(
     sourceConfig: SourceConfig,
-    embeddingClient: EmbeddingClient,
+    embeddingProvider: EmbeddingProvider,
     cloneDir: string,
     githubToken?: string,
   ): Promise<void> {
@@ -505,7 +525,7 @@ export class IndexingOrchestrator {
         sourceConfig,
         providerOptions,
       );
-      const pipeline = new IndexingPipeline(embeddingClient, sourceConfig);
+      const pipeline = new IndexingPipeline(embeddingProvider, sourceConfig);
 
       await this.setIndexStatus(
         sourceConfig.type,

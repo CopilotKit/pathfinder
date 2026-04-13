@@ -32,7 +32,7 @@ export type {
 // Register built-in providers
 import { FileDataProvider } from "./file.js";
 
-for (const type of ["markdown", "code", "raw-text", "html"]) {
+for (const type of ["markdown", "code", "raw-text", "html", "document"]) {
   registerProvider(
     type,
     (config, options) => new FileDataProvider(config, options),

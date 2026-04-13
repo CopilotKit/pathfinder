@@ -1,12 +1,14 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { EmbeddingClient } from "../../indexing/embeddings.js";
+import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type {
   KnowledgeToolConfig,
   FaqChunkResult,
   ChunkResult,
 } from "../../types.js";
 import { getFaqChunks, searchChunks } from "../../db/queries.js";
+import { logQuery } from "../../db/analytics.js";
+import { getServerConfig } from "../../config.js";
 
 /**
  * Format FAQ results in the standard QUESTION/ANSWER/SOURCE/CONFIDENCE format.
@@ -43,7 +45,7 @@ function extractAnswer(content: string): string {
  */
 export function registerKnowledgeTool(
   server: McpServer,
-  embeddingClient: EmbeddingClient,
+  embeddingClient: EmbeddingProvider,
   toolConfig: KnowledgeToolConfig,
 ): void {
   const inputSchema = {
@@ -76,6 +78,7 @@ export function registerKnowledgeTool(
     async ({ query, limit, min_confidence }) => {
       const effectiveLimit = limit ?? toolConfig.default_limit;
       const effectiveConfidence = min_confidence ?? toolConfig.min_confidence;
+      const startMs = Date.now();
 
       try {
         if (!query || query.trim() === "") {
@@ -85,6 +88,28 @@ export function registerKnowledgeTool(
             effectiveConfidence,
             effectiveLimit,
           );
+
+          // Fire-and-forget analytics logging
+          const analyticsConfig = getServerConfig().analytics;
+          if (analyticsConfig?.enabled) {
+            logQuery(
+              {
+                tool_name: toolConfig.name,
+                query_text: "<browse>",
+                result_count: chunks.length,
+                top_score: null,
+                latency_ms: Date.now() - startMs,
+                source_name: toolConfig.sources.join(","),
+                session_id: null,
+              },
+              analyticsConfig.log_queries,
+            ).catch((err) => {
+              console.error(
+                `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          }
+
           return {
             content: [
               { type: "text" as const, text: formatFaqResults(chunks) },
@@ -128,6 +153,31 @@ export function registerKnowledgeTool(
                 similarity: result.similarity,
               });
             }
+          }
+
+          // Fire-and-forget analytics logging
+          const analyticsConfig = getServerConfig().analytics;
+          if (analyticsConfig?.enabled) {
+            const topScore =
+              mergedResults.length > 0
+                ? Math.max(...mergedResults.map((r) => r.similarity))
+                : null;
+            logQuery(
+              {
+                tool_name: toolConfig.name,
+                query_text: query,
+                result_count: mergedResults.length,
+                top_score: topScore,
+                latency_ms: Date.now() - startMs,
+                source_name: toolConfig.sources.join(","),
+                session_id: null,
+              },
+              analyticsConfig.log_queries,
+            ).catch((err) => {
+              console.error(
+                `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
           }
 
           return {

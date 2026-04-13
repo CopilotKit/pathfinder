@@ -4,6 +4,8 @@ import {
   generateSchema,
   generateMigration,
   generatePostSchemaMigration,
+  generateTsvTriggerDdl,
+  generateDimensionCheckQuery,
 } from "./schema.js";
 import { getConfig, getServerConfig } from "../config.js";
 
@@ -79,6 +81,17 @@ async function initializePGlite(): Promise<void> {
     throw err;
   }
 
+  // Attempt tsvector trigger creation — PGlite does not support PL/pgSQL triggers
+  try {
+    await db.exec(generateTsvTriggerDdl());
+  } catch (error: unknown) {
+    console.warn(
+      `[db] tsvector trigger creation skipped (PGlite or unsupported): ` +
+        `${error instanceof Error ? error.message : String(error)}. ` +
+        `tsv column will be populated in application code during upsert.`,
+    );
+  }
+
   // Build a wrapper that duck-types as pg.Pool.
   // Supported pg.Pool surface: query(text, params?), connect() → {query, release}, end().
   // Other pg.Pool methods (e.g. on(), totalCount, idleCount) are NOT implemented —
@@ -93,6 +106,45 @@ async function initializePGlite(): Promise<void> {
   };
 
   pool = wrapper as unknown as pg.Pool;
+}
+
+/**
+ * Check if the configured embedding dimensions match what's stored in the database.
+ * Skips gracefully on empty tables, missing tables, or PGlite limitations.
+ * Throws on a confirmed mismatch with instructions to reindex.
+ */
+async function checkDimensionMismatch(
+  p: pg.Pool,
+  configuredDimensions: number,
+): Promise<void> {
+  try {
+    const result = await p.query(generateDimensionCheckQuery());
+    if (result.rows.length === 0 || result.rows[0].dimensions == null) return;
+
+    const dbDimensions = result.rows[0].dimensions;
+    if (dbDimensions !== configuredDimensions) {
+      console.error(
+        `[db] DIMENSION MISMATCH: Database has vector(${dbDimensions}) but config specifies dimensions=${configuredDimensions}. ` +
+          `Switching embedding providers requires a full reindex. Run: pathfinder reindex --force`,
+      );
+      throw new Error(
+        `Embedding dimension mismatch: database=${dbDimensions}, config=${configuredDimensions}. ` +
+          `Run "pathfinder reindex --force" to rebuild with the new dimensions.`,
+      );
+    }
+  } catch (error: unknown) {
+    // Re-throw our own mismatch error
+    if (
+      error instanceof Error &&
+      error.message.includes("dimension mismatch")
+    ) {
+      throw error;
+    }
+    // Expected failures: table doesn't exist yet, PGlite doesn't support vector_dims(), etc.
+    console.warn(
+      `[db] Dimension check skipped: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /**
@@ -114,6 +166,11 @@ export async function initializeSchema(): Promise<void> {
 
   if (isPGliteUrl(databaseUrl)) {
     await initializePGlite();
+    // Check dimension mismatch on PGlite — skip gracefully on failure
+    const dimensions = getServerConfig().embedding?.dimensions;
+    if (dimensions) {
+      await checkDimensionMismatch(getPool(), dimensions);
+    }
     return;
   }
 
@@ -124,6 +181,9 @@ export async function initializeSchema(): Promise<void> {
     throw new Error(
       "embedding.dimensions is required for database schema initialization",
     );
+
+  // Check for dimension mismatch before running DDL
+  await checkDimensionMismatch(p, dimensions);
 
   // Ensure the vector extension exists before registering types
   const setupClient = await p.connect();
@@ -149,6 +209,20 @@ export async function initializeSchema(): Promise<void> {
     throw err;
   } finally {
     migrationClient.release();
+  }
+
+  // Apply tsvector trigger DDL outside the transaction (idempotent)
+  const triggerClient = await p.connect();
+  try {
+    await triggerClient.query(generateTsvTriggerDdl());
+  } catch (error: unknown) {
+    console.warn(
+      `[db] tsvector trigger creation skipped: ` +
+        `${error instanceof Error ? error.message : String(error)}. ` +
+        `tsv column will be populated in application code during upsert.`,
+    );
+  } finally {
+    triggerClient.release();
   }
 }
 

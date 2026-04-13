@@ -1,4 +1,4 @@
-# Pathfinder — agentic docs retrieval for AI agents
+# Pathfinder — agentic knowledge server for AI agents
 # Copy this file to pathfinder.yaml and customize for your project.
 # Full documentation: https://pathfinder.copilotkit.dev
 
@@ -27,6 +27,15 @@ sources:
 #      target_tokens: 600
 #      overlap_tokens: 50
 
+# ── Document source (requires pdf-parse and/or mammoth) ──
+#  - name: specs
+#    type: document
+#    path: docs/specs/
+#    file_patterns: ["**/*.pdf", "**/*.docx"]
+#    chunk:
+#      target_tokens: 600
+#      overlap_tokens: 50
+
 # ── Slack source (requires SLACK_BOT_TOKEN + OPENAI_API_KEY) ──
 #  - name: community
 #    type: slack
@@ -44,6 +53,7 @@ tools:
     default_limit: 5
     max_limit: 20
     result_format: docs
+    # search_mode: vector   # 'vector' (default) | 'keyword' | 'hybrid'
 
   # Filesystem exploration — no database or API keys needed
   - name: explore-docs
@@ -67,7 +77,26 @@ embedding:
   model: text-embedding-3-small
   dimensions: 1536
 
+# ── Ollama (local, requires ollama running with model pulled) ──
+# embedding:
+#   provider: ollama
+#   model: nomic-embed-text
+#   dimensions: 768
+#   base_url: http://localhost:11434
+
+# ── Local transformers.js (zero external deps, CPU-only) ──
+# embedding:
+#   provider: local
+#   model: Xenova/all-MiniLM-L6-v2
+#   dimensions: 384
+
 indexing:
   auto_reindex: true
   reindex_hour_utc: 3
   stale_threshold_hours: 24
+
+# ── Analytics (query logging and dashboard) ──
+# analytics:
+#   enabled: true
+#   log_queries: true
+#   retention_days: 90

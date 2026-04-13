@@ -82,13 +82,17 @@ function parseConfig(): Config {
   const missing: string[] = [];
 
   const needsRag = hasSearchTools() || hasKnowledgeTools();
-  const needsDb = needsRag || hasCollectTools() || hasBashSemanticSearch();
+  const needsEmbedding = needsRag || hasBashSemanticSearch();
+  const needsDb = needsEmbedding || hasCollectTools();
 
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl && needsDb) missing.push("DATABASE_URL");
 
   const openaiApiKey = process.env.OPENAI_API_KEY;
-  if (!openaiApiKey && needsRag) missing.push("OPENAI_API_KEY");
+  const embeddingProvider = getServerConfig().embedding?.provider;
+  const needsOpenAI =
+    needsEmbedding && (!embeddingProvider || embeddingProvider === "openai");
+  if (!openaiApiKey && needsOpenAI) missing.push("OPENAI_API_KEY");
 
   const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET ?? "";
 

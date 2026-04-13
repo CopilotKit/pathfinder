@@ -49,78 +49,126 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
 /* Container */
 .container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
 
-/* Nav */
-nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
+/* Top Nav */
+.top-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1rem 0;
     background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
-nav .container { display:flex; align-items:center; justify-content:space-between; }
-.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
+.top-nav .nav-inner { max-width: 1400px; margin: 0 auto; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; }
+.nav-brand { display: flex; align-items: center; gap: 0.75rem; font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
 .nav-brand span { color: var(--accent); }
-.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
-.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
-.nav-links a:hover { color: var(--text-primary); }
-.nav-links a.active { color: var(--accent); }
-.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
-.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+.nav-links { display: flex; align-items: center; gap: 2rem; list-style: none; }
+.nav-links a { color: var(--text-secondary); font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: color 0.2s; }
+.nav-links a:hover { color: var(--text-primary); text-decoration: none; }
+.nav-links .gh-link, .nav-links .gh-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
+.nav-links .gh-link:hover, .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
 
-/* Sidebar */
-:root { --sb-width: 220px; }
-#page-sidebar {
-    position: fixed !important;
-    top: 60px;
-    right: 0;
-    width: var(--sb-width);
-    height: calc(100vh - 60px);
+/* Docs Layout */
+:root { --sidebar-width: 260px; }
+.docs-layout {
+    display: flex;
+    margin-top: 57px;
+    min-height: calc(100vh - 57px);
+}
+
+/* Left Sidebar */
+.sidebar {
+    position: fixed;
+    top: 57px;
+    left: 0;
+    width: var(--sidebar-width);
+    height: calc(100vh - 57px);
     overflow-y: auto;
-    padding: 2rem 1.5rem 2rem 1.5rem;
-    border-left: 1px solid var(--border);
-    background: var(--bg-deep);
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    padding: 1.5rem 0;
     z-index: 50;
 }
-#page-sidebar .sb-title {
+.sidebar-section { padding: 0 1.25rem; margin-bottom: 1.5rem; }
+.sidebar-section h3 {
     font-family: var(--mono);
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.12em;
     color: var(--text-dim);
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.5rem;
+    padding: 0 0.5rem;
 }
-#page-sidebar a {
+.sidebar-section a {
     display: block;
-    padding: 0.25rem 0;
-    font-size: 0.8rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
     color: var(--text-secondary);
     text-decoration: none;
-    transition: color 0.15s;
-    line-height: 1.4;
+    transition: color 0.15s, background 0.15s;
 }
-#page-sidebar a:hover { color: var(--text-primary); }
-#page-sidebar a.active { color: var(--accent); }
-#page-sidebar a.sb-indent { padding-left: 0.75rem; font-size: 0.75rem; }
+.sidebar-section a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
+.sidebar-section a.active { color: var(--accent); background: var(--accent-glow); }
 
-/* Article layout — mirrored from aimock's docs-content centering pattern */
-.article {
-    max-width: 860px;
-    padding: 100px 2rem 80px;
-    margin-right: calc(var(--sb-width) + max(0px, (100vw - var(--sb-width) - 860px) / 2));
-    margin-left: max(2rem, calc((100vw - var(--sb-width) - 860px) / 2));
+/* Main Content */
+.docs-content {
+    margin-left: var(--sidebar-width);
+    padding: 3rem 3rem;
+    max-width: calc(100vw - var(--sidebar-width) - 240px);
+    min-width: 0;
 }
-@media (max-width: 1200px) {
-    #page-sidebar { display: none; }
-    .article { max-width: 1120px; margin: 0 auto; }
+.docs-content h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 1rem; }
+.docs-content h1 .accent { color: var(--accent); }
+.docs-content .lead { font-size: 1.1rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 2rem; }
+.docs-content h2 { font-size: 1.5rem; font-weight: 600; margin-top: 3rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); scroll-margin-top: 80px; }
+.docs-content h3 { font-size: 1.15rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; scroll-margin-top: 80px; }
+.docs-content p { color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem; }
+.docs-content ul, .docs-content ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; }
+.docs-content li { margin-bottom: 0.35rem; line-height: 1.6; }
+.docs-content li strong { color: var(--text-primary); }
+.docs-content a { color: var(--accent); text-decoration: none; }
+.docs-content a:hover { text-decoration: underline; }
+
+/* Page TOC (right sidebar) */
+.page-toc {
+    position: fixed;
+    top: 80px;
+    right: 1rem;
+    width: 200px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    font-size: 0.78rem;
 }
-.article h1 { font-size: 42px; font-weight: 700; line-height: 1.15; margin-bottom: 16px; letter-spacing: -0.02em; }
-.article h1 .accent { color: var(--accent); }
-.article .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 48px; }
-.article h2 { font-size: 28px; font-weight: 600; margin: 48px 0 16px; padding-top: 16px; border-top: 1px solid var(--border); scroll-margin-top: 80px; }
-.article h2:first-of-type { border-top: none; }
-.article h3 { font-size: 20px; font-weight: 600; margin: 32px 0 12px; scroll-margin-top: 80px; }
-.article p { color: var(--text-secondary); margin-bottom: 16px; font-size: 1rem; line-height: 1.7; }
-.article ul, .article ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; font-size: 1rem; line-height: 1.7; }
-.article li { margin-bottom: 0.35rem; line-height: 1.6; }
-.article li strong { color: var(--text-primary); }
-.article a { color: var(--accent); text-decoration: none; }
-.article a:hover { text-decoration: underline; }
+.page-toc-label {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    padding: 0 0.5rem;
+    margin-bottom: 0.75rem;
+}
+.page-toc a {
+    display: block;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    text-decoration: none;
+    transition: color 0.15s, background 0.15s;
+}
+.page-toc a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
+.page-toc a.active { color: var(--accent); background: var(--accent-glow); }
+.page-toc a.toc-h3 { padding-left: 1.5rem; font-size: 0.72rem; color: var(--text-dim); }
+@media (max-width: 1200px) { .page-toc { display: none; } }
+
+/* Sidebar toggle (mobile) */
+.sidebar-toggle {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.25rem;
+}
 
 /* Code blocks */
 .code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
@@ -130,131 +178,80 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .code-block .cmd { color: var(--accent); }
 
 /* Inline code */
-.article code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
-
-/* Page TOC — inline fallback, hidden when fixed sidebar is visible */
-.page-toc { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin-bottom: 32px; max-width: 860px; }
-@media (min-width: 1201px) { .page-toc { display: none; } }
-.page-toc h4 { font-size: 13px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
-.page-toc ul { list-style: none; padding: 0; margin: 0; columns: 2; column-gap: 2rem; }
-.page-toc li { margin-bottom: 4px; }
-.page-toc a { color: var(--text-secondary); text-decoration: none; font-size: 0.875rem; transition: color 0.15s; }
-.page-toc a:hover { color: var(--accent); }
+.docs-content code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
 
 /* Footer */
-footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
-.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
-.footer-brand .prompt { color: var(--accent); }
-.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
-.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
-.footer-links a:hover { color: var(--text-primary); }
+.docs-footer {
+    margin-left: var(--sidebar-width);
+    padding: 3rem 4rem;
+    max-width: 860px;
+    border-top: 1px solid var(--border);
+}
+.docs-footer .footer-inner { display: flex; justify-content: space-between; align-items: center; }
+.footer-left { font-family: var(--mono); font-size: 0.8rem; color: var(--text-dim); }
+.footer-left .prompt { color: var(--accent); }
+.footer-links { display: flex; gap: 2rem; list-style: none; }
+.footer-links a { color: var(--text-dim); font-size: 0.85rem; text-decoration: none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text-primary); text-decoration: none; }
 
 /* Responsive: Tablet */
 @media (max-width: 768px) {
-    .article h1 { font-size: 32px; }
-    .article { padding: 90px 16px 60px; }
+    .docs-footer { margin-left: 0; padding: 1.5rem; }
     .nav-links { gap: 1rem; }
-}
-
-/* Responsive: Mobile */
-@media (max-width: 480px) {
-    .article h1 { font-size: 26px; }
-    .article .lead { font-size: 15px; }
     .article h2 { font-size: 22px; }
     .code-block { font-size: 11px; padding: 12px 14px; }
 }
 
-/* Hamburger menu */
-.hamburger { display:none; background:none; border:none; cursor:pointer; padding:0.5rem; z-index:101; }
-.hamburger span { display:block; width:22px; height:2px; background:var(--text-primary); margin:5px 0; transition: transform 0.3s, opacity 0.3s; border-radius:1px; }
-.hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
-.hamburger.open span:nth-child(2) { opacity:0; }
-.hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
-.mobile-menu { display:none; position:fixed; top:57px; left:0; right:0; background:var(--bg-surface); border-bottom:1px solid var(--border); padding:1rem 2rem 1.5rem; z-index:99; flex-direction:column; gap:0.25rem; }
-.mobile-menu.open { display:flex; }
-@media (min-width: 769px) { .mobile-menu { display:none !important; } }
-.mobile-menu a { color:var(--text-secondary); text-decoration:none; font-size:1rem; font-weight:500; padding:0.6rem 0; border-bottom:1px solid var(--border); transition:color 0.2s; }
-.mobile-menu a:last-child { border-bottom:none; }
-.mobile-menu a:hover { color:var(--text-primary); }
-.mobile-menu a.active { color:var(--accent); }
-.mobile-menu .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; margin-top:0.5rem; padding:0.5rem 1rem; border:1px solid var(--border); border-radius:6px; width:fit-content; }
-.mobile-menu .gh-btn:hover { border-color:var(--text-dim); background:var(--bg-card); }
+/* Responsive */
+@media (max-width: 1024px) {
+    .docs-content { padding: 2rem; margin-left: var(--sidebar-width); margin-right: 0; }
+}
 @media (max-width: 768px) {
-    .hamburger { display:block; }
-    .nav-links { display:none !important; }
+    .sidebar-toggle { display: block; }
+    .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+    .sidebar.open { transform: translateX(0); }
+    .docs-content { margin-left: 0; padding: 1.5rem; }
+    .nav-links a:not(.gh-link) { display: none; }
+}
+@media (max-width: 480px) {
+    .docs-content h1 { font-size: 1.75rem; }
+    .docs-content .lead { font-size: 0.95rem; }
+    .code-block { font-size: 11px; padding: 12px 14px; }
 }
 </style>
 </head>
 <body>
 
-<nav>
-  <div class="container">
-    <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
-    <div class="nav-links">
-        <a href="/">Home</a>
-        <a href="/usage">Usage</a>
-        <a href="/config" class="active">Config</a>
-        <a href="/deploy">Deploy</a>
-        <a href="/clients">Clients</a>
-        <a href="/search">Search</a>
-        <a href="/migrate-from-mintlify">Switch</a>
-        <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+<nav class="top-nav">
+  <div class="nav-inner">
+    <div style="display: flex; align-items: center; gap: 1rem">
+      <button class="sidebar-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')" aria-label="Toggle sidebar">&#9776;</button>
+      <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     </div>
-    <button class="hamburger" aria-label="Menu">
-      <span></span>
-      <span></span>
-      <span></span>
-    </button>
+    <ul class="nav-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
+      <li><a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a></li>
+    </ul>
   </div>
 </nav>
 
-<div class="mobile-menu">
-    <a href="/">Home</a>
-    <a href="/usage">Usage</a>
-    <a href="/config" class="active">Config</a>
-    <a href="/deploy">Deploy</a>
-    <a href="/clients">Clients</a>
-    <a href="/search">Search</a>
-    <a href="/migrate-from-mintlify">Switch</a>
-    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
-</div>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar"></aside>
 
-<article class="article">
+  <main class="docs-content">
     <h1>Configuration <span class="accent">Reference</span></h1>
     <p class="lead">Everything in Pathfinder is driven by a single <code>pathfinder.yaml</code> file. This is the full annotated reference.</p>
-
-    <div class="page-toc">
-        <h4>On this page</h4>
-        <ul>
-            <li><a href="#server">Server</a></li>
-            <li><a href="#sources">Sources</a></li>
-            <li><a href="#source-markdown">Markdown</a></li>
-            <li><a href="#source-code">Code</a></li>
-            <li><a href="#source-raw-text">Raw Text</a></li>
-            <li><a href="#source-html">HTML</a></li>
-            <li><a href="#source-slack">Slack</a></li>
-            <li><a href="#source-discord">Discord</a></li>
-            <li><a href="#source-notion">Notion</a></li>
-            <li><a href="#tools">Tools</a></li>
-            <li><a href="#tool-search">Search</a></li>
-            <li><a href="#tool-bash">Bash</a></li>
-            <li><a href="#tool-collect">Collect</a></li>
-            <li><a href="#tool-knowledge">Knowledge</a></li>
-            <li><a href="#embedding">Embedding</a></li>
-            <li><a href="#indexing">Indexing</a></li>
-            <li><a href="#webhook">Webhook</a></li>
-        </ul>
-    </div>
 
     <h2 id="server">server</h2>
 
     <p>Top-level server identity and session management.</p>
 
     <div class="code-block"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">my-project-docs</span>           <span class="comment"># Server name, exposed in MCP metadata</span>
+  <span class="key">name:</span> <span class="value">my-project-docs</span>             <span class="comment"># Server name, exposed in MCP metadata</span>
   <span class="key">version:</span> <span class="value">1.0.0</span>                    <span class="comment"># Server version string</span>
-  <span class="key">max_sessions_per_ip:</span> <span class="value">20</span>          <span class="comment"># Max concurrent MCP sessions per IP (default: 20)</span>
-  <span class="key">session_ttl_minutes:</span> <span class="value">30</span>          <span class="comment"># Idle session timeout in minutes (default: 30)</span></div>
+  <span class="key">max_sessions_per_ip:</span> <span class="value">20</span>           <span class="comment"># Max concurrent MCP sessions per IP (default: 20)</span>
+  <span class="key">session_ttl_minutes:</span> <span class="value">30</span>           <span class="comment"># Idle session timeout in minutes (default: 30)</span></div>
 
     <ul>
         <li><strong>name</strong> — Identifies the server in MCP tool descriptions. Required.</li>
@@ -268,37 +265,37 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <p>Define where your content lives. Each source becomes a virtual filesystem that agents can explore.</p>
 
     <div class="code-block"><span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>                        <span class="comment"># Unique name, referenced by tools</span>
-    <span class="key">type:</span> <span class="value">markdown</span>                    <span class="comment"># markdown | code | raw-text | html | slack | discord | notion</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>  <span class="comment"># Git repo URL (optional for local paths)</span>
-    <span class="key">branch:</span> <span class="value">main</span>                      <span class="comment"># Git branch to track (default: default branch)</span>
-    <span class="key">path:</span> <span class="value">docs/</span>                       <span class="comment"># Directory within the repo to index</span>
-    <span class="key">version:</span> <span class="value">v2</span>                      <span class="comment"># Version tag for multi-version docs (optional)</span>
-    <span class="key">file_patterns:</span>                      <span class="comment"># Glob patterns for files to include</span>
+  - <span class="key">name:</span> <span class="value">docs</span>                               <span class="comment"># Unique name, referenced by tools</span>
+    <span class="key">type:</span> <span class="value">markdown</span>                           <span class="comment"># markdown | code | raw-text | html | document | slack | discord | notion</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>    <span class="comment"># Git repo URL (optional for local paths)</span>
+    <span class="key">branch:</span> <span class="value">main</span>                             <span class="comment"># Git branch to track (default: default branch)</span>
+    <span class="key">path:</span> <span class="value">docs/</span>                              <span class="comment"># Directory within the repo to index</span>
+    <span class="key">version:</span> <span class="value">v2</span>                              <span class="comment"># Version tag for multi-version docs (optional)</span>
+    <span class="key">file_patterns:</span>                           <span class="comment"># Glob patterns for files to include</span>
       - <span class="value">"**/*.mdx"</span>
       - <span class="value">"**/*.md"</span>
-    <span class="key">exclude_patterns:</span>                   <span class="comment"># Glob patterns to exclude (optional)</span>
+    <span class="key">exclude_patterns:</span>                        <span class="comment"># Glob patterns to exclude (optional)</span>
       - <span class="value">"**/node_modules/**"</span>
       - <span class="value">"**/_internal/**"</span>
-    <span class="key">skip_dirs:</span>                          <span class="comment"># Directory names to skip entirely (optional)</span>
+    <span class="key">skip_dirs:</span>                               <span class="comment"># Directory names to skip entirely (optional)</span>
       - <span class="value">.git</span>
       - <span class="value">node_modules</span>
-    <span class="key">max_file_size:</span> <span class="value">100000</span>              <span class="comment"># Max file size in bytes to index (optional)</span>
-    <span class="key">category:</span> <span class="value">faq</span>                      <span class="comment"># Optional. Marks content as FAQ for /faq.txt and knowledge tools</span>
-    <span class="key">base_url:</span> <span class="value">https://docs.example.com</span>  <span class="comment"># Base URL for generating doc links (optional)</span>
-    <span class="key">url_derivation:</span>                     <span class="comment"># How to derive URLs from file paths (optional)</span>
+    <span class="key">max_file_size:</span> <span class="value">100000</span>                    <span class="comment"># Max file size in bytes to index (optional)</span>
+    <span class="key">category:</span> <span class="value">faq</span>                            <span class="comment"># Optional. Marks content as FAQ for /faq.txt and knowledge tools</span>
+    <span class="key">base_url:</span> <span class="value">https://docs.example.com</span>       <span class="comment"># Base URL for generating doc links (optional)</span>
+    <span class="key">url_derivation:</span>                          <span class="comment"># How to derive URLs from file paths (optional)</span>
       <span class="key">strip_prefix:</span> <span class="value">docs/</span>
       <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
       <span class="key">strip_route_groups:</span> <span class="value">true</span>
       <span class="key">strip_index:</span> <span class="value">true</span>
-    <span class="key">chunk:</span>                              <span class="comment"># How to split content for embeddings</span>
-      <span class="key">target_tokens:</span> <span class="value">600</span>              <span class="comment"># For markdown/raw-text sources</span>
-      <span class="key">overlap_tokens:</span> <span class="value">50</span>              <span class="comment"># Token overlap between chunks</span>
-      <span class="key">target_lines:</span> <span class="value">100</span>              <span class="comment"># For code sources</span>
-      <span class="key">overlap_lines:</span> <span class="value">10</span>              <span class="comment"># Line overlap between chunks</span></div>
+    <span class="key">chunk:</span>                                   <span class="comment"># How to split content for embeddings</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>                     <span class="comment"># For markdown/raw-text sources</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span>                     <span class="comment"># Token overlap between chunks</span>
+      <span class="key">target_lines:</span> <span class="value">100</span>                      <span class="comment"># For code sources</span>
+      <span class="key">overlap_lines:</span> <span class="value">10</span>                      <span class="comment"># Line overlap between chunks</span></div>
 
     <ul>
-        <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks. <code>html</code> parses HTML structure and extracts text content with token-based chunks.</li>
+        <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks. <code>html</code> parses HTML structure and extracts text content with token-based chunks. <code>document</code> extracts text from PDF and DOCX files with token-based chunks.</li>
         <li><strong>category</strong> — Optional tag applied to all chunks from this source. Sources with <code>category: faq</code> contribute to the <code>/faq.txt</code> endpoint and can be queried via knowledge tools.</li>
         <li><strong>repo</strong> — If provided, Pathfinder clones and updates from this repo. Omit for local directories.</li>
         <li><strong>version</strong> — Tags all indexed chunks with this version string. Used for version-filtered search queries.</li>
@@ -339,12 +336,12 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <span class="key">type:</span> <span class="value">slack</span>
     <span class="key">category:</span> <span class="value">faq</span>
     <span class="key">channels:</span>
-      - <span class="value">C06ABC123</span>                       <span class="comment"># Channel IDs to index</span>
+      - <span class="value">C06ABC123</span>                        <span class="comment"># Channel IDs to index</span>
       - <span class="value">C06DEF456</span>
     <span class="key">confidence_threshold:</span> <span class="value">0.7</span>            <span class="comment"># Min confidence for query results (0-1)</span>
-    <span class="key">trigger_emoji:</span> <span class="value">white_check_mark</span>     <span class="comment"># Emoji reaction triggers immediate reindex of thread</span>
-    <span class="key">min_thread_replies:</span> <span class="value">2</span>               <span class="comment"># Minimum replies for a thread to be indexed</span>
-    <span class="key">distiller_model:</span> <span class="value">gpt-4o-mini</span>        <span class="comment"># LLM model for distillation (default: gpt-4o-mini)</span></div>
+    <span class="key">trigger_emoji:</span> <span class="value">white_check_mark</span>      <span class="comment"># Emoji reaction triggers immediate reindex of thread</span>
+    <span class="key">min_thread_replies:</span> <span class="value">2</span>                <span class="comment"># Minimum replies for a thread to be indexed</span>
+    <span class="key">distiller_model:</span> <span class="value">gpt-4o-mini</span>         <span class="comment"># LLM model for distillation (default: gpt-4o-mini)</span></div>
 
     <ul>
         <li><strong>channels</strong> — Array of Slack channel IDs to monitor. The bot must be a member of each channel.</li>
@@ -371,7 +368,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
       - <span class="key">id:</span> <span class="value">"2222222222"</span>                 <span class="comment"># Forum channel — direct Q&amp;A extraction</span>
         <span class="key">type:</span> <span class="value">forum</span>
     <span class="key">confidence_threshold:</span> <span class="value">0.7</span>            <span class="comment"># Min confidence for query results (0-1)</span>
-    <span class="key">min_thread_replies:</span> <span class="value">2</span>               <span class="comment"># Minimum replies for text threads</span></div>
+    <span class="key">min_thread_replies:</span> <span class="value">2</span>                <span class="comment"># Minimum replies for text threads</span></div>
 
     <ul>
         <li><strong>guild_id</strong> — The Discord server ID.</li>
@@ -395,11 +392,11 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
   - name: notion-wiki
     type: notion
     <span class="key">root_pages:</span>
-      - <span class="value">"abc123def456..."</span>    <span class="comment"># Notion page IDs to index (including children)</span>
+      - <span class="value">"abc123def456..."</span>         <span class="comment"># Notion page IDs to index (including children)</span>
     <span class="key">databases:</span>
-      - <span class="value">"789xyz..."</span>           <span class="comment"># Database IDs — all entries indexed</span>
-    <span class="key">max_depth:</span> <span class="value">5</span>               <span class="comment"># How deep to recurse into child pages (1-20, default: 5)</span>
-    <span class="key">include_properties:</span> <span class="value">true</span>  <span class="comment"># Serialize database properties as YAML frontmatter (default: true)</span>
+      - <span class="value">"789xyz..."</span>               <span class="comment"># Database IDs — all entries indexed</span>
+    <span class="key">max_depth:</span> <span class="value">5</span>                  <span class="comment"># How deep to recurse into child pages (1-20, default: 5)</span>
+    <span class="key">include_properties:</span> <span class="value">true</span>      <span class="comment"># Serialize database properties as YAML frontmatter (default: true)</span>
     <span class="key">chunk:</span>
       <span class="key">target_tokens:</span> <span class="value">600</span>
       <span class="key">overlap_tokens:</span> <span class="value">50</span></div>
@@ -416,6 +413,28 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <p>By default, Notion sources are indexed as documents and referenced by <code>search</code> tools. To also make them available via <code>knowledge</code> tools and the <code>/faq.txt</code> endpoint, add <code>category: faq</code> to the source config — useful for Notion databases structured as Q&amp;A or FAQ collections.</p>
 
     <p><em>Note: The <code>chunk</code> config is available on all source types. For Slack and Discord, the Q&amp;A chunker produces one chunk per Q&amp;A pair (chunk settings have no effect). For Notion, the markdown chunker respects <code>target_tokens</code> and <code>overlap_tokens</code>.</em></p>
+
+    <h3 id="source-document">Source type: document</h3>
+
+    <p>Index PDF and DOCX files. Requires optional peer dependencies: <code>npm install pdf-parse</code> for PDF support and <code>npm install mammoth</code> for DOCX support. Uses token-based chunks like markdown sources.</p>
+
+    <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">manuals</span>
+    <span class="key">type:</span> <span class="value">document</span>
+    <span class="key">path:</span> <span class="value">./documents</span>
+    <span class="key">file_patterns:</span>
+      - <span class="value">"**/*.pdf"</span>
+      - <span class="value">"**/*.docx"</span>
+    <span class="key">max_file_size:</span> <span class="value">10485760</span>              <span class="comment"># 10MB default limit</span>
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span></div>
+
+    <ul>
+        <li><strong>PDF support</strong> — Requires <code>pdf-parse</code> peer dependency. Text is extracted page-by-page. Scanned PDFs (image-only pages with no extractable text) are detected and skipped with a warning.</li>
+        <li><strong>DOCX support</strong> — Requires <code>mammoth</code> peer dependency. Document content is converted to plain text for chunking.</li>
+        <li><strong>max_file_size</strong> — Defaults to 10MB (10485760 bytes) for document sources. Large files are skipped with a warning.</li>
+    </ul>
 
     <h3>url_derivation example</h3>
 
@@ -457,33 +476,44 @@ https://docs.example.com/getting-started</div>
     <p>Semantic search over embedded content. Requires a database and embedding config.</p>
 
     <div class="code-block"><span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>                <span class="comment"># Tool name exposed to agents</span>
+  - <span class="key">name:</span> <span class="value">search-docs</span>                 <span class="comment"># Tool name exposed to agents</span>
     <span class="key">type:</span> <span class="value">search</span>
     <span class="key">description:</span> <span class="value">Search the docs</span>      <span class="comment"># Description shown to agents</span>
     <span class="key">source:</span> <span class="value">docs</span>                      <span class="comment"># Which source to search</span>
     <span class="key">default_limit:</span> <span class="value">5</span>                  <span class="comment"># Default number of results</span>
     <span class="key">max_limit:</span> <span class="value">20</span>                     <span class="comment"># Maximum results an agent can request</span>
     <span class="key">result_format:</span> <span class="value">docs</span>               <span class="comment"># docs | code | raw</span>
-    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Minimum cosine similarity threshold (0-1, optional)</span></div>
+    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Minimum cosine similarity threshold (0-1, optional)</span>
+    <span class="key">search_mode:</span> <span class="value">vector</span>               <span class="comment"># vector (default) | keyword | hybrid</span></div>
+
+    <h3 id="search-modes">Search Modes</h3>
+
+    <p>The <code>search_mode</code> field controls how search queries are executed:</p>
+
+    <ul>
+      <li><strong>vector</strong> (default) — cosine similarity on embeddings. Best for semantic/conceptual queries.</li>
+      <li><strong>keyword</strong> — PostgreSQL full-text search (tsvector/tsquery). Best for exact terms, error codes, and technical identifiers. Does not require an embedding call at query time.</li>
+      <li><strong>hybrid</strong> — runs both vector and keyword searches in parallel, then merges results using Reciprocal Rank Fusion (RRF, k=60). Best overall recall for mixed query types.</li>
+    </ul>
 
     <h3 id="tool-bash">bash</h3>
 
     <p>Filesystem exploration with find, grep, cat, ls, head. Works with no database.</p>
 
     <div class="code-block"><span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">explore-docs</span>               <span class="comment"># Tool name exposed to agents</span>
+  - <span class="key">name:</span> <span class="value">explore-docs</span>                 <span class="comment"># Tool name exposed to agents</span>
     <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">description:</span> <span class="value">Explore the docs</span>     <span class="comment"># Description shown to agents</span>
+    <span class="key">description:</span> <span class="value">Explore the docs</span>      <span class="comment"># Description shown to agents</span>
     <span class="key">sources:</span> [<span class="value">docs</span>]                    <span class="comment"># Sources to mount (can be multiple)</span>
     <span class="key">bash:</span>
       <span class="key">session_state:</span> <span class="value">true</span>              <span class="comment"># Persist CWD across commands</span>
-      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>           <span class="comment"># memory | vector | hybrid</span>
-      <span class="key">virtual_files:</span> <span class="value">true</span>             <span class="comment"># Expose qmd and related as virtual commands</span>
-      <span class="key">workspace:</span> <span class="value">true</span>                 <span class="comment"># Enable writable /workspace directory</span>
-      <span class="key">max_file_size:</span> <span class="value">100000</span>           <span class="comment"># Max file size for cat output (bytes)</span>
+      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>            <span class="comment"># memory | vector | hybrid</span>
+      <span class="key">virtual_files:</span> <span class="value">true</span>              <span class="comment"># Expose qmd and related as virtual commands</span>
+      <span class="key">workspace:</span> <span class="value">true</span>                  <span class="comment"># Enable writable /workspace directory</span>
+      <span class="key">max_file_size:</span> <span class="value">100000</span>            <span class="comment"># Max file size for cat output (bytes)</span>
       <span class="key">cache:</span>
-        <span class="key">max_entries:</span> <span class="value">100</span>              <span class="comment"># Max cached command results</span>
-        <span class="key">ttl_seconds:</span> <span class="value">300</span>             <span class="comment"># Cache TTL in seconds</span></div>
+        <span class="key">max_entries:</span> <span class="value">100</span>               <span class="comment"># Max cached command results</span>
+        <span class="key">ttl_seconds:</span> <span class="value">300</span>               <span class="comment"># Cache TTL in seconds</span></div>
 
     <ul>
         <li><strong>grep_strategy</strong> — <code>memory</code> passes grep through to bash unchanged. <code>vector</code> intercepts grep and runs semantic search. <code>hybrid</code> runs bash grep first, falls back to semantic if no results.</li>
@@ -518,10 +548,10 @@ https://docs.example.com/getting-started</div>
   - <span class="key">name:</span> <span class="value">knowledge-base</span>
     <span class="key">type:</span> <span class="value">knowledge</span>
     <span class="key">description:</span> <span class="value">Search community Q&amp;A knowledge base</span>
-    <span class="key">sources:</span> [<span class="value">community-support</span>, <span class="value">discord-support</span>]  <span class="comment"># Sources with category: faq</span>
-    <span class="key">min_confidence:</span> <span class="value">0.7</span>                <span class="comment"># Override source-level confidence threshold</span>
-    <span class="key">default_limit:</span> <span class="value">10</span>                 <span class="comment"># Default number of results</span>
-    <span class="key">max_limit:</span> <span class="value">50</span>                     <span class="comment"># Maximum results an agent can request</span></div>
+    <span class="key">sources:</span> [<span class="value">community-support</span>, <span class="value">discord-support</span>]   <span class="comment"># Sources with category: faq</span>
+    <span class="key">min_confidence:</span> <span class="value">0.7</span>                             <span class="comment"># Override source-level confidence threshold</span>
+    <span class="key">default_limit:</span> <span class="value">10</span>                               <span class="comment"># Default number of results</span>
+    <span class="key">max_limit:</span> <span class="value">50</span>                                   <span class="comment"># Maximum results an agent can request</span></div>
 
     <ul>
         <li><strong>sources</strong> — Array of source names. These sources should have <code>category: faq</code> set.</li>
@@ -537,9 +567,40 @@ https://docs.example.com/getting-started</div>
     <p>Required when using search tools. Configures how content is embedded for vector search.</p>
 
     <div class="code-block"><span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">openai</span>                    <span class="comment"># Currently only openai is supported</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>       <span class="comment"># OpenAI embedding model</span>
+  <span class="key">provider:</span> <span class="value">openai</span>                    <span class="comment"># openai | ollama | local</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>       <span class="comment"># Model name (provider-specific)</span>
   <span class="key">dimensions:</span> <span class="value">1536</span>                    <span class="comment"># Vector dimensions (must match model)</span></div>
+
+    <h3>Provider options</h3>
+
+    <p>Three embedding providers are supported. <code>OPENAI_API_KEY</code> is only required when using the <code>openai</code> provider.</p>
+
+    <p><strong>OpenAI</strong> (default) — uses the OpenAI embeddings API. Requires <code>OPENAI_API_KEY</code>.</p>
+
+    <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span></div>
+
+    <p><strong>Ollama</strong> — calls a local Ollama instance over HTTP. No API key needed. Requires <a href="https://ollama.ai">Ollama</a> running with the model pulled (<code>ollama pull nomic-embed-text</code>).</p>
+
+    <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">ollama</span>
+  <span class="key">model:</span> <span class="value">nomic-embed-text</span>
+  <span class="key">dimensions:</span> <span class="value">768</span>
+  <span class="key">base_url:</span> <span class="value">http://localhost:11434</span>   <span class="comment"># Optional, this is the default</span></div>
+
+    <p><strong>Local</strong> — runs <code>@xenova/transformers</code> in-process. Zero external dependencies, CPU-only. Install the optional peer dependency: <code>npm install @xenova/transformers</code>.</p>
+
+    <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">local</span>
+  <span class="key">model:</span> <span class="value">Xenova/all-MiniLM-L6-v2</span>
+  <span class="key">dimensions:</span> <span class="value">384</span></div>
+
+    <div class="gap-card">
+        <h4>Dimension mismatch detection</h4>
+        <p>If you change embedding providers or models on an existing database, Pathfinder warns at startup when the configured dimensions don't match the existing vector index. You'll need to reindex to use the new dimensions.</p>
+    </div>
 
     <h2 id="indexing">indexing</h2>
 
@@ -547,7 +608,7 @@ https://docs.example.com/getting-started</div>
 
     <div class="code-block"><span class="key">indexing:</span>
   <span class="key">auto_reindex:</span> <span class="value">true</span>                  <span class="comment"># Enable daily automatic reindexing</span>
-  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>                <span class="comment"># Hour (0-23 UTC) to run daily reindex</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>                 <span class="comment"># Hour (0-23 UTC) to run daily reindex</span>
   <span class="key">stale_threshold_hours:</span> <span class="value">24</span>           <span class="comment"># Re-embed chunks older than this</span></div>
 
     <h2 id="webhook">webhook</h2>
@@ -561,6 +622,25 @@ https://docs.example.com/getting-started</div>
     <span class="key">docs:</span> [<span class="value">"docs/"</span>]</div>
 
     <p>Point a GitHub webhook at <code>https://your-server/webhooks/github</code> with the <code>push</code> event. Set <code>GITHUB_WEBHOOK_SECRET</code> to match the webhook secret.</p>
+
+    <h2 id="analytics">analytics</h2>
+
+    <p>Optional. Enables query logging and the built-in analytics dashboard at <code>/analytics</code>.</p>
+
+    <div class="code-block"><span class="key">analytics:</span>
+  <span class="key">enabled:</span> <span class="value">false</span>               <span class="comment"># Enable analytics (default: false)</span>
+  <span class="key">log_queries:</span> <span class="value">true</span>            <span class="comment"># Log all search queries (default: true)</span>
+  <span class="key">token:</span> <span class="value">${ANALYTICS_TOKEN}</span>    <span class="comment"># Bearer token for /api/analytics endpoints</span>
+  <span class="key">retention_days:</span> <span class="value">90</span>           <span class="comment"># Days to retain data (default: 90)</span></div>
+
+    <ul>
+        <li><strong>enabled</strong> — When <code>true</code>, Pathfinder logs queries and serves the analytics dashboard at <code>/analytics</code>. Default <code>false</code>.</li>
+        <li><strong>log_queries</strong> — When <code>true</code>, all search queries are logged with latency and result counts. Default <code>true</code> (when analytics is enabled).</li>
+        <li><strong>token</strong> — Bearer token for authenticating requests to <code>/api/analytics/*</code> endpoints. Use the <code>ANALYTICS_TOKEN</code> environment variable. Required when analytics is enabled.</li>
+        <li><strong>retention_days</strong> — How long to keep analytics data before automatic cleanup. Default 90 days.</li>
+    </ul>
+
+    <p>The analytics dashboard provides top queries, empty result tracking, and latency metrics. API endpoints: <code>/api/analytics/summary</code>, <code>/api/analytics/queries</code>, <code>/api/analytics/empty-queries</code>.</p>
 
     <h2>Example Configs</h2>
 
@@ -750,39 +830,19 @@ https://docs.example.com/getting-started</div>
   <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
   <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
 
-</article>
+  </main>
+  <aside class="page-toc" id="page-toc"></aside>
+</div>
 
-<aside id="page-sidebar"></aside>
-<script src="/sidebar.js"></script>
-
-<footer>
-  <div class="container">
-    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a> &mdash; free to use, modify, and self-host</div>
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-left"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a></div>
     <ul class="footer-links">
-        <li><a href="/">Home</a></li>
-        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
-        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
-        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
+      <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank">GitHub</a></li>
+      <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank">npm</a></li>
     </ul>
   </div>
 </footer>
-
-<script>
-(function(){
-  var btn=document.querySelector(".hamburger");
-  var menu=document.querySelector(".mobile-menu");
-  if(!btn||!menu)return;
-  btn.addEventListener("click",function(){
-    btn.classList.toggle("open");
-    menu.classList.toggle("open");
-  });
-  menu.addEventListener("click",function(e){
-    if(e.target.tagName==="A"){
-      btn.classList.remove("open");
-      menu.classList.remove("open");
-    }
-  });
-})();
-</script>
+<script src="/sidebar.js"></script>
 </body>
 </html>

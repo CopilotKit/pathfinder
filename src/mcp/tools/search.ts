@@ -1,8 +1,14 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { EmbeddingClient } from "../../indexing/embeddings.js";
+import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type { SearchToolConfig, ChunkResult } from "../../types.js";
-import { searchChunks } from "../../db/queries.js";
+import {
+  searchChunks,
+  textSearchChunks,
+  hybridSearchChunks,
+} from "../../db/queries.js";
+import { logQuery } from "../../db/analytics.js";
+import { getServerConfig } from "../../config.js";
 
 function formatDocsResults(results: ChunkResult[]): string {
   if (results.length === 0) return "No results found.";
@@ -61,7 +67,7 @@ function formatResults(results: ChunkResult[], format: string): string {
 
 export function registerSearchTool(
   server: McpServer,
-  embeddingClient: EmbeddingClient,
+  embeddingClient: EmbeddingProvider,
   toolConfig: SearchToolConfig,
 ): void {
   const inputSchema = {
@@ -95,24 +101,85 @@ export function registerSearchTool(
     inputSchema,
     async ({ query, limit, min_score, version }) => {
       const effectiveLimit = limit ?? toolConfig.default_limit;
+      const searchMode = toolConfig.search_mode ?? "vector";
+      const startMs = Date.now();
       try {
-        const embedding = await embeddingClient.embed(query);
-        const results = await searchChunks(
-          embedding,
-          effectiveLimit,
-          toolConfig.source,
-          version,
-        );
+        let results: ChunkResult[];
         const minScore = min_score ?? toolConfig.min_score;
-        const filtered =
-          minScore != null
-            ? results.filter((r) => r.similarity >= minScore)
-            : results;
+
+        switch (searchMode) {
+          case "keyword": {
+            results = await textSearchChunks(
+              query,
+              effectiveLimit,
+              toolConfig.source,
+              version,
+            );
+            // ts_rank scores are not on the cosine similarity scale,
+            // so min_score filtering is not applied in keyword mode.
+            break;
+          }
+          case "hybrid": {
+            const embedding = await embeddingClient.embed(query);
+            // hybridSearchChunks applies min_score to vector candidates
+            // before RRF merge, preserving semantic quality floor.
+            results = await hybridSearchChunks(
+              embedding,
+              query,
+              effectiveLimit,
+              toolConfig.source,
+              version,
+              minScore,
+            );
+            break;
+          }
+          case "vector":
+          default: {
+            const embedding = await embeddingClient.embed(query);
+            results = await searchChunks(
+              embedding,
+              effectiveLimit,
+              toolConfig.source,
+              version,
+            );
+            if (minScore != null) {
+              results = results.filter((r) => r.similarity >= minScore);
+            }
+            break;
+          }
+        }
+
+        // Fire-and-forget analytics logging
+        const analyticsConfig = getServerConfig().analytics;
+        if (analyticsConfig?.enabled) {
+          const latencyMs = Date.now() - startMs;
+          const topScore =
+            results.length > 0
+              ? Math.max(...results.map((r) => r.similarity))
+              : null;
+          logQuery(
+            {
+              tool_name: toolConfig.name,
+              query_text: query,
+              result_count: results.length,
+              top_score: topScore,
+              latency_ms: latencyMs,
+              source_name: toolConfig.source,
+              session_id: null,
+            },
+            analyticsConfig.log_queries,
+          ).catch((err) => {
+            console.error(
+              `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        }
+
         return {
           content: [
             {
               type: "text" as const,
-              text: formatResults(filtered, toolConfig.result_format),
+              text: formatResults(results, toolConfig.result_format),
             },
           ],
         };

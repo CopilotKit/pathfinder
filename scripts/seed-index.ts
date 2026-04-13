@@ -7,7 +7,7 @@
 
 import { initializeSchema, getPool } from '../src/db/client.js';
 import { getConfig, getServerConfig } from '../src/config.js';
-import { EmbeddingClient } from '../src/indexing/embeddings.js';
+import { createEmbeddingProvider } from '../src/indexing/embeddings.js';
 import { getProvider } from '../src/indexing/providers/index.js';
 import { IndexingPipeline } from '../src/indexing/pipeline.js';
 
@@ -65,11 +65,10 @@ async function main(): Promise<void> {
     await initializeSchema();
     console.log('Schema initialized.\n');
 
-    // Create embedding client from YAML config
-    const embeddingClient = new EmbeddingClient(
+    // Create embedding provider from YAML config
+    const embeddingProvider = createEmbeddingProvider(
+        serverConfig.embedding,
         config.openaiApiKey,
-        serverConfig.embedding.model,
-        serverConfig.embedding.dimensions,
     );
 
     // Index each source
@@ -81,7 +80,7 @@ async function main(): Promise<void> {
             cloneDir: config.cloneDir,
             githubToken: config.githubToken || undefined,
         });
-        const pipeline = new IndexingPipeline(embeddingClient, sourceConfig);
+        const pipeline = new IndexingPipeline(embeddingProvider, sourceConfig);
         const result = await provider.fullAcquire();
         if (result.items.length > 0) {
             await pipeline.indexItems(result.items, result.stateToken);

@@ -1,5 +1,55 @@
 # @copilotkit/pathfinder
 
+## 1.11.0
+
+### Minor Changes
+
+- **Analytics Dashboard**: Built-in query analytics with embedded Chart.js dashboard at `/analytics`. Track query volume, latency (avg + p95), empty result rates, top queries, and queries by source
+- **Query Logging**: Fire-and-forget instrumentation in search and knowledge tool handlers. Logs query text, result count, top similarity score, latency, source, and session ID
+- **Analytics REST API**: Three endpoints (`/api/analytics/summary`, `/queries`, `/empty-queries`) with Bearer token authentication via config or `ANALYTICS_TOKEN` env var
+- **Analytics Config**: New `analytics` section in pathfinder.yaml with `enabled`, `log_queries`, `token`, and `retention_days` fields. Fully optional and backwards compatible
+- **Auto-Cleanup**: Old query_log rows automatically pruned during nightly reindex cycle based on `retention_days` (default 90)
+- **PGlite Compatible**: p95 latency computed in application code (not SQL `percentile_cont`) for PGlite compatibility
+
+## 1.10.0
+
+### Minor Changes
+
+- **Auto-Generate from URL**: `pathfinder init --from <url>` crawls a docs site and generates a working pathfinder.yaml
+- **Site Crawler**: Sitemap-first discovery with robots.txt and recursive link following fallbacks, rate limiting, SPA detection
+- **Config Generator**: Auto-detects source type, derives base URL, generates complete YAML config
+
+## 1.9.0
+
+### Minor Changes
+
+- **PDF/DOCX Ingestion**: New `document` source type for indexing PDF and DOCX files with page-break and section-aware chunking
+- **Content Extractors**: Optional peer dependencies `pdf-parse` (PDF) and `mammoth` (DOCX), dynamically imported only when configured
+- **Scanned PDF Detection**: Warns when a PDF produces very little text, indicating a scanned document
+
+## 1.8.0
+
+### Minor Changes
+
+- **Hybrid Search**: Combine vector similarity and full-text keyword search using Reciprocal Rank Fusion (RRF). Three search modes: `vector` (default, unchanged), `keyword` (tsvector-based full-text), `hybrid` (both + RRF merge)
+- **Keyword Search Upgrade**: Replaced ILIKE with PostgreSQL tsvector/tsquery for proper full-text search with ranking via ts_rank
+- **search_mode Config**: New `search_mode` field on search tools — set to `'vector'`, `'keyword'`, or `'hybrid'` (defaults to `'vector'` for backwards compatibility)
+- **tsvector Schema Migration**: Adds `tsv` tsvector column with GIN index for fast full-text search, with PGlite-safe trigger fallback
+
+## 1.7.0
+
+### Minor Changes
+
+- **Local Embedding Support**: Drop the OpenAI dependency — use Ollama or local transformers.js for embeddings. Three providers: openai (existing), ollama (HTTP API), local (@xenova/transformers, zero external deps)
+- **EmbeddingProvider Interface**: Abstracted embedding generation behind a provider interface with factory. Pluggable architecture for future providers
+- **Conditional API Keys**: OPENAI_API_KEY only required when embedding.provider is "openai" — Ollama and local providers need no API keys
+- **Dimension Mismatch Detection**: Startup check warns when configured dimensions don't match existing vector index
+
+### Patch Changes
+
+- Format all source files with prettier
+- Make Slack webhook notifications non-fatal in CI
+
 ## 1.6.2
 
 ### Patch Changes

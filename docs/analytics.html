@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathfinder Analytics</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 24px; }
+        h1 { font-size: 1.5rem; margin-bottom: 24px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
+        .stat-card { background: #1e293b; border-radius: 8px; padding: 16px; }
+        .stat-card .label { font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; margin-bottom: 4px; }
+        .stat-card .value { font-size: 1.5rem; font-weight: 700; }
+        .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
+        .chart-box { background: #1e293b; border-radius: 8px; padding: 16px; position: relative; }
+        .chart-box h2 { font-size: 1rem; margin-bottom: 12px; }
+        .chart-box canvas { max-height: 300px; }
+        table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 8px; overflow: hidden; margin-bottom: 32px; }
+        th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #334155; }
+        th { background: #0f172a; font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; }
+        .empty { color: #f87171; }
+        .error { color: #f87171; padding: 24px; text-align: center; }
+        @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <h1>Pathfinder Analytics</h1>
+    <div id="error" class="error" style="display:none"></div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="chart-row">
+        <div class="chart-box">
+            <h2>Queries per Day (7d)</h2>
+            <canvas id="dailyChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h2>Queries by Source</h2>
+            <canvas id="sourceChart"></canvas>
+        </div>
+    </div>
+
+    <h2 style="margin-bottom: 12px;">Top Queries (7d)</h2>
+    <table id="topQueriesTable">
+        <thead><tr><th>Query</th><th>Count</th><th>Avg Results</th><th>Avg Score</th></tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <h2 style="margin-bottom: 12px;">Empty Result Queries (7d) <span class="empty">&#x26a0;</span></h2>
+    <table id="emptyQueriesTable">
+        <thead><tr><th>Query</th><th>Tool</th><th>Source</th><th>Count</th><th>Last Seen</th></tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <div id="login" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); align-items:center; justify-content:center; z-index:100;">
+        <div style="background:#1e293b; border-radius:12px; padding:32px; max-width:400px; width:90%;">
+            <h2 style="margin-bottom:16px; font-size:1.2rem;">Analytics Token</h2>
+            <p style="color:#94a3b8; font-size:0.875rem; margin-bottom:16px;">Enter your analytics token. Check the server console output for the auto-generated token, or use your configured ANALYTICS_TOKEN.</p>
+            <input id="tokenInput" type="password" placeholder="Paste token here" style="width:100%; padding:10px 14px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; font-size:0.9rem; margin-bottom:12px;" autofocus>
+            <button id="tokenSubmit" style="width:100%; padding:10px; border-radius:6px; border:none; background:#3b82f6; color:white; font-weight:600; cursor:pointer; font-size:0.9rem;">Access Dashboard</button>
+            <p id="loginError" style="color:#f87171; font-size:0.8rem; margin-top:8px; display:none;"></p>
+        </div>
+    </div>
+
+    <script>
+        function getToken() {
+            return sessionStorage.getItem('pathfinder_analytics_token') || '';
+        }
+
+        var TOKEN = getToken();
+        var headers = TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
+
+        function showLogin() {
+            document.getElementById('login').style.display = 'flex';
+            document.getElementById('tokenInput').focus();
+        }
+
+        document.getElementById('tokenSubmit').addEventListener('click', function() {
+            var input = document.getElementById('tokenInput').value.trim();
+            if (!input) return;
+            sessionStorage.setItem('pathfinder_analytics_token', input);
+            TOKEN = input;
+            headers = { 'Authorization': 'Bearer ' + TOKEN };
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('loginError').style.display = 'none';
+            load();
+        });
+
+        document.getElementById('tokenInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') document.getElementById('tokenSubmit').click();
+        });
+
+        async function fetchJson(url) {
+            var res = await fetch(url, { headers: headers });
+            if (res.status === 401 || res.status === 403) {
+                sessionStorage.removeItem('pathfinder_analytics_token');
+                showLogin();
+                var loginErr = document.getElementById('loginError');
+                loginErr.textContent = res.status === 401 ? 'Token required' : 'Invalid token';
+                loginErr.style.display = 'block';
+                throw new Error('auth');
+            }
+            if (!res.ok) {
+                var body = await res.json().catch(function() { return {}; });
+                throw new Error(body.error || 'HTTP ' + res.status);
+            }
+            return res.json();
+        }
+
+        async function load() {
+            try {
+                var results = await Promise.all([
+                    fetchJson('/api/analytics/summary'),
+                    fetchJson('/api/analytics/queries?days=7&limit=50'),
+                    fetchJson('/api/analytics/empty-queries?days=7&limit=50'),
+                ]);
+                var summary = results[0];
+                var topQueries = results[1];
+                var emptyQueries = results[2];
+
+                // Clear any previous error
+                document.getElementById('error').style.display = 'none';
+
+                // Stats cards
+                document.getElementById('stats').innerHTML = [
+                    { label: 'Total Queries', value: summary.total_queries.toLocaleString() },
+                    { label: 'Queries (7d)', value: summary.total_queries_7d.toLocaleString() },
+                    { label: 'Empty Result Rate (7d)', value: (summary.empty_result_rate_7d * 100).toFixed(1) + '%' },
+                    { label: 'Avg Latency (7d)', value: summary.avg_latency_ms_7d + 'ms' },
+                    { label: 'P95 Latency (7d)', value: summary.p95_latency_ms_7d + 'ms' },
+                    { label: 'Empty Queries (7d)', value: summary.empty_result_count_7d.toLocaleString() },
+                ].map(function(s) { return '<div class="stat-card"><div class="label">' + s.label + '</div><div class="value">' + s.value + '</div></div>'; }).join('');
+
+                // Daily chart
+                new Chart(document.getElementById('dailyChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: summary.queries_per_day_7d.map(function(d) { return d.day; }),
+                        datasets: [{ label: 'Queries', data: summary.queries_per_day_7d.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
+                    },
+                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+                });
+
+                // Source chart
+                if (summary.queries_by_source.length > 0) {
+                    new Chart(document.getElementById('sourceChart'), {
+                        type: 'doughnut',
+                        data: {
+                            labels: summary.queries_by_source.map(function(s) { return s.source_name; }),
+                            datasets: [{ data: summary.queries_by_source.map(function(s) { return s.count; }), backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'] }],
+                        },
+                        options: { responsive: true },
+                    });
+                }
+
+                // Top queries table
+                var topBody = document.querySelector('#topQueriesTable tbody');
+                topBody.innerHTML = topQueries.map(function(q) {
+                    return '<tr><td>' + esc(q.query_text) + '</td><td>' + q.count + '</td><td>' + q.avg_result_count.toFixed(1) + '</td><td>' + (q.avg_top_score != null ? q.avg_top_score.toFixed(2) : '-') + '</td></tr>';
+                }).join('') || '<tr><td colspan="4">No queries logged yet.</td></tr>';
+
+                // Empty queries table
+                var emptyBody = document.querySelector('#emptyQueriesTable tbody');
+                emptyBody.innerHTML = emptyQueries.map(function(q) {
+                    return '<tr class="empty"><td>' + esc(q.query_text) + '</td><td>' + esc(q.tool_name) + '</td><td>' + esc(q.source_name || '-') + '</td><td>' + q.count + '</td><td>' + new Date(q.last_seen).toLocaleString() + '</td></tr>';
+                }).join('') || '<tr><td colspan="5">No empty-result queries.</td></tr>';
+
+            } catch (err) {
+                if (err.message !== 'auth') {
+                    document.getElementById('error').style.display = 'block';
+                    document.getElementById('error').textContent = 'Failed to load analytics: ' + err.message;
+                }
+            }
+        }
+
+        function esc(s) {
+            var d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        // Show login prompt if no token, otherwise load dashboard
+        if (!TOKEN) {
+            showLogin();
+        } else {
+            load();
+        }
+    </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-import type { EmbeddingClient } from "../../indexing/embeddings.js";
+import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type { ChunkResult } from "../../types.js";
 
 export interface RelatedResult {
@@ -20,7 +20,7 @@ export function parseRelatedCommand(command: string): {
 export async function handleRelatedCommand(
   filePath: string,
   fileContent: string | undefined,
-  embeddingClient: EmbeddingClient,
+  embeddingClient: EmbeddingProvider,
   searchChunksFn: (
     embedding: number[],
     limit: number,

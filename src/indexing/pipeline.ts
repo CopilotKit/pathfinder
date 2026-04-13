@@ -2,7 +2,7 @@
 
 import { getChunker } from "./chunking/index.js";
 import { deriveUrl } from "./url-derivation.js";
-import { EmbeddingClient } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.js";
 import { upsertChunks, deleteChunksByFile } from "../db/queries.js";
 import { isFileSourceConfig } from "../types.js";
 import type { Chunk, SourceConfig } from "../types.js";
@@ -10,11 +10,14 @@ import type { ContentItem } from "./providers/types.js";
 
 export class IndexingPipeline {
   private sourceConfig: SourceConfig;
-  private embeddingClient: EmbeddingClient;
+  private embeddingProvider: EmbeddingProvider;
   private logPrefix: string;
 
-  constructor(embeddingClient: EmbeddingClient, sourceConfig: SourceConfig) {
-    this.embeddingClient = embeddingClient;
+  constructor(
+    embeddingProvider: EmbeddingProvider,
+    sourceConfig: SourceConfig,
+  ) {
+    this.embeddingProvider = embeddingProvider;
     this.sourceConfig = sourceConfig;
     this.logPrefix = `[pipeline:${sourceConfig.name}]`;
   }
@@ -53,7 +56,7 @@ export class IndexingPipeline {
     }
 
     const texts = chunkOutputs.map((c) => c.content);
-    const embeddings = await this.embeddingClient.embedBatch(texts);
+    const embeddings = await this.embeddingProvider.embedBatch(texts);
     const sourceUrl =
       item.sourceUrl ??
       (isFileSourceConfig(this.sourceConfig)

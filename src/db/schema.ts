@@ -67,10 +67,76 @@ DROP TABLE IF EXISTS code_chunks CASCADE;
 /**
  * Generate post-schema migration SQL for columns added after initial release.
  * Safe to run repeatedly — uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
+ *
+ * Includes tsvector support for hybrid search (v1.8.0):
+ * - Core DDL (column + populate + GIN index) works on both PostgreSQL and PGlite
+ * - Trigger DDL is appended but applied separately via try-catch in initializeSchema
+ *   because PGlite does not support PL/pgSQL triggers
  */
 export function generatePostSchemaMigration(): string {
-  return `
+  const coreSql = `
 ALTER TABLE chunks ADD COLUMN IF NOT EXISTS version TEXT;
 CREATE INDEX IF NOT EXISTS idx_chunks_version ON chunks (version);
+
+-- Hybrid search: tsvector column for full-text search
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS tsv tsvector;
+
+-- Populate tsvector for any existing rows that don't have it yet
+UPDATE chunks SET tsv = to_tsvector('english', content) WHERE tsv IS NULL;
+
+-- GIN index for fast full-text search
+CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
+
+-- Analytics: query_log table for tracking tool usage
+CREATE TABLE IF NOT EXISTS query_log (
+    id              SERIAL PRIMARY KEY,
+    tool_name       TEXT NOT NULL,
+    query_text      TEXT NOT NULL,
+    result_count    INTEGER NOT NULL,
+    top_score       REAL,
+    latency_ms      INTEGER NOT NULL,
+    source_name     TEXT,
+    session_id      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at);
+CREATE INDEX IF NOT EXISTS idx_query_log_tool_name ON query_log (tool_name);
+`;
+
+  return coreSql;
+}
+
+/**
+ * Returns ONLY the trigger DDL, for use in try-catch migration.
+ * Called separately from core DDL so PGlite can skip it gracefully.
+ */
+export function generateTsvTriggerDdl(): string {
+  return `
+-- Trigger to auto-populate tsvector on insert/update of content
+CREATE OR REPLACE FUNCTION chunks_tsv_trigger() RETURNS trigger AS $$
+BEGIN
+    NEW.tsv := to_tsvector('english', NEW.content);
+    RETURN NEW;
+END
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS chunks_tsv_update ON chunks;
+CREATE TRIGGER chunks_tsv_update
+    BEFORE INSERT OR UPDATE OF content ON chunks
+    FOR EACH ROW EXECUTE FUNCTION chunks_tsv_trigger();
+`;
+}
+
+/**
+ * SQL to query the current vector dimension of the embedding column.
+ * Uses vector_dims() on actual data instead of pg_attribute (which PGlite may not support).
+ * Returns { dimensions: number } or empty result if table has no rows.
+ */
+export function generateDimensionCheckQuery(): string {
+  return `
+SELECT vector_dims(embedding) AS dimensions
+FROM chunks
+LIMIT 1;
 `;
 }

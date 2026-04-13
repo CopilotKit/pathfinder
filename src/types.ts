@@ -33,7 +33,7 @@ const BaseSourceFields = {
 // File-based source schema (markdown, code, raw-text, html) — unchanged fields from today
 export const FileSourceConfigSchema = z.object({
   ...BaseSourceFields,
-  type: z.enum(["markdown", "code", "raw-text", "html"]),
+  type: z.enum(["markdown", "code", "raw-text", "html", "document"]),
   repo: z.string().url().optional(),
   branch: z.string().optional(),
   path: z.string().min(1),
@@ -102,6 +102,7 @@ const SearchToolConfigObjectSchema = z.object({
   max_limit: z.number().int().positive(),
   result_format: z.enum(["docs", "code", "raw"]),
   min_score: z.number().min(0).max(1).optional(),
+  search_mode: z.enum(["vector", "keyword", "hybrid"]).default("vector"),
 });
 
 // SearchToolConfig type is inferred from the object schema directly.
@@ -180,11 +181,30 @@ export const AnyToolConfigSchema = z.discriminatedUnion("type", [
 
 // ── Embedding configuration schemas ───────────────────────────────────────────
 
-export const EmbeddingConfigSchema = z.object({
-  provider: z.enum(["openai"]),
+export const OpenAIEmbeddingConfigSchema = z.object({
+  provider: z.literal("openai"),
   model: z.string().min(1),
   dimensions: z.number().int().positive(),
 });
+
+export const OllamaEmbeddingConfigSchema = z.object({
+  provider: z.literal("ollama"),
+  model: z.string().min(1).default("nomic-embed-text"),
+  dimensions: z.number().int().positive().default(768),
+  base_url: z.string().url().default("http://localhost:11434"),
+});
+
+export const LocalEmbeddingConfigSchema = z.object({
+  provider: z.literal("local"),
+  model: z.string().min(1).default("Xenova/all-MiniLM-L6-v2"),
+  dimensions: z.number().int().positive().default(384),
+});
+
+export const EmbeddingConfigSchema = z.discriminatedUnion("provider", [
+  OpenAIEmbeddingConfigSchema,
+  OllamaEmbeddingConfigSchema,
+  LocalEmbeddingConfigSchema,
+]);
 
 // ── Indexing configuration schemas ────────────────────────────────────────────
 
@@ -199,6 +219,15 @@ export const IndexingConfigSchema = z.object({
 export const WebhookConfigSchema = z.object({
   repo_sources: z.record(z.string(), z.array(z.string())),
   path_triggers: z.record(z.string(), z.array(z.string())),
+});
+
+// ── Analytics configuration schemas ──────────────────────────────────────────
+
+export const AnalyticsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  log_queries: z.boolean().default(true),
+  token: z.string().min(1).optional(),
+  retention_days: z.number().int().positive().default(90),
 });
 
 // ── Top-level server configuration schema ─────────────────────────────────────
@@ -216,6 +245,7 @@ export const ServerConfigSchema = z
     embedding: EmbeddingConfigSchema.optional(),
     indexing: IndexingConfigSchema.optional(),
     webhook: WebhookConfigSchema.optional(),
+    analytics: AnalyticsConfigSchema.optional(),
   })
   .superRefine((cfg, ctx) => {
     const hasRag = cfg.tools.some(
@@ -305,15 +335,25 @@ export type BashToolConfig = z.infer<typeof BashToolConfigSchema>;
 export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
 export type KnowledgeToolConfig = z.infer<typeof KnowledgeToolConfigSchema>;
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
+export type OpenAIEmbeddingConfig = z.infer<typeof OpenAIEmbeddingConfigSchema>;
+export type OllamaEmbeddingConfig = z.infer<typeof OllamaEmbeddingConfigSchema>;
+export type LocalEmbeddingConfig = z.infer<typeof LocalEmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
+export type AnalyticsConfig = z.infer<typeof AnalyticsConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type BashCacheConfig = z.infer<typeof BashCacheConfigSchema>;
 export type BashOptions = z.infer<typeof BashOptionsSchema>;
 
 // ── Source config type guards ────────────────────────────────────────────────
 
-const FILE_SOURCE_TYPES = new Set(["markdown", "code", "raw-text", "html"]);
+const FILE_SOURCE_TYPES = new Set([
+  "markdown",
+  "code",
+  "raw-text",
+  "html",
+  "document",
+]);
 export function isFileSourceConfig(
   config: SourceConfig,
 ): config is FileSourceConfig {

@@ -20,6 +20,12 @@ vi.mock("../db/queries.js", () => ({
   getFaqChunks: vi.fn(),
   searchChunks: vi.fn(),
 }));
+vi.mock("../db/analytics.js", () => ({
+  logQuery: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../config.js", () => ({
+  getServerConfig: vi.fn().mockReturnValue({}),
+}));
 
 import { registerKnowledgeTool } from "../mcp/tools/knowledge.js";
 import { getFaqChunks, searchChunks } from "../db/queries.js";

@@ -6,6 +6,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { simpleGit, type SimpleGit } from "simple-git";
 import { matchesPatterns, hasLowSemanticValue } from "../utils.js";
+import { extractContent } from "../content-extractors.js";
 import { isFileSourceConfig } from "../../types.js";
 import type { SourceConfig, FileSourceConfig } from "../../types.js";
 import type {
@@ -17,6 +18,7 @@ import type {
 
 const DEFAULT_SKIP_DIRS = new Set(["node_modules", "dist", "build", ".git"]);
 const DEFAULT_MAX_FILE_SIZE = 102400; // 100KB
+const DEFAULT_DOCUMENT_MAX_FILE_SIZE = 10485760; // 10MB
 
 function repoNameFromUrl(repoUrl: string): string {
   const last = repoUrl.split("/").pop() ?? "";
@@ -51,7 +53,11 @@ export class FileDataProvider implements DataProvider {
       ...DEFAULT_SKIP_DIRS,
       ...(config.skip_dirs ?? []),
     ]);
-    this.maxFileSize = config.max_file_size ?? DEFAULT_MAX_FILE_SIZE;
+    this.maxFileSize =
+      config.max_file_size ??
+      (config.type === "document"
+        ? DEFAULT_DOCUMENT_MAX_FILE_SIZE
+        : DEFAULT_MAX_FILE_SIZE);
   }
 
   private isLocal(): boolean {
@@ -102,9 +108,12 @@ export class FileDataProvider implements DataProvider {
     for (const absPath of matchingFiles) {
       const relPath = path.relative(repoDir, absPath);
       try {
-        const content = await fs.promises.readFile(absPath, "utf-8");
+        const { content, metadata } = await extractContent(
+          absPath,
+          this.config.type,
+        );
         if (hasLowSemanticValue(content)) continue;
-        items.push({ id: relPath, content });
+        items.push({ id: relPath, content, metadata });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`${this.logPrefix} Failed to read ${relPath}: ${msg}`);
@@ -192,9 +201,12 @@ export class FileDataProvider implements DataProvider {
       try {
         const stat = await fs.promises.stat(absPath);
         if (stat.size > this.maxFileSize) continue;
-        const content = await fs.promises.readFile(absPath, "utf-8");
+        const { content, metadata } = await extractContent(
+          absPath,
+          this.config.type,
+        );
         if (hasLowSemanticValue(content)) continue;
-        items.push({ id: relPath, content });
+        items.push({ id: relPath, content, metadata });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`${this.logPrefix} Failed to read ${relPath}: ${msg}`);

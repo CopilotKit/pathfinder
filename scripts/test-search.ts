@@ -8,7 +8,7 @@
 
 import { initializeSchema, getPool } from '../src/db/client.js';
 import { getConfig, getServerConfig } from '../src/config.js';
-import { EmbeddingClient } from '../src/indexing/embeddings.js';
+import { createEmbeddingProvider } from '../src/indexing/embeddings.js';
 import { searchChunks } from '../src/db/queries.js';
 import type { ChunkResult } from '../src/types.js';
 
@@ -85,15 +85,14 @@ async function directSearch(
     console.log('Initializing database schema...');
     await initializeSchema();
 
-    const embeddingClient = new EmbeddingClient(
+    const embeddingProvider = createEmbeddingProvider(
+        serverConfig.embedding,
         config.openaiApiKey,
-        serverConfig.embedding.model,
-        serverConfig.embedding.dimensions,
     );
 
     console.log(`Embedding query: "${query}"...`);
     const embedStart = Date.now();
-    const embedding = await embeddingClient.embed(query);
+    const embedding = await embeddingProvider.embed(query);
     const embedMs = Date.now() - embedStart;
     console.log(`Embedding generated in ${embedMs}ms\n`);
 
