@@ -2,7 +2,11 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type { SearchToolConfig, ChunkResult } from "../../types.js";
-import { searchChunks } from "../../db/queries.js";
+import {
+  searchChunks,
+  textSearchChunks,
+  hybridSearchChunks,
+} from "../../db/queries.js";
 
 function formatDocsResults(results: ChunkResult[]): string {
   if (results.length === 0) return "No results found.";
@@ -95,24 +99,57 @@ export function registerSearchTool(
     inputSchema,
     async ({ query, limit, min_score, version }) => {
       const effectiveLimit = limit ?? toolConfig.default_limit;
+      const searchMode = toolConfig.search_mode ?? "vector";
       try {
-        const embedding = await embeddingClient.embed(query);
-        const results = await searchChunks(
-          embedding,
-          effectiveLimit,
-          toolConfig.source,
-          version,
-        );
+        let results: ChunkResult[];
         const minScore = min_score ?? toolConfig.min_score;
-        const filtered =
-          minScore != null
-            ? results.filter((r) => r.similarity >= minScore)
-            : results;
+
+        switch (searchMode) {
+          case "keyword": {
+            results = await textSearchChunks(
+              query,
+              effectiveLimit,
+              toolConfig.source,
+            );
+            // ts_rank scores are not on the cosine similarity scale,
+            // so min_score filtering is not applied in keyword mode.
+            break;
+          }
+          case "hybrid": {
+            const embedding = await embeddingClient.embed(query);
+            // hybridSearchChunks applies min_score to vector candidates
+            // before RRF merge, preserving semantic quality floor.
+            results = await hybridSearchChunks(
+              embedding,
+              query,
+              effectiveLimit,
+              toolConfig.source,
+              version,
+              minScore,
+            );
+            break;
+          }
+          case "vector":
+          default: {
+            const embedding = await embeddingClient.embed(query);
+            results = await searchChunks(
+              embedding,
+              effectiveLimit,
+              toolConfig.source,
+              version,
+            );
+            if (minScore != null) {
+              results = results.filter((r) => r.similarity >= minScore);
+            }
+            break;
+          }
+        }
+
         return {
           content: [
             {
               type: "text" as const,
-              text: formatResults(filtered, toolConfig.result_format),
+              text: formatResults(results, toolConfig.result_format),
             },
           ],
         };

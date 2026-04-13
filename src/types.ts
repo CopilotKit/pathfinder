@@ -102,6 +102,7 @@ const SearchToolConfigObjectSchema = z.object({
   max_limit: z.number().int().positive(),
   result_format: z.enum(["docs", "code", "raw"]),
   min_score: z.number().min(0).max(1).optional(),
+  search_mode: z.enum(["vector", "keyword", "hybrid"]).default("vector"),
 });
 
 // SearchToolConfig type is inferred from the object schema directly.
