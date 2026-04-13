@@ -47,6 +47,7 @@ const baseToolConfig: SearchToolConfig = {
   default_limit: 5,
   max_limit: 20,
   result_format: "docs",
+  search_mode: "vector",
 };
 
 // ── Full MCP protocol tests ────────────────────────────────────────────────

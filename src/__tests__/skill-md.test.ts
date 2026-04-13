@@ -27,6 +27,7 @@ function makeConfig(
       default_limit: 5,
       max_limit: 20,
       result_format: "docs",
+      search_mode: "vector",
     },
     {
       name: "explore",
