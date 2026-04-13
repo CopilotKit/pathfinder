@@ -102,12 +102,13 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .features h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; text-align: center; }
 .features .section-sub { color: var(--text-secondary); margin-bottom: 2rem; font-size: 16px; text-align: center; }
 
-/* Feature cards (3x2 grid) */
-.feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-.feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; transition: transform 0.2s, border-color 0.2s; }
-.feature-card:hover { transform: translateY(-2px); border-color: var(--accent-dim); }
-.feature-card h3 { font-size: 16px; margin-bottom: 8px; }
-.feature-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
+/* Feature cards (3x3 grid) */
+.feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+.feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; box-shadow: 0 4px 16px rgba(0,0,0,0.2); transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s; }
+.feature-card:hover { transform: translateY(-4px); border-color: var(--accent-dim); box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+.feature-card .icon { font-size: 1.75rem; margin-bottom: 1rem; }
+.feature-card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; }
+.feature-card p { font-size: 0.875rem; color: var(--text-secondary); line-height: 1.6; }
 
 /* Comparison matrix */
 .section-comparison { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; }
@@ -196,13 +197,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     <div class="nav-links">
         <a href="/" class="active">Home</a>
-        <a href="/usage">Usage</a>
-        <a href="/config">Config</a>
-        <a href="/deploy">Deploy</a>
-        <a href="/clients">Clients</a>
-        <a href="/search">Search</a>
-        <a href="/migrate-from-mintlify">Switch</a>
-        <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+        <a href="/usage">Docs</a>
+        <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a>
     </div>
     <button class="hamburger" aria-label="Menu">
       <span></span>
@@ -214,13 +210,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
 <div class="mobile-menu">
     <a href="/" class="active">Home</a>
-    <a href="/usage">Usage</a>
-    <a href="/config">Config</a>
-    <a href="/deploy">Deploy</a>
-    <a href="/clients">Clients</a>
-    <a href="/search">Search</a>
-    <a href="/migrate-from-mintlify">Switch</a>
-    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+    <a href="/usage">Docs</a>
+    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a>
 </div>
 
 <section class="hero">
@@ -311,6 +302,21 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
             <div class="icon">🔄</div>
             <h3>Always Current</h3>
             <p>Webhook-triggered reindexing on every push. Nightly full reindex on schedule. Confidence thresholds adjust without re-processing.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">🔌</div>
+            <h3>Pluggable Embeddings</h3>
+            <p>OpenAI, Ollama, or local transformers.js — choose your embedding provider. Run fully local with no API keys, or use the cloud. Switch with one config line.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">📄</div>
+            <h3>PDF &amp; DOCX Support</h3>
+            <p>Index binary documents directly — no conversion needed. Page-break and section-aware chunking extracts structure from PDFs and Word docs.</p>
+        </div>
+        <div class="feature-card">
+            <div class="icon">📊</div>
+            <h3>Analytics Dashboard</h3>
+            <p>See what agents search for, which queries return empty, and where your knowledge gaps are. Built-in dashboard at <code>/analytics</code>.</p>
         </div>
     </div>
 </section>
@@ -435,14 +441,6 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
                 <td><span class="no">&#10007;</span></td>
                 <td><span class="no">&#10007;</span></td>
                 <td><span class="yes">&#10003;</span> <span class="partial">uses local models</span></td>
-            </tr>
-            <tr>
-                <td>Hybrid search (vector + keyword)</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
                 <td>PDF/DOCX support</td>

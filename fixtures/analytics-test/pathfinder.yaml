@@ -1,0 +1,36 @@
+server:
+  name: analytics-test
+  version: "1.0.0"
+
+sources:
+  - name: docs
+    type: markdown
+    path: fixtures/breeze-api/docs
+    file_patterns:
+      - "**/*.md"
+    chunk:
+      target_tokens: 600
+
+tools:
+  - name: search-docs
+    type: search
+    description: "Search docs"
+    source: docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+analytics:
+  enabled: true
+  log_queries: true
+  retention_days: 90
+
+embedding:
+  provider: local
+  model: Xenova/all-MiniLM-L6-v2
+  dimensions: 384
+
+indexing:
+  auto_reindex: false
+  reindex_hour_utc: 3
+  stale_threshold_hours: 24

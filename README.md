@@ -64,6 +64,7 @@ Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source c
 - **[Semantic Search](https://pathfinder.copilotkit.dev/search)** — pgvector RAG with configurable chunk sizes, overlap, and score thresholds
 - **[Filesystem Exploration](https://pathfinder.copilotkit.dev/search)** — QuickJS WASM sandbox with session state, `qmd` semantic grep, `related` files
 - **[8 Source Types](https://pathfinder.copilotkit.dev/config)** — Markdown, code, raw-text, HTML, document (PDF/DOCX), Slack, Discord, Notion — with pluggable chunker registry
+- **[Hybrid Search](https://pathfinder.copilotkit.dev/search)** — Combine vector and keyword search with RRF scoring for better recall on technical terms
 - **[Multiple Embedding Providers](https://pathfinder.copilotkit.dev/config)** — OpenAI, Ollama (local HTTP), or transformers.js (zero external deps, CPU-only)
 - **[Config-Driven](https://pathfinder.copilotkit.dev/config)** — Everything in one `pathfinder.yaml`: sources, tools, embedding, indexing, webhooks
 - **[Client Setup](https://pathfinder.copilotkit.dev/clients)** — Claude Desktop, Claude Code, Cursor, Codex, VS Code, any Streamable HTTP client

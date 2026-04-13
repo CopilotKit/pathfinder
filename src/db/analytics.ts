@@ -144,18 +144,14 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     empty_result_rate_7d: total7d > 0 ? empty7d / total7d : 0,
     avg_latency_ms_7d: s.avg_latency ?? 0,
     p95_latency_ms_7d: p95Latency,
-    queries_by_source: bySourceRes.rows.map(
-      (r: Record<string, unknown>) => ({
-        source_name: r.source_name as string,
-        count: r.count as number,
-      }),
-    ),
-    queries_per_day_7d: perDayRes.rows.map(
-      (r: Record<string, unknown>) => ({
-        day: r.day as string,
-        count: r.count as number,
-      }),
-    ),
+    queries_by_source: bySourceRes.rows.map((r: Record<string, unknown>) => ({
+      source_name: r.source_name as string,
+      count: r.count as number,
+    })),
+    queries_per_day_7d: perDayRes.rows.map((r: Record<string, unknown>) => ({
+      day: r.day as string,
+      count: r.count as number,
+    })),
   };
 }
 
@@ -189,9 +185,7 @@ export async function getTopQueries(
     count: r.count as number,
     avg_result_count: parseFloat(r.avg_result_count as string) || 0,
     avg_top_score:
-      r.avg_top_score != null
-        ? parseFloat(r.avg_top_score as string)
-        : null,
+      r.avg_top_score != null ? parseFloat(r.avg_top_score as string) : null,
   }));
 }
 

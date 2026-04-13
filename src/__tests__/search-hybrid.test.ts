@@ -72,11 +72,7 @@ describe("search tool hybrid mode", () => {
       result_format: "docs",
       search_mode: "hybrid",
     };
-    registerSearchTool(
-      server as never,
-      embeddingClient as never,
-      hybridConfig,
-    );
+    registerSearchTool(server as never, embeddingClient as never, hybridConfig);
 
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();

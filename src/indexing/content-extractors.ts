@@ -41,9 +41,7 @@ export async function extractContent(
  * Warns if the PDF produces very little text (likely a scanned document).
  */
 async function extractPdf(filePath: string): Promise<ExtractionResult> {
-  let pdfParse: (
-    buffer: Buffer,
-  ) => Promise<{
+  let pdfParse: (buffer: Buffer) => Promise<{
     text: string;
     numpages: number;
     info: Record<string, unknown>;

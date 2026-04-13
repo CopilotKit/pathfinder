@@ -13,7 +13,10 @@ export class IndexingPipeline {
   private embeddingProvider: EmbeddingProvider;
   private logPrefix: string;
 
-  constructor(embeddingProvider: EmbeddingProvider, sourceConfig: SourceConfig) {
+  constructor(
+    embeddingProvider: EmbeddingProvider,
+    sourceConfig: SourceConfig,
+  ) {
     this.embeddingProvider = embeddingProvider;
     this.sourceConfig = sourceConfig;
     this.logPrefix = `[pipeline:${sourceConfig.name}]`;

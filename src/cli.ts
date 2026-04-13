@@ -10,7 +10,7 @@ const program = new Command();
 
 program
   .name("pathfinder")
-  .description("Agentic docs retrieval for AI agents")
+  .description("The knowledge server for AI agents")
   .version("1.11.0");
 
 program

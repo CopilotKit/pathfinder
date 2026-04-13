@@ -1,6 +1,6 @@
 # Pathfinder
 
-Pathfinder is an agentic docs retrieval server. It provides semantic search over documentation and code, plus a sandboxed filesystem for browsing indexed content. Use it to find relevant docs, explore codebases, and save intermediate results.
+Pathfinder is an agentic knowledge server. It provides semantic search over documentation and code, plus a sandboxed filesystem for browsing indexed content. Use it to find relevant docs, explore codebases, and save intermediate results.
 
 ## Available Tools
 

@@ -49,78 +49,126 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
 /* Container */
 .container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
 
-/* Nav */
-nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
+/* Top Nav */
+.top-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1rem 0;
     background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
-nav .container { display:flex; align-items:center; justify-content:space-between; }
-.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
+.top-nav .nav-inner { max-width: 1400px; margin: 0 auto; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; }
+.nav-brand { display: flex; align-items: center; gap: 0.75rem; font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
 .nav-brand span { color: var(--accent); }
-.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
-.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
-.nav-links a:hover { color: var(--text-primary); }
-.nav-links a.active { color: var(--accent); }
-.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
-.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+.nav-links { display: flex; align-items: center; gap: 2rem; list-style: none; }
+.nav-links a { color: var(--text-secondary); font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: color 0.2s; }
+.nav-links a:hover { color: var(--text-primary); text-decoration: none; }
+.nav-links .gh-link, .nav-links .gh-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
+.nav-links .gh-link:hover, .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
 
-/* Sidebar */
-:root { --sb-width: 220px; }
-#page-sidebar {
-    position: fixed !important;
-    top: 60px;
-    right: 0;
-    width: var(--sb-width);
-    height: calc(100vh - 60px);
+/* Docs Layout */
+:root { --sidebar-width: 260px; }
+.docs-layout {
+    display: flex;
+    margin-top: 57px;
+    min-height: calc(100vh - 57px);
+}
+
+/* Left Sidebar */
+.sidebar {
+    position: fixed;
+    top: 57px;
+    left: 0;
+    width: var(--sidebar-width);
+    height: calc(100vh - 57px);
     overflow-y: auto;
-    padding: 2rem 1.5rem 2rem 1.5rem;
-    border-left: 1px solid var(--border);
-    background: var(--bg-deep);
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    padding: 1.5rem 0;
     z-index: 50;
 }
-#page-sidebar .sb-title {
+.sidebar-section { padding: 0 1.25rem; margin-bottom: 1.5rem; }
+.sidebar-section h3 {
     font-family: var(--mono);
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.12em;
     color: var(--text-dim);
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.5rem;
+    padding: 0 0.5rem;
 }
-#page-sidebar a {
+.sidebar-section a {
     display: block;
-    padding: 0.25rem 0;
-    font-size: 0.8rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
     color: var(--text-secondary);
     text-decoration: none;
-    transition: color 0.15s;
-    line-height: 1.4;
+    transition: color 0.15s, background 0.15s;
 }
-#page-sidebar a:hover { color: var(--text-primary); }
-#page-sidebar a.active { color: var(--accent); }
-#page-sidebar a.sb-indent { padding-left: 0.75rem; font-size: 0.75rem; }
+.sidebar-section a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
+.sidebar-section a.active { color: var(--accent); background: var(--accent-glow); }
 
-/* Article layout */
-.article {
-    max-width: 860px;
-    padding: 100px 2rem 80px;
-    margin-right: calc(var(--sb-width) + max(0px, (100vw - var(--sb-width) - 860px) / 2));
-    margin-left: max(2rem, calc((100vw - var(--sb-width) - 860px) / 2));
+/* Main Content */
+.docs-content {
+    margin-left: var(--sidebar-width);
+    padding: 3rem 3rem;
+    max-width: calc(100vw - var(--sidebar-width) - 240px);
+    min-width: 0;
 }
-@media (max-width: 1200px) {
-    #page-sidebar { display: none; }
-    .article { max-width: 1120px; margin: 0 auto; }
+.docs-content h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 1rem; }
+.docs-content h1 .accent { color: var(--accent); }
+.docs-content .lead { font-size: 1.1rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 2rem; }
+.docs-content h2 { font-size: 1.5rem; font-weight: 600; margin-top: 3rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); scroll-margin-top: 80px; }
+.docs-content h3 { font-size: 1.15rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; scroll-margin-top: 80px; }
+.docs-content p { color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem; }
+.docs-content ul, .docs-content ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; }
+.docs-content li { margin-bottom: 0.35rem; line-height: 1.6; }
+.docs-content li strong { color: var(--text-primary); }
+.docs-content a { color: var(--accent); text-decoration: none; }
+.docs-content a:hover { text-decoration: underline; }
+
+/* Page TOC (right sidebar) */
+.page-toc {
+    position: fixed;
+    top: 80px;
+    right: 1rem;
+    width: 200px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    font-size: 0.78rem;
 }
-.article h1 { font-size: 42px; font-weight: 700; line-height: 1.15; margin-bottom: 16px; letter-spacing: -0.02em; }
-.article h1 .accent { color: var(--accent); }
-.article .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 48px; }
-.article h2 { font-size: 28px; font-weight: 600; margin: 48px 0 16px; padding-top: 16px; border-top: 1px solid var(--border); scroll-margin-top: 80px; }
-.article h2:first-of-type { border-top: none; }
-.article h3 { font-size: 20px; font-weight: 600; margin: 32px 0 12px; scroll-margin-top: 80px; }
-.article p { color: var(--text-secondary); margin-bottom: 16px; font-size: 1rem; line-height: 1.7; }
-.article ul, .article ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; font-size: 1rem; line-height: 1.7; }
-.article li { margin-bottom: 0.35rem; line-height: 1.6; }
-.article li strong { color: var(--text-primary); }
-.article a { color: var(--accent); text-decoration: none; }
-.article a:hover { text-decoration: underline; }
+.page-toc-label {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    padding: 0 0.5rem;
+    margin-bottom: 0.75rem;
+}
+.page-toc a {
+    display: block;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    text-decoration: none;
+    transition: color 0.15s, background 0.15s;
+}
+.page-toc a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
+.page-toc a.active { color: var(--accent); background: var(--accent-glow); }
+.page-toc a.toc-h3 { padding-left: 1.5rem; font-size: 0.72rem; color: var(--text-dim); }
+@media (max-width: 1200px) { .page-toc { display: none; } }
+
+/* Sidebar toggle (mobile) */
+.sidebar-toggle {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.25rem;
+}
 
 /* Code blocks */
 .code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
@@ -130,7 +178,8 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .code-block .cmd { color: var(--accent); }
 
 /* Inline code */
-.article code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
+.docs-content code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
+.docs-content pre code { background: none; border: none; border-radius: 0; padding: 0; font-size: inherit; }
 
 /* Quick start cards */
 .quick-start-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 32px; }
@@ -141,6 +190,10 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .path-card .subtitle { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
 .path-card .subtitle code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-family: var(--mono); font-size: 12px; color: var(--accent); }
 
+/* Code block header */
+.code-block-header { font-family: var(--mono); font-size: 0.7rem; color: var(--text-dim); padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); }
+.code-block-header .lang-tag { color: var(--text-dim); margin-left: 0.5rem; }
+
 /* Env table */
 .env-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
 .env-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
@@ -148,106 +201,82 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .env-table td code { font-size: 12px; }
 
 /* Footer */
-footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
-.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
-.footer-brand .prompt { color: var(--accent); }
-.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
-.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
-.footer-links a:hover { color: var(--text-primary); }
+.docs-footer {
+    margin-left: var(--sidebar-width);
+    padding: 3rem 4rem;
+    max-width: 860px;
+    border-top: 1px solid var(--border);
+}
+.docs-footer .footer-inner { display: flex; justify-content: space-between; align-items: center; }
+.footer-left { font-family: var(--mono); font-size: 0.8rem; color: var(--text-dim); }
+.footer-left .prompt { color: var(--accent); }
+.footer-links { display: flex; gap: 2rem; list-style: none; }
+.footer-links a { color: var(--text-dim); font-size: 0.85rem; text-decoration: none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text-primary); text-decoration: none; }
 
 /* Responsive: Tablet */
 @media (max-width: 768px) {
-    .article h1 { font-size: 32px; }
-    .article { padding: 90px 16px 60px; }
     .quick-start-paths { grid-template-columns: 1fr; }
     .env-table { font-size: 12px; }
     .env-table th, .env-table td { padding: 8px 10px; }
-    .nav-links { gap: 1rem; }
+    .docs-footer { margin-left: 0; padding: 1.5rem; }
 }
 
-/* Responsive: Mobile */
-@media (max-width: 480px) {
-    .article h1 { font-size: 26px; }
-    .article .lead { font-size: 15px; }
-    .article h2 { font-size: 22px; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
+/* Responsive */
+@media (max-width: 1024px) {
+    .docs-content { padding: 2rem; margin-left: var(--sidebar-width); margin-right: 0; }
 }
-
-/* Hamburger menu */
-.hamburger { display:none; background:none; border:none; cursor:pointer; padding:0.5rem; z-index:101; }
-.hamburger span { display:block; width:22px; height:2px; background:var(--text-primary); margin:5px 0; transition: transform 0.3s, opacity 0.3s; border-radius:1px; }
-.hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
-.hamburger.open span:nth-child(2) { opacity:0; }
-.hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
-.mobile-menu { display:none; position:fixed; top:57px; left:0; right:0; background:var(--bg-surface); border-bottom:1px solid var(--border); padding:1rem 2rem 1.5rem; z-index:99; flex-direction:column; gap:0.25rem; }
-.mobile-menu.open { display:flex; }
-@media (min-width: 769px) { .mobile-menu { display:none !important; } }
-.mobile-menu a { color:var(--text-secondary); text-decoration:none; font-size:1rem; font-weight:500; padding:0.6rem 0; border-bottom:1px solid var(--border); transition:color 0.2s; }
-.mobile-menu a:last-child { border-bottom:none; }
-.mobile-menu a:hover { color:var(--text-primary); }
-.mobile-menu a.active { color:var(--accent); }
-.mobile-menu .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; margin-top:0.5rem; padding:0.5rem 1rem; border:1px solid var(--border); border-radius:6px; width:fit-content; }
-.mobile-menu .gh-btn:hover { border-color:var(--text-dim); background:var(--bg-card); }
 @media (max-width: 768px) {
-    .hamburger { display:block; }
-    .nav-links { display:none !important; }
+    .sidebar-toggle { display: block; }
+    .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+    .sidebar.open { transform: translateX(0); }
+    .docs-content { margin-left: 0; padding: 1.5rem; }
+    .nav-links a:not(.gh-link) { display: none; }
+}
+@media (max-width: 480px) {
+    .docs-content h1 { font-size: 1.75rem; }
+    .docs-content .lead { font-size: 0.95rem; }
+    .code-block { font-size: 11px; padding: 12px 14px; }
 }
 </style>
 </head>
 <body>
 
-<nav>
-  <div class="container">
-    <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
-    <div class="nav-links">
-        <a href="/">Home</a>
-        <a href="/usage" class="active">Usage</a>
-        <a href="/config">Config</a>
-        <a href="/deploy">Deploy</a>
-        <a href="/clients">Clients</a>
-        <a href="/search">Search</a>
-        <a href="/migrate-from-mintlify">Switch</a>
-        <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
+<nav class="top-nav">
+  <div class="nav-inner">
+    <div style="display: flex; align-items: center; gap: 1rem">
+      <button class="sidebar-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')" aria-label="Toggle sidebar">&#9776;</button>
+      <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
     </div>
-    <button class="hamburger" aria-label="Menu">
-      <span></span>
-      <span></span>
-      <span></span>
-    </button>
+    <ul class="nav-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
+      <li><a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a></li>
+    </ul>
   </div>
 </nav>
 
-<div class="mobile-menu">
-    <a href="/">Home</a>
-    <a href="/usage" class="active">Usage</a>
-    <a href="/config">Config</a>
-    <a href="/deploy">Deploy</a>
-    <a href="/clients">Clients</a>
-    <a href="/search">Search</a>
-    <a href="/migrate-from-mintlify">Switch</a>
-    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn">GitHub</a>
-</div>
+<div class="docs-layout">
+  <aside class="sidebar" id="sidebar"></aside>
 
-<article class="article">
+  <main class="docs-content">
     <h1>Getting <span class="accent">Started</span></h1>
     <p class="lead">Two install paths. Same server. Choose what fits your workflow.</p>
 
     <h2>Quick Start</h2>
 
-    <div class="quick-start-paths">
-        <div class="path-card">
-            <h3>CLI</h3>
-            <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder init
-<span class="cmd">$</span> npx @copilotkit/pathfinder serve</div>
-            <p class="subtitle">Quickest start. No Docker needed. Add Postgres later for semantic search.</p>
+    <div class="cli-docker-tabs">
+        <div class="tab-cli">
+            <div class="code-block"><pre><code>npx @copilotkit/pathfinder init
+npx @copilotkit/pathfinder serve</code></pre></div>
+            <p>Quickest start. No Docker needed. Add Postgres later for semantic search.</p>
         </div>
-        <div class="path-card">
-            <h3>Docker</h3>
-            <div class="code-block"><span class="cmd">$</span> docker pull ghcr.io/copilotkit/pathfinder
-<span class="cmd">$</span> docker run -v ./pathfinder.yaml:/app/pathfinder.yaml \
+        <div class="tab-docker">
+            <div class="code-block"><pre><code>docker pull ghcr.io/copilotkit/pathfinder
+docker run -v ./pathfinder.yaml:/app/pathfinder.yaml \
   -v ./docs:/app/docs -p 3001:3001 \
-  ghcr.io/copilotkit/pathfinder</div>
-            <p class="subtitle">Production-ready. Use docker-compose to add Postgres for full semantic search.</p>
+  ghcr.io/copilotkit/pathfinder</code></pre></div>
+            <p>Production-ready. Use docker-compose to add Postgres for full semantic search.</p>
         </div>
     </div>
 
@@ -343,45 +372,22 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
             <h3><a href="/search">Search Features</a></h3>
             <p class="subtitle">How semantic search works, the <code>qmd</code> command, related files, grep-miss suggestions, and search tool parameters.</p>
         </div>
-        <div class="path-card">
-            <h3><a href="/migrate-from-mintlify">Switch from Mintlify</a></h3>
-            <p class="subtitle">Step-by-step guide from ChromaFS to Pathfinder. Concept mapping, walkthrough, and what's different.</p>
-        </div>
     </div>
 
-</article>
+  </main>
+  <aside class="page-toc" id="page-toc"></aside>
+</div>
 
-<aside id="page-sidebar"></aside>
-<script src="/sidebar.js"></script>
-
-<footer>
-  <div class="container">
-    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a> &mdash; free to use, modify, and self-host</div>
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-left"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a></div>
     <ul class="footer-links">
-        <li><a href="/">Home</a></li>
-        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
-        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
-        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
+      <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank">GitHub</a></li>
+      <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank">npm</a></li>
     </ul>
   </div>
 </footer>
-
-<script>
-(function(){
-  var btn=document.querySelector(".hamburger");
-  var menu=document.querySelector(".mobile-menu");
-  if(!btn||!menu)return;
-  btn.addEventListener("click",function(){
-    btn.classList.toggle("open");
-    menu.classList.toggle("open");
-  });
-  menu.addEventListener("click",function(e){
-    if(e.target.tagName==="A"){
-      btn.classList.remove("open");
-      menu.classList.remove("open");
-    }
-  });
-})();
-</script>
+<script src="/sidebar.js"></script>
+<script src="/cli-tabs.js"></script>
 </body>
 </html>

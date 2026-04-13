@@ -133,8 +133,7 @@ export function chunkDocument(
     // - Adding this section would exceed target
     // - This section has its own title (preserve section boundaries)
     const sizeExceeded =
-      current &&
-      current.length + separator.length + text.length > targetChars;
+      current && current.length + separator.length + text.length > targetChars;
     const hasNewTitle = section.title !== null && current.length > 0;
 
     if (sizeExceeded || hasNewTitle) {

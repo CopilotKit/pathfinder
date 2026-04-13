@@ -336,9 +336,7 @@ export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
 export type KnowledgeToolConfig = z.infer<typeof KnowledgeToolConfigSchema>;
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 export type OpenAIEmbeddingConfig = z.infer<typeof OpenAIEmbeddingConfigSchema>;
-export type OllamaEmbeddingConfig = z.infer<
-  typeof OllamaEmbeddingConfigSchema
->;
+export type OllamaEmbeddingConfig = z.infer<typeof OllamaEmbeddingConfigSchema>;
 export type LocalEmbeddingConfig = z.infer<typeof LocalEmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
@@ -349,7 +347,13 @@ export type BashOptions = z.infer<typeof BashOptionsSchema>;
 
 // ── Source config type guards ────────────────────────────────────────────────
 
-const FILE_SOURCE_TYPES = new Set(["markdown", "code", "raw-text", "html", "document"]);
+const FILE_SOURCE_TYPES = new Set([
+  "markdown",
+  "code",
+  "raw-text",
+  "html",
+  "document",
+]);
 export function isFileSourceConfig(
   config: SourceConfig,
 ): config is FileSourceConfig {

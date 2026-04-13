@@ -25,9 +25,7 @@ describe("chunkDocument", () => {
   });
 
   it("returns empty array for whitespace-only string", () => {
-    expect(chunkDocument("   \n\n  ", "test.pdf", mkConfig())).toEqual(
-      [],
-    );
+    expect(chunkDocument("   \n\n  ", "test.pdf", mkConfig())).toEqual([]);
   });
 
   it("returns empty array for null/undefined content", () => {
@@ -35,11 +33,7 @@ describe("chunkDocument", () => {
       chunkDocument(null as unknown as string, "test.pdf", mkConfig()),
     ).toEqual([]);
     expect(
-      chunkDocument(
-        undefined as unknown as string,
-        "test.pdf",
-        mkConfig(),
-      ),
+      chunkDocument(undefined as unknown as string, "test.pdf", mkConfig()),
     ).toEqual([]);
   });
 
@@ -84,10 +78,8 @@ describe("chunkDocument", () => {
   // ── Section header detection ────────────────────────────────────────
 
   it("splits on ALL CAPS section headers", () => {
-    const section1 =
-      "INTRODUCTION\n\nThis is the introduction. ".repeat(20);
-    const section2 =
-      "METHODOLOGY\n\nThis describes the method. ".repeat(20);
+    const section1 = "INTRODUCTION\n\nThis is the introduction. ".repeat(20);
+    const section2 = "METHODOLOGY\n\nThis describes the method. ".repeat(20);
     const content = `${section1}\n\n${section2}`;
     const chunks = chunkDocument(
       content,
@@ -98,10 +90,10 @@ describe("chunkDocument", () => {
   });
 
   it('splits on numbered section headers (e.g., "1. Introduction")', () => {
-    const section1 =
-      "1. Introduction\n\nThis is the intro section. ".repeat(20);
-    const section2 =
-      "2. Background\n\nThis is the background. ".repeat(20);
+    const section1 = "1. Introduction\n\nThis is the intro section. ".repeat(
+      20,
+    );
+    const section2 = "2. Background\n\nThis is the background. ".repeat(20);
     const content = `${section1}\n\n${section2}`;
     const chunks = chunkDocument(
       content,
@@ -308,8 +300,7 @@ describe("chunkDocument", () => {
   // ── Title extraction with numbered headers ───────────────────────────
 
   it("includes numbered section header in chunk title", () => {
-    const content =
-      "1. Getting Started\n\nThis section helps you get started.";
+    const content = "1. Getting Started\n\nThis section helps you get started.";
     const chunks = chunkDocument(content, "doc.pdf", mkConfig());
     expect(chunks[0].title).toBe("1. Getting Started");
   });

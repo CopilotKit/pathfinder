@@ -8,9 +8,7 @@ describe("extractContent", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), "extract-test-"),
-    );
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "extract-test-"));
   });
 
   // ── Non-document types pass through as UTF-8 ──────────────────────────
@@ -55,9 +53,8 @@ describe("extractContent", () => {
 
       vi.doMock("pdf-parse", () => ({ default: mockPdfParse }));
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "test.pdf");
       await fs.promises.writeFile(filePath, Buffer.from("fake-pdf-bytes"));
@@ -77,16 +74,15 @@ describe("extractContent", () => {
         throw new Error("Cannot find module 'pdf-parse'");
       });
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "test.pdf");
       await fs.promises.writeFile(filePath, Buffer.from("fake-pdf-bytes"));
 
-      await expect(
-        extractContentMocked(filePath, "document"),
-      ).rejects.toThrow(/install pdf-parse/i);
+      await expect(extractContentMocked(filePath, "document")).rejects.toThrow(
+        /install pdf-parse/i,
+      );
     });
 
     it("warns when PDF produces very little text (likely scanned)", async () => {
@@ -98,16 +94,13 @@ describe("extractContent", () => {
 
       vi.doMock("pdf-parse", () => ({ default: mockPdfParse }));
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "scanned.pdf");
       await fs.promises.writeFile(filePath, Buffer.from("fake-pdf-bytes"));
 
-      const warnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const result = await extractContentMocked(filePath, "document");
       expect(result.content).toBe("Hi");
       expect(warnSpy).toHaveBeenCalledWith(
@@ -127,23 +120,18 @@ describe("extractContent", () => {
     it("extracts text from a DOCX file", async () => {
       const mockMammoth = {
         extractRawText: vi.fn().mockResolvedValue({
-          value:
-            "Document heading\n\nParagraph one.\n\nParagraph two.",
+          value: "Document heading\n\nParagraph one.\n\nParagraph two.",
           messages: [],
         }),
       };
 
       vi.doMock("mammoth", () => ({ default: mockMammoth }));
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "test.docx");
-      await fs.promises.writeFile(
-        filePath,
-        Buffer.from("fake-docx-bytes"),
-      );
+      await fs.promises.writeFile(filePath, Buffer.from("fake-docx-bytes"));
 
       const result = await extractContentMocked(filePath, "document");
       expect(result.content).toBe(
@@ -159,19 +147,15 @@ describe("extractContent", () => {
         throw new Error("Cannot find module 'mammoth'");
       });
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "test.docx");
-      await fs.promises.writeFile(
-        filePath,
-        Buffer.from("fake-docx-bytes"),
-      );
+      await fs.promises.writeFile(filePath, Buffer.from("fake-docx-bytes"));
 
-      await expect(
-        extractContentMocked(filePath, "document"),
-      ).rejects.toThrow(/install mammoth/i);
+      await expect(extractContentMocked(filePath, "document")).rejects.toThrow(
+        /install mammoth/i,
+      );
     });
   });
 
@@ -187,9 +171,8 @@ describe("extractContent", () => {
 
     vi.doMock("pdf-parse", () => ({ default: mockPdfParse }));
 
-    const { extractContent: extractContentMocked } = await import(
-      "../indexing/content-extractors.js"
-    );
+    const { extractContent: extractContentMocked } =
+      await import("../indexing/content-extractors.js");
 
     const filePath = path.join(tmpDir, "TEST.PDF");
     await fs.promises.writeFile(filePath, Buffer.from("fake"));
@@ -209,9 +192,8 @@ describe("extractContent", () => {
 
     vi.doMock("mammoth", () => ({ default: mockMammoth }));
 
-    const { extractContent: extractContentMocked } = await import(
-      "../indexing/content-extractors.js"
-    );
+    const { extractContent: extractContentMocked } =
+      await import("../indexing/content-extractors.js");
 
     const filePath = path.join(tmpDir, "TEST.DOCX");
     await fs.promises.writeFile(filePath, Buffer.from("fake"));
@@ -230,19 +212,15 @@ describe("extractContent", () => {
         .mockRejectedValue(new Error("Invalid PDF structure"));
       vi.doMock("pdf-parse", () => ({ default: mockPdfParse }));
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "corrupt.pdf");
-      await fs.promises.writeFile(
-        filePath,
-        Buffer.from("not-a-real-pdf"),
-      );
+      await fs.promises.writeFile(filePath, Buffer.from("not-a-real-pdf"));
 
-      await expect(
-        extractContentMocked(filePath, "document"),
-      ).rejects.toThrow("Invalid PDF structure");
+      await expect(extractContentMocked(filePath, "document")).rejects.toThrow(
+        "Invalid PDF structure",
+      );
     });
 
     it("handles PDF with zero pages", async () => {
@@ -254,9 +232,8 @@ describe("extractContent", () => {
       });
       vi.doMock("pdf-parse", () => ({ default: mockPdfParse }));
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "empty.pdf");
       await fs.promises.writeFile(filePath, Buffer.from("fake"));
@@ -275,9 +252,8 @@ describe("extractContent", () => {
       });
       vi.doMock("pdf-parse", () => ({ default: mockPdfParse }));
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "large.pdf");
       await fs.promises.writeFile(filePath, Buffer.from("fake"));
@@ -303,9 +279,8 @@ describe("extractContent", () => {
       };
       vi.doMock("mammoth", () => ({ default: mockMammoth }));
 
-      const { extractContent: extractContentMocked } = await import(
-        "../indexing/content-extractors.js"
-      );
+      const { extractContent: extractContentMocked } =
+        await import("../indexing/content-extractors.js");
 
       const filePath = path.join(tmpDir, "warnings.docx");
       await fs.promises.writeFile(filePath, Buffer.from("fake"));
@@ -326,9 +301,7 @@ describe("extractContent", () => {
     });
 
     it("throws when file path is a directory", async () => {
-      await expect(
-        extractContent(tmpDir, "document"),
-      ).rejects.toThrow();
+      await expect(extractContent(tmpDir, "document")).rejects.toThrow();
     });
   });
 

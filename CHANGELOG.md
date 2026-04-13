@@ -11,6 +11,22 @@
 - **Auto-Cleanup**: Old query_log rows automatically pruned during nightly reindex cycle based on `retention_days` (default 90)
 - **PGlite Compatible**: p95 latency computed in application code (not SQL `percentile_cont`) for PGlite compatibility
 
+## 1.10.0
+
+### Minor Changes
+
+- **Auto-Generate from URL**: `pathfinder init --from <url>` crawls a docs site and generates a working pathfinder.yaml
+- **Site Crawler**: Sitemap-first discovery with robots.txt and recursive link following fallbacks, rate limiting, SPA detection
+- **Config Generator**: Auto-detects source type, derives base URL, generates complete YAML config
+
+## 1.9.0
+
+### Minor Changes
+
+- **PDF/DOCX Ingestion**: New `document` source type for indexing PDF and DOCX files with page-break and section-aware chunking
+- **Content Extractors**: Optional peer dependencies `pdf-parse` (PDF) and `mammoth` (DOCX), dynamically imported only when configured
+- **Scanned PDF Detection**: Warns when a PDF produces very little text, indicating a scanned document
+
 ## 1.8.0
 
 ### Minor Changes

@@ -17,17 +17,13 @@ describe("document type schema validation", () => {
 describe("document type registration", () => {
   it("document type is registered in provider registry", async () => {
     // Import the registry and verify 'document' maps to FileDataProvider
-    const { getProvider } = await import(
-      "../indexing/providers/index.js"
-    );
+    const { getProvider } = await import("../indexing/providers/index.js");
     const provider = getProvider("document");
     expect(provider).toBeDefined();
   });
 
   it("document type is registered in chunker registry", async () => {
-    const { getChunker } = await import(
-      "../indexing/chunking/index.js"
-    );
+    const { getChunker } = await import("../indexing/chunking/index.js");
     const chunker = getChunker("document");
     expect(chunker).toBeDefined();
   });
@@ -35,25 +31,19 @@ describe("document type registration", () => {
 
 describe("backwards compatibility", () => {
   it("markdown source type still works after document type addition", async () => {
-    const { getProvider } = await import(
-      "../indexing/providers/index.js"
-    );
+    const { getProvider } = await import("../indexing/providers/index.js");
     const provider = getProvider("markdown");
     expect(provider).toBeDefined();
   });
 
   it("html source type still works after document type addition", async () => {
-    const { getProvider } = await import(
-      "../indexing/providers/index.js"
-    );
+    const { getProvider } = await import("../indexing/providers/index.js");
     const provider = getProvider("html");
     expect(provider).toBeDefined();
   });
 
   it("code source type still works after document type addition", async () => {
-    const { getProvider } = await import(
-      "../indexing/providers/index.js"
-    );
+    const { getProvider } = await import("../indexing/providers/index.js");
     const provider = getProvider("code");
     expect(provider).toBeDefined();
   });
