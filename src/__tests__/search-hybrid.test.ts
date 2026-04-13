@@ -232,6 +232,7 @@ describe("search tool keyword mode", () => {
       "ECONNREFUSED",
       5,
       "docs",
+      undefined,
     );
     expect(result.isError).toBeFalsy();
     const text = (result.content as Array<{ type: string; text: string }>)[0]

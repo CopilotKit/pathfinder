@@ -110,6 +110,7 @@ export function registerSearchTool(
               query,
               effectiveLimit,
               toolConfig.source,
+              version,
             );
             // ts_rank scores are not on the cosine similarity scale,
             // so min_score filtering is not applied in keyword mode.

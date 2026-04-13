@@ -86,7 +86,10 @@ export async function textSearchChunks(
   pattern: string,
   limit: number,
   sourceName?: string,
+  version?: string,
 ): Promise<ChunkResult[]> {
+  if (!pattern.trim()) return [];
+
   const pool = getPool();
 
   const conditions: string[] = [];
@@ -102,6 +105,11 @@ export async function textSearchChunks(
     conditions.push(`source_name = $${paramIdx}`);
     params.push(sourceName);
     paramIdx++;
+  }
+
+  if (version) {
+    conditions.push(`version = $${paramIdx++}`);
+    params.push(version);
   }
 
   const whereClause = conditions.join(" AND ");
@@ -168,7 +176,7 @@ export async function hybridSearchChunks(
   // Run both searches in parallel
   const [vectorResults, keywordResults] = await Promise.all([
     searchChunks(embedding, candidateLimit, sourceName, version),
-    textSearchChunks(queryText, candidateLimit, sourceName),
+    textSearchChunks(queryText, candidateLimit, sourceName, version),
   ]);
 
   // Apply min_score filter to vector candidates before merging
@@ -203,14 +211,18 @@ export function rrfMerge(
   // Score vector results by rank position
   for (let i = 0; i < vectorResults.length; i++) {
     const r = vectorResults[i];
+    if (scores.has(r.id)) continue; // keep first/best-ranked
     const rank = i + 1; // 1-indexed
     const rrfScore = 1 / (RRF_K + rank);
     scores.set(r.id, { rrfScore, result: r });
   }
 
   // Score keyword results by rank position, accumulate
+  const seenKeyword = new Set<number>();
   for (let i = 0; i < keywordResults.length; i++) {
     const r = keywordResults[i];
+    if (seenKeyword.has(r.id)) continue; // keep first/best-ranked
+    seenKeyword.add(r.id);
     const rank = i + 1;
     const rrfContribution = 1 / (RRF_K + rank);
 
