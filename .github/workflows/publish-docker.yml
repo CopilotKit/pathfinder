@@ -29,16 +29,20 @@ jobs:
       - name: Notify Slack — success
         if: success()
         run: |
-          curl -sf -X POST "$SLACK_WEBHOOK" \ || true
-            -H 'Content-Type: application/json' \
-            -d "{\"text\":\"Docker image published: ghcr.io/copilotkit/pathfinder:${{ github.ref_name }}\"}"
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -sf -X POST "$SLACK_WEBHOOK" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"Docker image published: ghcr.io/copilotkit/pathfinder:${{ github.ref_name }}\"}" || true
+          fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
       - name: Notify Slack — failure
         if: failure()
         run: |
-          curl -sf -X POST "$SLACK_WEBHOOK" \ || true
-            -H 'Content-Type: application/json' \
-            -d "{\"text\":\"Docker publish failed\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}"
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -sf -X POST "$SLACK_WEBHOOK" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"Docker publish failed\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}" || true
+          fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}

@@ -9,8 +9,10 @@ jobs:
       - name: Notify Slack
         if: github.actor != 'github-actions[bot]'
         run: |
-          curl -sf -X POST "$SLACK_WEBHOOK" \ || true
-            -H 'Content-Type: application/json' \
-            -d "{\"text\":\"New PR on pathfinder: *${{ github.event.pull_request.title }}* by ${{ github.actor }}\n<${{ github.event.pull_request.html_url }}|View PR #${{ github.event.pull_request.number }}>\"}"
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -sf -X POST "$SLACK_WEBHOOK" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"New PR on pathfinder: *${{ github.event.pull_request.title }}* by ${{ github.actor }}\n<${{ github.event.pull_request.html_url }}|View PR #${{ github.event.pull_request.number }}>\"}" || true
+          fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
