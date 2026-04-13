@@ -1,23 +1,15 @@
 # @copilotkit/pathfinder
 
-## 1.10.0
+## 1.11.0
 
 ### Minor Changes
 
-- **Auto-Generate from URL**: New `pathfinder init --from <url>` command that crawls a documentation site and generates a working `pathfinder.yaml`. Three-tier discovery: sitemap.xml, robots.txt Sitemap directives, recursive link following
-- **Site Crawler**: Rate-limited crawler with retry/backoff for 429/5xx, page caching, SPA detection warnings, and robots.txt compliance
-- **Config Generator**: Auto-detects source type (HTML/markdown), derives base URL from common path prefix, detects content selectors, and supports GitHub/GitLab repo detection
-- **CLI Flags**: `--rate-limit <ms>`, `--max-pages <n>`, `--force` flags for controlling crawl behavior
-
-## 1.9.0
-
-### Minor Changes
-
-- **PDF/DOCX Ingestion**: New `document` source type for indexing PDF and DOCX files. Format detected from file extension, with page-break and section-aware chunking
-- **Content Extractors**: Dynamic import of `pdf-parse` (PDF) and `mammoth` (DOCX) as optional peer dependencies — only loaded when a `document` source is configured
-- **Document Chunker**: Intelligent splitting on page breaks (form feed), ALL CAPS section headers, numbered section headers, and paragraph boundaries with configurable overlap
-- **Scanned PDF Detection**: Warns when a multi-page PDF produces very little text, indicating a scanned document without a text layer
-- **10MB Default File Size**: Document sources default to 10MB max file size (vs 100KB for text sources)
+- **Analytics Dashboard**: Built-in query analytics with embedded Chart.js dashboard at `/analytics`. Track query volume, latency (avg + p95), empty result rates, top queries, and queries by source
+- **Query Logging**: Fire-and-forget instrumentation in search and knowledge tool handlers. Logs query text, result count, top similarity score, latency, source, and session ID
+- **Analytics REST API**: Three endpoints (`/api/analytics/summary`, `/queries`, `/empty-queries`) with Bearer token authentication via config or `ANALYTICS_TOKEN` env var
+- **Analytics Config**: New `analytics` section in pathfinder.yaml with `enabled`, `log_queries`, `token`, and `retention_days` fields. Fully optional and backwards compatible
+- **Auto-Cleanup**: Old query_log rows automatically pruned during nightly reindex cycle based on `retention_days` (default 90)
+- **PGlite Compatible**: p95 latency computed in application code (not SQL `percentile_cont`) for PGlite compatibility
 
 ## 1.8.0
 
