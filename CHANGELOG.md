@@ -1,5 +1,17 @@
 # @copilotkit/pathfinder
 
+## 1.11.1
+
+### Patch Changes
+
+- **Analytics Filter UX**: Tool type pills (All / Search / Explore) and source sub-filters for drilling into query data without losing the big picture
+- **Tool Counts Endpoint**: New `/api/analytics/tool-counts` for query volume by tool type
+- **Filterable API**: All analytics endpoints accept `tool_type` and `source` query params
+- **Dev Mode Auth Bypass**: Analytics dashboard and API skip token auth when `NODE_ENV=development`
+- **Backfill-Safe Stats**: Avg result count and latency stats exclude reconstructed log data (`result_count=-1`)
+- **Always-On Logging**: Query logging fires unconditionally — `analytics.enabled` only gates dashboard access
+- **CI Fix**: Slack webhook curl in all workflows wrapped in if-guards to prevent failures when `SLACK_WEBHOOK` is unset
+
 ## 1.11.0
 
 ### Minor Changes
