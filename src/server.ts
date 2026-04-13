@@ -39,7 +39,9 @@ import {
   getAnalyticsSummary,
   getTopQueries,
   getEmptyQueries,
+  getToolCounts,
 } from "./db/analytics.js";
+import type { AnalyticsFilter } from "./db/analytics.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -635,12 +637,20 @@ export function analyticsAuth(
   next: express.NextFunction,
 ): void {
   const analyticsCfg = getAnalyticsConfig();
-  const token = getAnalyticsToken();
+  const config = getConfig();
 
   if (!analyticsCfg?.enabled) {
     res.status(404).json({ error: "Analytics not enabled" });
     return;
   }
+
+  // Skip token check in development mode
+  if (config.nodeEnv === "development") {
+    next();
+    return;
+  }
+
+  const token = getAnalyticsToken();
 
   if (!token) {
     // Should not happen — getAnalyticsToken auto-generates if needed
@@ -665,12 +675,20 @@ export function analyticsAuth(
   next();
 }
 
+function parseAnalyticsFilter(req: Request): AnalyticsFilter {
+  const filter: AnalyticsFilter = {};
+  if (req.query.tool_type) filter.tool_type = req.query.tool_type as string;
+  if (req.query.source) filter.source = req.query.source as string;
+  return filter;
+}
+
 app.get(
   "/api/analytics/summary",
   analyticsAuth,
-  async (_req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     try {
-      const summary = await getAnalyticsSummary();
+      const filter = parseAnalyticsFilter(req);
+      const summary = await getAnalyticsSummary(filter);
       res.json(summary);
     } catch (err) {
       console.error("[analytics] Summary query failed:", err);
@@ -686,7 +704,8 @@ app.get(
     try {
       const days = parseInt(req.query.days as string) || 7;
       const limit = parseInt(req.query.limit as string) || 50;
-      const queries = await getTopQueries(days, Math.min(limit, 200));
+      const filter = parseAnalyticsFilter(req);
+      const queries = await getTopQueries(days, Math.min(limit, 200), filter);
       res.json(queries);
     } catch (err) {
       console.error("[analytics] Top queries failed:", err);
@@ -702,7 +721,8 @@ app.get(
     try {
       const days = parseInt(req.query.days as string) || 7;
       const limit = parseInt(req.query.limit as string) || 50;
-      const queries = await getEmptyQueries(days, Math.min(limit, 200));
+      const filter = parseAnalyticsFilter(req);
+      const queries = await getEmptyQueries(days, Math.min(limit, 200), filter);
       res.json(queries);
     } catch (err) {
       console.error("[analytics] Empty queries failed:", err);
@@ -710,6 +730,26 @@ app.get(
     }
   },
 );
+
+app.get(
+  "/api/analytics/tool-counts",
+  analyticsAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const days = parseInt(req.query.days as string) || 7;
+      const counts = await getToolCounts(days);
+      res.json(counts);
+    } catch (err) {
+      console.error("[analytics] Tool counts failed:", err);
+      res.status(500).json({ error: "Failed to fetch tool counts" });
+    }
+  },
+);
+
+app.get("/api/analytics/auth-mode", (_req: Request, res: Response) => {
+  const config = getConfig();
+  res.json({ dev: config.nodeEnv === "development" });
+});
 
 app.get("/analytics", (_req: Request, res: Response) => {
   if (!getAnalyticsConfig()?.enabled) {

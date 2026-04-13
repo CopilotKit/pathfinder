@@ -23,6 +23,24 @@
         .empty { color: #f87171; }
         .error { color: #f87171; padding: 24px; text-align: center; }
         @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
+
+        /* Filter bar styles */
+        .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; }
+        .filter-row .spacer { flex: 1; }
+        .filter-row .divider { width: 1px; height: 20px; background: #334155; margin: 0 6px; }
+        .filter-row .pill {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 5px 12px; border-radius: 20px; border: 1px solid #334155;
+            background: #1e293b; color: #94a3b8; font-size: 0.78rem; font-weight: 500;
+            cursor: pointer; transition: all 0.15s ease; user-select: none;
+        }
+        .filter-row .pill:hover { border-color: #3b82f6; color: #e2e8f0; }
+        .filter-row .pill.active { background: #3b82f6; border-color: #3b82f6; color: #ffffff; }
+        .filter-row .pill .count { opacity: 0.7; font-size: 0.72rem; }
+        .tool-badge {
+            display: inline-block; padding: 2px 8px; border-radius: 10px;
+            font-size: 0.7rem; font-weight: 500; background: #334155; color: #94a3b8;
+        }
     </style>
 </head>
 <body>
@@ -33,7 +51,7 @@
 
     <div class="chart-row">
         <div class="chart-box">
-            <h2>Queries per Day (7d)</h2>
+            <h2 id="dailyChartTitle">Queries per Day (7d)</h2>
             <canvas id="dailyChart"></canvas>
         </div>
         <div class="chart-box">
@@ -42,9 +60,13 @@
         </div>
     </div>
 
+    <div id="filters" style="display:none;">
+        <div class="filter-row" id="filterRow"></div>
+    </div>
+
     <h2 style="margin-bottom: 12px;">Top Queries (7d)</h2>
     <table id="topQueriesTable">
-        <thead><tr><th>Query</th><th>Count</th><th>Avg Results</th><th>Avg Score</th></tr></thead>
+        <thead><tr><th>Query</th><th>Tool</th><th>Count</th><th>Avg Results</th><th>Avg Score</th></tr></thead>
         <tbody></tbody>
     </table>
 
@@ -65,6 +87,12 @@
     </div>
 
     <script>
+        // --- State ---
+        var activeToolType = null;  // null = "All"
+        var activeSource = null;    // null = "All Sources"
+        var dailyChartInstance = null;
+        var sourceChartInstance = null;
+
         function getToken() {
             return sessionStorage.getItem('pathfinder_analytics_token') || '';
         }
@@ -109,19 +137,76 @@
             return res.json();
         }
 
+        function buildFilterParams() {
+            var params = [];
+            if (activeToolType) params.push('tool_type=' + encodeURIComponent(activeToolType));
+            if (activeSource) params.push('source=' + encodeURIComponent(activeSource));
+            return params.length > 0 ? '&' + params.join('&') : '';
+        }
+
+        // --- Filter UI ---
+        function renderFilters(toolCounts, sources) {
+            var row = document.getElementById('filterRow');
+            var total = toolCounts.reduce(function(sum, t) { return sum + t.count; }, 0);
+
+            var html = '<span class="pill' + (activeToolType === null ? ' active' : '') + '" data-tool="">'
+                + 'All <span class="count">(' + total.toLocaleString() + ')</span></span>';
+            toolCounts.forEach(function(t) {
+                var isActive = activeToolType === t.tool_type;
+                var label = t.tool_type.charAt(0).toUpperCase() + t.tool_type.slice(1);
+                html += '<span class="pill' + (isActive ? ' active' : '') + '" data-tool="' + esc(t.tool_type) + '">'
+                    + esc(label) + ' <span class="count">(' + t.count.toLocaleString() + ')</span></span>';
+            });
+
+            if (sources && sources.length > 0) {
+                html += '<span class="spacer"></span>';
+                html += '<span class="pill' + (activeSource === null ? ' active' : '') + '" data-source="">All Sources</span>';
+                sources.forEach(function(s) {
+                    var isActive = activeSource === s.source_name;
+                    html += '<span class="pill' + (isActive ? ' active' : '') + '" data-source="' + esc(s.source_name) + '">'
+                        + esc(s.source_name) + ' <span class="count">(' + s.count.toLocaleString() + ')</span></span>';
+                });
+            }
+
+            row.innerHTML = html;
+            row.querySelectorAll('.pill[data-tool]').forEach(function(pill) {
+                pill.addEventListener('click', function() {
+                    var val = this.getAttribute('data-tool');
+                    activeToolType = val || null;
+                    activeSource = null;
+                    load();
+                });
+            });
+            row.querySelectorAll('.pill[data-source]').forEach(function(pill) {
+                pill.addEventListener('click', function() {
+                    var val = this.getAttribute('data-source');
+                    activeSource = val || null;
+                    load();
+                });
+            });
+        }
+
+        // --- Main load ---
         async function load() {
             try {
+                var fp = buildFilterParams();
                 var results = await Promise.all([
-                    fetchJson('/api/analytics/summary'),
-                    fetchJson('/api/analytics/queries?days=7&limit=50'),
-                    fetchJson('/api/analytics/empty-queries?days=7&limit=50'),
+                    fetchJson('/api/analytics/summary?' + fp.replace(/^&/, '')),
+                    fetchJson('/api/analytics/queries?days=7&limit=50' + fp),
+                    fetchJson('/api/analytics/empty-queries?days=7&limit=50' + fp),
+                    fetchJson('/api/analytics/tool-counts?days=7'),
                 ]);
                 var summary = results[0];
                 var topQueries = results[1];
                 var emptyQueries = results[2];
+                var toolCounts = results[3];
 
                 // Clear any previous error
                 document.getElementById('error').style.display = 'none';
+                document.getElementById('filters').style.display = 'block';
+
+                // Render filters
+                renderFilters(toolCounts, summary.queries_by_source);
 
                 // Stats cards
                 document.getElementById('stats').innerHTML = [
@@ -133,8 +218,12 @@
                     { label: 'Empty Queries (7d)', value: summary.empty_result_count_7d.toLocaleString() },
                 ].map(function(s) { return '<div class="stat-card"><div class="label">' + s.label + '</div><div class="value">' + s.value + '</div></div>'; }).join('');
 
-                // Daily chart
-                new Chart(document.getElementById('dailyChart'), {
+                // Daily chart - destroy previous instance
+                if (dailyChartInstance) { dailyChartInstance.destroy(); dailyChartInstance = null; }
+                var titleSuffix = activeToolType ? ' - ' + activeToolType.charAt(0).toUpperCase() + activeToolType.slice(1) : '';
+                document.getElementById('dailyChartTitle').textContent = 'Queries per Day (7d)' + titleSuffix;
+
+                dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
                     type: 'bar',
                     data: {
                         labels: summary.queries_per_day_7d.map(function(d) { return d.day; }),
@@ -143,9 +232,10 @@
                     options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
                 });
 
-                // Source chart
+                // Source chart - destroy previous instance
+                if (sourceChartInstance) { sourceChartInstance.destroy(); sourceChartInstance = null; }
                 if (summary.queries_by_source.length > 0) {
-                    new Chart(document.getElementById('sourceChart'), {
+                    sourceChartInstance = new Chart(document.getElementById('sourceChart'), {
                         type: 'doughnut',
                         data: {
                             labels: summary.queries_by_source.map(function(s) { return s.source_name; }),
@@ -155,16 +245,18 @@
                     });
                 }
 
-                // Top queries table
+                // Top queries table (now with Tool column)
                 var topBody = document.querySelector('#topQueriesTable tbody');
                 topBody.innerHTML = topQueries.map(function(q) {
-                    return '<tr><td>' + esc(q.query_text) + '</td><td>' + q.count + '</td><td>' + q.avg_result_count.toFixed(1) + '</td><td>' + (q.avg_top_score != null ? q.avg_top_score.toFixed(2) : '-') + '</td></tr>';
-                }).join('') || '<tr><td colspan="4">No queries logged yet.</td></tr>';
+                    var avgRes = q.avg_result_count != null ? q.avg_result_count.toFixed(1) : '-';
+                    var avgScore = q.avg_top_score != null ? q.avg_top_score.toFixed(2) : '-';
+                    return '<tr><td>' + esc(q.query_text) + '</td><td><span class="tool-badge">' + esc(q.tool_name) + '</span></td><td>' + q.count + '</td><td>' + avgRes + '</td><td>' + avgScore + '</td></tr>';
+                }).join('') || '<tr><td colspan="5">No queries logged yet.</td></tr>';
 
                 // Empty queries table
                 var emptyBody = document.querySelector('#emptyQueriesTable tbody');
                 emptyBody.innerHTML = emptyQueries.map(function(q) {
-                    return '<tr class="empty"><td>' + esc(q.query_text) + '</td><td>' + esc(q.tool_name) + '</td><td>' + esc(q.source_name || '-') + '</td><td>' + q.count + '</td><td>' + new Date(q.last_seen).toLocaleString() + '</td></tr>';
+                    return '<tr class="empty"><td>' + esc(q.query_text) + '</td><td><span class="tool-badge">' + esc(q.tool_name) + '</span></td><td>' + esc(q.source_name || '-') + '</td><td>' + q.count + '</td><td>' + new Date(q.last_seen).toLocaleString() + '</td></tr>';
                 }).join('') || '<tr><td colspan="5">No empty-result queries.</td></tr>';
 
             } catch (err) {
@@ -181,12 +273,24 @@
             return d.innerHTML;
         }
 
-        // Show login prompt if no token, otherwise load dashboard
-        if (!TOKEN) {
-            showLogin();
-        } else {
-            load();
-        }
+        // Check if server is in dev mode (skip auth), otherwise require token
+        (async function init() {
+            try {
+                var authMode = await fetch('/api/analytics/auth-mode').then(function(r) { return r.json(); });
+                if (authMode.dev) {
+                    // Dev mode — no token needed
+                    headers = {};
+                    load();
+                    return;
+                }
+            } catch (e) { /* ignore — fall through to normal auth */ }
+
+            if (!TOKEN) {
+                showLogin();
+            } else {
+                load();
+            }
+        })();
     </script>
 </body>
 </html>
