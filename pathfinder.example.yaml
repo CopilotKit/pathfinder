@@ -94,3 +94,9 @@ indexing:
   auto_reindex: true
   reindex_hour_utc: 3
   stale_threshold_hours: 24
+
+# ── Analytics (query logging and dashboard) ──
+# analytics:
+#   enabled: true
+#   log_queries: true
+#   retention_days: 90

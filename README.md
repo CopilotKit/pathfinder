@@ -72,12 +72,16 @@ Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source c
 - **[Auto-Generated Endpoints](https://pathfinder.copilotkit.dev/usage)** — `/llms.txt`, `/llms-full.txt`, `/faq.txt`, `/.well-known/skills/default/skill.md`
 - **[Webhook Reindexing](https://pathfinder.copilotkit.dev/deploy)** — GitHub push triggers incremental reindex
 - **[IP Rate Limiting](https://pathfinder.copilotkit.dev/config)** — Per-IP session caps and configurable TTL
+- **[Analytics](https://pathfinder.copilotkit.dev/analytics)** — Query logging, top queries, empty results, latency metrics at `/analytics`
 
 ## CLI
 
 ```bash
 # Scaffold config
 npx @copilotkit/pathfinder init
+
+# Auto-generate config from an existing docs site
+npx @copilotkit/pathfinder init --from <url>
 
 # Start server (uses PGlite if no DATABASE_URL)
 npx @copilotkit/pathfinder serve
