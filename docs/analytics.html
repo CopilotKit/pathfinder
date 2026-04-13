@@ -14,8 +14,9 @@
         .stat-card .label { font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; margin-bottom: 4px; }
         .stat-card .value { font-size: 1.5rem; font-weight: 700; }
         .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
-        .chart-box { background: #1e293b; border-radius: 8px; padding: 16px; }
+        .chart-box { background: #1e293b; border-radius: 8px; padding: 16px; position: relative; }
         .chart-box h2 { font-size: 1rem; margin-bottom: 12px; }
+        .chart-box canvas { max-height: 300px; }
         table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 8px; overflow: hidden; margin-bottom: 32px; }
         th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #334155; }
         th { background: #0f172a; font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; }
@@ -53,12 +54,54 @@
         <tbody></tbody>
     </table>
 
+    <div id="login" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); align-items:center; justify-content:center; z-index:100;">
+        <div style="background:#1e293b; border-radius:12px; padding:32px; max-width:400px; width:90%;">
+            <h2 style="margin-bottom:16px; font-size:1.2rem;">Analytics Token</h2>
+            <p style="color:#94a3b8; font-size:0.875rem; margin-bottom:16px;">Enter your analytics token. Check the server console output for the auto-generated token, or use your configured ANALYTICS_TOKEN.</p>
+            <input id="tokenInput" type="password" placeholder="Paste token here" style="width:100%; padding:10px 14px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; font-size:0.9rem; margin-bottom:12px;" autofocus>
+            <button id="tokenSubmit" style="width:100%; padding:10px; border-radius:6px; border:none; background:#3b82f6; color:white; font-weight:600; cursor:pointer; font-size:0.9rem;">Access Dashboard</button>
+            <p id="loginError" style="color:#f87171; font-size:0.8rem; margin-top:8px; display:none;"></p>
+        </div>
+    </div>
+
     <script>
-        const TOKEN = new URLSearchParams(window.location.search).get('token') || '';
-        const headers = TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
+        function getToken() {
+            return sessionStorage.getItem('pathfinder_analytics_token') || '';
+        }
+
+        var TOKEN = getToken();
+        var headers = TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
+
+        function showLogin() {
+            document.getElementById('login').style.display = 'flex';
+            document.getElementById('tokenInput').focus();
+        }
+
+        document.getElementById('tokenSubmit').addEventListener('click', function() {
+            var input = document.getElementById('tokenInput').value.trim();
+            if (!input) return;
+            sessionStorage.setItem('pathfinder_analytics_token', input);
+            TOKEN = input;
+            headers = { 'Authorization': 'Bearer ' + TOKEN };
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('loginError').style.display = 'none';
+            load();
+        });
+
+        document.getElementById('tokenInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') document.getElementById('tokenSubmit').click();
+        });
 
         async function fetchJson(url) {
             var res = await fetch(url, { headers: headers });
+            if (res.status === 401 || res.status === 403) {
+                sessionStorage.removeItem('pathfinder_analytics_token');
+                showLogin();
+                var loginErr = document.getElementById('loginError');
+                loginErr.textContent = res.status === 401 ? 'Token required' : 'Invalid token';
+                loginErr.style.display = 'block';
+                throw new Error('auth');
+            }
             if (!res.ok) {
                 var body = await res.json().catch(function() { return {}; });
                 throw new Error(body.error || 'HTTP ' + res.status);
@@ -76,6 +119,9 @@
                 var summary = results[0];
                 var topQueries = results[1];
                 var emptyQueries = results[2];
+
+                // Clear any previous error
+                document.getElementById('error').style.display = 'none';
 
                 // Stats cards
                 document.getElementById('stats').innerHTML = [
@@ -122,8 +168,10 @@
                 }).join('') || '<tr><td colspan="5">No empty-result queries.</td></tr>';
 
             } catch (err) {
-                document.getElementById('error').style.display = 'block';
-                document.getElementById('error').textContent = 'Failed to load analytics: ' + err.message;
+                if (err.message !== 'auth') {
+                    document.getElementById('error').style.display = 'block';
+                    document.getElementById('error').textContent = 'Failed to load analytics: ' + err.message;
+                }
             }
         }
 
@@ -133,7 +181,12 @@
             return d.innerHTML;
         }
 
-        load();
+        // Show login prompt if no token, otherwise load dashboard
+        if (!TOKEN) {
+            showLogin();
+        } else {
+            load();
+        }
     </script>
 </body>
 </html>
