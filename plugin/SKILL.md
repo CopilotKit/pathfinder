@@ -19,6 +19,8 @@ Finds content by meaning, not just keywords. Use this when you need to understan
 - "Error handling middleware"
 - "Database migration workflow"
 
+> **Note:** Some search tools may be configured for hybrid mode (combining vector and keyword search) or keyword-only mode. The tool handles this internally — always provide a natural language query regardless of mode.
+
 ### explore (bash/filesystem)
 
 A sandboxed bash shell for browsing the indexed filesystem. Files are read-only (except `/workspace/`). Use this for precise lookups, structural exploration, and when you need exact file contents.

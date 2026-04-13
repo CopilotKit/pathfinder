@@ -17,6 +17,12 @@ vi.mock("../db/queries.js", () => ({
   textSearchChunks: vi.fn(),
   hybridSearchChunks: vi.fn(),
 }));
+vi.mock("../db/analytics.js", () => ({
+  logQuery: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../config.js", () => ({
+  getServerConfig: vi.fn().mockReturnValue({}),
+}));
 
 import { registerSearchTool } from "../mcp/tools/search.js";
 import {

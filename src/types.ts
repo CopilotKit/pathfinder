@@ -33,7 +33,7 @@ const BaseSourceFields = {
 // File-based source schema (markdown, code, raw-text, html) — unchanged fields from today
 export const FileSourceConfigSchema = z.object({
   ...BaseSourceFields,
-  type: z.enum(["markdown", "code", "raw-text", "html"]),
+  type: z.enum(["markdown", "code", "raw-text", "html", "document"]),
   repo: z.string().url().optional(),
   branch: z.string().optional(),
   path: z.string().min(1),
@@ -221,6 +221,15 @@ export const WebhookConfigSchema = z.object({
   path_triggers: z.record(z.string(), z.array(z.string())),
 });
 
+// ── Analytics configuration schemas ──────────────────────────────────────────
+
+export const AnalyticsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  log_queries: z.boolean().default(true),
+  token: z.string().min(1).optional(),
+  retention_days: z.number().int().positive().default(90),
+});
+
 // ── Top-level server configuration schema ─────────────────────────────────────
 
 export const ServerConfigSchema = z
@@ -236,6 +245,7 @@ export const ServerConfigSchema = z
     embedding: EmbeddingConfigSchema.optional(),
     indexing: IndexingConfigSchema.optional(),
     webhook: WebhookConfigSchema.optional(),
+    analytics: AnalyticsConfigSchema.optional(),
   })
   .superRefine((cfg, ctx) => {
     const hasRag = cfg.tools.some(
@@ -332,13 +342,14 @@ export type OllamaEmbeddingConfig = z.infer<
 export type LocalEmbeddingConfig = z.infer<typeof LocalEmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
+export type AnalyticsConfig = z.infer<typeof AnalyticsConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type BashCacheConfig = z.infer<typeof BashCacheConfigSchema>;
 export type BashOptions = z.infer<typeof BashOptionsSchema>;
 
 // ── Source config type guards ────────────────────────────────────────────────
 
-const FILE_SOURCE_TYPES = new Set(["markdown", "code", "raw-text", "html"]);
+const FILE_SOURCE_TYPES = new Set(["markdown", "code", "raw-text", "html", "document"]);
 export function isFileSourceConfig(
   config: SourceConfig,
 ): config is FileSourceConfig {

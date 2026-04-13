@@ -1,5 +1,16 @@
 # @copilotkit/pathfinder
 
+## 1.11.0
+
+### Minor Changes
+
+- **Analytics Dashboard**: Built-in query analytics with embedded Chart.js dashboard at `/analytics`. Track query volume, latency (avg + p95), empty result rates, top queries, and queries by source
+- **Query Logging**: Fire-and-forget instrumentation in search and knowledge tool handlers. Logs query text, result count, top similarity score, latency, source, and session ID
+- **Analytics REST API**: Three endpoints (`/api/analytics/summary`, `/queries`, `/empty-queries`) with Bearer token authentication via config or `ANALYTICS_TOKEN` env var
+- **Analytics Config**: New `analytics` section in pathfinder.yaml with `enabled`, `log_queries`, `token`, and `retention_days` fields. Fully optional and backwards compatible
+- **Auto-Cleanup**: Old query_log rows automatically pruned during nightly reindex cycle based on `retention_days` (default 90)
+- **PGlite Compatible**: p95 latency computed in application code (not SQL `percentile_cont`) for PGlite compatibility
+
 ## 1.8.0
 
 ### Minor Changes

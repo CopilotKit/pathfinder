@@ -263,7 +263,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     </div>
     <div class="stay-card">
         <h4>Fully offline operation</h4>
-        <p>mcp-local-rag uses local embedding models — no API keys, no network calls. Pathfinder requires an OpenAI API key for embeddings (local embedding support is on the roadmap).</p>
+        <p>mcp-local-rag uses local embedding models — no API keys, no network calls. Pathfinder supports local embeddings via Ollama and @xenova/transformers — no API keys needed — but requires a running server process.</p>
     </div>
     <div class="stay-card">
         <h4>Zero dependencies</h4>
@@ -406,8 +406,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <p>Pathfinder is more capable, but it's also more involved. Here's what changes:</p>
 
     <div class="gap-card">
-        <h4>Requires an OpenAI API key for embeddings</h4>
-        <p>mcp-local-rag uses local embedding models with zero API dependencies. Pathfinder uses OpenAI embeddings by default. Local embedding support is on the roadmap. If you only use bash tools (no semantic search), you can skip the API key entirely.</p>
+        <h4>OpenAI embeddings are the default, but local options are available</h4>
+        <p>mcp-local-rag uses local embedding models with zero API dependencies. Pathfinder uses OpenAI embeddings by default, but also supports Ollama and @xenova/transformers for fully local, API-key-free embeddings. If you only use bash tools (no semantic search), you can skip the embedding provider entirely.</p>
     </div>
     <div class="gap-card">
         <h4>Server process stays running</h4>

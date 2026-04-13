@@ -63,7 +63,7 @@ Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source c
 
 - **[Semantic Search](https://pathfinder.copilotkit.dev/search)** — pgvector RAG with configurable chunk sizes, overlap, and score thresholds
 - **[Filesystem Exploration](https://pathfinder.copilotkit.dev/search)** — QuickJS WASM sandbox with session state, `qmd` semantic grep, `related` files
-- **[7 Source Types](https://pathfinder.copilotkit.dev/config)** — Markdown, code, raw-text, HTML, Slack, Discord, Notion — with pluggable chunker registry
+- **[8 Source Types](https://pathfinder.copilotkit.dev/config)** — Markdown, code, raw-text, HTML, document (PDF/DOCX), Slack, Discord, Notion — with pluggable chunker registry
 - **[Multiple Embedding Providers](https://pathfinder.copilotkit.dev/config)** — OpenAI, Ollama (local HTTP), or transformers.js (zero external deps, CPU-only)
 - **[Config-Driven](https://pathfinder.copilotkit.dev/config)** — Everything in one `pathfinder.yaml`: sources, tools, embedding, indexing, webhooks
 - **[Client Setup](https://pathfinder.copilotkit.dev/clients)** — Claude Desktop, Claude Code, Cursor, Codex, VS Code, any Streamable HTTP client
@@ -72,12 +72,16 @@ Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source c
 - **[Auto-Generated Endpoints](https://pathfinder.copilotkit.dev/usage)** — `/llms.txt`, `/llms-full.txt`, `/faq.txt`, `/.well-known/skills/default/skill.md`
 - **[Webhook Reindexing](https://pathfinder.copilotkit.dev/deploy)** — GitHub push triggers incremental reindex
 - **[IP Rate Limiting](https://pathfinder.copilotkit.dev/config)** — Per-IP session caps and configurable TTL
+- **[Analytics](https://pathfinder.copilotkit.dev/analytics)** — Query logging, top queries, empty results, latency metrics at `/analytics`
 
 ## CLI
 
 ```bash
 # Scaffold config
 npx @copilotkit/pathfinder init
+
+# Auto-generate config from an existing docs site
+npx @copilotkit/pathfinder init --from <url>
 
 # Start server (uses PGlite if no DATABASE_URL)
 npx @copilotkit/pathfinder serve
