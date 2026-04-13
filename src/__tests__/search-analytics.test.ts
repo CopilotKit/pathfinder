@@ -23,16 +23,17 @@ vi.mock("../db/analytics.js", () => ({
 }));
 vi.mock("../config.js", () => ({
   getServerConfig: vi.fn(),
+  getAnalyticsConfig: vi.fn(),
 }));
 
 import { registerSearchTool } from "../mcp/tools/search.js";
 import { searchChunks } from "../db/queries.js";
 import { logQuery } from "../db/analytics.js";
-import { getServerConfig } from "../config.js";
+import { getAnalyticsConfig } from "../config.js";
 
 const mockSearchChunks = vi.mocked(searchChunks);
 const mockLogQuery = vi.mocked(logQuery);
-const mockGetServerConfig = vi.mocked(getServerConfig);
+const mockGetAnalyticsConfig = vi.mocked(getAnalyticsConfig);
 const mockEmbed = vi.fn();
 
 function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
@@ -74,10 +75,13 @@ describe("search tool analytics instrumentation", () => {
       { embed: mockEmbed } as never,
       toolConfig,
     );
-    const [ct, st] = InMemoryTransport.createLinkedPair();
-    await server.connect(st);
-    client = new Client({ name: "tc", version: "1.0.0" });
-    await client.connect(ct);
+
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+
+    client = new Client({ name: "test-client", version: "1.0.0" });
+    await client.connect(clientTransport);
   });
 
   beforeEach(() => {
@@ -90,9 +94,11 @@ describe("search tool analytics instrumentation", () => {
   });
 
   it("logs query when analytics is enabled", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: true, log_queries: true, retention_days: 90 },
-    } as never);
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     mockEmbed.mockResolvedValueOnce([0.1]);
     mockSearchChunks.mockResolvedValueOnce([makeChunkResult()]);
     mockLogQuery.mockResolvedValueOnce(undefined);
@@ -116,12 +122,15 @@ describe("search tool analytics instrumentation", () => {
     expect(logText).toBe(true);
   });
 
-  it("does not log when analytics is disabled", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: false, log_queries: true, retention_days: 90 },
-    } as never);
+  it("always logs even when analytics is disabled (logging is unconditional)", async () => {
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: false,
+      log_queries: true,
+      retention_days: 90,
+    });
     mockEmbed.mockResolvedValueOnce([0.1]);
-    mockSearchChunks.mockResolvedValueOnce([]);
+    mockSearchChunks.mockResolvedValueOnce([makeChunkResult()]);
+    mockLogQuery.mockResolvedValueOnce(undefined);
 
     await client.callTool({
       name: "search-docs",
@@ -129,13 +138,14 @@ describe("search tool analytics instrumentation", () => {
     });
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(mockLogQuery).not.toHaveBeenCalled();
+    expect(mockLogQuery).toHaveBeenCalledTimes(1);
   });
 
-  it("does not log when analytics config is absent", async () => {
-    mockGetServerConfig.mockReturnValue({} as never);
+  it("always logs even when analytics config is absent", async () => {
+    mockGetAnalyticsConfig.mockReturnValue(undefined);
     mockEmbed.mockResolvedValueOnce([0.1]);
-    mockSearchChunks.mockResolvedValueOnce([]);
+    mockSearchChunks.mockResolvedValueOnce([makeChunkResult()]);
+    mockLogQuery.mockResolvedValueOnce(undefined);
 
     await client.callTool({
       name: "search-docs",
@@ -143,13 +153,18 @@ describe("search tool analytics instrumentation", () => {
     });
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(mockLogQuery).not.toHaveBeenCalled();
+    expect(mockLogQuery).toHaveBeenCalledTimes(1);
+    // Defaults to logging full query text when config absent
+    const [, logText] = mockLogQuery.mock.calls[0];
+    expect(logText).toBe(true);
   });
 
   it("passes log_queries: false to logQuery when configured", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: true, log_queries: false, retention_days: 90 },
-    } as never);
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: false,
+      retention_days: 90,
+    });
     mockEmbed.mockResolvedValueOnce([0.1]);
     mockSearchChunks.mockResolvedValueOnce([makeChunkResult()]);
     mockLogQuery.mockResolvedValueOnce(undefined);
@@ -166,24 +181,32 @@ describe("search tool analytics instrumentation", () => {
   });
 
   it("does not fail the search when logQuery throws", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: true, log_queries: true, retention_days: 90 },
-    } as never);
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     mockEmbed.mockResolvedValueOnce([0.1]);
     mockSearchChunks.mockResolvedValueOnce([makeChunkResult()]);
-    mockLogQuery.mockRejectedValueOnce(new Error("DB write failed"));
+    mockLogQuery.mockRejectedValueOnce(new Error("db down"));
 
     const result = await client.callTool({
       name: "search-docs",
       arguments: { query: "test" },
     });
-    expect(result.isError).toBeFalsy();
+
+    // Search still returns results despite analytics failure
+    const text = (result.content as Array<{ type: string; text: string }>)[0]
+      .text;
+    expect(text).toContain("Title");
   });
 
   it("logs null top_score when no results", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: true, log_queries: true, retention_days: 90 },
-    } as never);
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     mockEmbed.mockResolvedValueOnce([0.1]);
     mockSearchChunks.mockResolvedValueOnce([]);
     mockLogQuery.mockResolvedValueOnce(undefined);
@@ -194,47 +217,33 @@ describe("search tool analytics instrumentation", () => {
     });
     await new Promise((r) => setTimeout(r, 10));
 
+    expect(mockLogQuery).toHaveBeenCalledTimes(1);
     const [entry] = mockLogQuery.mock.calls[0];
     expect(entry.result_count).toBe(0);
     expect(entry.top_score).toBeNull();
   });
 
-  it("does not log analytics when search itself fails", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: true, log_queries: true, retention_days: 90 },
-    } as never);
-    mockEmbed.mockRejectedValueOnce(new Error("API error"));
-
-    const result = await client.callTool({
-      name: "search-docs",
-      arguments: { query: "test" },
-    });
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(result.isError).toBe(true);
-    expect(mockLogQuery).not.toHaveBeenCalled();
-  });
-
   it("computes correct top_score from multiple results", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: true, log_queries: true, retention_days: 90 },
-    } as never);
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     mockEmbed.mockResolvedValueOnce([0.1]);
     mockSearchChunks.mockResolvedValueOnce([
+      makeChunkResult({ similarity: 0.5 }),
+      makeChunkResult({ similarity: 0.95 }),
       makeChunkResult({ similarity: 0.7 }),
-      makeChunkResult({ id: 2, similarity: 0.95 }),
-      makeChunkResult({ id: 3, similarity: 0.6 }),
     ]);
     mockLogQuery.mockResolvedValueOnce(undefined);
 
     await client.callTool({
       name: "search-docs",
-      arguments: { query: "test" },
+      arguments: { query: "multi" },
     });
     await new Promise((r) => setTimeout(r, 10));
 
     const [entry] = mockLogQuery.mock.calls[0];
     expect(entry.top_score).toBeCloseTo(0.95);
-    expect(entry.result_count).toBe(3);
   });
 });

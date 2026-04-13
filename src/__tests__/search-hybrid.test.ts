@@ -22,6 +22,7 @@ vi.mock("../db/analytics.js", () => ({
 }));
 vi.mock("../config.js", () => ({
   getServerConfig: vi.fn().mockReturnValue({}),
+  getAnalyticsConfig: vi.fn().mockReturnValue(undefined),
 }));
 
 import { registerSearchTool } from "../mcp/tools/search.js";

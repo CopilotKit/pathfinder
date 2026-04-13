@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import {
   ServerConfigSchema,
   type ServerConfig,
+  type AnalyticsConfig,
   isDiscordSourceConfig,
   isFileSourceConfig,
 } from "./types.js";
@@ -343,4 +344,14 @@ export function getServerConfig(): ServerConfig {
     cachedServerConfig = loadServerConfig();
   }
   return cachedServerConfig;
+}
+
+/**
+ * Safe accessor for analytics config — works around z.infer losing the
+ * optional `analytics` property through superRefine's discriminated union.
+ */
+export function getAnalyticsConfig(): AnalyticsConfig | undefined {
+  return (getServerConfig() as Record<string, unknown>).analytics as
+    | AnalyticsConfig
+    | undefined;
 }

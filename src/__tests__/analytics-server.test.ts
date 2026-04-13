@@ -1,13 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import express, { Request, Response, NextFunction } from "express";
+import express, { Request, Response } from "express";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-// ---------------------------------------------------------------------------
-// Mock all heavy dependencies so we can import from server.ts without
-// actually starting the full app or connecting to a database.
-// ---------------------------------------------------------------------------
 
 const mockGetAnalyticsSummary = vi.fn();
 const mockGetTopQueries = vi.fn();
@@ -21,6 +16,7 @@ vi.mock("../db/analytics.js", () => ({
 
 vi.mock("../config.js", () => ({
   getServerConfig: vi.fn(),
+  getAnalyticsConfig: vi.fn(),
   getConfig: vi.fn().mockReturnValue({
     port: 3001,
     databaseUrl: "pglite:///tmp/test",
@@ -42,10 +38,10 @@ vi.mock("../config.js", () => ({
   hasBashSemanticSearch: vi.fn().mockReturnValue(false),
 }));
 
-import { getServerConfig } from "../config.js";
+import { getAnalyticsConfig } from "../config.js";
 import { analyticsAuth } from "../server.js";
 
-const mockGetServerConfigFn = vi.mocked(getServerConfig);
+const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 
 // ---------------------------------------------------------------------------
 // Build a minimal Express app that mirrors the analytics routes from server.ts
@@ -60,8 +56,7 @@ function buildTestApp() {
 
   // Dashboard HTML route — mirrors server.ts /analytics
   app.get("/analytics", (_req: Request, res: Response) => {
-    const serverCfg = getServerConfig();
-    if (!serverCfg.analytics?.enabled) {
+    if (!getAnalyticsConfig()?.enabled) {
       res.status(404).json({ error: "Analytics not enabled" });
       return;
     }
@@ -174,12 +169,12 @@ describe("Analytics server routes (HTTP-level)", () => {
 
   describe("GET /analytics (dashboard HTML)", () => {
     it("returns HTML when analytics is enabled", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true, token: "test-token" },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "test-token",
+      });
 
       await startApp();
       const res = await request(server, "GET", "/analytics");
@@ -192,11 +187,7 @@ describe("Analytics server routes (HTTP-level)", () => {
     });
 
     it("returns 404 JSON when analytics is disabled", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue(undefined);
 
       await startApp();
       const res = await request(server, "GET", "/analytics");
@@ -207,12 +198,12 @@ describe("Analytics server routes (HTTP-level)", () => {
     });
 
     it("serves HTML without requiring a token (auth is client-side)", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true, token: "secret" },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
 
       await startApp();
       // No Authorization header — HTML page should still be served
@@ -227,12 +218,12 @@ describe("Analytics server routes (HTTP-level)", () => {
 
   describe("GET /api/analytics/summary (auth + data)", () => {
     it("returns 401 JSON without a token", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true, token: "secret" },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
 
       await startApp();
       const res = await request(server, "GET", "/api/analytics/summary");
@@ -243,12 +234,12 @@ describe("Analytics server routes (HTTP-level)", () => {
     });
 
     it("returns data with a valid token", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true, token: "secret" },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
       mockGetAnalyticsSummary.mockResolvedValue({
         total_queries: 42,
         queries_today: 5,
@@ -266,12 +257,12 @@ describe("Analytics server routes (HTTP-level)", () => {
     });
 
     it("returns 403 with an invalid token", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true, token: "secret" },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
 
       await startApp();
       const res = await request(server, "GET", "/api/analytics/summary", {
@@ -284,11 +275,7 @@ describe("Analytics server routes (HTTP-level)", () => {
     });
 
     it("returns 404 when analytics is disabled", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue(undefined);
 
       await startApp();
       const res = await request(server, "GET", "/api/analytics/summary", {
@@ -305,12 +292,11 @@ describe("Analytics server routes (HTTP-level)", () => {
 
   describe("auto-generated token (HTTP-level)", () => {
     it("auto-generated token works for API requests when no token configured", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+      });
       mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
 
       await startApp();
@@ -343,12 +329,12 @@ describe("Analytics server routes (HTTP-level)", () => {
 
   describe("GET /api/analytics/queries (parameter parsing)", () => {
     it("passes days and limit query params to the handler", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true, token: "tok" },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
       mockGetTopQueries.mockResolvedValue([]);
 
       await startApp();
@@ -360,12 +346,12 @@ describe("Analytics server routes (HTTP-level)", () => {
     });
 
     it("defaults days to 7 and limit to 50 when not provided", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true, token: "tok" },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
       mockGetTopQueries.mockResolvedValue([]);
 
       await startApp();
@@ -377,12 +363,12 @@ describe("Analytics server routes (HTTP-level)", () => {
     });
 
     it("caps limit at 200", async () => {
-      mockGetServerConfigFn.mockReturnValue({
-        analytics: { enabled: true, token: "tok" },
-        server: { name: "test" },
-        sources: [],
-        tools: [],
-      } as never);
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
       mockGetTopQueries.mockResolvedValue([]);
 
       await startApp();

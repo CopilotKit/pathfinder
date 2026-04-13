@@ -21,17 +21,18 @@ vi.mock("../db/analytics.js", () => ({
 }));
 vi.mock("../config.js", () => ({
   getServerConfig: vi.fn(),
+  getAnalyticsConfig: vi.fn(),
 }));
 
 import { registerKnowledgeTool } from "../mcp/tools/knowledge.js";
 import { getFaqChunks, searchChunks } from "../db/queries.js";
 import { logQuery } from "../db/analytics.js";
-import { getServerConfig } from "../config.js";
+import { getAnalyticsConfig } from "../config.js";
 
 const mockGetFaqChunks = vi.mocked(getFaqChunks);
 const mockSearchChunks = vi.mocked(searchChunks);
 const mockLogQuery = vi.mocked(logQuery);
-const mockGetServerConfig = vi.mocked(getServerConfig);
+const mockGetAnalyticsConfig = vi.mocked(getAnalyticsConfig);
 const mockEmbed = vi.fn();
 
 const toolConfig: KnowledgeToolConfig = {
@@ -71,9 +72,11 @@ describe("knowledge tool analytics instrumentation", () => {
   });
 
   it("logs browse-mode query when analytics enabled", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: true, log_queries: true, retention_days: 90 },
-    } as never);
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     mockGetFaqChunks.mockResolvedValueOnce([]);
     mockLogQuery.mockResolvedValueOnce(undefined);
 
@@ -87,9 +90,11 @@ describe("knowledge tool analytics instrumentation", () => {
   });
 
   it("logs search-mode query with actual query text", async () => {
-    mockGetServerConfig.mockReturnValue({
-      analytics: { enabled: true, log_queries: true, retention_days: 90 },
-    } as never);
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     mockEmbed.mockResolvedValueOnce([0.1]);
     mockSearchChunks.mockResolvedValueOnce([]);
     mockGetFaqChunks.mockResolvedValueOnce([]);
@@ -106,13 +111,16 @@ describe("knowledge tool analytics instrumentation", () => {
     expect(entry.query_text).toBe("how to deploy");
   });
 
-  it("does not log when analytics disabled", async () => {
-    mockGetServerConfig.mockReturnValue({} as never);
+  it("always logs even when analytics config is absent (logging is unconditional)", async () => {
+    mockGetAnalyticsConfig.mockReturnValue(undefined);
     mockGetFaqChunks.mockResolvedValueOnce([]);
+    mockLogQuery.mockResolvedValueOnce(undefined);
 
     await client.callTool({ name: "faq", arguments: {} });
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(mockLogQuery).not.toHaveBeenCalled();
+    expect(mockLogQuery).toHaveBeenCalledTimes(1);
+    const [, logText] = mockLogQuery.mock.calls[0];
+    expect(logText).toBe(true);
   });
 });

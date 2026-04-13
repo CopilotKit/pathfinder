@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   getConfig,
   getServerConfig,
+  getAnalyticsConfig,
   getIndexableSourceNames,
 } from "../config.js";
 import { createEmbeddingProvider } from "./embeddings.js";
@@ -301,24 +302,21 @@ export class IndexingOrchestrator {
           console.log("[orchestrator] Starting nightly reindex");
           this.queueFullReindex();
 
-          // Analytics cleanup — run at the same hour as reindex, once per day
-          const analyticsConfig = getServerConfig().analytics;
-          if (analyticsConfig?.enabled) {
-            const retentionDays = analyticsConfig.retention_days ?? 90;
-            cleanupOldQueryLogs(retentionDays)
-              .then((deleted) => {
-                if (deleted > 0) {
-                  console.log(
-                    `[analytics] Cleaned up ${deleted} query_log rows older than ${retentionDays} days`,
-                  );
-                }
-              })
-              .catch((err) => {
-                console.error(
-                  `[analytics] Cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+          // Analytics cleanup — always runs since logging is always on
+          const retentionDays = getAnalyticsConfig()?.retention_days ?? 90;
+          cleanupOldQueryLogs(retentionDays)
+            .then((deleted) => {
+              if (deleted > 0) {
+                console.log(
+                  `[analytics] Cleaned up ${deleted} query_log rows older than ${retentionDays} days`,
                 );
-              });
-          }
+              }
+            })
+            .catch((err) => {
+              console.error(
+                `[analytics] Cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
         }
       }
     }, 60_000);

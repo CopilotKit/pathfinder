@@ -8,7 +8,7 @@ import type {
 } from "../../types.js";
 import { getFaqChunks, searchChunks } from "../../db/queries.js";
 import { logQuery } from "../../db/analytics.js";
-import { getServerConfig } from "../../config.js";
+import { getAnalyticsConfig } from "../../config.js";
 
 /**
  * Format FAQ results in the standard QUESTION/ANSWER/SOURCE/CONFIDENCE format.
@@ -90,25 +90,23 @@ export function registerKnowledgeTool(
           );
 
           // Fire-and-forget analytics logging
-          const analyticsConfig = getServerConfig().analytics;
-          if (analyticsConfig?.enabled) {
-            logQuery(
-              {
-                tool_name: toolConfig.name,
-                query_text: "<browse>",
-                result_count: chunks.length,
-                top_score: null,
-                latency_ms: Date.now() - startMs,
-                source_name: toolConfig.sources.join(","),
-                session_id: null,
-              },
-              analyticsConfig.log_queries,
-            ).catch((err) => {
-              console.error(
-                `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            });
-          }
+          const analyticsConfig = getAnalyticsConfig();
+          logQuery(
+            {
+              tool_name: toolConfig.name,
+              query_text: "<browse>",
+              result_count: chunks.length,
+              top_score: null,
+              latency_ms: Date.now() - startMs,
+              source_name: toolConfig.sources.join(","),
+              session_id: null,
+            },
+            analyticsConfig?.log_queries ?? true,
+          ).catch((err) => {
+            console.error(
+              `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
 
           return {
             content: [
@@ -156,29 +154,27 @@ export function registerKnowledgeTool(
           }
 
           // Fire-and-forget analytics logging
-          const analyticsConfig = getServerConfig().analytics;
-          if (analyticsConfig?.enabled) {
-            const topScore =
-              mergedResults.length > 0
-                ? Math.max(...mergedResults.map((r) => r.similarity))
-                : null;
-            logQuery(
-              {
-                tool_name: toolConfig.name,
-                query_text: query,
-                result_count: mergedResults.length,
-                top_score: topScore,
-                latency_ms: Date.now() - startMs,
-                source_name: toolConfig.sources.join(","),
-                session_id: null,
-              },
-              analyticsConfig.log_queries,
-            ).catch((err) => {
-              console.error(
-                `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            });
-          }
+          const analyticsConfig = getAnalyticsConfig();
+          const topScore =
+            mergedResults.length > 0
+              ? Math.max(...mergedResults.map((r) => r.similarity))
+              : null;
+          logQuery(
+            {
+              tool_name: toolConfig.name,
+              query_text: query,
+              result_count: mergedResults.length,
+              top_score: topScore,
+              latency_ms: Date.now() - startMs,
+              source_name: toolConfig.sources.join(","),
+              session_id: null,
+            },
+            analyticsConfig?.log_queries ?? true,
+          ).catch((err) => {
+            console.error(
+              `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
 
           return {
             content: [

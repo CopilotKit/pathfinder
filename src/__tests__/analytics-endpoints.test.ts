@@ -13,9 +13,10 @@ vi.mock("../db/analytics.js", () => ({
   getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
 }));
 
-// Mock getServerConfig to control analytics config in tests
+// Mock config — analyticsAuth now uses getAnalyticsConfig
 vi.mock("../config.js", () => ({
   getServerConfig: vi.fn(),
+  getAnalyticsConfig: vi.fn(),
   getConfig: vi.fn().mockReturnValue({
     port: 3001,
     databaseUrl: "pglite:///tmp/test",
@@ -37,10 +38,10 @@ vi.mock("../config.js", () => ({
   hasBashSemanticSearch: vi.fn().mockReturnValue(false),
 }));
 
-import { getServerConfig } from "../config.js";
+import { getAnalyticsConfig } from "../config.js";
 import { analyticsAuth } from "../server.js";
 
-const mockGetServerConfigFn = vi.mocked(getServerConfig);
+const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 
 function mockRes() {
   const json = vi.fn();
@@ -59,7 +60,7 @@ describe("analyticsAuth middleware", () => {
   });
 
   it("returns 404 when analytics not enabled", () => {
-    mockGetServerConfigFn.mockReturnValue({} as never);
+    mockGetAnalyticsConfigFn.mockReturnValue(undefined);
     const res = mockRes();
     const next = vi.fn();
 
@@ -70,9 +71,11 @@ describe("analyticsAuth middleware", () => {
   });
 
   it("auto-generates token and requires auth when enabled with no token", () => {
-    mockGetServerConfigFn.mockReturnValue({
-      analytics: { enabled: true },
-    } as never);
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     const res = mockRes();
     const next = vi.fn();
 
@@ -114,13 +117,11 @@ describe("analyticsAuth middleware", () => {
   });
 
   it("auto-generated token is stable across multiple calls (not regenerated)", () => {
-    // NOTE: The auto-generated token is a module-level variable that persists
-    // across tests within the same file. The previous test already triggered
-    // generation, so here we verify stability: calling analyticsAuth again
-    // should NOT log a new token, and the token from the previous test still works.
-    mockGetServerConfigFn.mockReturnValue({
-      analytics: { enabled: true },
-    } as never);
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
 
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -139,7 +140,6 @@ describe("analyticsAuth middleware", () => {
     expect(tokenLog).toBeUndefined();
 
     // Now verify that three consecutive 401 responses all reject the same way
-    // (the token hasn't changed between calls)
     const res2 = mockRes();
     analyticsAuth({ headers: {} } as never, res2 as never, vi.fn());
     expect(res2.status).toHaveBeenCalledWith(401);
@@ -161,9 +161,12 @@ describe("analyticsAuth middleware", () => {
   });
 
   it("returns 401 when token required but no auth header", () => {
-    mockGetServerConfigFn.mockReturnValue({
-      analytics: { enabled: true, token: "secret" },
-    } as never);
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
     const res = mockRes();
     const next = vi.fn();
 
@@ -174,9 +177,12 @@ describe("analyticsAuth middleware", () => {
   });
 
   it("returns 403 when token does not match", () => {
-    mockGetServerConfigFn.mockReturnValue({
-      analytics: { enabled: true, token: "secret" },
-    } as never);
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
     const res = mockRes();
     const next = vi.fn();
 
@@ -191,9 +197,12 @@ describe("analyticsAuth middleware", () => {
   });
 
   it("calls next when token matches", () => {
-    mockGetServerConfigFn.mockReturnValue({
-      analytics: { enabled: true, token: "secret" },
-    } as never);
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
     const res = mockRes();
     const next = vi.fn();
 
@@ -207,9 +216,12 @@ describe("analyticsAuth middleware", () => {
   });
 
   it("returns 401 for malformed auth header (no space after Bearer)", () => {
-    mockGetServerConfigFn.mockReturnValue({
-      analytics: { enabled: true, token: "secret" },
-    } as never);
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
     const res = mockRes();
     const next = vi.fn();
 
@@ -225,9 +237,11 @@ describe("analyticsAuth middleware", () => {
 
   it("uses ANALYTICS_TOKEN env var as fallback when config has no token", () => {
     process.env.ANALYTICS_TOKEN = "env-secret";
-    mockGetServerConfigFn.mockReturnValue({
-      analytics: { enabled: true },
-    } as never);
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     const res = mockRes();
     const next = vi.fn();
 
@@ -242,9 +256,11 @@ describe("analyticsAuth middleware", () => {
 
   it("rejects when ANALYTICS_TOKEN env var is set but wrong token provided", () => {
     process.env.ANALYTICS_TOKEN = "env-secret";
-    mockGetServerConfigFn.mockReturnValue({
-      analytics: { enabled: true },
-    } as never);
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
     const res = mockRes();
     const next = vi.fn();
 

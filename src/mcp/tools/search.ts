@@ -8,7 +8,7 @@ import {
   hybridSearchChunks,
 } from "../../db/queries.js";
 import { logQuery } from "../../db/analytics.js";
-import { getServerConfig } from "../../config.js";
+import { getAnalyticsConfig } from "../../config.js";
 
 function formatDocsResults(results: ChunkResult[]): string {
   if (results.length === 0) return "No results found.";
@@ -149,31 +149,29 @@ export function registerSearchTool(
           }
         }
 
-        // Fire-and-forget analytics logging
-        const analyticsConfig = getServerConfig().analytics;
-        if (analyticsConfig?.enabled) {
-          const latencyMs = Date.now() - startMs;
-          const topScore =
-            results.length > 0
-              ? Math.max(...results.map((r) => r.similarity))
-              : null;
-          logQuery(
-            {
-              tool_name: toolConfig.name,
-              query_text: query,
-              result_count: results.length,
-              top_score: topScore,
-              latency_ms: latencyMs,
-              source_name: toolConfig.source,
-              session_id: null,
-            },
-            analyticsConfig.log_queries,
-          ).catch((err) => {
-            console.error(
-              `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          });
-        }
+        // Fire-and-forget analytics logging (always captures, regardless of analytics.enabled)
+        const logQueries = getAnalyticsConfig()?.log_queries ?? true;
+        const latencyMs = Date.now() - startMs;
+        const topScore =
+          results.length > 0
+            ? Math.max(...results.map((r) => r.similarity))
+            : null;
+        logQuery(
+          {
+            tool_name: toolConfig.name,
+            query_text: query,
+            result_count: results.length,
+            top_score: topScore,
+            latency_ms: latencyMs,
+            source_name: toolConfig.source,
+            session_id: null,
+          },
+          logQueries,
+        ).catch((err) => {
+          console.error(
+            `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
 
         return {
           content: [

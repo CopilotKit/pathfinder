@@ -25,6 +25,7 @@ vi.mock("../db/analytics.js", () => ({
 }));
 vi.mock("../config.js", () => ({
   getServerConfig: vi.fn().mockReturnValue({}),
+  getAnalyticsConfig: vi.fn().mockReturnValue(undefined),
 }));
 
 import { registerKnowledgeTool } from "../mcp/tools/knowledge.js";
