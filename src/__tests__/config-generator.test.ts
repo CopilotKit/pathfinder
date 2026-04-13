@@ -192,7 +192,7 @@ describe('generateConfig edge cases', () => {
         expect(config.sources[0].repo).toContain('gitlab.com');
     });
 
-    it('wires detected content_selector into source config', () => {
+    it('does not include content_selector in config (emitted as YAML comment instead)', () => {
         const crawlResult: CrawlResult = {
             pages: [
                 { url: 'https://docs.example.com/page', html: '<html><body><main><h1>Title</h1><p>Content</p></main></body></html>', contentType: 'text/html', textLength: 200 },
@@ -204,8 +204,25 @@ describe('generateConfig edge cases', () => {
         };
 
         const config = generateConfig(crawlResult, 'https://docs.example.com');
-        // Fix I2: detectContentSelector should find <main> and include it
-        expect((config.sources[0] as any).content_selector).toBe('main');
+        // content_selector must NOT be in the config object (would fail Zod validation)
+        expect((config.sources[0] as any).content_selector).toBeUndefined();
+    });
+
+    it('emits content_selector as YAML comment when detected', async () => {
+        const { generateConfigYaml } = await import('../config-generator.js');
+
+        const crawlResult: CrawlResult = {
+            pages: [
+                { url: 'https://docs.example.com/page', html: '<html><body><main><h1>Title</h1><p>Content</p></main></body></html>', contentType: 'text/html', textLength: 200 },
+            ],
+            discoveryMethod: 'sitemap',
+            baseUrl: 'https://docs.example.com',
+            warnings: [],
+            failedUrls: [],
+        };
+
+        const yaml = generateConfigYaml(crawlResult, 'https://docs.example.com');
+        expect(yaml).toContain('# content_selector: "main"');
     });
 });
 

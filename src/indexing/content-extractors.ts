@@ -64,7 +64,7 @@ async function extractPdf(filePath: string): Promise<ExtractionResult> {
   const result = await pdfParse(buffer);
 
   // Warn about likely scanned PDFs (very little text for multi-page docs)
-  if (result.numpages > 1 && result.text.trim().length < 50) {
+  if (result.numpages >= 1 && result.text.trim().length < 50) {
     console.warn(
       `[content-extractor] ${filePath}: PDF has ${result.numpages} pages but produced very little text ` +
         `(${result.text.trim().length} chars). This may be a scanned document without a text layer.`,
@@ -107,5 +107,13 @@ async function extractDocx(filePath: string): Promise<ExtractionResult> {
   }
 
   const result = await mammoth.extractRawText({ path: filePath });
+
+  if (result.messages && result.messages.length > 0) {
+    console.warn(
+      `[content-extractor] ${filePath}: mammoth reported ${result.messages.length} warning(s):`,
+      result.messages,
+    );
+  }
+
   return { content: result.value };
 }

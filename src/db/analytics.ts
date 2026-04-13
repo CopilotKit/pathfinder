@@ -113,6 +113,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
             SELECT source_name, count(*)::int AS count
             FROM query_log
             WHERE source_name IS NOT NULL
+              AND created_at > NOW() - INTERVAL '7 days'
             GROUP BY source_name
             ORDER BY count DESC
         `),

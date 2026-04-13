@@ -32,7 +32,6 @@ interface GeneratedSource {
     file_patterns: string[];
     base_url: string;
     repo?: string;
-    content_selector?: string;
     chunk: {
         target_tokens: number;
         overlap_tokens: number;
@@ -197,11 +196,6 @@ export function generateConfig(crawlResult: CrawlResult, inputUrl: string): Gene
     const gitRepo = detectGitRepo(inputUrl);
     const hostname = new URL(inputUrl).hostname;
 
-    // Fix I2: detect content selector and wire into source config
-    const contentSelector = crawlResult.pages.length > 0
-        ? detectContentSelector(crawlResult.pages[0].html)
-        : null;
-
     const source: GeneratedSource = {
         name: 'docs',
         type: sourceType,
@@ -216,10 +210,6 @@ export function generateConfig(crawlResult: CrawlResult, inputUrl: string): Gene
 
     if (gitRepo) {
         source.repo = gitRepo.repoUrl;
-    }
-
-    if (contentSelector) {
-        source.content_selector = contentSelector;
     }
 
     const tool: GeneratedTool = {
@@ -258,6 +248,11 @@ export function generateConfig(crawlResult: CrawlResult, inputUrl: string): Gene
 export function generateConfigYaml(crawlResult: CrawlResult, inputUrl: string): string {
     const config = generateConfig(crawlResult, inputUrl);
 
+    // Detect content selector from crawled pages (not stored in config to avoid Zod validation failure)
+    const contentSelector = crawlResult.pages.length > 0
+        ? detectContentSelector(crawlResult.pages[0].html)
+        : null;
+
     const header = [
         '# Pathfinder configuration — auto-generated from ' + inputUrl,
         '# Review and customize before running: pathfinder serve',
@@ -265,9 +260,19 @@ export function generateConfigYaml(crawlResult: CrawlResult, inputUrl: string): 
         '',
     ].join('\n');
 
-    return header + stringifyYaml(config, {
+    let yaml = header + stringifyYaml(config, {
         lineWidth: 120,
         defaultStringType: 'QUOTE_DOUBLE',
         defaultKeyType: 'PLAIN',
     });
+
+    // Append content_selector as a comment after the source block if detected
+    if (contentSelector) {
+        yaml = yaml.replace(
+            /^( +)base_url:/m,
+            `$1# content_selector: "${contentSelector}" — detected from crawled pages\n$1base_url:`,
+        );
+    }
+
+    return yaml;
 }

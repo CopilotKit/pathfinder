@@ -3,7 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import { crawlSite, type CrawlOptions } from './crawl.js';
-import { generateConfigYaml } from './config-generator.js';
+import { generateConfigYaml, detectSourceType } from './config-generator.js';
 
 /**
  * Validate that the input URL is a valid HTTP(S) URL.
@@ -97,8 +97,9 @@ export async function initFromUrl(options: {
     const yamlContent = generateConfigYaml(result, url);
     writeGeneratedConfig(targetDir, yamlContent, force);
 
+    const sourceType = result.pages.length > 0 ? detectSourceType(result.pages) : 'unknown';
     console.log(`\nGenerated pathfinder.yaml`);
-    console.log(`  Source type: ${result.pages.length > 0 ? 'html' : 'unknown'}`);
+    console.log(`  Source type: ${sourceType}`);
     console.log(`  Pages cached: ${result.pages.length} in ${cacheDir}`);
     console.log(`\nNext steps:`);
     console.log(`  1. Review pathfinder.yaml and adjust if needed`);
