@@ -173,6 +173,9 @@ indexing:
   reindex_hour_utc: 3
   stale_threshold_hours: 24
 
+analytics:
+  enabled: true
+
 webhook:
   repo_sources:
     "CopilotKit/CopilotKit":
