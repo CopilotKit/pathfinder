@@ -416,7 +416,22 @@ server {
     </table>
 
     <h3 id="optional-dependencies">Optional dependencies</h3>
-    <p>For <code>document</code> source type (PDF/DOCX), install optional peer dependencies: <code>npm install pdf-parse mammoth</code></p>
+    <p>Some features require extra packages that are not bundled by default. Install only the ones your config needs:</p>
+    <table class="env-table">
+        <thead>
+            <tr>
+                <th>Package</th>
+                <th>When required</th>
+                <th>Install</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>pdf-parse</code></td><td>Any source has <code>type: document</code> with <code>*.pdf</code> file patterns</td><td><code>npm install pdf-parse</code></td></tr>
+            <tr><td><code>mammoth</code></td><td>Any source has <code>type: document</code> with <code>*.docx</code> file patterns</td><td><code>npm install mammoth</code></td></tr>
+            <tr><td><code>@xenova/transformers</code></td><td><code>embedding.provider</code> is <code>local</code></td><td><code>npm install @xenova/transformers</code></td></tr>
+        </tbody>
+    </table>
+    <p>Run <code>pathfinder validate</code> to detect missing optional dependencies and get install instructions.</p>
 
     <h3 id="health-endpoint">Health endpoint</h3>
     <p>Pathfinder exposes <code>GET /health</code> for monitoring. It returns JSON with uptime, indexing status, chunk counts per source, and index state (last indexed time, commit SHA, errors). Use it for load balancer health checks and deployment verification.</p>

@@ -467,6 +467,121 @@ describe("validateConfig", () => {
     expect(openaiEnv?.required).toBe(true);
   });
 
+  // ── Optional dependency checks ──────────────────────────────────────────
+
+  describe("optional dependency checks", () => {
+    it("reports missing pdf-parse for PDF document sources", async () => {
+      (getServerConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        server: { name: "test", version: "1.0" },
+        sources: [
+          {
+            name: "pdf-docs",
+            type: "document",
+            path: "./docs",
+            file_patterns: ["**/*.pdf"],
+            chunk: {},
+          },
+        ],
+        tools: [
+          {
+            name: "c",
+            type: "collect",
+            description: "collect",
+            response: "Collected",
+            schema: { field1: { type: "string" } },
+          },
+        ],
+      });
+
+      const result = await validateConfig();
+      expect(
+        result.errors.some(
+          (e) =>
+            e.includes("Missing optional dependency: pdf-parse") &&
+            e.includes("npm install pdf-parse"),
+        ),
+      ).toBe(true);
+    });
+
+    it("reports missing mammoth for DOCX document sources", async () => {
+      (getServerConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        server: { name: "test", version: "1.0" },
+        sources: [
+          {
+            name: "docx-docs",
+            type: "document",
+            path: "./docs",
+            file_patterns: ["**/*.docx"],
+            chunk: {},
+          },
+        ],
+        tools: [
+          {
+            name: "c",
+            type: "collect",
+            description: "collect",
+            response: "Collected",
+            schema: { field1: { type: "string" } },
+          },
+        ],
+      });
+
+      const result = await validateConfig();
+      expect(
+        result.errors.some(
+          (e) =>
+            e.includes("Missing optional dependency: mammoth") &&
+            e.includes("npm install mammoth"),
+        ),
+      ).toBe(true);
+    });
+
+    it("reports missing @xenova/transformers for local embedding provider", async () => {
+      (getServerConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        server: { name: "test", version: "1.0" },
+        sources: [
+          {
+            name: "docs",
+            type: "markdown",
+            path: "./docs",
+            file_patterns: ["**/*.md"],
+            chunk: {},
+          },
+        ],
+        tools: [
+          {
+            name: "c",
+            type: "collect",
+            description: "collect",
+            response: "Collected",
+            schema: { field1: { type: "string" } },
+          },
+        ],
+        embedding: {
+          provider: "local",
+          model: "Xenova/all-MiniLM-L6-v2",
+          dimensions: 384,
+        },
+      });
+
+      const result = await validateConfig();
+      expect(
+        result.errors.some(
+          (e) =>
+            e.includes("Missing optional dependency: @xenova/transformers") &&
+            e.includes("npm install @xenova/transformers"),
+        ),
+      ).toBe(true);
+    });
+
+    it("does not report optional dep errors when no document sources or local embeddings", async () => {
+      const result = await validateConfig();
+      expect(
+        result.errors.some((e) => e.includes("Missing optional dependency")),
+      ).toBe(false);
+    });
+  });
+
   // ── Source validation ────────────────────────────────────────────────────
 
   describe("source validation", () => {
@@ -944,6 +1059,52 @@ describe("formatValidationResult", () => {
     expect(output).toContain("- Error one");
     expect(output).toContain("- Error two");
     expect(output).toContain("- Error three");
+  });
+
+  it("formats optional dependency warnings separately from hard errors", () => {
+    const result: ValidationResult = {
+      configValid: true,
+      envVars: [],
+      sources: [],
+      tools: [],
+      errors: [
+        "Missing optional dependency: pdf-parse — Required for PDF document sources. Install: npm install pdf-parse",
+        "Missing required environment variable: DATABASE_URL",
+      ],
+    };
+
+    const output = formatValidationResult(result);
+    expect(output).toContain("Optional Dependencies:");
+    expect(output).toContain("pdf-parse");
+    expect(output).toContain("2 error(s) found");
+    expect(output).toContain(
+      "- Missing required environment variable: DATABASE_URL",
+    );
+    // The optional dep error should appear in the Optional Dependencies section, not in the error list
+    const lines = output.split("\n");
+    const errorListLines = lines.filter(
+      (l) => l.startsWith("  - ") && l.includes("Missing required"),
+    );
+    expect(errorListLines).toHaveLength(1);
+  });
+
+  it("formats result with only optional dep warnings as no hard errors", () => {
+    const result: ValidationResult = {
+      configValid: true,
+      envVars: [],
+      sources: [],
+      tools: [],
+      errors: [
+        "Missing optional dependency: mammoth — Required for DOCX document sources. Install: npm install mammoth",
+      ],
+    };
+
+    const output = formatValidationResult(result);
+    expect(output).toContain("Optional Dependencies:");
+    expect(output).toContain(
+      "1 optional dependency warning(s), no hard errors",
+    );
+    expect(output).not.toContain("error(s) found");
   });
 
   it("includes section headers", () => {

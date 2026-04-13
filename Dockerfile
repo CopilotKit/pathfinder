@@ -21,6 +21,9 @@ RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
+# Optional: install these if your config uses document sources or local embeddings
+# RUN npm install pdf-parse mammoth        # For type: document (PDF/DOCX)
+# RUN npm install @xenova/transformers     # For embedding.provider: local
 COPY --from=build /app/dist/ ./dist/
 COPY deploy/copilotkit-docs.yaml ./copilotkit-docs.yaml
 COPY deploy/pathfinder-docs.yaml ./pathfinder-docs.yaml

@@ -133,6 +133,80 @@ export async function validateConfig(
     }
   }
 
+  // Step 5: Optional dependency checks
+  const optionalDepChecks: Array<{
+    name: string;
+    pkg: string;
+    condition: boolean;
+    message: string;
+  }> = [];
+
+  // Check if any source uses type: document
+  const hasDocumentSource = serverCfg.sources.some(
+    (s) => s.type === "document",
+  );
+  if (hasDocumentSource) {
+    // Check for pdf-parse
+    const hasPdfSources = serverCfg.sources.some(
+      (s) =>
+        s.type === "document" &&
+        "file_patterns" in s &&
+        (s.file_patterns as string[]).some((p) => p.includes(".pdf")),
+    );
+    if (hasPdfSources) {
+      try {
+        await import("pdf-parse");
+      } catch {
+        optionalDepChecks.push({
+          name: "pdf-parse",
+          pkg: "pdf-parse",
+          condition: true,
+          message: "Required for PDF document sources",
+        });
+      }
+    }
+    // Check for mammoth
+    const hasDocxSources = serverCfg.sources.some(
+      (s) =>
+        s.type === "document" &&
+        "file_patterns" in s &&
+        (s.file_patterns as string[]).some((p) => p.includes(".docx")),
+    );
+    if (hasDocxSources) {
+      try {
+        await import("mammoth");
+      } catch {
+        optionalDepChecks.push({
+          name: "mammoth",
+          pkg: "mammoth",
+          condition: true,
+          message: "Required for DOCX document sources",
+        });
+      }
+    }
+  }
+
+  // Check for @xenova/transformers when using local embeddings
+  if (serverCfg.embedding?.provider === "local") {
+    try {
+      await import("@xenova/transformers");
+    } catch {
+      optionalDepChecks.push({
+        name: "@xenova/transformers",
+        pkg: "@xenova/transformers",
+        condition: true,
+        message: "Required for local embedding provider",
+      });
+    }
+  }
+
+  // Add to result
+  for (const check of optionalDepChecks) {
+    result.errors.push(
+      `Missing optional dependency: ${check.name} — ${check.message}. Install: npm install ${check.pkg}`,
+    );
+  }
+
   // Step 4: Tool cross-validation
   const sourceNames = new Set(serverCfg.sources.map((s) => s.name));
 
@@ -303,12 +377,32 @@ export function formatValidationResult(result: ValidationResult): string {
   }
   lines.push("");
 
+  // Separate optional dep warnings from hard errors for display
+  const optDepErrors = result.errors.filter((e) =>
+    e.startsWith("Missing optional dependency:"),
+  );
+  const otherErrors = result.errors.filter(
+    (e) => !e.startsWith("Missing optional dependency:"),
+  );
+
+  if (optDepErrors.length > 0) {
+    lines.push("Optional Dependencies:");
+    for (const err of optDepErrors) {
+      lines.push(`  - ${err}`);
+    }
+    lines.push("");
+  }
+
   const errorCount = result.errors.length;
   if (errorCount === 0) {
     lines.push(`Result: All validations passed.`);
+  } else if (otherErrors.length === 0) {
+    lines.push(
+      `Result: ${optDepErrors.length} optional dependency warning(s), no hard errors.`,
+    );
   } else {
     lines.push(`Result: ${errorCount} error(s) found.`);
-    for (const err of result.errors) {
+    for (const err of otherErrors) {
       lines.push(`  - ${err}`);
     }
   }
