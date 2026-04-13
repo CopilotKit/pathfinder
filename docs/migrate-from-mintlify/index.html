@@ -444,8 +444,8 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <p>You run the infrastructure. Docker Compose makes this straightforward, but there's no managed cloud offering (yet). You need PostgreSQL and optionally an OpenAI API key.</p>
     </div>
     <div class="gap-card">
-        <h4>No analytics dashboard</h4>
-        <p>Telemetry data (file access patterns, grep misses) goes to the database but there's no built-in visualization. Query it directly or build your own dashboard.</p>
+        <h4>Analytics dashboard included</h4>
+        <p>Pathfinder includes a built-in analytics dashboard at <code>/analytics</code> with query logging, top queries, empty result tracking, and latency metrics. Enable it with <code>analytics.enabled: true</code> in your config.</p>
     </div>
 
     <a href="/" class="back-link">&larr; Back to Pathfinder</a>

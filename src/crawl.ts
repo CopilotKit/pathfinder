@@ -308,10 +308,16 @@ export async function crawlSite(url: string, options: CrawlOptions = {}): Promis
     const warnings: string[] = [];
     const visited = new Set<string>();
 
+    // Helper to normalize URLs for consistent dedup (strip trailing slash)
+    function normalizeUrl(u: string): string {
+        return u.replace(/\/$/, '');
+    }
+
     // Helper to fetch and store a page
     async function fetchPage(pageUrl: string): Promise<CrawledPage | null> {
-        if (visited.has(pageUrl) || pages.length >= maxPages) return null;
-        visited.add(pageUrl);
+        const normalized = normalizeUrl(pageUrl);
+        if (visited.has(normalized) || pages.length >= maxPages) return null;
+        visited.add(normalized);
 
         // Check cache first
         if (cacheDir) {
@@ -350,11 +356,23 @@ export async function crawlSite(url: string, options: CrawlOptions = {}): Promis
         return { url: pageUrl, html: result.body, contentType: result.contentType, textLength };
     }
 
+    // Fetch robots.txt early so sitemap-discovered URLs can be filtered
+    const robotsResult = await rateLimitedFetch(`${baseUrl}/robots.txt`, rateLimit, maxRetries, lastFetchTime);
+    let robotsTxt = '';
+    if (robotsResult.ok) {
+        robotsTxt = robotsResult.body;
+    }
+
     // Helper to fetch pages from a list of URLs discovered via sitemap
     async function fetchSitemapPages(allPageUrls: string[]): Promise<void> {
         const urlsToFetch = allPageUrls.slice(0, maxPages);
         for (const pageUrl of urlsToFetch) {
             if (pages.length >= maxPages) break;
+            // Enforce robots.txt on sitemap-discovered URLs
+            if (robotsTxt) {
+                const pathname = new URL(pageUrl).pathname;
+                if (!respectsRobotsTxt(robotsTxt, pathname)) continue;
+            }
             const page = await fetchPage(pageUrl);
             if (page) pages.push(page);
         }
@@ -424,11 +442,9 @@ export async function crawlSite(url: string, options: CrawlOptions = {}): Promis
     }
 
     // ── Strategy 2: Try robots.txt for Sitemap: directives ──────────────────
+    // (robots.txt already fetched above for filtering)
 
-    const robotsResult = await rateLimitedFetch(`${baseUrl}/robots.txt`, rateLimit, maxRetries, lastFetchTime);
-    let robotsTxt = '';
     if (robotsResult.ok) {
-        robotsTxt = robotsResult.body;
         const sitemapUrls = extractSitemapsFromRobotsTxt(robotsTxt);
 
         if (sitemapUrls.length > 0) {
@@ -469,11 +485,11 @@ export async function crawlSite(url: string, options: CrawlOptions = {}): Promis
     // ── Strategy 3: Recursive link crawling ─────────────────────────────────
 
     // BFS crawl from the root URL
-    const queue: { url: string; depth: number }[] = [{ url, depth: 0 }];
+    const queue: { url: string; depth: number }[] = [{ url: normalizeUrl(url), depth: 0 }];
 
     while (queue.length > 0 && pages.length < maxPages) {
         const current = queue.shift()!;
-        if (visited.has(current.url)) continue;
+        if (visited.has(normalizeUrl(current.url))) continue;
 
         // Check robots.txt disallow rules
         const pathname = new URL(current.url).pathname;
@@ -489,8 +505,8 @@ export async function crawlSite(url: string, options: CrawlOptions = {}): Promis
         if (current.depth < maxDepth) {
             const links = extractLinks(page.html, current.url);
             for (const link of links) {
-                if (!visited.has(link)) {
-                    queue.push({ url: link, depth: current.depth + 1 });
+                if (!visited.has(normalizeUrl(link))) {
+                    queue.push({ url: normalizeUrl(link), depth: current.depth + 1 });
                 }
             }
         }

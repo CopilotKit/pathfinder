@@ -7,6 +7,8 @@ import {
   textSearchChunks,
   hybridSearchChunks,
 } from "../../db/queries.js";
+import { logQuery } from "../../db/analytics.js";
+import { getServerConfig } from "../../config.js";
 
 function formatDocsResults(results: ChunkResult[]): string {
   if (results.length === 0) return "No results found.";
@@ -100,6 +102,7 @@ export function registerSearchTool(
     async ({ query, limit, min_score, version }) => {
       const effectiveLimit = limit ?? toolConfig.default_limit;
       const searchMode = toolConfig.search_mode ?? "vector";
+      const startMs = Date.now();
       try {
         let results: ChunkResult[];
         const minScore = min_score ?? toolConfig.min_score;
@@ -144,6 +147,32 @@ export function registerSearchTool(
             }
             break;
           }
+        }
+
+        // Fire-and-forget analytics logging
+        const analyticsConfig = getServerConfig().analytics;
+        if (analyticsConfig?.enabled) {
+          const latencyMs = Date.now() - startMs;
+          const topScore =
+            results.length > 0
+              ? Math.max(...results.map((r) => r.similarity))
+              : null;
+          logQuery(
+            {
+              tool_name: toolConfig.name,
+              query_text: query,
+              result_count: results.length,
+              top_score: topScore,
+              latency_ms: latencyMs,
+              source_name: toolConfig.source,
+              session_id: null,
+            },
+            analyticsConfig.log_queries,
+          ).catch((err) => {
+            console.error(
+              `[analytics] Failed to log query: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
         }
 
         return {

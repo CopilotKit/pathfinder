@@ -171,4 +171,35 @@ describe("generatePostSchemaMigration", () => {
       "CREATE INDEX IF NOT EXISTS idx_chunks_version ON chunks (version)",
     );
   });
+
+  it("creates query_log table", () => {
+    const sql = generatePostSchemaMigration();
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS query_log");
+  });
+
+  it("includes query_log required columns", () => {
+    const sql = generatePostSchemaMigration();
+    for (const col of [
+      "tool_name",
+      "query_text",
+      "result_count",
+      "top_score",
+      "latency_ms",
+      "source_name",
+      "session_id",
+      "created_at",
+    ]) {
+      expect(sql).toContain(col);
+    }
+  });
+
+  it("creates indexes on query_log", () => {
+    const sql = generatePostSchemaMigration();
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at)",
+    );
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_query_log_tool_name ON query_log (tool_name)",
+    );
+  });
 });
