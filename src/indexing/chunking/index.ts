@@ -34,6 +34,10 @@ registerChunker("code", chunkCode);
 registerChunker("raw-text", chunkRawText);
 registerChunker("html", chunkHtml);
 
+import { chunkDocument } from "./document.js";
+
+registerChunker("document", chunkDocument);
+
 import { chunkQa } from "./qa.js";
 
 registerChunker("slack", chunkQa);
