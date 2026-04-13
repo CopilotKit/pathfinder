@@ -11,14 +11,41 @@ const program = new Command();
 program
   .name("pathfinder")
   .description("Agentic docs retrieval for AI agents")
-  .version("1.8.0");
+  .version("1.11.0");
 
 program
   .command("init")
-  .description("Scaffold a new Pathfinder project in the current directory")
-  .action(async () => {
+  .description(
+    "Scaffold a new Pathfinder project (use --from <url> to auto-generate from a docs site)",
+  )
+  .option(
+    "--from <url>",
+    "Auto-generate config by crawling a documentation URL",
+  )
+  .option(
+    "--rate-limit <ms>",
+    "Milliseconds between requests (default: 500)",
+    parseInt,
+  )
+  .option("--max-pages <n>", "Maximum pages to crawl (default: 500)", parseInt)
+  .option("--force", "Overwrite existing pathfinder.yaml")
+  .action(async (opts) => {
     const cwd = process.cwd();
 
+    if (opts.from) {
+      // Auto-generate from URL
+      const { initFromUrl } = await import("./cli-init.js");
+      await initFromUrl({
+        url: opts.from,
+        targetDir: cwd,
+        rateLimit: opts.rateLimit,
+        maxPages: opts.maxPages,
+        force: opts.force,
+      });
+      return;
+    }
+
+    // Original scaffold behavior
     const yamlDest = path.join(cwd, "pathfinder.yaml");
     if (fs.existsSync(yamlDest)) {
       console.log("pathfinder.yaml already exists, skipping.");

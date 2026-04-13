@@ -235,6 +235,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
             <li><a href="#source-slack">Slack</a></li>
             <li><a href="#source-discord">Discord</a></li>
             <li><a href="#source-notion">Notion</a></li>
+            <li><a href="#source-document">Document</a></li>
             <li><a href="#tools">Tools</a></li>
             <li><a href="#tool-search">Search</a></li>
             <li><a href="#tool-bash">Bash</a></li>
@@ -243,6 +244,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
             <li><a href="#embedding">Embedding</a></li>
             <li><a href="#indexing">Indexing</a></li>
             <li><a href="#webhook">Webhook</a></li>
+            <li><a href="#analytics">Analytics</a></li>
         </ul>
     </div>
 
@@ -269,7 +271,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
     <div class="code-block"><span class="key">sources:</span>
   - <span class="key">name:</span> <span class="value">docs</span>                        <span class="comment"># Unique name, referenced by tools</span>
-    <span class="key">type:</span> <span class="value">markdown</span>                    <span class="comment"># markdown | code | raw-text | html | slack | discord | notion</span>
+    <span class="key">type:</span> <span class="value">markdown</span>                    <span class="comment"># markdown | code | raw-text | html | document | slack | discord | notion</span>
     <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>  <span class="comment"># Git repo URL (optional for local paths)</span>
     <span class="key">branch:</span> <span class="value">main</span>                      <span class="comment"># Git branch to track (default: default branch)</span>
     <span class="key">path:</span> <span class="value">docs/</span>                       <span class="comment"># Directory within the repo to index</span>
@@ -298,7 +300,7 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
       <span class="key">overlap_lines:</span> <span class="value">10</span>              <span class="comment"># Line overlap between chunks</span></div>
 
     <ul>
-        <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks. <code>html</code> parses HTML structure and extracts text content with token-based chunks.</li>
+        <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks. <code>html</code> parses HTML structure and extracts text content with token-based chunks. <code>document</code> extracts text from PDF and DOCX files with token-based chunks.</li>
         <li><strong>category</strong> — Optional tag applied to all chunks from this source. Sources with <code>category: faq</code> contribute to the <code>/faq.txt</code> endpoint and can be queried via knowledge tools.</li>
         <li><strong>repo</strong> — If provided, Pathfinder clones and updates from this repo. Omit for local directories.</li>
         <li><strong>version</strong> — Tags all indexed chunks with this version string. Used for version-filtered search queries.</li>
@@ -416,6 +418,28 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
     <p>By default, Notion sources are indexed as documents and referenced by <code>search</code> tools. To also make them available via <code>knowledge</code> tools and the <code>/faq.txt</code> endpoint, add <code>category: faq</code> to the source config — useful for Notion databases structured as Q&amp;A or FAQ collections.</p>
 
     <p><em>Note: The <code>chunk</code> config is available on all source types. For Slack and Discord, the Q&amp;A chunker produces one chunk per Q&amp;A pair (chunk settings have no effect). For Notion, the markdown chunker respects <code>target_tokens</code> and <code>overlap_tokens</code>.</em></p>
+
+    <h3 id="source-document">Source type: document</h3>
+
+    <p>Index PDF and DOCX files. Requires optional peer dependencies: <code>npm install pdf-parse</code> for PDF support and <code>npm install mammoth</code> for DOCX support. Uses token-based chunks like markdown sources.</p>
+
+    <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">manuals</span>
+    <span class="key">type:</span> <span class="value">document</span>
+    <span class="key">path:</span> <span class="value">./documents</span>
+    <span class="key">file_patterns:</span>
+      - <span class="value">"**/*.pdf"</span>
+      - <span class="value">"**/*.docx"</span>
+    <span class="key">max_file_size:</span> <span class="value">10485760</span>              <span class="comment"># 10MB default limit</span>
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span></div>
+
+    <ul>
+        <li><strong>PDF support</strong> — Requires <code>pdf-parse</code> peer dependency. Text is extracted page-by-page. Scanned PDFs (image-only pages with no extractable text) are detected and skipped with a warning.</li>
+        <li><strong>DOCX support</strong> — Requires <code>mammoth</code> peer dependency. Document content is converted to plain text for chunking.</li>
+        <li><strong>max_file_size</strong> — Defaults to 10MB (10485760 bytes) for document sources. Large files are skipped with a warning.</li>
+    </ul>
 
     <h3>url_derivation example</h3>
 
@@ -603,6 +627,25 @@ https://docs.example.com/getting-started</div>
     <span class="key">docs:</span> [<span class="value">"docs/"</span>]</div>
 
     <p>Point a GitHub webhook at <code>https://your-server/webhooks/github</code> with the <code>push</code> event. Set <code>GITHUB_WEBHOOK_SECRET</code> to match the webhook secret.</p>
+
+    <h2 id="analytics">analytics</h2>
+
+    <p>Optional. Enables query logging and the built-in analytics dashboard at <code>/analytics</code>.</p>
+
+    <div class="code-block"><span class="key">analytics:</span>
+  <span class="key">enabled:</span> <span class="value">false</span>                       <span class="comment"># Enable analytics (default: false)</span>
+  <span class="key">log_queries:</span> <span class="value">true</span>                    <span class="comment"># Log all search queries (default: true)</span>
+  <span class="key">token:</span> <span class="value">${ANALYTICS_TOKEN}</span>             <span class="comment"># Bearer token for the /api/analytics endpoints</span>
+  <span class="key">retention_days:</span> <span class="value">90</span>                  <span class="comment"># Days to retain analytics data (default: 90)</span></div>
+
+    <ul>
+        <li><strong>enabled</strong> — When <code>true</code>, Pathfinder logs queries and serves the analytics dashboard at <code>/analytics</code>. Default <code>false</code>.</li>
+        <li><strong>log_queries</strong> — When <code>true</code>, all search queries are logged with latency and result counts. Default <code>true</code> (when analytics is enabled).</li>
+        <li><strong>token</strong> — Bearer token for authenticating requests to <code>/api/analytics/*</code> endpoints. Use the <code>ANALYTICS_TOKEN</code> environment variable. Required when analytics is enabled.</li>
+        <li><strong>retention_days</strong> — How long to keep analytics data before automatic cleanup. Default 90 days.</li>
+    </ul>
+
+    <p>The analytics dashboard provides top queries, empty result tracking, and latency metrics. API endpoints: <code>/api/analytics/summary</code>, <code>/api/analytics/queries</code>, <code>/api/analytics/empty-queries</code>.</p>
 
     <h2>Example Configs</h2>
 

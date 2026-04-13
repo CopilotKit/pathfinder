@@ -285,6 +285,17 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
         <li><strong><code>/.well-known/skills/default/skill.md</code></strong> — A dynamic agent capability description that reflects your current tool configuration. Agents can read this to understand what Pathfinder can do.</li>
         <li><strong><code>/faq.txt</code></strong> — Q&amp;A pairs from FAQ-category sources (Slack threads, Discord forums), filtered by confidence. Only generated when sources with <code>category: faq</code> are configured.</li>
         <li><strong><code>/health</code></strong> — JSON health check with uptime, indexing status, and chunk counts per source.</li>
+        <li><strong><code>/analytics</code></strong> — Built-in analytics dashboard with query logging, top queries, empty result tracking, and latency metrics. Requires <code>analytics.enabled: true</code> in config.</li>
+    </ul>
+
+    <h3>Analytics API Endpoints</h3>
+
+    <p>When analytics is enabled, the following API endpoints are available (authenticated via <code>ANALYTICS_TOKEN</code> bearer token):</p>
+
+    <ul>
+        <li><strong><code>/api/analytics/summary</code></strong> — Overview of query volume, average latency, and top queries.</li>
+        <li><strong><code>/api/analytics/queries</code></strong> — Paginated list of all logged search queries with timestamps, latency, and result counts.</li>
+        <li><strong><code>/api/analytics/empty-queries</code></strong> — Queries that returned zero results, useful for identifying content gaps.</li>
     </ul>
 
     <p>All HTTP responses include <code>Link</code> headers pointing to <code>/llms.txt</code> and, when available, <code>&lt;/faq.txt&gt;; rel="faq"</code>, so clients can discover these endpoints automatically.</p>
@@ -293,6 +304,13 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 
     <ul>
         <li><strong><code>pathfinder init</code></strong> — Scaffold a new <code>pathfinder.yaml</code> config file interactively.</li>
+        <li><strong><code>pathfinder init --from &lt;url&gt;</code></strong> — Crawl a documentation site and auto-generate a <code>pathfinder.yaml</code> config. Options:
+            <ul>
+                <li><code>--rate-limit &lt;ms&gt;</code> — Milliseconds between requests (default: 500)</li>
+                <li><code>--max-pages &lt;n&gt;</code> — Maximum pages to crawl (default: 500)</li>
+                <li><code>--force</code> — Overwrite existing <code>pathfinder.yaml</code></li>
+            </ul>
+        </li>
         <li><strong><code>pathfinder serve</code></strong> — Start the MCP server. Uses PGlite if no <code>DATABASE_URL</code> is set. Options:
             <ul>
                 <li><code>-p, --port &lt;number&gt;</code> — Override the default port (3001)</li>
