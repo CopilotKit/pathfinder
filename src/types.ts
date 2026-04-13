@@ -33,7 +33,7 @@ const BaseSourceFields = {
 // File-based source schema (markdown, code, raw-text, html) — unchanged fields from today
 export const FileSourceConfigSchema = z.object({
   ...BaseSourceFields,
-  type: z.enum(["markdown", "code", "raw-text", "html"]),
+  type: z.enum(["markdown", "code", "raw-text", "html", "document"]),
   repo: z.string().url().optional(),
   branch: z.string().optional(),
   path: z.string().min(1),
@@ -338,7 +338,7 @@ export type BashOptions = z.infer<typeof BashOptionsSchema>;
 
 // ── Source config type guards ────────────────────────────────────────────────
 
-const FILE_SOURCE_TYPES = new Set(["markdown", "code", "raw-text", "html"]);
+const FILE_SOURCE_TYPES = new Set(["markdown", "code", "raw-text", "html", "document"]);
 export function isFileSourceConfig(
   config: SourceConfig,
 ): config is FileSourceConfig {
