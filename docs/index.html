@@ -37,7 +37,15 @@
     --warning: #ffaa00;
     --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
     --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
+/* Animations */
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.fade-in { opacity: 0; transform: translateY(30px); transition: opacity 0.8s var(--ease-out-expo), transform 0.8s var(--ease-out-expo); }
+.fade-in.visible { opacity: 1; transform: translateY(0); }
 * { margin:0; padding:0; box-sizing:border-box; }
 html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
 body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
@@ -66,14 +74,14 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 
 /* Hero */
 .hero { padding: 120px 0 3rem; max-width: 1120px; margin: 0 auto; padding-left: 2rem; padding-right: 2rem; }
-.badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 32px; }
+.badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 32px; animation: fadeUp 0.8s var(--ease-out-expo) both; }
 .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-.hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; line-height: 1.08; margin-bottom: 24px; letter-spacing: -0.03em; }
+.hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; line-height: 1.08; margin-bottom: 24px; letter-spacing: -0.03em; animation: fadeUp 0.8s var(--ease-out-expo) 0.1s both; }
 .hero-break { display: none; }
 @media (min-width: 769px) { .hero-break { display: block; } }
 .hero h1 .accent { color: var(--accent); }
-.hero .subtitle { font-size: 1.2rem; color: var(--text-secondary); max-width: 700px; line-height: 1.7; margin-bottom: 40px; }
+.hero .subtitle { font-size: 1.2rem; color: var(--text-secondary); max-width: 700px; line-height: 1.7; margin-bottom: 40px; animation: fadeUp 0.8s var(--ease-out-expo) 0.2s both; }
 
 /* Install box */
 .install-box { display: inline-flex; flex-direction: column; gap: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 0.9rem; margin-bottom: 2.5rem; }
@@ -104,7 +112,7 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 
 /* Feature cards (3x3 grid) */
 .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
-.feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; box-shadow: 0 4px 16px rgba(0,0,0,0.2); transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s; }
+.feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; box-shadow: 0 4px 16px rgba(0,0,0,0.2); transition: all 0.3s var(--ease-out-expo); }
 .feature-card:hover { transform: translateY(-4px); border-color: var(--accent-dim); box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
 .feature-card .icon { font-size: 1.75rem; margin-bottom: 1rem; }
 .feature-card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; }
@@ -275,51 +283,51 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </section>
 
 <section class="features" id="features">
-    <h2>What's in the box</h2>
-    <p class="section-sub">A complete system enabling agents to discover and learn what's important.</p>
+    <h2 class="fade-in">What's in the box</h2>
+    <p class="section-sub fade-in">A complete system enabling agents to discover and learn what's important.</p>
 
     <div class="feature-grid">
-        <div class="feature-card">
+        <div class="feature-card fade-in">
             <div class="icon">🔍</div>
             <h3>Semantic + Filesystem</h3>
             <p>Agents choose the right tool: vector search for conceptual questions, grep and cat for precise lookups. Both paradigms, composable.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card fade-in" style="transition-delay: 0.08s">
             <div class="icon">💬</div>
             <h3>Automatic Q&amp;A Extraction</h3>
             <p>Slack threads and Discord forums are distilled into Q&amp;A pairs automatically. Forum posts need no LLM — they're already questions and answers.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card fade-in" style="transition-delay: 0.16s">
             <div class="icon">🔗</div>
             <h3>Cross-Source Intelligence</h3>
             <p>Search docs and Q&amp;A together. Grep misses suggest semantic search. related finds similar files across sources.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card fade-in" style="transition-delay: 0.24s">
             <div class="icon">📋</div>
             <h3>Knowledge on Tap</h3>
             <p>/faq.txt and /llms.txt give agents instant context at session start. No search required — your best answers are already loaded.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card fade-in" style="transition-delay: 0.32s">
             <div class="icon">🚀</div>
             <h3>Zero-Infra Mode</h3>
             <p>Bash-only tools work with no database, no API keys. Add RAG when you're ready — it's just config.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card fade-in" style="transition-delay: 0.4s">
             <div class="icon">🔄</div>
             <h3>Always Current</h3>
             <p>Webhook-triggered reindexing on every push. Nightly full reindex on schedule. Confidence thresholds adjust without re-processing.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card fade-in" style="transition-delay: 0.48s">
             <div class="icon">🔌</div>
             <h3>Pluggable Embeddings</h3>
             <p>OpenAI, Ollama, or local transformers.js — choose your embedding provider. Run fully local with no API keys, or use the cloud. Switch with one config line.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card fade-in" style="transition-delay: 0.56s">
             <div class="icon">📄</div>
             <h3>PDF &amp; DOCX Support</h3>
             <p>Index binary documents directly — no conversion needed. Page-break and section-aware chunking extracts structure from PDFs and Word docs.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card fade-in" style="transition-delay: 0.64s">
             <div class="icon">📊</div>
             <h3>Analytics Dashboard</h3>
             <p>See what agents search for, which queries return empty, and where your knowledge gaps are. Built-in dashboard at <code>/analytics</code>.</p>
@@ -328,10 +336,10 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </section>
 
 <section class="section-comparison" id="comparison">
-    <h2>How Pathfinder compares</h2>
-    <p class="section-sub">See how Pathfinder stacks up against other knowledge tools for AI agents.</p>
+    <h2 class="fade-in">How Pathfinder compares</h2>
+    <p class="section-sub fade-in">See how Pathfinder stacks up against other knowledge tools for AI agents.</p>
 
-    <div class="comparison-wrap">
+    <div class="comparison-wrap fade-in">
     <table class="comp-matrix">
         <thead>
             <tr>
@@ -470,9 +478,9 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
 </section>
 
 <section class="migration" id="migration">
-    <h2>Switch to Pathfinder</h2>
-    <p class="section-sub">Migration guides for every platform. Most take less than 15 minutes.</p>
-    <div style="display:flex; flex-wrap:wrap; gap:12px; justify-content:center;">
+    <h2 class="fade-in">Switch to Pathfinder</h2>
+    <p class="section-sub fade-in">Migration guides for every platform. Most take less than 15 minutes.</p>
+    <div class="fade-in" style="display:flex; flex-wrap:wrap; gap:12px; justify-content:center;">
         <a href="/migrate-from-mintlify" class="cta-btn">From Mintlify &#8594;</a>
         <a href="/migrate-from-gitbook" class="cta-btn">From GitBook &#8594;</a>
         <a href="/migrate-from-ragdocs" class="cta-btn">From mcp-ragdocs &#8594;</a>
@@ -581,6 +589,26 @@ observer.observe(terminal);
       menu.classList.remove("open");
     }
   });
+})();
+</script>
+<script>
+// Scroll-triggered fade-in via IntersectionObserver
+(function () {
+    var observer = new IntersectionObserver(
+        function (entries) {
+            entries.forEach(function (entry) {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add("visible");
+                    observer.unobserve(entry.target);
+                }
+            });
+        },
+        { threshold: 0.1, rootMargin: "0px 0px -40px 0px" },
+    );
+
+    document.querySelectorAll(".fade-in").forEach(function (el) {
+        observer.observe(el);
+    });
 })();
 </script>
 </body>
