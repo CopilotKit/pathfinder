@@ -4,6 +4,7 @@ import {
   generateSchema,
   generateMigration,
   generatePostSchemaMigration,
+  generateTsvTriggerDdl,
   generateDimensionCheckQuery,
 } from "./schema.js";
 import { getConfig, getServerConfig } from "../config.js";
@@ -78,6 +79,17 @@ async function initializePGlite(): Promise<void> {
       // ROLLBACK failed — original error is more useful
     }
     throw err;
+  }
+
+  // Attempt tsvector trigger creation — PGlite does not support PL/pgSQL triggers
+  try {
+    await db.exec(generateTsvTriggerDdl());
+  } catch (error: unknown) {
+    console.warn(
+      `[db] tsvector trigger creation skipped (PGlite or unsupported): ` +
+        `${error instanceof Error ? error.message : String(error)}. ` +
+        `tsv column will be populated in application code during upsert.`,
+    );
   }
 
   // Build a wrapper that duck-types as pg.Pool.
@@ -197,6 +209,20 @@ export async function initializeSchema(): Promise<void> {
     throw err;
   } finally {
     migrationClient.release();
+  }
+
+  // Apply tsvector trigger DDL outside the transaction (idempotent)
+  const triggerClient = await p.connect();
+  try {
+    await triggerClient.query(generateTsvTriggerDdl());
+  } catch (error: unknown) {
+    console.warn(
+      `[db] tsvector trigger creation skipped: ` +
+        `${error instanceof Error ? error.message : String(error)}. ` +
+        `tsv column will be populated in application code during upsert.`,
+    );
+  } finally {
+    triggerClient.release();
   }
 }
 
