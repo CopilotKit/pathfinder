@@ -38,10 +38,11 @@ vi.mock("../config.js", () => ({
   hasBashSemanticSearch: vi.fn().mockReturnValue(false),
 }));
 
-import { getAnalyticsConfig } from "../config.js";
+import { getAnalyticsConfig, getConfig } from "../config.js";
 import { analyticsAuth } from "../server.js";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
+const mockGetConfigFn = vi.mocked(getConfig);
 
 function mockRes() {
   const json = vi.fn();
@@ -271,6 +272,71 @@ describe("analyticsAuth middleware", () => {
     );
 
     expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it("skips token check in development mode", () => {
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
+    // Override getConfig to return nodeEnv: "development"
+    mockGetConfigFn.mockReturnValue({
+      port: 3001,
+      databaseUrl: "pglite:///tmp/test",
+      openaiApiKey: "",
+      githubToken: "",
+      githubWebhookSecret: "",
+      nodeEnv: "development",
+      logLevel: "info",
+      cloneDir: "/tmp/test",
+      slackBotToken: "",
+      slackSigningSecret: "",
+      discordBotToken: "",
+      discordPublicKey: "",
+      notionToken: "",
+    });
+    const res = mockRes();
+    const next = vi.fn();
+
+    // No auth header — should still pass in dev mode
+    analyticsAuth({ headers: {} } as never, res as never, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it("requires token in non-dev mode even when analytics is enabled", () => {
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
+    // Explicitly set nodeEnv to "production"
+    mockGetConfigFn.mockReturnValue({
+      port: 3001,
+      databaseUrl: "pglite:///tmp/test",
+      openaiApiKey: "",
+      githubToken: "",
+      githubWebhookSecret: "",
+      nodeEnv: "production",
+      logLevel: "info",
+      cloneDir: "/tmp/test",
+      slackBotToken: "",
+      slackSigningSecret: "",
+      discordBotToken: "",
+      discordPublicKey: "",
+      notionToken: "",
+    });
+    const res = mockRes();
+    const next = vi.fn();
+
+    analyticsAuth({ headers: {} } as never, res as never, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
   });
 });
 

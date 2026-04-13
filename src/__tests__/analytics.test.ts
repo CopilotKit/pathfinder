@@ -11,6 +11,7 @@ import {
   getAnalyticsSummary,
   getTopQueries,
   getEmptyQueries,
+  getToolCounts,
   cleanupOldQueryLogs,
 } from "../db/analytics.js";
 import type { QueryLogEntry } from "../db/analytics.js";
@@ -217,17 +218,19 @@ describe("p95 computation edge cases", () => {
 // ---------------------------------------------------------------------------
 
 describe("getTopQueries", () => {
-  it("returns top queries with frequency and avg stats", async () => {
+  it("returns top queries with frequency, tool_name, and avg stats", async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
         {
           query_text: "install guide",
+          tool_name: "search-docs",
           count: 42,
           avg_result_count: "3.5",
           avg_top_score: "0.88",
         },
         {
           query_text: "api reference",
+          tool_name: "search-code",
           count: 30,
           avg_result_count: "5.0",
           avg_top_score: null,
@@ -239,9 +242,11 @@ describe("getTopQueries", () => {
 
     expect(result).toHaveLength(2);
     expect(result[0].query_text).toBe("install guide");
+    expect(result[0].tool_name).toBe("search-docs");
     expect(result[0].count).toBe(42);
     expect(result[0].avg_result_count).toBeCloseTo(3.5);
     expect(result[0].avg_top_score).toBeCloseTo(0.88);
+    expect(result[1].tool_name).toBe("search-code");
     expect(result[1].avg_top_score).toBeNull();
   });
 
@@ -250,7 +255,9 @@ describe("getTopQueries", () => {
     await getTopQueries(30, 10);
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params).toEqual([30, 10]);
+    // No filter params, so just days and limit
+    expect(params).toContain(30);
+    expect(params).toContain(10);
   });
 
   it("excludes redacted queries", async () => {
@@ -382,5 +389,171 @@ describe("cleanupOldQueryLogs error handling", () => {
   it("propagates DB error to caller", async () => {
     mockQuery.mockRejectedValueOnce(new Error("disk full"));
     await expect(cleanupOldQueryLogs(90)).rejects.toThrow("disk full");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getToolCounts
+// ---------------------------------------------------------------------------
+
+describe("getToolCounts", () => {
+  it("returns counts grouped by tool type prefix", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { tool_type: "search", count: 3033 },
+        { tool_type: "explore", count: 755 },
+      ],
+    });
+
+    const result = await getToolCounts(7);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ tool_type: "search", count: 3033 });
+    expect(result[1]).toEqual({ tool_type: "explore", count: 755 });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("split_part(tool_name");
+    expect(params).toEqual([7]);
+  });
+
+  it("returns empty array when no queries exist", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const result = await getToolCounts(7);
+    expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Filter support (tool_type, source)
+// ---------------------------------------------------------------------------
+
+describe("getAnalyticsSummary with filters", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] }) // total
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      }) // 7d summary
+      .mockResolvedValueOnce({ rows: [] }) // latency rows
+      .mockResolvedValueOnce({ rows: [] }) // by source
+      .mockResolvedValueOnce({ rows: [] }); // per day
+  }
+
+  it("passes tool_type filter as LIKE clause to all queries", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({ tool_type: "search" });
+
+    // All 5 queries should have the filter
+    for (let i = 0; i < 5; i++) {
+      const [sql, params] = mockQuery.mock.calls[i];
+      expect(sql).toContain("tool_name LIKE");
+      expect(params).toContain("search");
+    }
+  });
+
+  it("passes source filter as exact match to all queries", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({ source: "docs" });
+
+    for (let i = 0; i < 5; i++) {
+      const [sql, params] = mockQuery.mock.calls[i];
+      expect(sql).toContain("source_name =");
+      expect(params).toContain("docs");
+    }
+  });
+
+  it("passes both filters when provided", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({ tool_type: "search", source: "docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("tool_name LIKE");
+    expect(sql).toContain("source_name =");
+    expect(params).toContain("search");
+    expect(params).toContain("docs");
+  });
+
+  it("omits filter clauses when no filter provided", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("tool_name LIKE");
+    expect(sql).not.toContain("source_name =");
+  });
+});
+
+describe("getTopQueries with filters", () => {
+  it("includes tool_type filter in WHERE clause", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "explore" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("tool_name LIKE");
+    expect(params).toContain("explore");
+  });
+
+  it("includes source filter in WHERE clause", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { source: "ag-ui-docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("source_name =");
+    expect(params).toContain("ag-ui-docs");
+  });
+});
+
+describe("getEmptyQueries with filters", () => {
+  it("includes tool_type filter in WHERE clause", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getEmptyQueries(7, 50, { tool_type: "search" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("tool_name LIKE");
+    expect(params).toContain("search");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// avg_result_count null handling
+// ---------------------------------------------------------------------------
+
+describe("getTopQueries null avg_result_count", () => {
+  it("returns null avg_result_count when SQL returns null (backfilled data)", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          query_text: "cat /INDEX.md",
+          tool_name: "explore-docs",
+          count: 17,
+          avg_result_count: null,
+          avg_top_score: null,
+        },
+      ],
+    });
+
+    const result = await getTopQueries(7, 50);
+
+    expect(result[0].avg_result_count).toBeNull();
+    expect(result[0].avg_top_score).toBeNull();
+  });
+
+  it("returns 0 avg_result_count when SQL returns '0' (real zero-result queries)", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          query_text: "nonexistent",
+          tool_name: "search-docs",
+          count: 5,
+          avg_result_count: "0",
+          avg_top_score: "0.0",
+        },
+      ],
+    });
+
+    const result = await getTopQueries(7, 50);
+
+    expect(result[0].avg_result_count).toBe(0);
+    expect(result[0].avg_top_score).toBe(0);
   });
 });
