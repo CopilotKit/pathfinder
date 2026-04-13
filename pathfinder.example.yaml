@@ -27,6 +27,15 @@ sources:
 #      target_tokens: 600
 #      overlap_tokens: 50
 
+# ── Document source (requires pdf-parse and/or mammoth) ──
+#  - name: specs
+#    type: document
+#    path: docs/specs/
+#    file_patterns: ["**/*.pdf", "**/*.docx"]
+#    chunk:
+#      target_tokens: 600
+#      overlap_tokens: 50
+
 # ── Slack source (requires SLACK_BOT_TOKEN + OPENAI_API_KEY) ──
 #  - name: community
 #    type: slack

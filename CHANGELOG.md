@@ -1,5 +1,15 @@
 # @copilotkit/pathfinder
 
+## 1.9.0
+
+### Minor Changes
+
+- **PDF/DOCX Ingestion**: New `document` source type for indexing PDF and DOCX files. Format detected from file extension, with page-break and section-aware chunking
+- **Content Extractors**: Dynamic import of `pdf-parse` (PDF) and `mammoth` (DOCX) as optional peer dependencies — only loaded when a `document` source is configured
+- **Document Chunker**: Intelligent splitting on page breaks (form feed), ALL CAPS section headers, numbered section headers, and paragraph boundaries with configurable overlap
+- **Scanned PDF Detection**: Warns when a multi-page PDF produces very little text, indicating a scanned document without a text layer
+- **10MB Default File Size**: Document sources default to 10MB max file size (vs 100KB for text sources)
+
 ## 1.8.0
 
 ### Minor Changes
