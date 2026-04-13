@@ -1,5 +1,14 @@
 # @copilotkit/pathfinder
 
+## 1.10.0
+
+### Minor Changes
+
+- **Auto-Generate from URL**: New `pathfinder init --from <url>` command that crawls a documentation site and generates a working `pathfinder.yaml`. Three-tier discovery: sitemap.xml, robots.txt Sitemap directives, recursive link following
+- **Site Crawler**: Rate-limited crawler with retry/backoff for 429/5xx, page caching, SPA detection warnings, and robots.txt compliance
+- **Config Generator**: Auto-detects source type (HTML/markdown), derives base URL from common path prefix, detects content selectors, and supports GitHub/GitLab repo detection
+- **CLI Flags**: `--rate-limit <ms>`, `--max-pages <n>`, `--force` flags for controlling crawl behavior
+
 ## 1.9.0
 
 ### Minor Changes
