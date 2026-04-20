@@ -207,10 +207,12 @@ export async function getAnalyticsSummary(
     fp,
   );
 
-  // Windowed summary. Backfilled rows (latency_ms<0) are excluded from all
-  // three aggregates for consistency: otherwise the empty_result_rate_window
+  // Windowed summary. Backfilled rows (latency_ms<0) are excluded from every
+  // windowed aggregate (summary, latency, by-source, per-day, and also
+  // getToolCounts) for consistency: otherwise the empty_result_rate_window
   // denominator would include backfilled rows while the numerator and
-  // avg_latency implicitly exclude them, inflating the rate.
+  // avg_latency implicitly exclude them, inflating the rate. All windowed
+  // aggregates exclude `latency_ms < 0`.
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
   const summaryBase = [...dw2.clauses, "latency_ms >= 0"];
@@ -235,10 +237,15 @@ export async function getAnalyticsSummary(
     [...fp3, ...dw3.params],
   );
 
-  // By source (filtered)
+  // By source (filtered). Excludes backfilled rows (latency_ms < 0) so the
+  // doughnut totals line up with summary + per-day.
   const { clauses: fc4, params: fp4, nextIdx: n4 } = buildFilterClauses(filter);
   const dw4 = buildDateWindow(filter, days, n4);
-  const sourceBase = ["source_name IS NOT NULL", ...dw4.clauses];
+  const sourceBase = [
+    "source_name IS NOT NULL",
+    ...dw4.clauses,
+    "latency_ms >= 0",
+  ];
   const sourceWhere = whereAnd(sourceBase, fc4);
   const bySourceRes = await pool.query(
     `SELECT source_name, count(*)::int AS count
@@ -249,10 +256,12 @@ export async function getAnalyticsSummary(
     [...fp4, ...dw4.params],
   );
 
-  // Per day (filtered)
+  // Per day (filtered). Excludes backfilled rows (latency_ms < 0) so the
+  // per-day bars match the summary/latency aggregates above.
   const { clauses: fc5, params: fp5, nextIdx: n5 } = buildFilterClauses(filter);
   const dw5 = buildDateWindow(filter, days, n5);
-  const dayWhere = whereAnd(dw5.clauses, fc5);
+  const dayBase = [...dw5.clauses, "latency_ms >= 0"];
+  const dayWhere = whereAnd(dayBase, fc5);
   const perDayRes = await pool.query(
     `SELECT date_trunc('day', created_at)::date::text AS day, count(*)::int AS count
     FROM query_log
@@ -406,7 +415,10 @@ export async function getToolCounts(
     nextIdx,
   } = buildFilterClauses(sourceOnlyFilter);
   const dw = buildDateWindow(sourceOnlyFilter, days, nextIdx);
-  const where = whereAnd(dw.clauses, fc);
+  // Exclude backfilled rows (latency_ms < 0) so tool counts match the
+  // windowed aggregates used elsewhere (summary, latency, per-day).
+  const baseClauses = [...dw.clauses, "latency_ms >= 0"];
+  const where = whereAnd(baseClauses, fc);
   const { rows } = await pool.query(
     `SELECT
         split_part(tool_name, '-', 1) AS tool_type,
@@ -441,8 +453,13 @@ export async function cleanupOldQueryLogs(
   retentionDays: number,
 ): Promise<number> {
   const pool = getPool();
+  // Use `<=` here so the partition is complete vs. the rolling-window reads
+  // (which use `created_at > NOW() - INTERVAL`). With strict `<`, rows sitting
+  // exactly at the retention edge would be visible to reads but not cleaned
+  // up by retention. `<=` is the safer choice — we'd rather delete an extra
+  // row at the boundary than leak rows past the retention window.
   const result = await pool.query(
-    `DELETE FROM query_log WHERE created_at < NOW() - INTERVAL '1 day' * $1`,
+    `DELETE FROM query_log WHERE created_at <= NOW() - INTERVAL '1 day' * $1`,
     [retentionDays],
   );
   return result.rowCount ?? 0;
