@@ -373,8 +373,18 @@ export async function getToolCounts(
   filter: AnalyticsFilter = {},
 ): Promise<ToolCount[]> {
   const pool = getPool();
-  const dw = buildDateWindow(filter, days, 1);
-  const where = "WHERE " + dw.clauses.join(" AND ");
+
+  // tool_type intentionally ignored: filtering tool counts by tool type would
+  // be circular (asking "what tool types exist given only this one"). We only
+  // honor `source` from the filter here.
+  const { tool_type: _ignoredToolType, ...rest } = filter;
+  void _ignoredToolType;
+  const sourceOnlyFilter: AnalyticsFilter = rest;
+
+  const { clauses: fc, params: fp, nextIdx } =
+    buildFilterClauses(sourceOnlyFilter);
+  const dw = buildDateWindow(sourceOnlyFilter, days, nextIdx);
+  const where = whereAnd(dw.clauses, fc);
   const { rows } = await pool.query(
     `SELECT
         split_part(tool_name, '-', 1) AS tool_type,
@@ -383,7 +393,7 @@ export async function getToolCounts(
     ${where}
     GROUP BY tool_type
     ORDER BY count DESC`,
-    dw.params,
+    [...fp, ...dw.params],
   );
 
   return rows.map((r: Record<string, unknown>) => ({

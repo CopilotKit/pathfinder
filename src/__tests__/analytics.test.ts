@@ -699,6 +699,44 @@ describe("getToolCounts with from/to range", () => {
 });
 
 // ---------------------------------------------------------------------------
+// getToolCounts respects source filter; intentionally ignores tool_type
+// ---------------------------------------------------------------------------
+
+describe("getToolCounts respects source filter", () => {
+  it("applies source filter to WHERE clause", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { source: "docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("source_name =");
+    expect(params).toContain("docs");
+  });
+
+  it("ignores tool_type filter (intentional — would be circular)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { tool_type: "search" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("tool_name LIKE");
+    expect(params).not.toContain("search");
+  });
+
+  it("combines source filter with from/to range", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-20T23:59:59.999Z");
+    await getToolCounts(7, { source: "docs", from, to });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("source_name =");
+    expect(sql).toContain("created_at >=");
+    expect(params).toContain("docs");
+    expect(params).toContain(from);
+    expect(params).toContain(to);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // avg_result_count null handling
 // ---------------------------------------------------------------------------
 
