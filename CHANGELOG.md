@@ -1,5 +1,16 @@
 # @copilotkit/pathfinder
 
+## 1.12.0
+
+### Minor Changes
+
+- **MCP OAuth 2.1**: Full OAuth ceremonial flow so claude.ai (and other MCP clients) can authenticate against the public Pathfinder server. Anonymous OAuth — RFC-compliant endpoints (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, `/token`) with auto-approve and JWT issuance. PKCE S256 required.
+- **Dynamic Client Registration** (RFC 7591): claude.ai and other MCP clients auto-register; no manual client provisioning
+- **HS256 JWT**: Hand-rolled with `node:crypto` — no new dependencies
+- **Opportunistic bearer auth on `/mcp`**: Valid JWT accepted, invalid rejected, missing allowed (backward compatible)
+- **Per-endpoint rate limiting**: 10/min `/register`, 30/min `/authorize` and `/token` per IP
+- **Required env var**: `MCP_JWT_SECRET` (32+ bytes) — production throws on startup if missing
+
 ## 1.11.1
 
 ### Patch Changes
