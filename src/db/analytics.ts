@@ -207,15 +207,19 @@ export async function getAnalyticsSummary(
     fp,
   );
 
-  // Windowed summary (filtered) - exclude backfilled rows from latency/empty stats
+  // Windowed summary. Backfilled rows (latency_ms<0) are excluded from all
+  // three aggregates for consistency: otherwise the empty_result_rate_window
+  // denominator would include backfilled rows while the numerator and
+  // avg_latency implicitly exclude them, inflating the rate.
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
-  const summaryWhere = whereAnd(dw2.clauses, fc2);
+  const summaryBase = [...dw2.clauses, "latency_ms >= 0"];
+  const summaryWhere = whereAnd(summaryBase, fc2);
   const summaryRes = await pool.query(
     `SELECT
         count(*)::int AS total,
         count(*) FILTER (WHERE result_count = 0)::int AS empty,
-        COALESCE(avg(latency_ms) FILTER (WHERE latency_ms >= 0)::int, 0) AS avg_latency
+        COALESCE(avg(latency_ms)::int, 0) AS avg_latency
     FROM query_log
     ${summaryWhere}`,
     [...fp2, ...dw2.params],
