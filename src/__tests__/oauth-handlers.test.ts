@@ -164,6 +164,7 @@ describe("registerHandler", () => {
       body: {
         redirect_uris: ["https://claude.ai/cb"],
         client_name: "Claude",
+        token_endpoint_auth_method: "client_secret_basic",
       },
     });
     const res = mockRes();
@@ -176,6 +177,7 @@ describe("registerHandler", () => {
     expect(body.client_name).toBe("Claude");
     expect(body.grant_types).toEqual(["authorization_code", "refresh_token"]);
     expect(body.response_types).toEqual(["code"]);
+    // Handler echoes the requested auth method (was previously hardcoded to client_secret_basic)
     expect(body.token_endpoint_auth_method).toBe("client_secret_basic");
   });
 
