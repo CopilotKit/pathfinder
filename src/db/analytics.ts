@@ -280,10 +280,12 @@ export async function getAnalyticsSummary(
       source_name: r.source_name as string,
       count: r.count as number,
     })),
-    queries_per_day_window: perDayRes.rows.map((r: Record<string, unknown>) => ({
-      day: r.day as string,
-      count: r.count as number,
-    })),
+    queries_per_day_window: perDayRes.rows.map(
+      (r: Record<string, unknown>) => ({
+        day: r.day as string,
+        count: r.count as number,
+      }),
+    ),
   };
 }
 
@@ -393,8 +395,11 @@ export async function getToolCounts(
   void _ignoredToolType;
   const sourceOnlyFilter: AnalyticsFilter = rest;
 
-  const { clauses: fc, params: fp, nextIdx } =
-    buildFilterClauses(sourceOnlyFilter);
+  const {
+    clauses: fc,
+    params: fp,
+    nextIdx,
+  } = buildFilterClauses(sourceOnlyFilter);
   const dw = buildDateWindow(sourceOnlyFilter, days, nextIdx);
   const where = whereAnd(dw.clauses, fc);
   const { rows } = await pool.query(

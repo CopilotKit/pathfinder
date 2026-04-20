@@ -493,7 +493,9 @@ describe("getTopQueries LIKE injection hardening", () => {
     // in the parameter value. Verify the wildcard is not passed raw — i.e.
     // the param should contain an escaped form ('\_') and the SQL should
     // declare the escape character.
-    const toolParam = params.find((p: unknown) => typeof p === "string" && p.includes("_"));
+    const toolParam = params.find(
+      (p: unknown) => typeof p === "string" && p.includes("_"),
+    );
     expect(typeof toolParam).toBe("string");
     expect(toolParam).toBe("\\_");
     // SQL carries an explicit ESCAPE '\' clause so `\_` in the param is treated
