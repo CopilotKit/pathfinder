@@ -836,7 +836,8 @@ app.get(
         res.status(parsed.status).json(parsed.body);
         return;
       }
-      const summary = await getAnalyticsSummary(parsed.filter);
+      const days = parseInt(req.query.days as string) || 7;
+      const summary = await getAnalyticsSummary(parsed.filter, days);
       res.json(summary);
     } catch (err) {
       console.error("[analytics] Summary query failed:", err);
