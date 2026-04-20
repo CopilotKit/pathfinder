@@ -397,6 +397,7 @@ server {
         </thead>
         <tbody>
             <tr><td><code>DATABASE_URL</code></td><td>For search tools</td><td>-</td><td>PostgreSQL connection string (with pgvector)</td></tr>
+            <tr><td><code>MCP_JWT_SECRET</code></td><td><strong>Required in production</strong></td><td>-</td><td>HMAC secret for signing OAuth access/refresh tokens. Generate with <code>openssl rand -hex 32</code>. Rotating this invalidates all issued tokens — clients will re-authenticate transparently. In development mode (<code>NODE_ENV=development</code>) a random secret is generated per process and logged as a warning.</td></tr>
             <tr><td><code>OPENAI_API_KEY</code></td><td>When embedding.provider is "openai" (default)</td><td>-</td><td>OpenAI API key for computing embeddings. Not needed for ollama or local providers.</td></tr>
             <tr><td><code>GITHUB_TOKEN</code></td><td>For private repos</td><td>-</td><td>GitHub PAT for cloning private repositories</td></tr>
             <tr><td><code>GITHUB_WEBHOOK_SECRET</code></td><td>For webhooks</td><td>-</td><td>Secret for validating GitHub webhook payloads</td></tr>
@@ -414,6 +415,11 @@ server {
             <tr><td><code>ANALYTICS_TOKEN</code></td><td>When analytics enabled</td><td>-</td><td>Bearer token for authenticating <code>/api/analytics/*</code> endpoints</td></tr>
         </tbody>
     </table>
+
+    <div class="gap-card">
+        <h4>MCP_JWT_SECRET must be set in production</h4>
+        <p><code>MCP_JWT_SECRET</code> MUST be set before <code>NODE_ENV=production</code> — the server will throw on startup if it's missing. See <a href="/config#authentication">Authentication</a> for how the OAuth flow uses this secret.</p>
+    </div>
 
     <h3 id="optional-dependencies">Optional dependencies</h3>
     <p>Some features require extra packages that are not bundled by default. Install only the ones your config needs:</p>
