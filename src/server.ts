@@ -963,6 +963,23 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
         },
       };
     }
+    // Cap the range width. Without this, a client could send
+    // from=1970-01-01&to=9999-12-31 and the DB would scan every row. Use
+    // the same upper bound as the rolling `days` preset so both code paths
+    // agree on "how much history is addressable".
+    const rangeDays = Math.ceil(
+      (to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000),
+    );
+    if (rangeDays > MAX_DAYS) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: `from/to range must be <= ${MAX_DAYS} days`,
+        },
+      };
+    }
     filter.from = from;
     filter.to = to;
   }
