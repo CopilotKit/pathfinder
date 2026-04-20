@@ -518,6 +518,69 @@ describe("getEmptyQueries with filters", () => {
 // Date range filter (from/to) support
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// getAnalyticsSummary honors `days` parameter
+//
+// Regression: pre-fix, getAnalyticsSummary ignored any caller-supplied window
+// and always hardcoded `buildDateWindow(filter, 7, ...)`. The dashboard's
+// "Last 30 days" preset sent days=30 to /api/analytics/summary, but the
+// handler never parsed it — so stat cards + daily chart showed 7-day data
+// while the tables (which DO thread days through) showed 30-day data.
+// ---------------------------------------------------------------------------
+
+describe("getAnalyticsSummary honors days window", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] }) // total
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      }) // 7d summary
+      .mockResolvedValueOnce({ rows: [] }) // latency rows
+      .mockResolvedValueOnce({ rows: [] }) // by source
+      .mockResolvedValueOnce({ rows: [] }); // per day
+  }
+
+  it("passes the requested `days` value to every windowed subquery", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({}, 30);
+
+    // Skip mock.calls[0] — the totals query has no date window.
+    for (let i = 1; i < 5; i++) {
+      const [sql, params] = mockQuery.mock.calls[i];
+      expect(sql).toContain("NOW() - INTERVAL");
+      expect(params).toContain(30);
+      expect(params).not.toContain(7);
+    }
+  });
+
+  it("defaults `days` to 7 when not provided (backward compatible)", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    for (let i = 1; i < 5; i++) {
+      const [, params] = mockQuery.mock.calls[i];
+      expect(params).toContain(7);
+    }
+  });
+
+  it("explicit from/to takes precedence over days", async () => {
+    mockSummaryQueries();
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-20T23:59:59.999Z");
+    // Passing a `days` value should be ignored when from/to is set.
+    await getAnalyticsSummary({ from, to }, 30);
+
+    for (let i = 1; i < 5; i++) {
+      const [sql, params] = mockQuery.mock.calls[i];
+      expect(sql).toContain("created_at >=");
+      expect(params).toContain(from);
+      expect(params).toContain(to);
+      expect(params).not.toContain(30);
+      expect(params).not.toContain(7);
+    }
+  });
+});
+
 describe("getAnalyticsSummary with from/to range", () => {
   function mockSummaryQueries() {
     mockQuery
