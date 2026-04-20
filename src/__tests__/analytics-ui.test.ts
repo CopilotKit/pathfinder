@@ -55,8 +55,7 @@ function installChartStub(win: Window & typeof globalThis): {
       this.destroyed = true;
     }
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (win as any).Chart = ChartStub;
+  Object.assign(win, { Chart: ChartStub });
   return { instances };
 }
 
@@ -116,8 +115,7 @@ async function loadDashboard(
   const win = dom.window as unknown as Window & typeof globalThis;
   const { instances } = installChartStub(win);
   const { fetchFn, calls } = buildFetchStub(handlers);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (win as any).fetch = fetchFn;
+  Object.assign(win, { fetch: fetchFn });
 
   // Pull out the inline <script> and execute in the window.
   const scriptEl = dom.window.document.querySelector("script:not([src])");
@@ -186,10 +184,6 @@ function todayUTC(): string {
 // ---------------------------------------------------------------------------
 
 describe("analytics dashboard UI — date preset wiring", () => {
-  beforeEach(() => {
-    // Ensure no lingering preview mode or token from other tests.
-    // jsdom gives a fresh window per test anyway, but be defensive.
-  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -286,14 +280,18 @@ describe("analytics dashboard UI — date preset wiring", () => {
     expect(statsHtml).toContain("9,999");
     expect(statsHtml).not.toContain("1,111");
 
-    // Daily bar chart should be re-rendered with 30 bars.
+    // Daily bar chart should be re-rendered with one bar per day in the
+    // mocked queries_per_day_window. Assert against the mock shape rather
+    // than a hardcoded 30 so the test doesn't drift if the canned payload
+    // width ever changes.
     const lastBarChart = [...chartInstances]
       .reverse()
       .find((c) => c.type === "bar");
     expect(lastBarChart).toBeDefined();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const labels = (lastBarChart as any).data.labels as string[];
-    expect(labels).toHaveLength(30);
+    const mockedSummary = canned(30, 9999).summary;
+    expect(labels).toHaveLength(mockedSummary.queries_per_day_window.length);
   });
 
   it("clicking 'Today' sends from=<today>&to=<today> (both equal, UTC), not days=1", async () => {

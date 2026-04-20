@@ -578,11 +578,14 @@ describe("getAnalyticsSummary honors days window", () => {
     await getAnalyticsSummary({}, 30);
 
     // Skip mock.calls[0] — the totals query has no date window.
+    // With no filter params, days is the first (and only) param on each
+    // windowed subquery. Assert directly on params[0] rather than using
+    // `.not.toContain(7)`, which could accidentally pass for any other
+    // reason a `7` is absent.
     for (let i = 1; i < 5; i++) {
       const [sql, params] = mockQuery.mock.calls[i];
       expect(sql).toContain("NOW() - INTERVAL");
-      expect(params).toContain(30);
-      expect(params).not.toContain(7);
+      expect(params[0]).toBe(30);
     }
   });
 
