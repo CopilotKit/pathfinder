@@ -991,6 +991,9 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — sources cached under the previous
+            // window are stale. Let the next unfiltered load refresh it.
+            unfilteredSourcesCache = null;
             load();
           });
         });
@@ -1009,6 +1012,8 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — invalidate source cache.
+            unfilteredSourcesCache = null;
             load();
           });
         }
@@ -1081,6 +1086,8 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — invalidate source cache.
+            unfilteredSourcesCache = null;
             load();
           });
         }
@@ -1291,6 +1298,8 @@
                   dateCustomMode = false;
                   draftFromInput = null;
                   draftToInput = null;
+                  // Date window changed — invalidate source cache.
+                  unfilteredSourcesCache = null;
                   load();
                 },
               },
