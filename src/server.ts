@@ -141,8 +141,12 @@ app.post(
     }
     try {
       await handler(req, res);
-      // Schedule bash refresh after reindexing. The orchestrator runs async,
-      // so we use a delay heuristic — TODO: replace with event-based notification.
+      // Schedule bash refresh after webhook-triggered reindex. This path
+      // uses a delay heuristic rather than orchestrator.onReindexComplete
+      // because that callback only fires on scheduled/nightly reindex, not
+      // per-webhook — the webhook handler reindexes inline via the
+      // orchestrator's handler path without going through the completion
+      // callback. Unifying the two notification paths is a larger refactor.
       const serverCfg = getServerConfig();
       const bashTools = serverCfg.tools.filter((t) => t.type === "bash");
       if (bashTools.length > 0) {
@@ -209,23 +213,30 @@ app.use(express.json());
 // Form-encoded parser for OAuth /token POSTs
 app.use(express.urlencoded({ extended: false }));
 
-// DEBUG: trace every request from claude.ai IPs to diagnose auth flow
-app.use((req, _res, next) => {
-  const ip =
-    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-    req.socket?.remoteAddress ||
-    "unknown";
-  if (
-    ip.startsWith("160.79.106") ||
-    ip.startsWith("104.192.205") ||
-    (req.headers["user-agent"] as string | undefined)?.includes("python-httpx")
-  ) {
-    console.log(
-      `[trace] ${req.method} ${req.path} ip=${ip} ua=${req.headers["user-agent"]} auth=${req.headers.authorization ? "bearer" : "none"}`,
-    );
-  }
-  next();
-});
+// DEBUG: opt-in trace for requests from claude.ai IPs to diagnose auth flow.
+// Gated behind PATHFINDER_TRACE_CLAUDE_AI=1 so production logs stay clean —
+// the hardcoded IP prefixes are here purely to help reproduce a specific
+// auth-flow bug and should not fire in general deployments.
+if (process.env.PATHFINDER_TRACE_CLAUDE_AI === "1") {
+  app.use((req, _res, next) => {
+    const ip =
+      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+      req.socket?.remoteAddress ||
+      "unknown";
+    if (
+      ip.startsWith("160.79.106") ||
+      ip.startsWith("104.192.205") ||
+      (req.headers["user-agent"] as string | undefined)?.includes(
+        "python-httpx",
+      )
+    ) {
+      console.log(
+        `[trace] ${req.method} ${req.path} ip=${ip} ua=${req.headers["user-agent"]} auth=${req.headers.authorization ? "bearer" : "none"}`,
+      );
+    }
+    next();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // OAuth 2.1 ceremonial flow — RFC-compliant endpoints with auto-approval.
@@ -388,7 +399,14 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
             );
             delete transports[sid];
             delete sessionLastActivity[sid];
-            transport.close?.();
+            // transport.close() is async on some transports; log rather
+            // than ignore so a close failure doesn't silently leak.
+            Promise.resolve(transport.close?.()).catch((err) => {
+              console.error(
+                `[mcp] transport close failed for ${sid.slice(0, 8)}:`,
+                err,
+              );
+            });
             return;
           }
           workspaceManager?.ensureSession(sid);
@@ -849,8 +867,12 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
     if (err) return err;
   }
 
-  if (req.query.tool_type) filter.tool_type = req.query.tool_type as string;
-  if (req.query.source) filter.source = req.query.source as string;
+  // After the array rejection above, these are narrowed to string | undefined.
+  // Use a typeof check (not `as string` casts) so future changes to rejectArray
+  // surface as real type errors instead of silently hiding a bad narrowing.
+  if (typeof req.query.tool_type === "string")
+    filter.tool_type = req.query.tool_type;
+  if (typeof req.query.source === "string") filter.source = req.query.source;
 
   const fromRaw =
     typeof req.query.from === "string" ? req.query.from : undefined;
@@ -1298,7 +1320,10 @@ export async function startServer(options?: ServerOptions): Promise<void> {
 
   async function shutdown(signal: string): Promise<void> {
     console.log(`\n[shutdown] Received ${signal}, shutting down...`);
-    if (telemetryFlushInterval) clearInterval(telemetryFlushInterval);
+    if (telemetryFlushInterval) {
+      clearInterval(telemetryFlushInterval);
+      telemetryFlushInterval = undefined;
+    }
     if (sessionReaperInterval) {
       clearInterval(sessionReaperInterval);
       sessionReaperInterval = undefined;
