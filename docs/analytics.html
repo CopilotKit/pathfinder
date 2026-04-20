@@ -462,10 +462,13 @@
       // date-range-selector mockup be visually evaluated against a full page.
       (function setupPreviewMode() {
         if (!window.location.search.includes("preview=1")) return;
-        // Flag preview mode on the window so fetchJson/getToken can skip
-        // auth headers, WITHOUT polluting the shared token storage slot.
-        // Writing "preview" to sessionStorage used to bleed into real
-        // /analytics sessions on the same origin (tabs share storage).
+        // Flag preview mode on a window-local property so fetchJson and
+        // getToken can short-circuit auth without touching the shared token
+        // slot in sessionStorage. sessionStorage is scoped per-origin and
+        // shared across tabs, so any sentinel written there (e.g. a
+        // "preview" placeholder) would be picked up by a real /analytics
+        // session on the same origin. Keeping the flag on `window` isolates
+        // the effect to this single page load.
         window.__pathfinderPreview = true;
 
         var today = new Date();
