@@ -248,7 +248,18 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
 
   <main class="docs-content">
     <h1>MCP <span class="accent">Client</span> Setup</h1>
-    <p class="lead">Point your AI agent at Pathfinder. Any client that supports Streamable HTTP transport works.</p>
+    <p class="lead">Pathfinder supports both the modern Streamable HTTP transport (<code>/mcp</code>) and the legacy SSE transport (<code>/sse</code>). OAuth authentication is automatic — no user accounts needed; clients register dynamically.</p>
+
+    <h2>Transport Choices</h2>
+
+    <p>Two endpoints ship in every Pathfinder instance. Pick the one your client supports:</p>
+
+    <ul>
+        <li><strong>Streamable HTTP (<code>/mcp</code>)</strong> — recommended for modern clients (Claude Code, Cursor HTTP mode, OpenCode).</li>
+        <li><strong>SSE (<code>/sse</code> + <code>/messages</code>)</strong> — legacy transport; needed for the claude.ai web connector and older MCP clients.</li>
+    </ul>
+
+    <p>Both transports share the same tools, sessions, and OAuth flow. Clients without a bearer token pass through; invalid bearers are rejected with 401.</p>
 
     <h2>Client Configurations</h2>
 
@@ -278,6 +289,17 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
     }
   }
 }</div>
+    </div>
+
+    <div class="client-card">
+        <h3>Claude.ai (Web Connector)</h3>
+        <div class="config-path">Settings &rarr; Connectors &rarr; Add custom connector</div>
+        <p>claude.ai uses the legacy SSE transport. Paste your Pathfinder URL into the custom connector dialog, then click <strong>Authenticate</strong> — the OAuth handshake runs automatically and the connector is approved anonymously.</p>
+        <div class="code-block"><span class="comment"># Streamable HTTP (newer clients)</span>
+<span class="key">URL:</span> <span class="value">https://your-pathfinder-host/mcp</span>
+
+<span class="comment"># SSE (claude.ai and older clients)</span>
+<span class="key">URL:</span> <span class="value">https://your-pathfinder-host/sse</span></div>
     </div>
 
     <div class="client-card">
