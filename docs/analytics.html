@@ -178,7 +178,11 @@
         // date-range-selector mockup be visually evaluated against a full page.
         (function setupPreviewMode() {
             if (!window.location.search.includes('preview=1')) return;
-            sessionStorage.setItem('pathfinder_analytics_token', 'preview');
+            // Flag preview mode on the window so fetchJson/getToken can skip
+            // auth headers, WITHOUT polluting the shared token storage slot.
+            // Writing "preview" to sessionStorage used to bleed into real
+            // /analytics sessions on the same origin (tabs share storage).
+            window.__pathfinderPreview = true;
 
             var today = new Date();
             function dayOffset(n) {
@@ -320,6 +324,8 @@
         }
 
         function getToken() {
+            // Preview mode skips real auth — no token, no Authorization header.
+            if (window.__pathfinderPreview) return '';
             return sessionStorage.getItem('pathfinder_analytics_token') || '';
         }
 
@@ -665,10 +671,23 @@
                 // reflects the full set. Snapshot it so that later, when a
                 // tool-type filter shrinks the response, the source pills still
                 // render the complete list.
-                if (activeToolType === null && summary.queries_by_source) {
+                //
+                // Only cache a non-empty array: caching `[]` would defeat the
+                // cache (both branches would render zero pills, losing pills
+                // that existed pre-filter) — we want a populated snapshot.
+                if (
+                    activeToolType === null &&
+                    Array.isArray(summary.queries_by_source) &&
+                    summary.queries_by_source.length > 0
+                ) {
                     unfilteredSourcesCache = summary.queries_by_source.slice();
                 }
-                currentSources = unfilteredSourcesCache || summary.queries_by_source;
+                // Explicit null-check (not `||`) so an intentionally empty
+                // cached array doesn't silently fall through to the current
+                // summary's sources.
+                currentSources = unfilteredSourcesCache !== null
+                    ? unfilteredSourcesCache
+                    : (Array.isArray(summary.queries_by_source) ? summary.queries_by_source : []);
 
                 // Render filters
                 renderFilters(toolCounts, currentSources);
@@ -772,6 +791,13 @@
 
         // Check if server is in dev mode (skip auth), otherwise require token
         (async function init() {
+            // Preview mode renders from canned data with the fetch stub above;
+            // skip both the auth-mode probe and the token prompt entirely.
+            if (window.__pathfinderPreview) {
+                headers = {};
+                load();
+                return;
+            }
             try {
                 var authMode = await fetch('/api/analytics/auth-mode').then(function(r) { return r.json(); });
                 if (authMode.dev) {
