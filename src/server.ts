@@ -251,79 +251,79 @@ let SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes default, overridden by config
 let ipLimiter: IpSessionLimiter | undefined;
 let workspaceManager: WorkspaceManager | undefined;
 
-// Reap idle sessions every 5 minutes (both /mcp Streamable HTTP and /sse legacy SSE)
-setInterval(
-  () => {
-    const now = Date.now();
-    let reaped = 0;
-    for (const sid of Object.keys(sessionLastActivity)) {
-      // Skip SSE-owned sessions — they're reaped by reapIdleSseSessions below.
-      if (sseTransports[sid]) continue;
-      if (now - sessionLastActivity[sid] > SESSION_TTL_MS) {
-        delete transports[sid];
-        delete sessionLastActivity[sid];
-        try {
-          sessionStateManager.cleanup(sid);
-        } catch (e) {
-          console.error(
-            `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
-            e,
-          );
-        }
-        try {
-          ipLimiter?.remove(sid);
-        } catch (e) {
-          console.error(`[mcp] IP limiter cleanup failed:`, e);
-        }
-        try {
-          workspaceManager?.cleanup(sid);
-        } catch (e) {
-          console.error(
-            `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
-            e,
-          );
-        }
-        reaped++;
+// Session reaper tick — started from startServer() so importing this module
+// (including from tests) doesn't leak a 5-minute setInterval into the loop.
+function reapIdleSessionsTick(): void {
+  const now = Date.now();
+  let reaped = 0;
+  for (const sid of Object.keys(sessionLastActivity)) {
+    // Skip SSE-owned sessions — they're reaped by reapIdleSseSessions below.
+    if (sseTransports[sid]) continue;
+    if (now - sessionLastActivity[sid] > SESSION_TTL_MS) {
+      delete transports[sid];
+      delete sessionLastActivity[sid];
+      try {
+        sessionStateManager.cleanup(sid);
+      } catch (e) {
+        console.error(
+          `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
+          e,
+        );
       }
-    }
-    if (reaped > 0) {
-      console.log(
-        `[mcp] Reaped ${reaped} idle sessions (${Object.keys(transports).length} active)`,
-      );
-    }
-
-    // Reap idle SSE sessions. reapIdleSseSessions closes the transport (which
-    // triggers our onclose → removes from sseTransports, ipLimiter, workspace)
-    // and also defensively clears the maps itself.
-    const reapedSse = reapIdleSseSessions({
-      sseTransports,
-      sessionLastActivity,
-      ttlMs: SESSION_TTL_MS,
-      now,
-    });
-    for (const sid of reapedSse) {
       try {
         ipLimiter?.remove(sid);
       } catch (e) {
-        console.error(`[mcp] SSE IP limiter cleanup failed:`, e);
+        console.error(`[mcp] IP limiter cleanup failed:`, e);
       }
       try {
         workspaceManager?.cleanup(sid);
       } catch (e) {
         console.error(
-          `[mcp] SSE workspace cleanup failed for ${sid.slice(0, 8)}:`,
+          `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
           e,
         );
       }
+      reaped++;
     }
-    if (reapedSse.length > 0) {
-      console.log(
-        `[mcp] Reaped ${reapedSse.length} idle SSE sessions (${Object.keys(sseTransports).length} SSE active)`,
+  }
+  if (reaped > 0) {
+    console.log(
+      `[mcp] Reaped ${reaped} idle sessions (${Object.keys(transports).length} active)`,
+    );
+  }
+
+  // Reap idle SSE sessions. reapIdleSseSessions closes the transport (which
+  // triggers our onclose → removes from sseTransports, ipLimiter, workspace)
+  // and also defensively clears the maps itself.
+  const reapedSse = reapIdleSseSessions({
+    sseTransports,
+    sessionLastActivity,
+    ttlMs: SESSION_TTL_MS,
+    now,
+  });
+  for (const sid of reapedSse) {
+    try {
+      ipLimiter?.remove(sid);
+    } catch (e) {
+      console.error(`[mcp] SSE IP limiter cleanup failed:`, e);
+    }
+    try {
+      workspaceManager?.cleanup(sid);
+    } catch (e) {
+      console.error(
+        `[mcp] SSE workspace cleanup failed for ${sid.slice(0, 8)}:`,
+        e,
       );
     }
-  },
-  5 * 60 * 1000,
-);
+  }
+  if (reapedSse.length > 0) {
+    console.log(
+      `[mcp] Reaped ${reapedSse.length} idle SSE sessions (${Object.keys(sseTransports).length} SSE active)`,
+    );
+  }
+}
+
+let sessionReaperInterval: ReturnType<typeof setInterval> | undefined;
 
 function clientIp(req: Request): string {
   return (
@@ -1112,6 +1112,15 @@ export async function startServer(options?: ServerOptions): Promise<void> {
   const maxSessionsPerIp = serverCfg.server.max_sessions_per_ip ?? 20;
   SESSION_TTL_MS = (serverCfg.server.session_ttl_minutes ?? 30) * 60 * 1000;
   ipLimiter = new IpSessionLimiter(maxSessionsPerIp);
+
+  // Start the idle-session reaper. Running it from here (rather than at
+  // module import) keeps test imports free of leaked timers.
+  if (!sessionReaperInterval) {
+    sessionReaperInterval = setInterval(
+      reapIdleSessionsTick,
+      5 * 60 * 1000,
+    );
+  }
   console.log(
     `[startup] IP rate limit: ${maxSessionsPerIp} sessions/IP, TTL: ${serverCfg.server.session_ttl_minutes ?? 30}m`,
   );
@@ -1254,6 +1263,10 @@ export async function startServer(options?: ServerOptions): Promise<void> {
   async function shutdown(signal: string): Promise<void> {
     console.log(`\n[shutdown] Received ${signal}, shutting down...`);
     if (telemetryFlushInterval) clearInterval(telemetryFlushInterval);
+    if (sessionReaperInterval) {
+      clearInterval(sessionReaperInterval);
+      sessionReaperInterval = undefined;
+    }
     try {
       await bashTelemetry?.flush();
     } catch (e) {
