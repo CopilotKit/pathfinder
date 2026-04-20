@@ -82,7 +82,8 @@ function buildTestApp() {
           res.status(parsed.status).json(parsed.body);
           return;
         }
-        const summary = await mockGetAnalyticsSummary(parsed.filter);
+        const days = parseInt(req.query.days as string) || 7;
+        const summary = await mockGetAnalyticsSummary(parsed.filter, days);
         res.json(summary);
       } catch (err) {
         res.status(500).json({ error: "Failed to fetch analytics summary" });
@@ -501,6 +502,79 @@ describe("Analytics server routes (HTTP-level)", () => {
       const callArg = mockGetAnalyticsSummary.mock.calls[0][0];
       expect(callArg.from).toBeUndefined();
       expect(callArg.to).toBeUndefined();
+    });
+
+    // -------------------------------------------------------------------------
+    // Regression: the summary handler used to drop the `days` query param
+    // entirely — only parseAnalyticsFilter(from/to) made it to the DB layer.
+    // As a result, the dashboard's "Last N days" preset never updated the
+    // stat cards or the daily chart.
+    // -------------------------------------------------------------------------
+    it("forwards `days=30` through to getAnalyticsSummary as the second arg", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?days=30",
+        { Authorization: "Bearer tok" },
+      );
+
+      expect(res.status).toBe(200);
+      // getAnalyticsSummary must be invoked with (filter, days).
+      expect(mockGetAnalyticsSummary).toHaveBeenCalledTimes(1);
+      const [filterArg, daysArg] = mockGetAnalyticsSummary.mock.calls[0];
+      expect(filterArg).toEqual({});
+      expect(daysArg).toBe(30);
+    });
+
+    it("defaults `days` to 7 when no days param is provided", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
+
+      await startApp();
+      await request(server, "GET", "/api/analytics/summary", {
+        Authorization: "Bearer tok",
+      });
+
+      const [, daysArg] = mockGetAnalyticsSummary.mock.calls[0];
+      expect(daysArg).toBe(7);
+    });
+
+    it("does not pass `days` to DB when from/to range is active", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
+
+      await startApp();
+      await request(
+        server,
+        "GET",
+        "/api/analytics/summary?from=2026-04-01&to=2026-04-20&days=30",
+        { Authorization: "Bearer tok" },
+      );
+
+      // `days` still reaches the DB layer as a fallback (default 7), but the
+      // explicit from/to range takes precedence inside buildDateWindow.
+      const [filterArg] = mockGetAnalyticsSummary.mock.calls[0];
+      expect(filterArg.from).toBeInstanceOf(Date);
+      expect(filterArg.to).toBeInstanceOf(Date);
     });
   });
 });
