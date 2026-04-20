@@ -1085,7 +1085,13 @@ app.get("/analytics", (_req: Request, res: Response) => {
     res.status(404).json({ error: "Analytics not enabled" });
     return;
   }
-  res.sendFile(path.resolve(__dirname, "../docs/analytics.html"));
+  // `dotfiles: "allow"` is required so the file serves from paths that contain
+  // a dot-prefixed segment (e.g. git worktrees under `.claude/`). Without it,
+  // Express's `send` returns 404 for any path with a dotfile component,
+  // regardless of whether the file itself exists.
+  res.sendFile(path.resolve(__dirname, "../docs/analytics.html"), {
+    dotfiles: "allow",
+  });
 });
 
 // ---------------------------------------------------------------------------
