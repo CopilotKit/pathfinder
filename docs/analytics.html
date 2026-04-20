@@ -991,6 +991,11 @@
             pill.addEventListener("click", function () {
               var isAll = this.hasAttribute("data-source-all");
               activeSource = isAll ? null : this.getAttribute("data-source");
+              // Clearing/changing the source filter means the next fetch
+              // may return a narrower set of sources in summary. Drop the
+              // cache so a later unfiltered response can re-seed it from
+              // the full population.
+              unfilteredSourcesCache = null;
               load();
             });
           });
@@ -1181,16 +1186,23 @@
 
           // Cache for non-fetching re-renders (e.g. toggling the date popover)
           currentToolCounts = toolCounts;
-          // When no tool-type filter is active, the summary.queries_by_source
+          // When NO filters are active, the summary.queries_by_source
           // reflects the full set. Snapshot it so that later, when a
-          // tool-type filter shrinks the response, the source pills still
-          // render the complete list.
+          // tool-type or source filter shrinks the response, the source
+          // pills still render the complete list.
+          //
+          // Must gate on BOTH activeToolType === null AND activeSource === null:
+          // if only activeToolType is checked, a user who picks source=A
+          // then clears the tool filter (keeping source=A) would overwrite
+          // the cache with a single-row response, permanently hiding the
+          // other sources until a full reload.
           //
           // Only cache a non-empty array: caching `[]` would defeat the
           // cache (both branches would render zero pills, losing pills
           // that existed pre-filter) — we want a populated snapshot.
           if (
             activeToolType === null &&
+            activeSource === null &&
             Array.isArray(summary.queries_by_source) &&
             summary.queries_by_source.length > 0
           ) {
