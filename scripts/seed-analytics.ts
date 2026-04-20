@@ -179,8 +179,11 @@ To view the dashboard:
      PATHFINDER_CONFIG=fixtures/analytics-test/pathfinder.yaml \\
      npx tsx src/index.ts
 
-  2. Open the URL printed in the console (includes auto-generated token):
-     http://localhost:3001/analytics?token=<token>
+  2. The server logs only a short fingerprint of the auto-generated token
+     (for safety). To obtain a usable token, set ANALYTICS_TOKEN explicitly
+     when starting the server, then:
+     http://localhost:3001/analytics
+     and paste the token into the "Analytics Token" prompt.
 `);
 
     await closePool();

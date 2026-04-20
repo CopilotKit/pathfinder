@@ -518,7 +518,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(daysArg).toBe(7);
     });
 
-    it("does not pass `days` to DB when from/to range is active", async () => {
+    it("forwards days param alongside from/to range (DB layer handles precedence)", async () => {
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
         log_queries: true,
@@ -531,13 +531,16 @@ describe("Analytics server routes (HTTP-level)", () => {
       await request(
         server,
         "GET",
-        "/api/analytics/summary?from=2026-04-01&to=2026-04-20&days=30",
+        "/api/analytics/summary?from=2026-04-01&to=2026-04-20&days=7",
         { Authorization: "Bearer tok" },
       );
 
-      // `days` still reaches the DB layer as a fallback (default 7), but the
-      // explicit from/to range takes precedence inside buildDateWindow.
-      const [filterArg] = mockGetAnalyticsSummary.mock.calls[0];
+      // The handler forwards both the explicit range (on filter) and the
+      // days param; buildDateWindow inside the DB layer picks from/to when
+      // both are set. Asserting both arguments here keeps the handler
+      // behaviour locked down even if the DB precedence rule changes.
+      const [filterArg, daysArg] = mockGetAnalyticsSummary.mock.calls[0];
+      expect(daysArg).toBe(7);
       expect(filterArg.from).toBeInstanceOf(Date);
       expect(filterArg.to).toBeInstanceOf(Date);
     });
@@ -616,6 +619,93 @@ describe("Analytics server routes (HTTP-level)", () => {
         { Authorization: "Bearer tok" },
       );
       expect(res.status).toBe(400);
+    });
+  });
+
+  // ---- DB error handling (500 path) -----------------------------------------
+  //
+  // Each handler wraps its DB call in a try/catch that logs the error and
+  // returns a generic 500. These tests lock down that contract so a handler
+  // can't accidentally leak a stack trace (or, worse, crash the process).
+  // ---------------------------------------------------------------------------
+
+  describe("DB error handling (500 path)", () => {
+    function cfg() {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+    }
+
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errSpy.mockRestore();
+    });
+
+    it("returns 500 JSON when getAnalyticsSummary throws", async () => {
+      cfg();
+      mockGetAnalyticsSummary.mockRejectedValueOnce(new Error("db down"));
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/summary", {
+        Authorization: "Bearer tok",
+      });
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeTruthy();
+      // Body must not leak internal stack/message detail
+      expect(res.body).not.toContain("db down");
+    });
+
+    it("returns 500 JSON when getTopQueries throws", async () => {
+      cfg();
+      mockGetTopQueries.mockRejectedValueOnce(new Error("db down"));
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/queries", {
+        Authorization: "Bearer tok",
+      });
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeTruthy();
+      expect(res.body).not.toContain("db down");
+    });
+
+    it("returns 500 JSON when getEmptyQueries throws", async () => {
+      cfg();
+      mockGetEmptyQueries.mockRejectedValueOnce(new Error("db down"));
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/empty-queries", {
+        Authorization: "Bearer tok",
+      });
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeTruthy();
+      expect(res.body).not.toContain("db down");
+    });
+
+    it("returns 500 JSON when getToolCounts throws", async () => {
+      cfg();
+      mockGetToolCounts.mockRejectedValueOnce(new Error("db down"));
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/tool-counts", {
+        Authorization: "Bearer tok",
+      });
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeTruthy();
+      expect(res.body).not.toContain("db down");
     });
   });
 });

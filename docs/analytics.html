@@ -462,10 +462,13 @@
       // date-range-selector mockup be visually evaluated against a full page.
       (function setupPreviewMode() {
         if (!window.location.search.includes("preview=1")) return;
-        // Flag preview mode on the window so fetchJson/getToken can skip
-        // auth headers, WITHOUT polluting the shared token storage slot.
-        // Writing "preview" to sessionStorage used to bleed into real
-        // /analytics sessions on the same origin (tabs share storage).
+        // Flag preview mode on a window-local property so fetchJson and
+        // getToken can short-circuit auth without touching the shared token
+        // slot in sessionStorage. sessionStorage is scoped per-origin and
+        // shared across tabs, so any sentinel written there (e.g. a
+        // "preview" placeholder) would be picked up by a real /analytics
+        // session on the same origin. Keeping the flag on `window` isolates
+        // the effect to this single page load.
         window.__pathfinderPreview = true;
 
         var today = new Date();
@@ -626,6 +629,27 @@
         };
       })();
 
+      // --- Constants / helpers ---
+      // Upper bound used by the "All time" preset. Server-side MAX_DAYS must
+      // stay >= this value.
+      var ALL_TIME_DAYS = 99999;
+
+      // Dedicated error so load()'s catch block can distinguish auth failures
+      // (which already rendered the login modal) from all other errors
+      // without resorting to `err.message === "auth"` magic string matching.
+      function AnalyticsAuthError() {
+        var e = new Error("analytics-auth");
+        e.name = "AnalyticsAuthError";
+        return e;
+      }
+
+      // Coerce an unknown value to a finite number for .toLocaleString() —
+      // if the server sends null / undefined / NaN for a counter field, we
+      // render 0 rather than letting toLocaleString() throw or render "NaN".
+      function safeNumber(x) {
+        return typeof x === "number" && Number.isFinite(x) ? x : 0;
+      }
+
       // --- State ---
       var activeToolType = null; // null = "All"
       var activeSource = null; // null = "All Sources"
@@ -701,7 +725,7 @@
         if (activeDaysBack === 14) return "Last 14 days";
         if (activeDaysBack === 30) return "Last 30 days";
         if (activeDaysBack === 90) return "Last 90 days";
-        if (activeDaysBack !== null && activeDaysBack >= 99999)
+        if (activeDaysBack !== null && activeDaysBack >= ALL_TIME_DAYS)
           return "All time";
         if (activeDaysBack !== null) return "Last " + activeDaysBack + " days";
         return "Custom range";
@@ -749,13 +773,16 @@
           loginErr.textContent =
             res.status === 401 ? "Token required" : "Invalid token";
           loginErr.style.display = "block";
-          throw new Error("auth");
+          throw AnalyticsAuthError();
         }
         if (!res.ok) {
-          var body = await res.json().catch(function () {
+          var body = await res.json().catch(function (parseErr) {
+            console.error("[analytics] error body parse failed", parseErr);
             return {};
           });
-          throw new Error(body.error || "HTTP " + res.status);
+          throw new Error(
+            body.error_description || body.error || "HTTP " + res.status,
+          );
         }
         return res.json();
       }
@@ -821,7 +848,7 @@
           { label: "Last 14 days", kind: "days", days: 14 },
           { label: "Last 30 days", kind: "days", days: 30 },
           { label: "Last 90 days", kind: "days", days: 90 },
-          { label: "All time", kind: "days", days: 99999 },
+          { label: "All time", kind: "days", days: ALL_TIME_DAYS },
         ];
         var pillLabel = formatPillLabel();
         var customModeCls = dateCustomMode ? " custom-mode" : "";
@@ -991,6 +1018,9 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — sources cached under the previous
+            // window are stale. Let the next unfiltered load refresh it.
+            unfilteredSourcesCache = null;
             load();
           });
         });
@@ -1009,6 +1039,8 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — invalidate source cache.
+            unfilteredSourcesCache = null;
             load();
           });
         }
@@ -1081,6 +1113,8 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — invalidate source cache.
+            unfilteredSourcesCache = null;
             load();
           });
         }
@@ -1181,35 +1215,46 @@
           // When the window is "All time", the windowed Queries card
           // would duplicate the Total Queries card (same population),
           // so omit it for clarity.
-          var isAllTime = activeDaysBack !== null && activeDaysBack >= 99999;
+          var isAllTime =
+            activeDaysBack !== null && activeDaysBack >= ALL_TIME_DAYS;
           var statCards = [
             {
               label: "Total Queries",
-              value: summary.total_queries.toLocaleString(),
+              value: safeNumber(summary.total_queries).toLocaleString(),
             },
           ];
           if (!isAllTime) {
             statCards.push({
               label: "Queries (" + winLabel + ")",
-              value: summary.total_queries_window.toLocaleString(),
+              value: safeNumber(summary.total_queries_window).toLocaleString(),
             });
           }
+          // Guard the percentage: NaN * 100 = NaN, and (NaN).toFixed(1) is
+          // "NaN", so an undefined or non-finite rate from the server would
+          // render as "NaN%". Fall back to "-" instead.
+          var rate = summary.empty_result_rate_window;
+          var rateLabel =
+            typeof rate === "number" && Number.isFinite(rate)
+              ? (rate * 100).toFixed(1) + "%"
+              : "-";
           statCards.push(
             {
               label: "Empty Result Rate (" + winLabel + ")",
-              value: (summary.empty_result_rate_window * 100).toFixed(1) + "%",
+              value: rateLabel,
             },
             {
               label: "Avg Latency (" + winLabel + ")",
-              value: summary.avg_latency_ms_window + "ms",
+              value: safeNumber(summary.avg_latency_ms_window) + "ms",
             },
             {
               label: "P95 Latency (" + winLabel + ")",
-              value: summary.p95_latency_ms_window + "ms",
+              value: safeNumber(summary.p95_latency_ms_window) + "ms",
             },
             {
               label: "Empty Queries (" + winLabel + ")",
-              value: summary.empty_result_count_window.toLocaleString(),
+              value: safeNumber(
+                summary.empty_result_count_window,
+              ).toLocaleString(),
             },
           );
           document.getElementById("stats").innerHTML = statCards
@@ -1291,6 +1336,8 @@
                   dateCustomMode = false;
                   draftFromInput = null;
                   draftToInput = null;
+                  // Date window changed — invalidate source cache.
+                  unfilteredSourcesCache = null;
                   load();
                 },
               },
@@ -1387,7 +1434,7 @@
           // request that rejects after a newer load() has already
           // rendered would otherwise clobber the fresh UI with an error.
           if (gen !== loadGeneration) return;
-          if (err.message !== "auth") {
+          if (err.name !== "AnalyticsAuthError") {
             document.getElementById("error").style.display = "block";
             document.getElementById("error").textContent =
               "Failed to load analytics: " + err.message;
@@ -1431,7 +1478,12 @@
             return;
           }
         } catch (e) {
-          /* ignore — fall through to normal auth */
+          // Fall through to normal auth. Log so a broken probe is visible
+          // in devtools rather than silently invoking the token prompt.
+          console.warn(
+            "[analytics] auth-mode probe failed; falling back to token auth",
+            e,
+          );
         }
 
         if (!TOKEN) {
