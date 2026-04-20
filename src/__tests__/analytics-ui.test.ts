@@ -295,81 +295,98 @@ describe("analytics dashboard UI — date preset wiring", () => {
   });
 
   it("clicking 'Today' sends from=<today>&to=<today> (both equal, UTC), not days=1", async () => {
-    const endpoints = {
-      "/api/analytics/auth-mode": () => ({ dev: true }),
-      "/api/analytics/summary": (qs: string) => {
-        const p = parseQS(qs);
-        // Return a distinguishing value when the `from`/`to` range is used.
-        const usingRange = Boolean(p.from && p.to);
-        return canned(1, usingRange ? 4242 : 1111).summary;
-      },
-      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
-      "/api/analytics/queries": () => [],
-      "/api/analytics/empty-queries": () => [],
-    };
+    // Freeze Date so "today" is deterministic across timezones and midnight
+    // rollovers. toFake:["Date"] keeps setTimeout real so the flush-microtask
+    // pattern below (`await setTimeout(r, 0)`) still advances normally.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+    try {
+      const endpoints = {
+        "/api/analytics/auth-mode": () => ({ dev: true }),
+        "/api/analytics/summary": (qs: string) => {
+          const p = parseQS(qs);
+          // Return a distinguishing value when the `from`/`to` range is used.
+          const usingRange = Boolean(p.from && p.to);
+          return canned(1, usingRange ? 4242 : 1111).summary;
+        },
+        "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+        "/api/analytics/queries": () => [],
+        "/api/analytics/empty-queries": () => [],
+      };
 
-    const { dom, calls } = await loadDashboard(endpoints);
-    const initial = calls.slice();
+      const { dom, calls } = await loadDashboard(endpoints);
+      const initial = calls.slice();
 
-    // Open popover.
-    const datePill = dom.window.document.getElementById("datePill")!;
-    datePill.dispatchEvent(
-      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
-    );
+      // Open popover.
+      const datePill = dom.window.document.getElementById("datePill")!;
+      datePill.dispatchEvent(
+        new dom.window.MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
 
-    // Click "Today" preset. data-days is whatever the UI chose — the test
-    // only asserts on outbound fetches, which is what actually matters.
-    const todayPreset = Array.from(
-      dom.window.document.querySelectorAll(".preset"),
-    ).find((el) => el.textContent?.trim().startsWith("Today")) as
-      | HTMLElement
-      | undefined;
-    expect(todayPreset).toBeDefined();
-    todayPreset!.dispatchEvent(
-      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
-    );
+      // Click "Today" preset. data-days is whatever the UI chose — the test
+      // only asserts on outbound fetches, which is what actually matters.
+      const todayPreset = Array.from(
+        dom.window.document.querySelectorAll(".preset"),
+      ).find((el) => el.textContent?.trim().startsWith("Today")) as
+        | HTMLElement
+        | undefined;
+      expect(todayPreset).toBeDefined();
+      todayPreset!.dispatchEvent(
+        new dom.window.MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
 
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
 
-    const after = calls.slice(initial.length);
-    const summaryCall = after.find((u) =>
-      u.startsWith("/api/analytics/summary"),
-    );
-    expect(summaryCall).toBeDefined();
-    const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+      const after = calls.slice(initial.length);
+      const summaryCall = after.find((u) =>
+        u.startsWith("/api/analytics/summary"),
+      );
+      expect(summaryCall).toBeDefined();
+      const qs = parseQS(summaryCall!.split("?")[1] ?? "");
 
-    const today = todayUTC();
-    // from and to must both be present AND equal to today's date.
-    expect(qs.from).toBe(today);
-    expect(qs.to).toBe(today);
-    // days= must NOT be sent — "Today" uses explicit range, not rolling window.
-    expect(qs.days).toBeUndefined();
+      // With frozen Date, today is exactly 2026-04-20 in UTC.
+      const today = "2026-04-20";
+      expect(today).toBe(todayUTC());
+      // from and to must both be present AND equal to today's date.
+      expect(qs.from).toBe(today);
+      expect(qs.to).toBe(today);
+      // days= must NOT be sent — "Today" uses explicit range, not rolling window.
+      expect(qs.days).toBeUndefined();
 
-    // Every endpoint must send the explicit range.
-    for (const p of [
-      "/api/analytics/summary",
-      "/api/analytics/tool-counts",
-      "/api/analytics/queries",
-      "/api/analytics/empty-queries",
-    ]) {
-      const call = after.find((u) => u.startsWith(p));
-      expect(call, p + " should be refetched").toBeDefined();
-      const q = parseQS(call!.split("?")[1] ?? "");
-      expect(q.from, p + " from=today").toBe(today);
-      expect(q.to, p + " to=today").toBe(today);
-      expect(q.days, p + " should not send days").toBeUndefined();
+      // Every endpoint must send the explicit range.
+      for (const p of [
+        "/api/analytics/summary",
+        "/api/analytics/tool-counts",
+        "/api/analytics/queries",
+        "/api/analytics/empty-queries",
+      ]) {
+        const call = after.find((u) => u.startsWith(p));
+        expect(call, p + " should be refetched").toBeDefined();
+        const q = parseQS(call!.split("?")[1] ?? "");
+        expect(q.from, p + " from=today").toBe(today);
+        expect(q.to, p + " to=today").toBe(today);
+        expect(q.days, p + " should not send days").toBeUndefined();
+      }
+
+      // Stat card must show the range-using payload, not the default 7-day one.
+      const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+      expect(statsHtml).toContain("4,242");
+
+      // Pill label must say "Today" — not the formatted date.
+      const pillLabel = dom.window.document
+        .querySelector("#datePill .date-value")
+        ?.textContent?.trim();
+      expect(pillLabel).toBe("Today");
+    } finally {
+      vi.useRealTimers();
     }
-
-    // Stat card must show the range-using payload, not the default 7-day one.
-    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
-    expect(statsHtml).toContain("4,242");
-
-    // Pill label must say "Today" — not the formatted date.
-    const pillLabel = dom.window.document
-      .querySelector("#datePill .date-value")
-      ?.textContent?.trim();
-    expect(pillLabel).toBe("Today");
   });
 
   it("clicking 'Last 7 days' AFTER 'Today' switches back to days=7 and updates stats", async () => {
