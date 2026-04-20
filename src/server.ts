@@ -1205,9 +1205,7 @@ export function registerAnalyticsRoutes(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const code = (err as any).code as string | undefined;
       if (code === "ENOENT") {
-        res
-          .status(404)
-          .json({ error: "analytics dashboard not available" });
+        res.status(404).json({ error: "analytics dashboard not available" });
         return;
       }
       console.error("[analytics] sendFile failed:", err);

@@ -149,9 +149,7 @@ describe("analyticsAuth middleware", () => {
     // its log suppressed), then verify subsequent calls don't regenerate.
     // beforeEach resets the cached token, so this test must create it
     // explicitly rather than rely on prior-test side effects.
-    const bootstrapSpy = vi
-      .spyOn(console, "log")
-      .mockImplementation(() => {});
+    const bootstrapSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     analyticsAuth({ headers: {} } as never, mockRes() as never, vi.fn());
     bootstrapSpy.mockRestore();
 

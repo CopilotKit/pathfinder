@@ -277,8 +277,7 @@ export async function getAnalyticsSummary(
     total_queries: totalQueries,
     total_queries_window: totalWindow,
     empty_result_count_window: emptyWindow,
-    empty_result_rate_window:
-      totalWindow > 0 ? emptyWindow / totalWindow : 0,
+    empty_result_rate_window: totalWindow > 0 ? emptyWindow / totalWindow : 0,
     avg_latency_ms_window: s.avg_latency ?? 0,
     p95_latency_ms_window: p95Latency,
     queries_by_source: bySourceRes.rows.map((r: Record<string, unknown>) => ({
