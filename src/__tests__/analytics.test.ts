@@ -497,22 +497,24 @@ describe("getTopQueries LIKE injection hardening", () => {
       (p: unknown) => typeof p === "string" && p.includes("_"),
     );
     expect(typeof toolParam).toBe("string");
-    expect(toolParam).toBe("\\_");
-    // SQL carries an explicit ESCAPE '\' clause so `\_` in the param is treated
-    // as a literal `_` rather than a LIKE wildcard.
-    expect(sql).toContain("ESCAPE '\\'");
+    expect(toolParam).toBe("|_");
+    // SQL carries an explicit ESCAPE '|' clause so `|_` in the param is
+    // treated as a literal `_` rather than a LIKE wildcard. We use `|`
+    // rather than `\` because Postgres with standard_conforming_strings=on
+    // (the default) treats '\\' as two characters, which ESCAPE rejects.
+    expect(sql).toContain("ESCAPE '|'");
   });
 
-  it("escapes backslash and percent", async () => {
+  it("escapes pipe and percent", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
-    await getTopQueries(7, 50, { tool_type: "a%b\\c" });
+    await getTopQueries(7, 50, { tool_type: "a%b|c" });
 
     const [, params] = mockQuery.mock.calls[0];
     const toolParam = params.find(
       (p: unknown) => typeof p === "string" && p.length > 0 && p !== "docs",
     );
-    // Each \, %, _ must be prefixed with a backslash
-    expect(toolParam).toBe("a\\%b\\\\c");
+    // Each |, %, _ must be prefixed with a literal `|`
+    expect(toolParam).toBe("a|%b||c");
   });
 });
 
