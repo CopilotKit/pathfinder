@@ -31,6 +31,14 @@ import { SessionStateManager } from "./mcp/tools/bash-session.js";
 import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
 import { insertCollectedData } from "./db/queries.js";
 import { IpSessionLimiter } from "./ip-limiter.js";
+import {
+  protectedResourceHandler,
+  authorizationServerHandler,
+  registerHandler,
+  authorizeHandler,
+  tokenHandler,
+  bearerMiddleware,
+} from "./oauth/handlers.js";
 import { WorkspaceManager } from "./workspace.js";
 import { generateLlmsTxt, generateLlmsFullTxt } from "./llms-txt.js";
 import { generateFaqTxt } from "./faq-txt.js";
@@ -195,41 +203,20 @@ app.post(
 
 // JSON parser for all other routes
 app.use(express.json());
+// Form-encoded parser for OAuth /token POSTs
+app.use(express.urlencoded({ extended: false }));
 
 // ---------------------------------------------------------------------------
-// OAuth discovery stubs — tell MCP clients that no auth is required.
-// Newer Claude Code versions probe these before connecting.
+// OAuth 2.1 ceremonial flow — RFC-compliant endpoints with auto-approval.
+// Opportunistic bearer auth on /mcp lets existing unauthenticated clients
+// keep working while claude.ai-style clients can complete the OAuth handshake.
 // ---------------------------------------------------------------------------
 
-// Return resource metadata with no authorization servers — signals "no auth required"
-// per RFC 9728. Newer Claude Code versions probe this before connecting.
-app.get(
-  "/.well-known/oauth-protected-resource",
-  (req: Request, res: Response) => {
-    const host = req.headers.host || `localhost:${getConfig().port}`;
-    const proto = req.headers["x-forwarded-proto"] || "http";
-    res.json({
-      resource: `${proto}://${host}`,
-    });
-  },
-);
-
-app.get(
-  "/.well-known/oauth-authorization-server",
-  (_req: Request, res: Response) => {
-    res.status(404).json({
-      error:
-        "No authorization server — this resource does not require authentication",
-    });
-  },
-);
-
-app.post("/register", (_req: Request, res: Response) => {
-  res.status(404).json({
-    error:
-      "No authorization server — this resource does not require authentication",
-  });
-});
+app.get("/.well-known/oauth-protected-resource", protectedResourceHandler);
+app.get("/.well-known/oauth-authorization-server", authorizationServerHandler);
+app.post("/register", registerHandler);
+app.get("/authorize", authorizeHandler);
+app.post("/token", tokenHandler);
 
 // ---------------------------------------------------------------------------
 // MCP endpoint — session-based (initialize once, then tool calls reuse session)
@@ -291,7 +278,7 @@ function clientIp(req: Request): string {
   );
 }
 
-app.post("/mcp", async (req: Request, res: Response) => {
+app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const ip = clientIp(req);
@@ -420,7 +407,7 @@ app.get("/mcp", async (req: Request, res: Response) => {
 });
 
 // Session termination
-app.delete("/mcp", async (req: Request, res: Response) => {
+app.delete("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
   if (sessionId && transports[sessionId]) {
     await transports[sessionId].handleRequest(req, res);

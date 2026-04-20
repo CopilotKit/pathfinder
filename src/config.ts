@@ -11,6 +11,7 @@ import {
   isDiscordSourceConfig,
   isFileSourceConfig,
 } from "./types.js";
+import { resolveJwtSecret } from "./oauth/secret.js";
 
 // ── Environment variable config (secrets and runtime settings) ────────────────
 
@@ -28,6 +29,7 @@ export interface Config {
   discordBotToken: string;
   discordPublicKey: string;
   notionToken: string;
+  mcpJwtSecret: string;
 }
 
 /**
@@ -145,13 +147,16 @@ function parseConfig(): Config {
     );
   }
 
+  const nodeEnv = process.env.NODE_ENV || "development";
+  const mcpJwtSecret = resolveJwtSecret({ nodeEnv });
+
   return {
     databaseUrl,
     openaiApiKey: openaiApiKey ?? "",
     githubToken: process.env.GITHUB_TOKEN || "",
     githubWebhookSecret: githubWebhookSecret!,
     port,
-    nodeEnv: process.env.NODE_ENV || "development",
+    nodeEnv,
     logLevel: process.env.LOG_LEVEL || "info",
     cloneDir: process.env.CLONE_DIR || "/tmp/mcp-repos",
     slackBotToken,
@@ -159,6 +164,7 @@ function parseConfig(): Config {
     discordBotToken,
     discordPublicKey,
     notionToken,
+    mcpJwtSecret,
   };
 }
 
