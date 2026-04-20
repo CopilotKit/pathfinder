@@ -515,6 +515,127 @@ describe("getEmptyQueries with filters", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Date range filter (from/to) support
+// ---------------------------------------------------------------------------
+
+describe("getAnalyticsSummary with from/to range", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it("generates created_at >= / <= range clause and passes Date params", async () => {
+    mockSummaryQueries();
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-20T23:59:59.999Z");
+    await getAnalyticsSummary({ from, to });
+
+    // Total query has no date window (all time).
+    const [totalSql] = mockQuery.mock.calls[0];
+    expect(totalSql).not.toContain("created_at");
+
+    // The other four queries should use the explicit range, not NOW() - INTERVAL.
+    for (let i = 1; i < 5; i++) {
+      const [sql, params] = mockQuery.mock.calls[i];
+      expect(sql).toContain("created_at >=");
+      expect(sql).toContain("created_at <=");
+      expect(sql).not.toContain("NOW() - INTERVAL");
+      expect(params).toContain(from);
+      expect(params).toContain(to);
+    }
+  });
+
+  it("falls back to NOW() - INTERVAL window when from/to are not set", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    for (let i = 1; i < 5; i++) {
+      const [sql] = mockQuery.mock.calls[i];
+      expect(sql).toContain("NOW() - INTERVAL");
+      expect(sql).not.toContain("created_at >=");
+    }
+  });
+});
+
+describe("getTopQueries with from/to range", () => {
+  it("combines tool_type filter with explicit range", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-20T23:59:59.999Z");
+    await getTopQueries(7, 50, { tool_type: "search", from, to });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("tool_name LIKE");
+    expect(sql).toContain("created_at >=");
+    expect(sql).toContain("created_at <=");
+    expect(sql).not.toContain("NOW() - INTERVAL");
+    expect(params).toContain("search");
+    expect(params).toContain(from);
+    expect(params).toContain(to);
+    // limit still appears at the end
+    expect(params).toContain(50);
+  });
+
+  it("does not pass `days` when range is active", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-05T23:59:59.999Z");
+    await getTopQueries(30, 10, { from, to });
+
+    const [, params] = mockQuery.mock.calls[0];
+    // days=30 should NOT be in params — only range Dates + limit
+    expect(params).not.toContain(30);
+    expect(params).toContain(10);
+  });
+});
+
+describe("getEmptyQueries with from/to range", () => {
+  it("uses explicit range alongside result_count = 0", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-20T23:59:59.999Z");
+    await getEmptyQueries(7, 50, { from, to });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("result_count = 0");
+    expect(sql).toContain("created_at >=");
+    expect(sql).toContain("created_at <=");
+    expect(params).toContain(from);
+    expect(params).toContain(to);
+  });
+});
+
+describe("getToolCounts with from/to range", () => {
+  it("uses explicit range when filter.from/to are set", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-20T23:59:59.999Z");
+    await getToolCounts(7, { from, to });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("created_at >=");
+    expect(sql).toContain("created_at <=");
+    expect(sql).not.toContain("NOW() - INTERVAL");
+    expect(params).toEqual([from, to]);
+  });
+
+  it("falls back to days window when no range filter provided", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(14);
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("NOW() - INTERVAL");
+    expect(params).toEqual([14]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // avg_result_count null handling
 // ---------------------------------------------------------------------------
 
