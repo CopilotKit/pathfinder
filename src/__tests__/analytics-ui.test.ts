@@ -429,3 +429,159 @@ describe("analytics dashboard UI — date preset wiring", () => {
     expect(statsHtml).toContain("7,777");
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — dynamic window labels", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeEndpoints() {
+    return {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": (qs: string) => {
+        const p = parseQS(qs);
+        const days = p.days ? parseInt(p.days, 10) : 7;
+        return canned(days, 1234).summary;
+      },
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+  }
+
+  async function clickPresetByDays(dom: JSDOM, days: number) {
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const preset = Array.from(
+      dom.window.document.querySelectorAll(".preset[data-days]"),
+    ).find((el) => el.getAttribute("data-days") === String(days)) as
+      | HTMLElement
+      | undefined;
+    preset!.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  async function clickToday(dom: JSDOM) {
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const todayPreset = Array.from(
+      dom.window.document.querySelectorAll(".preset"),
+    ).find((el) => el.textContent?.trim().startsWith("Today")) as
+      | HTMLElement
+      | undefined;
+    todayPreset!.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it("default load shows 'Last 7 days' window label on stat cards, chart title, and table headers", async () => {
+    const { dom } = await loadDashboard(makeEndpoints());
+    const doc = dom.window.document;
+
+    // Stat card labels (first four stat cards carry the window label).
+    const statsHtml = doc.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("Queries (Last 7 days)");
+    expect(statsHtml).toContain("Empty Result Rate (Last 7 days)");
+    expect(statsHtml).toContain("Avg Latency (Last 7 days)");
+    expect(statsHtml).toContain("P95 Latency (Last 7 days)");
+    expect(statsHtml).toContain("Empty Queries (Last 7 days)");
+    // And the "(7d)" literal must be gone from stat card labels.
+    expect(statsHtml).not.toContain("(7d)");
+
+    // Daily chart title.
+    const dailyTitle = doc.getElementById("dailyChartTitle")!.textContent;
+    expect(dailyTitle).toBe("Queries per Day (Last 7 days)");
+
+    // Top queries table h2.
+    const topQueriesTitle = doc.getElementById("topQueriesTitle")!.textContent;
+    expect(topQueriesTitle).toBe("Top Queries (Last 7 days)");
+
+    // Empty queries table h2 (contains the warning span, so check textContent).
+    const emptyTitle = doc
+      .getElementById("emptyQueriesTitle")!
+      .textContent!.trim();
+    expect(emptyTitle.startsWith("Empty Result Queries (Last 7 days)")).toBe(
+      true,
+    );
+  });
+
+  it("switching to 'Last 30 days' updates every label to 'Last 30 days'", async () => {
+    const { dom } = await loadDashboard(makeEndpoints());
+    await clickPresetByDays(dom, 30);
+
+    const doc = dom.window.document;
+    const statsHtml = doc.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("Queries (Last 30 days)");
+    expect(statsHtml).toContain("Empty Result Rate (Last 30 days)");
+    expect(statsHtml).toContain("Avg Latency (Last 30 days)");
+    expect(statsHtml).toContain("P95 Latency (Last 30 days)");
+    expect(statsHtml).toContain("Empty Queries (Last 30 days)");
+    expect(statsHtml).not.toContain("Last 7 days");
+    expect(statsHtml).not.toContain("(7d)");
+
+    expect(doc.getElementById("dailyChartTitle")!.textContent).toBe(
+      "Queries per Day (Last 30 days)",
+    );
+    expect(doc.getElementById("topQueriesTitle")!.textContent).toBe(
+      "Top Queries (Last 30 days)",
+    );
+    const emptyTitle = doc
+      .getElementById("emptyQueriesTitle")!
+      .textContent!.trim();
+    expect(emptyTitle.startsWith("Empty Result Queries (Last 30 days)")).toBe(
+      true,
+    );
+  });
+
+  it("switching to 'Today' updates every label to 'Today'", async () => {
+    const { dom } = await loadDashboard(makeEndpoints());
+    await clickToday(dom);
+
+    const doc = dom.window.document;
+    const statsHtml = doc.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("Queries (Today)");
+    expect(statsHtml).toContain("Empty Result Rate (Today)");
+    expect(statsHtml).toContain("Avg Latency (Today)");
+    expect(statsHtml).toContain("P95 Latency (Today)");
+    expect(statsHtml).toContain("Empty Queries (Today)");
+
+    expect(doc.getElementById("dailyChartTitle")!.textContent).toBe(
+      "Queries per Day (Today)",
+    );
+    expect(doc.getElementById("topQueriesTitle")!.textContent).toBe(
+      "Top Queries (Today)",
+    );
+    const emptyTitle = doc
+      .getElementById("emptyQueriesTitle")!
+      .textContent!.trim();
+    expect(emptyTitle.startsWith("Empty Result Queries (Today)")).toBe(true);
+  });
+
+  it("switching to 'Last 90 days' updates every label to 'Last 90 days'", async () => {
+    const { dom } = await loadDashboard(makeEndpoints());
+    await clickPresetByDays(dom, 90);
+
+    const doc = dom.window.document;
+    const statsHtml = doc.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("Queries (Last 90 days)");
+    expect(doc.getElementById("dailyChartTitle")!.textContent).toBe(
+      "Queries per Day (Last 90 days)",
+    );
+    expect(doc.getElementById("topQueriesTitle")!.textContent).toBe(
+      "Top Queries (Last 90 days)",
+    );
+  });
+});
