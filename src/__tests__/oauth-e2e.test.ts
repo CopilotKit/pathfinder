@@ -104,9 +104,7 @@ describe("OAuth 2.1 end-to-end ceremonial flow", () => {
 
     // 2. Generate PKCE pair
     const verifier = base64url(randomBytes(32));
-    const challenge = base64url(
-      createHash("sha256").update(verifier).digest(),
-    );
+    const challenge = base64url(createHash("sha256").update(verifier).digest());
 
     // 3. GET /authorize
     const authorizeUrl = new URL(`${baseUrl}/authorize`);

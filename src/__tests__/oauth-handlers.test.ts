@@ -39,7 +39,9 @@ import {
 import { clientStore, codeStore } from "../oauth/store.js";
 import { signJWT } from "../oauth/jwt.js";
 
-function mockReq(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function mockReq(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     headers: {
       host: "mcp.example.com",
@@ -122,9 +124,7 @@ describe("authorizationServerHandler", () => {
       "https://mcp.example.com/authorize",
     );
     expect(body.token_endpoint).toBe("https://mcp.example.com/token");
-    expect(body.registration_endpoint).toBe(
-      "https://mcp.example.com/register",
-    );
+    expect(body.registration_endpoint).toBe("https://mcp.example.com/register");
     expect(body.response_types_supported).toContain("code");
     expect(body.grant_types_supported).toContain("authorization_code");
     expect(body.code_challenge_methods_supported).toContain("S256");

@@ -35,7 +35,10 @@ export class OAuthRateLimiter {
     }
 
     const elapsed = now - state.windowStart;
-    const retryAfterSec = Math.max(1, Math.ceil((this.windowMs - elapsed) / 1000));
+    const retryAfterSec = Math.max(
+      1,
+      Math.ceil((this.windowMs - elapsed) / 1000),
+    );
     return { ok: false, retryAfterSec };
   }
 }

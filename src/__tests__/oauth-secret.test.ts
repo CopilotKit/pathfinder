@@ -1,8 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  resolveJwtSecret,
-  resetJwtSecretCache,
-} from "../oauth/secret.js";
+import { resolveJwtSecret, resetJwtSecretCache } from "../oauth/secret.js";
 
 describe("resolveJwtSecret", () => {
   const savedSecret = process.env.MCP_JWT_SECRET;

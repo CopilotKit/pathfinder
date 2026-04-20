@@ -261,8 +261,7 @@ export function tokenHandler(req: Request, res: Response): void {
   );
   const a = Buffer.from(expectedChallenge);
   const b = Buffer.from(record.codeChallenge);
-  const pkceOk =
-    a.length === b.length && timingSafeEqual(a, b);
+  const pkceOk = a.length === b.length && timingSafeEqual(a, b);
   if (!pkceOk) {
     res.status(400).json({
       error: "invalid_grant",
@@ -356,9 +355,6 @@ export function bearerMiddleware(
 }
 
 function unauthorized(res: Response, error: string): void {
-  res.setHeader(
-    "WWW-Authenticate",
-    `Bearer realm="mcp", error="${error}"`,
-  );
+  res.setHeader("WWW-Authenticate", `Bearer realm="mcp", error="${error}"`);
   res.status(401).json({ error });
 }
