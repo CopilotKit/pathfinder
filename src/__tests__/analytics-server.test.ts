@@ -651,9 +651,14 @@ describe("Analytics server routes (HTTP-level)", () => {
     it("rejects days=0 with 400", async () => {
       cfg();
       await startApp();
-      const res = await request(server, "GET", "/api/analytics/summary?days=0", {
-        Authorization: "Bearer tok",
-      });
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?days=0",
+        {
+          Authorization: "Bearer tok",
+        },
+      );
       expect(res.status).toBe(400);
     });
 

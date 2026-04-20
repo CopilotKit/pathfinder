@@ -102,8 +102,7 @@ describe("analyticsAuth middleware", () => {
     expect(tokenLogCall).toBeDefined();
     expect(tokenLogCall as string).toMatch(/fingerprint=[A-Za-z0-9]{8}…/);
     const urlLog = logCalls.find(
-      (msg) =>
-        typeof msg === "string" && msg.includes("/analytics?token="),
+      (msg) => typeof msg === "string" && msg.includes("/analytics?token="),
     );
     expect(urlLog).toBeUndefined();
 
