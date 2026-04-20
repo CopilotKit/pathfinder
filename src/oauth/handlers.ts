@@ -120,12 +120,28 @@ export function registerHandler(req: Request, res: Response): void {
   const body = (req.body ?? {}) as {
     redirect_uris?: unknown;
     client_name?: unknown;
+    token_endpoint_auth_method?: unknown;
+    grant_types?: unknown;
+    response_types?: unknown;
+    scope?: unknown;
   };
   const redirectUris = Array.isArray(body.redirect_uris)
     ? body.redirect_uris.filter((u): u is string => typeof u === "string")
     : [];
   const clientName =
     typeof body.client_name === "string" ? body.client_name : "";
+
+  // Honor the client's requested auth method if it's one we support; default to none
+  const supportedAuthMethods = new Set([
+    "client_secret_basic",
+    "client_secret_post",
+    "none",
+  ]);
+  const requestedAuthMethod =
+    typeof body.token_endpoint_auth_method === "string" &&
+    supportedAuthMethods.has(body.token_endpoint_auth_method)
+      ? body.token_endpoint_auth_method
+      : "none";
 
   const client = clientStore.register({ redirect_uris: redirectUris });
   console.log(
@@ -141,7 +157,8 @@ export function registerHandler(req: Request, res: Response): void {
     client_name: clientName,
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
-    token_endpoint_auth_method: "client_secret_basic",
+    token_endpoint_auth_method: requestedAuthMethod,
+    scope: TOKEN_SCOPE,
   });
 }
 
