@@ -385,6 +385,8 @@
         // --- Filter UI ---
         function renderFilters(toolCounts, sources) {
             var row = document.getElementById('filterRow');
+            toolCounts = Array.isArray(toolCounts) ? toolCounts : [];
+            sources = Array.isArray(sources) ? sources : [];
             var total = toolCounts.reduce(function(sum, t) { return sum + t.count; }, 0);
 
             // Tool-type group (left)
@@ -718,12 +720,13 @@
                 var titleSuffix = activeToolType ? ' - ' + activeToolType.charAt(0).toUpperCase() + activeToolType.slice(1) : '';
                 document.getElementById('dailyChartTitle').textContent = 'Queries per Day (' + winLabel + ')' + titleSuffix;
 
-                var dayLabels = summary.queries_per_day_window.map(function(d) { return d.day; });
+                var perDayArr = asArray(summary.queries_per_day_window);
+                var dayLabels = perDayArr.map(function(d) { return d.day; });
                 dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
                     type: 'bar',
                     data: {
                         labels: dayLabels,
-                        datasets: [{ label: 'Queries', data: summary.queries_per_day_window.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
+                        datasets: [{ label: 'Queries', data: perDayArr.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
                     },
                     options: {
                         responsive: true,
@@ -750,12 +753,13 @@
 
                 // Source chart - destroy previous instance
                 if (sourceChartInstance) { sourceChartInstance.destroy(); sourceChartInstance = null; }
-                if (summary.queries_by_source.length > 0) {
+                var sourcesArr = asArray(summary.queries_by_source);
+                if (sourcesArr.length > 0) {
                     sourceChartInstance = new Chart(document.getElementById('sourceChart'), {
                         type: 'doughnut',
                         data: {
-                            labels: summary.queries_by_source.map(function(s) { return s.source_name; }),
-                            datasets: [{ data: summary.queries_by_source.map(function(s) { return s.count; }), backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'] }],
+                            labels: sourcesArr.map(function(s) { return s.source_name; }),
+                            datasets: [{ data: sourcesArr.map(function(s) { return s.count; }), backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'] }],
                         },
                         options: { responsive: true },
                     });
@@ -763,7 +767,7 @@
 
                 // Top queries table (now with Tool column)
                 var topBody = document.querySelector('#topQueriesTable tbody');
-                topBody.innerHTML = topQueries.map(function(q) {
+                topBody.innerHTML = asArray(topQueries).map(function(q) {
                     var avgRes = q.avg_result_count != null ? q.avg_result_count.toFixed(1) : '-';
                     var avgScore = q.avg_top_score != null ? q.avg_top_score.toFixed(2) : '-';
                     return '<tr><td>' + esc(q.query_text) + '</td><td><span class="tool-badge">' + esc(q.tool_name) + '</span></td><td>' + q.count + '</td><td>' + avgRes + '</td><td>' + avgScore + '</td></tr>';
@@ -771,11 +775,15 @@
 
                 // Empty queries table
                 var emptyBody = document.querySelector('#emptyQueriesTable tbody');
-                emptyBody.innerHTML = emptyQueries.map(function(q) {
+                emptyBody.innerHTML = asArray(emptyQueries).map(function(q) {
                     return '<tr class="empty"><td>' + esc(q.query_text) + '</td><td><span class="tool-badge">' + esc(q.tool_name) + '</span></td><td>' + esc(q.source_name || '-') + '</td><td>' + q.count + '</td><td>' + new Date(q.last_seen).toLocaleString() + '</td></tr>';
                 }).join('') || '<tr><td colspan="5">No empty-result queries.</td></tr>';
 
             } catch (err) {
+                // Stale-response guard also applies to failures: a slow old
+                // request that rejects after a newer load() has already
+                // rendered would otherwise clobber the fresh UI with an error.
+                if (gen !== loadGeneration) return;
                 if (err.message !== 'auth') {
                     document.getElementById('error').style.display = 'block';
                     document.getElementById('error').textContent = 'Failed to load analytics: ' + err.message;
@@ -787,6 +795,14 @@
             var d = document.createElement('div');
             d.textContent = s;
             return d.innerHTML;
+        }
+
+        // Defensive array normalizer — any field the server returns as a
+        // list should be coerced to one before we call .length / .map() on
+        // it. A malformed or missing response shouldn't throw in the
+        // renderer and blank the whole dashboard.
+        function asArray(x) {
+            return Array.isArray(x) ? x : [];
         }
 
         // Check if server is in dev mode (skip auth), otherwise require token
