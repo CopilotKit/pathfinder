@@ -854,8 +854,14 @@ export type AnalyticsFilterParseResult =
 export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
   const filter: AnalyticsFilter = {};
 
-  // Express parses `?from=a&from=b` as an array — reject those explicitly
-  // along with any other non-string shape (objects from nested parsers).
+  // Defense-in-depth: Express parses `?from=a&from=b` as an array, and
+  // nested-object parsers can yield objects. Reject any non-string shape
+  // for every filter name up front so downstream casts (and the positive-
+  // int parser for days/limit) can assume string-or-undefined. The list
+  // includes `days` and `limit` even though parsePositiveIntParam has its
+  // own array guard — rejecting here returns a consistent 400 envelope
+  // (`{ error: "invalid_request", error_description: "..." }`) regardless
+  // of which endpoint the request hit.
   const rejectArray = (
     name: string,
   ): AnalyticsFilterParseResult | undefined => {
@@ -981,28 +987,49 @@ export function parsePositiveIntParam(
 const MAX_DAYS = 100000;
 const MAX_LIMIT = 200;
 
-function parseDaysOrError(req: Request, res: Response): number | undefined {
+/**
+ * Result envelope matching {@link AnalyticsFilterParseResult} so day/limit
+ * parse errors emit the same `{error, error_description}` body shape as
+ * from/to validation. The older signature took (req, res) and wrote the
+ * 400 inline — callers now check `ok` and forward `status`/`body` on
+ * failure, keeping the error surface uniform across all parsers.
+ */
+type NumberParseResult =
+  | { ok: true; value: number }
+  | {
+      ok: false;
+      status: 400;
+      body: { error: string; error_description: string };
+    };
+
+function parseDaysOrError(req: Request): NumberParseResult {
   const result = parsePositiveIntParam(req.query.days, 7, MAX_DAYS);
   if (typeof result === "object") {
-    res.status(400).json({
-      error: "invalid_request",
-      error_description: `days ${result.error}`,
-    });
-    return undefined;
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: "invalid_request",
+        error_description: `days ${result.error}`,
+      },
+    };
   }
-  return result;
+  return { ok: true, value: result };
 }
 
-function parseLimitOrError(req: Request, res: Response): number | undefined {
+function parseLimitOrError(req: Request): NumberParseResult {
   const result = parsePositiveIntParam(req.query.limit, 50, MAX_LIMIT);
   if (typeof result === "object") {
-    res.status(400).json({
-      error: "invalid_request",
-      error_description: `limit ${result.error}`,
-    });
-    return undefined;
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: "invalid_request",
+        error_description: `limit ${result.error}`,
+      },
+    };
   }
-  return result;
+  return { ok: true, value: result };
 }
 
 /**
@@ -1043,9 +1070,15 @@ export function registerAnalyticsRoutes(
           res.status(parsed.status).json(parsed.body);
           return;
         }
-        const days = parseDaysOrError(req, res);
-        if (days === undefined) return;
-        const summary = await _getAnalyticsSummary(parsed.filter, days);
+        const daysParsed = parseDaysOrError(req);
+        if (!daysParsed.ok) {
+          res.status(daysParsed.status).json(daysParsed.body);
+          return;
+        }
+        const summary = await _getAnalyticsSummary(
+          parsed.filter,
+          daysParsed.value,
+        );
         res.json(summary);
       } catch (err) {
         console.error("[analytics] Summary query failed:", err);
@@ -1064,11 +1097,21 @@ export function registerAnalyticsRoutes(
           res.status(parsed.status).json(parsed.body);
           return;
         }
-        const days = parseDaysOrError(req, res);
-        if (days === undefined) return;
-        const limit = parseLimitOrError(req, res);
-        if (limit === undefined) return;
-        const queries = await _getTopQueries(days, limit, parsed.filter);
+        const daysParsed = parseDaysOrError(req);
+        if (!daysParsed.ok) {
+          res.status(daysParsed.status).json(daysParsed.body);
+          return;
+        }
+        const limitParsed = parseLimitOrError(req);
+        if (!limitParsed.ok) {
+          res.status(limitParsed.status).json(limitParsed.body);
+          return;
+        }
+        const queries = await _getTopQueries(
+          daysParsed.value,
+          limitParsed.value,
+          parsed.filter,
+        );
         res.json(queries);
       } catch (err) {
         console.error("[analytics] Top queries failed:", err);
@@ -1087,11 +1130,21 @@ export function registerAnalyticsRoutes(
           res.status(parsed.status).json(parsed.body);
           return;
         }
-        const days = parseDaysOrError(req, res);
-        if (days === undefined) return;
-        const limit = parseLimitOrError(req, res);
-        if (limit === undefined) return;
-        const queries = await _getEmptyQueries(days, limit, parsed.filter);
+        const daysParsed = parseDaysOrError(req);
+        if (!daysParsed.ok) {
+          res.status(daysParsed.status).json(daysParsed.body);
+          return;
+        }
+        const limitParsed = parseLimitOrError(req);
+        if (!limitParsed.ok) {
+          res.status(limitParsed.status).json(limitParsed.body);
+          return;
+        }
+        const queries = await _getEmptyQueries(
+          daysParsed.value,
+          limitParsed.value,
+          parsed.filter,
+        );
         res.json(queries);
       } catch (err) {
         console.error("[analytics] Empty queries failed:", err);
@@ -1110,9 +1163,12 @@ export function registerAnalyticsRoutes(
           res.status(parsed.status).json(parsed.body);
           return;
         }
-        const days = parseDaysOrError(req, res);
-        if (days === undefined) return;
-        const counts = await _getToolCounts(days, parsed.filter);
+        const daysParsed = parseDaysOrError(req);
+        if (!daysParsed.ok) {
+          res.status(daysParsed.status).json(daysParsed.body);
+          return;
+        }
+        const counts = await _getToolCounts(daysParsed.value, parsed.filter);
         res.json(counts);
       } catch (err) {
         console.error("[analytics] Tool counts failed:", err);
