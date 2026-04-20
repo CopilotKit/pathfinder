@@ -17,6 +17,23 @@ describe("ClientStore", () => {
     expect(result.redirect_uris).toEqual(["https://example.com/cb"]);
   });
 
+  it("register issues a client_secret with base64url encoding and secret metadata", () => {
+    const result = store.register({ redirect_uris: [] });
+    expect(result.client_secret).toBeDefined();
+    expect(typeof result.client_secret).toBe("string");
+    // base64url (no +/= chars); 32 bytes → 43 chars
+    expect(result.client_secret).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(result.client_secret.length).toBeGreaterThanOrEqual(32);
+    expect(result.client_secret_issued_at).toBe(result.client_id_issued_at);
+    expect(result.client_secret_expires_at).toBe(0);
+  });
+
+  it("two registers issue distinct client_secrets", () => {
+    const a = store.register({ redirect_uris: [] });
+    const b = store.register({ redirect_uris: [] });
+    expect(a.client_secret).not.toBe(b.client_secret);
+  });
+
   it("get(client_id) returns registered client", () => {
     const { client_id } = store.register({
       redirect_uris: ["https://example.com/cb"],

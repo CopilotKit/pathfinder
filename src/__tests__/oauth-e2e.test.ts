@@ -36,6 +36,7 @@ import {
   registerHandler,
   authorizeHandler,
   tokenHandler,
+  revocationHandler,
   bearerMiddleware,
   type AuthContext,
 } from "../oauth/handlers.js";
@@ -65,6 +66,7 @@ beforeAll(async () => {
   app.post("/register", registerHandler);
   app.get("/authorize", authorizeHandler);
   app.post("/token", tokenHandler);
+  app.post("/revoke", revocationHandler);
 
   // Stub /mcp that echoes req.auth
   app.post(
@@ -142,10 +144,14 @@ describe("OAuth 2.1 end-to-end ceremonial flow", () => {
       access_token: string;
       token_type: string;
       expires_in: number;
+      refresh_token: string;
+      scope: string;
     };
     expect(tokenBody.access_token).toBeTruthy();
     expect(tokenBody.token_type).toBe("Bearer");
     expect(tokenBody.expires_in).toBe(3600);
+    expect(tokenBody.refresh_token).toBeTruthy();
+    expect(tokenBody.scope).toBe("mcp");
 
     // 5. POST /mcp with Bearer — should attach req.auth
     const mcpRes = await fetch(`${baseUrl}/mcp`, {
@@ -161,6 +167,73 @@ describe("OAuth 2.1 end-to-end ceremonial flow", () => {
       echoed_auth: { sub: string; client_id: string } | null;
     };
     expect(mcpBody.echoed_auth).toEqual({ sub: "anonymous", client_id });
+
+    // 6. Exchange refresh_token for a new access_token
+    const refreshForm = new URLSearchParams();
+    refreshForm.set("grant_type", "refresh_token");
+    refreshForm.set("refresh_token", tokenBody.refresh_token);
+    refreshForm.set("client_id", client_id);
+    const refreshRes = await fetch(`${baseUrl}/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: refreshForm.toString(),
+    });
+    expect(refreshRes.status).toBe(200);
+    const refreshBody = (await refreshRes.json()) as {
+      access_token: string;
+      token_type: string;
+      expires_in: number;
+      refresh_token: string;
+      scope: string;
+    };
+    expect(refreshBody.access_token).toBeTruthy();
+    expect(refreshBody.refresh_token).toBeTruthy();
+    expect(refreshBody.scope).toBe("mcp");
+
+    // The refreshed access_token should also authenticate /mcp
+    const mcp2 = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${refreshBody.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    expect(mcp2.status).toBe(200);
+  });
+
+  it("AS metadata advertises refresh_token grant and revocation_endpoint", async () => {
+    const res = await fetch(
+      `${baseUrl}/.well-known/oauth-authorization-server`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      grant_types_supported: string[];
+      revocation_endpoint: string;
+      scopes_supported: string[];
+      response_modes_supported: string[];
+      token_endpoint_auth_methods_supported: string[];
+    };
+    expect(body.grant_types_supported).toContain("refresh_token");
+    expect(body.revocation_endpoint).toBe(`${baseUrl}/revoke`);
+    expect(body.scopes_supported).toContain("mcp");
+    expect(body.response_modes_supported).toContain("query");
+    expect(body.token_endpoint_auth_methods_supported).toEqual(
+      expect.arrayContaining([
+        "client_secret_basic",
+        "client_secret_post",
+        "none",
+      ]),
+    );
+  });
+
+  it("/revoke always returns 200 regardless of token", async () => {
+    const res = await fetch(`${baseUrl}/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "token=some-random-token",
+    });
+    expect(res.status).toBe(200);
   });
 
   it("/mcp succeeds with no Authorization header (opportunistic)", async () => {
