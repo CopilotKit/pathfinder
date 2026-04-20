@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express, { Request, Response } from "express";
 import http from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 const mockGetAnalyticsSummary = vi.fn();
 const mockGetTopQueries = vi.fn();
@@ -53,7 +52,10 @@ function buildTestApp() {
   const app = express();
   app.use(express.json());
 
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  // Resolve docs/analytics.html from the repo root. Vitest runs from the
+  // repo root, so process.cwd() is stable regardless of whether __dirname
+  // points into src/__tests__ (source tree) or dist/__tests__ (built).
+  const analyticsHtmlPath = path.join(process.cwd(), "docs", "analytics.html");
 
   // Dashboard HTML route — mirrors server.ts /analytics
   app.get("/analytics", (_req: Request, res: Response) => {
@@ -61,7 +63,11 @@ function buildTestApp() {
       res.status(404).json({ error: "Analytics not enabled" });
       return;
     }
-    res.sendFile(path.resolve(__dirname, "../../docs/analytics.html"));
+    // `dotfiles: "allow"` is required so the file serves from paths that
+    // contain a dot-prefixed segment (e.g. git worktrees under `.claude/`).
+    // Without it, Express's `send` returns 404 for any path containing a
+    // dotfile component, which is unrelated to the actual file's existence.
+    res.sendFile(analyticsHtmlPath, { dotfiles: "allow" });
   });
 
   // API routes with analyticsAuth middleware
