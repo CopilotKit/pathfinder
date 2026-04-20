@@ -207,6 +207,24 @@ app.use(express.json());
 // Form-encoded parser for OAuth /token POSTs
 app.use(express.urlencoded({ extended: false }));
 
+// DEBUG: trace every request from claude.ai IPs to diagnose auth flow
+app.use((req, _res, next) => {
+  const ip =
+    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+    req.socket?.remoteAddress ||
+    "unknown";
+  if (
+    ip.startsWith("160.79.106") ||
+    ip.startsWith("104.192.205") ||
+    (req.headers["user-agent"] as string | undefined)?.includes("python-httpx")
+  ) {
+    console.log(
+      `[trace] ${req.method} ${req.path} ip=${ip} ua=${req.headers["user-agent"]} auth=${req.headers.authorization ? "bearer" : "none"}`,
+    );
+  }
+  next();
+});
+
 // ---------------------------------------------------------------------------
 // OAuth 2.1 ceremonial flow — RFC-compliant endpoints with auto-approval.
 // Opportunistic bearer auth on /mcp lets existing unauthenticated clients

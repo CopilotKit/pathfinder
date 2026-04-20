@@ -506,3 +506,13 @@ function unauthorized(res: Response, error: string): void {
   res.setHeader("WWW-Authenticate", `Bearer realm="mcp", error="${error}"`);
   res.status(401).json({ error });
 }
+
+function unauthorizedWithDiscovery(req: Request, res: Response): void {
+  const origin = originOf(req);
+  const resourceMetadata = `${origin}/.well-known/oauth-protected-resource`;
+  res.setHeader(
+    "WWW-Authenticate",
+    `Bearer realm="mcp", resource_metadata="${resourceMetadata}", scope="${TOKEN_SCOPE}"`,
+  );
+  res.status(401).json({ error: "invalid_token" });
+}
