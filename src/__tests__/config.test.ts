@@ -1034,6 +1034,7 @@ describe("config.ts", () => {
       process.env.CLONE_DIR = "/tmp/clones";
       process.env.GITHUB_TOKEN = "ghp_test";
       process.env.GITHUB_WEBHOOK_SECRET = "secret";
+      process.env.MCP_JWT_SECRET = "x".repeat(64);
 
       mockedExistsSync.mockReturnValue(true);
       mockedReadFileSync.mockReturnValue(makeYaml());

@@ -31,6 +31,7 @@ vi.mock("../config.js", () => ({
     discordBotToken: "",
     discordPublicKey: "",
     notionToken: "",
+    mcpJwtSecret: "x".repeat(32),
   }),
   hasSearchTools: vi.fn().mockReturnValue(false),
   hasKnowledgeTools: vi.fn().mockReturnValue(false),
@@ -296,6 +297,7 @@ describe("analyticsAuth middleware", () => {
       discordBotToken: "",
       discordPublicKey: "",
       notionToken: "",
+      mcpJwtSecret: "x".repeat(32),
     });
     const res = mockRes();
     const next = vi.fn();
@@ -329,6 +331,7 @@ describe("analyticsAuth middleware", () => {
       discordBotToken: "",
       discordPublicKey: "",
       notionToken: "",
+      mcpJwtSecret: "x".repeat(32),
     });
     const res = mockRes();
     const next = vi.fn();

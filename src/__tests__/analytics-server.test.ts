@@ -31,6 +31,7 @@ vi.mock("../config.js", () => ({
     discordBotToken: "",
     discordPublicKey: "",
     notionToken: "",
+    mcpJwtSecret: "x".repeat(32),
   }),
   hasSearchTools: vi.fn().mockReturnValue(false),
   hasKnowledgeTools: vi.fn().mockReturnValue(false),

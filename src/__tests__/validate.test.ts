@@ -75,6 +75,7 @@ vi.mock("../config.js", () => {
       logLevel: "info",
       cloneDir: "/tmp/test",
       notionToken: "",
+      mcpJwtSecret: "x".repeat(32),
     }),
     getServerConfig: vi.fn().mockReturnValue({
       server: { name: "test", version: "1.0" },
@@ -193,6 +194,7 @@ const defaultConfig = {
   logLevel: "info",
   cloneDir: "/tmp/test",
   notionToken: "",
+  mcpJwtSecret: "x".repeat(32),
 };
 
 describe("validateConfig", () => {
