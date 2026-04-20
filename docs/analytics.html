@@ -255,8 +255,44 @@
         // --- State ---
         var activeToolType = null;  // null = "All"
         var activeSource = null;    // null = "All Sources"
+        var activeDaysBack = 7;     // number of days for preset window (null when using custom range)
+        var activeFrom = null;      // YYYY-MM-DD string or null
+        var activeTo = null;        // YYYY-MM-DD string or null
         var dailyChartInstance = null;
         var sourceChartInstance = null;
+        var datePopoverOpen = false;
+        var dateCustomMode = false;
+
+        // Intl formatters (cached)
+        var shortDateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+
+        function parseISODate(s) {
+            // Parse YYYY-MM-DD as a local-noon Date so DST/TZ doesn't shift the day label.
+            var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+            if (!m) return null;
+            return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), 12, 0, 0);
+        }
+
+        function formatPillLabel() {
+            if (activeFrom && activeTo) {
+                if (activeFrom === activeTo) {
+                    var d = parseISODate(activeFrom);
+                    return d ? shortDateFmt.format(d) : activeFrom;
+                }
+                var df = parseISODate(activeFrom);
+                var dt = parseISODate(activeTo);
+                if (df && dt) return shortDateFmt.format(df) + ' \u2013 ' + shortDateFmt.format(dt);
+                return activeFrom + ' \u2013 ' + activeTo;
+            }
+            if (activeDaysBack === 1) return 'Today';
+            if (activeDaysBack === 7) return 'Last 7 days';
+            if (activeDaysBack === 14) return 'Last 14 days';
+            if (activeDaysBack === 30) return 'Last 30 days';
+            if (activeDaysBack === 90) return 'Last 90 days';
+            if (activeDaysBack !== null && activeDaysBack >= 99999) return 'All time';
+            if (activeDaysBack !== null) return 'Last ' + activeDaysBack + ' days';
+            return 'Custom range';
+        }
 
         function getToken() {
             return sessionStorage.getItem('pathfinder_analytics_token') || '';
@@ -306,6 +342,12 @@
             var params = [];
             if (activeToolType) params.push('tool_type=' + encodeURIComponent(activeToolType));
             if (activeSource) params.push('source=' + encodeURIComponent(activeSource));
+            if (activeFrom && activeTo) {
+                params.push('from=' + encodeURIComponent(activeFrom));
+                params.push('to=' + encodeURIComponent(activeTo));
+            } else if (activeDaysBack !== null) {
+                params.push('days=' + encodeURIComponent(activeDaysBack));
+            }
             return params.length > 0 ? '&' + params.join('&') : '';
         }
 
@@ -326,39 +368,69 @@
             });
             toolHtml += '</div>';
 
-            // Date-range group (center) — MOCKUP, not functional
+            // Date-range group (center)
+            var presets = [
+                { label: 'Today',         days: 1 },
+                { label: 'Last 7 days',   days: 7 },
+                { label: 'Last 14 days',  days: 14 },
+                { label: 'Last 30 days',  days: 30 },
+                { label: 'Last 90 days',  days: 90 },
+                { label: 'All time',      days: 99999 },
+            ];
+            var pillLabel = formatPillLabel();
+            var customModeCls = dateCustomMode ? ' custom-mode' : '';
+            var openCls = datePopoverOpen ? ' open' : '';
+            var presetHtml = presets.map(function(p) {
+                var isActive = activeDaysBack === p.days && !activeFrom;
+                return '<div class="preset' + (isActive ? ' active' : '') + '" data-days="' + p.days + '">'
+                    + '<span>' + esc(p.label) + '</span>'
+                    + '<span class="check">&#10003;</span></div>';
+            }).join('');
+            var customActive = dateCustomMode || (activeFrom && activeTo);
+            presetHtml += '<div class="preset' + (customActive ? ' active' : '') + '" data-custom="1">'
+                + '<span>Custom&hellip;</span>'
+                + '<span class="check">&#10003;</span></div>';
+
+            // Default the custom-range inputs to whatever is active, falling back to today/week.
+            var today = new Date();
+            function toISO(d) {
+                var y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
+                return y + '-' + m + '-' + dd;
+            }
+            var defaultTo = activeTo || toISO(today);
+            var defaultFrom = activeFrom;
+            if (!defaultFrom) {
+                var back = new Date(today);
+                back.setDate(back.getDate() - 6);
+                defaultFrom = toISO(back);
+            }
+            var customVisibleStyle = dateCustomMode ? '' : 'display:none;';
+
             var dateHtml = ''
-                + '<!-- MOCKUP — not functional -->'
                 + '<div class="filter-group date-group" id="dateGroup">'
-                +   '<span class="pill date-pill open" aria-expanded="true">'
+                +   '<span class="pill date-pill' + openCls + '" id="datePill" aria-expanded="' + (datePopoverOpen ? 'true' : 'false') + '">'
                 +     '<span class="cal-icon">&#128197;</span>'
-                +     '<span class="date-value">Last 7 days</span>'
+                +     '<span class="date-value">' + esc(pillLabel) + '</span>'
                 +     '<span class="chevron">&#9662;</span>'
                 +   '</span>'
-                +   '<div class="date-popover" role="dialog" aria-label="Select date range">'
-                +     '<div class="preset-list">'
-                +       '<div class="preset"><span>Today</span><span class="check">&#10003;</span></div>'
-                +       '<div class="preset active"><span>Last 7 days</span><span class="check">&#10003;</span></div>'
-                +       '<div class="preset"><span>Last 14 days</span><span class="check">&#10003;</span></div>'
-                +       '<div class="preset"><span>Last 30 days</span><span class="check">&#10003;</span></div>'
-                +       '<div class="preset"><span>Last 90 days</span><span class="check">&#10003;</span></div>'
-                +       '<div class="preset"><span>All time</span><span class="check">&#10003;</span></div>'
-                +       '<div class="preset"><span>Custom&hellip;</span><span class="check">&#10003;</span></div>'
-                +     '</div>'
-                +     '<div class="divider-h"></div>'
-                +     '<div class="custom-range">'
-                +       '<div class="custom-range-label">Custom range</div>'
-                +       '<div class="date-inputs">'
-                +         '<input type="text" value="2026-04-13" aria-label="From date" />'
-                +         '<span class="arrow">&rarr;</span>'
-                +         '<input type="text" value="2026-04-20" aria-label="To date" />'
-                +       '</div>'
-                +     '</div>'
-                +     '<div class="popover-actions">'
-                +       '<button type="button" class="btn btn-ghost">Cancel</button>'
-                +       '<button type="button" class="btn btn-primary">Apply</button>'
-                +     '</div>'
-                +   '</div>'
+                +   (datePopoverOpen
+                    ? ('<div class="date-popover' + customModeCls + '" id="datePopover" role="dialog" aria-label="Select date range">'
+                        +   '<div class="preset-list" id="presetList">' + presetHtml + '</div>'
+                        +   '<div class="custom-range" id="customRange" style="' + customVisibleStyle + '">'
+                        +     '<div class="divider-h"></div>'
+                        +     '<div class="custom-range-label">Custom range</div>'
+                        +     '<div class="date-inputs">'
+                        +       '<input type="date" id="dateFromInput" value="' + esc(defaultFrom) + '" aria-label="From date" />'
+                        +       '<span class="arrow">&rarr;</span>'
+                        +       '<input type="date" id="dateToInput" value="' + esc(defaultTo) + '" aria-label="To date" />'
+                        +     '</div>'
+                        +     '<div class="popover-actions">'
+                        +       '<button type="button" class="btn btn-ghost" id="dateCancelBtn">Cancel</button>'
+                        +       '<button type="button" class="btn btn-primary" id="dateApplyBtn">Apply</button>'
+                        +     '</div>'
+                        +   '</div>'
+                        + '</div>')
+                    : '')
                 + '</div>';
 
             // Source group (right)
@@ -390,17 +462,105 @@
                     load();
                 });
             });
+
+            // Date pill — toggle popover
+            var datePill = document.getElementById('datePill');
+            if (datePill) {
+                datePill.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    datePopoverOpen = !datePopoverOpen;
+                    if (!datePopoverOpen) dateCustomMode = false;
+                    renderFilters(currentToolCounts, currentSources);
+                });
+            }
+
+            // Preset clicks
+            row.querySelectorAll('.preset[data-days]').forEach(function(p) {
+                p.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var d = parseInt(this.getAttribute('data-days'), 10);
+                    activeDaysBack = d;
+                    activeFrom = null;
+                    activeTo = null;
+                    datePopoverOpen = false;
+                    dateCustomMode = false;
+                    load();
+                });
+            });
+
+            // Custom preset — reveals the date inputs (does not close)
+            var customPreset = row.querySelector('.preset[data-custom]');
+            if (customPreset) {
+                customPreset.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    dateCustomMode = true;
+                    renderFilters(currentToolCounts, currentSources);
+                });
+            }
+
+            // Cancel — close popover without applying
+            var cancelBtn = document.getElementById('dateCancelBtn');
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    datePopoverOpen = false;
+                    dateCustomMode = false;
+                    renderFilters(currentToolCounts, currentSources);
+                });
+            }
+
+            // Apply — parse inputs, set range, reload
+            var applyBtn = document.getElementById('dateApplyBtn');
+            if (applyBtn) {
+                applyBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var f = document.getElementById('dateFromInput').value;
+                    var t = document.getElementById('dateToInput').value;
+                    if (!/^\d{4}-\d{2}-\d{2}$/.test(f) || !/^\d{4}-\d{2}-\d{2}$/.test(t)) return;
+                    // Normalize: if the user picked them backwards, swap so from <= to.
+                    if (f > t) { var tmp = f; f = t; t = tmp; }
+                    activeFrom = f;
+                    activeTo = t;
+                    activeDaysBack = null;
+                    datePopoverOpen = false;
+                    dateCustomMode = false;
+                    load();
+                });
+            }
+
+            // Prevent clicks inside the popover from bubbling to the outside-click handler
+            var popover = document.getElementById('datePopover');
+            if (popover) {
+                popover.addEventListener('click', function(e) { e.stopPropagation(); });
+            }
         }
+
+        // Outside-click closes the date popover without applying. Installed once.
+        document.addEventListener('click', function() {
+            if (!datePopoverOpen) return;
+            datePopoverOpen = false;
+            dateCustomMode = false;
+            renderFilters(currentToolCounts, currentSources);
+        });
+
+        // Cached so date-popover interactions can re-render without another fetch.
+        var currentToolCounts = [];
+        var currentSources = [];
 
         // --- Main load ---
         async function load() {
             try {
                 var fp = buildFilterParams();
+                // Prefix a '?' so the '&' in fp hangs off cleanly; summary needs special handling
+                var summaryUrl = '/api/analytics/summary' + (fp ? '?' + fp.replace(/^&/, '') : '');
+                var queriesUrl = '/api/analytics/queries?limit=50' + fp;
+                var emptyUrl = '/api/analytics/empty-queries?limit=50' + fp;
+                var toolCountsUrl = '/api/analytics/tool-counts' + (fp ? '?' + fp.replace(/^&/, '') : '');
                 var results = await Promise.all([
-                    fetchJson('/api/analytics/summary?' + fp.replace(/^&/, '')),
-                    fetchJson('/api/analytics/queries?days=7&limit=50' + fp),
-                    fetchJson('/api/analytics/empty-queries?days=7&limit=50' + fp),
-                    fetchJson('/api/analytics/tool-counts?days=7'),
+                    fetchJson(summaryUrl),
+                    fetchJson(queriesUrl),
+                    fetchJson(emptyUrl),
+                    fetchJson(toolCountsUrl),
                 ]);
                 var summary = results[0];
                 var topQueries = results[1];
@@ -410,6 +570,10 @@
                 // Clear any previous error
                 document.getElementById('error').style.display = 'none';
                 document.getElementById('filters').style.display = 'block';
+
+                // Cache for non-fetching re-renders (e.g. toggling the date popover)
+                currentToolCounts = toolCounts;
+                currentSources = summary.queries_by_source;
 
                 // Render filters
                 renderFilters(toolCounts, summary.queries_by_source);
@@ -429,13 +593,28 @@
                 var titleSuffix = activeToolType ? ' - ' + activeToolType.charAt(0).toUpperCase() + activeToolType.slice(1) : '';
                 document.getElementById('dailyChartTitle').textContent = 'Queries per Day (7d)' + titleSuffix;
 
+                var dayLabels = summary.queries_per_day_7d.map(function(d) { return d.day; });
                 dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
                     type: 'bar',
                     data: {
-                        labels: summary.queries_per_day_7d.map(function(d) { return d.day; }),
+                        labels: dayLabels,
                         datasets: [{ label: 'Queries', data: summary.queries_per_day_7d.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
                     },
-                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true } },
+                        onClick: function(_evt, elements) {
+                            if (!elements || elements.length === 0) return;
+                            var idx = elements[0].index;
+                            var day = dayLabels[idx];
+                            if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+                            activeFrom = day;
+                            activeTo = day;
+                            activeDaysBack = null;
+                            load();
+                        },
+                    },
                 });
 
                 // Source chart - destroy previous instance
