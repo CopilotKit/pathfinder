@@ -13,6 +13,7 @@ describe("resolveJwtSecret", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetJwtSecretCache();
     if (savedSecret === undefined) {
       delete process.env.MCP_JWT_SECRET;
