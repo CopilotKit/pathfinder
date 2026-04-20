@@ -128,16 +128,16 @@ describe("getAnalyticsSummary", () => {
     const result = await getAnalyticsSummary();
 
     expect(result.total_queries).toBe(1000);
-    expect(result.total_queries_7d).toBe(200);
-    expect(result.empty_result_count_7d).toBe(10);
-    expect(result.empty_result_rate_7d).toBeCloseTo(0.05);
-    expect(result.avg_latency_ms_7d).toBe(45);
+    expect(result.total_queries_window).toBe(200);
+    expect(result.empty_result_count_window).toBe(10);
+    expect(result.empty_result_rate_window).toBeCloseTo(0.05);
+    expect(result.avg_latency_ms_window).toBe(45);
     // p95 of [1..200] sorted: index = floor(200 * 0.95) = 190, value = 191
-    expect(result.p95_latency_ms_7d).toBe(191);
+    expect(result.p95_latency_ms_window).toBe(191);
     expect(result.queries_by_source).toEqual([
       { source_name: "docs", count: 150 },
     ]);
-    expect(result.queries_per_day_7d).toHaveLength(2);
+    expect(result.queries_per_day_window).toHaveLength(2);
   });
 
   it("handles zero queries gracefully", async () => {
@@ -153,10 +153,10 @@ describe("getAnalyticsSummary", () => {
     const result = await getAnalyticsSummary();
 
     expect(result.total_queries).toBe(0);
-    expect(result.empty_result_rate_7d).toBe(0);
-    expect(result.p95_latency_ms_7d).toBe(0);
+    expect(result.empty_result_rate_window).toBe(0);
+    expect(result.p95_latency_ms_window).toBe(0);
     expect(result.queries_by_source).toEqual([]);
-    expect(result.queries_per_day_7d).toEqual([]);
+    expect(result.queries_per_day_window).toEqual([]);
   });
 });
 
@@ -176,7 +176,7 @@ describe("p95 computation edge cases", () => {
       .mockResolvedValueOnce({ rows: [] });
 
     const result = await getAnalyticsSummary();
-    expect(result.p95_latency_ms_7d).toBe(42);
+    expect(result.p95_latency_ms_window).toBe(42);
   });
 
   it("p95 of all identical values returns that value", async () => {
@@ -192,7 +192,7 @@ describe("p95 computation edge cases", () => {
       .mockResolvedValueOnce({ rows: [] });
 
     const result = await getAnalyticsSummary();
-    expect(result.p95_latency_ms_7d).toBe(50);
+    expect(result.p95_latency_ms_window).toBe(50);
   });
 
   it("p95 of two values returns the higher one", async () => {
@@ -209,7 +209,7 @@ describe("p95 computation edge cases", () => {
 
     const result = await getAnalyticsSummary();
     // floor(2 * 0.95) = 1, sorted[1] = 100
-    expect(result.p95_latency_ms_7d).toBe(100);
+    expect(result.p95_latency_ms_window).toBe(100);
   });
 });
 
