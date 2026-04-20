@@ -72,7 +72,7 @@ describe("analyticsAuth middleware", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("auto-generates token and requires auth when enabled with no token", () => {
+  it("auto-generates token, logs only a fingerprint, and requires auth", () => {
     mockGetAnalyticsConfigFn.mockReturnValue({
       enabled: true,
       log_queries: true,
@@ -89,7 +89,8 @@ describe("analyticsAuth middleware", () => {
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
 
-    // Token should be logged to console on first generation
+    // Token log must include a fingerprint (not the full token) and must
+    // NOT include the `/analytics?token=...` URL form.
     const logCalls = consoleSpy.mock.calls.map((c) => c[0]);
     const tokenLogCall = logCalls.find(
       (msg) =>
@@ -97,23 +98,12 @@ describe("analyticsAuth middleware", () => {
         msg.includes("[analytics] No token configured"),
     );
     expect(tokenLogCall).toBeDefined();
-
-    // Extract the auto-generated token from the log message
-    const tokenMatch = (tokenLogCall as string).match(
-      /auto-generated token: (\S+)/,
+    expect(tokenLogCall as string).toMatch(/fingerprint=[A-Za-z0-9]{8}…/);
+    const urlLog = logCalls.find(
+      (msg) =>
+        typeof msg === "string" && msg.includes("/analytics?token="),
     );
-    expect(tokenMatch).not.toBeNull();
-    const autoToken = tokenMatch![1];
-
-    // A second call with the auto-generated token should succeed
-    const res2 = mockRes();
-    const next2 = vi.fn();
-    analyticsAuth(
-      { headers: { authorization: `Bearer ${autoToken}` } } as never,
-      res2 as never,
-      next2,
-    );
-    expect(next2).toHaveBeenCalled();
+    expect(urlLog).toBeUndefined();
 
     consoleSpy.mockRestore();
   });
@@ -275,14 +265,13 @@ describe("analyticsAuth middleware", () => {
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
-  it("skips token check in development mode", () => {
+  it("skips token check in development mode ONLY from localhost", () => {
     mockGetAnalyticsConfigFn.mockReturnValue({
       enabled: true,
       log_queries: true,
       retention_days: 90,
       token: "secret",
     });
-    // Override getConfig to return nodeEnv: "development"
     mockGetConfigFn.mockReturnValue({
       port: 3001,
       databaseUrl: "pglite:///tmp/test",
@@ -302,11 +291,94 @@ describe("analyticsAuth middleware", () => {
     const res = mockRes();
     const next = vi.fn();
 
-    // No auth header — should still pass in dev mode
-    analyticsAuth({ headers: {} } as never, res as never, next);
+    // Localhost caller, no auth header — should bypass
+    analyticsAuth(
+      { headers: {}, socket: { remoteAddress: "127.0.0.1" } } as never,
+      res as never,
+      next,
+    );
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it("dev bypass refuses non-localhost callers", () => {
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
+    mockGetConfigFn.mockReturnValue({
+      port: 3001,
+      databaseUrl: "pglite:///tmp/test",
+      openaiApiKey: "",
+      githubToken: "",
+      githubWebhookSecret: "",
+      nodeEnv: "development",
+      logLevel: "info",
+      cloneDir: "/tmp/test",
+      slackBotToken: "",
+      slackSigningSecret: "",
+      discordBotToken: "",
+      discordPublicKey: "",
+      notionToken: "",
+      mcpJwtSecret: "x".repeat(32),
+    });
+    const res = mockRes();
+    const next = vi.fn();
+
+    // Non-localhost caller — must NOT be bypassed, falls through to token check
+    analyticsAuth(
+      {
+        headers: {},
+        socket: { remoteAddress: "192.168.1.100" },
+      } as never,
+      res as never,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it("production mode: getAnalyticsToken throws → 503", () => {
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
+    mockGetConfigFn.mockReturnValue({
+      port: 3001,
+      databaseUrl: "pglite:///tmp/test",
+      openaiApiKey: "",
+      githubToken: "",
+      githubWebhookSecret: "",
+      nodeEnv: "production",
+      logLevel: "info",
+      cloneDir: "/tmp/test",
+      slackBotToken: "",
+      slackSigningSecret: "",
+      discordBotToken: "",
+      discordPublicKey: "",
+      notionToken: "",
+      mcpJwtSecret: "x".repeat(32),
+    });
+    const consoleErrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const res = mockRes();
+    const next = vi.fn();
+
+    analyticsAuth(
+      { headers: {}, socket: { remoteAddress: "1.2.3.4" } } as never,
+      res as never,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(503);
+    consoleErrSpy.mockRestore();
   });
 
   it("requires token in non-dev mode even when analytics is enabled", () => {

@@ -342,7 +342,7 @@ describe("Analytics server routes (HTTP-level)", () => {
   // ---- Auto-generated token via HTTP ---------------------------------------
 
   describe("auto-generated token (HTTP-level)", () => {
-    it("auto-generated token works for API requests when no token configured", async () => {
+    it("auto-generated token (log fingerprinted, full token withheld)", async () => {
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
         log_queries: true,
@@ -352,11 +352,13 @@ describe("Analytics server routes (HTTP-level)", () => {
 
       await startApp();
 
-      // First request without auth — should get 401 and trigger token generation
+      // First request without auth — should 401 and trigger generation
       const res1 = await request(server, "GET", "/api/analytics/summary");
       expect(res1.status).toBe(401);
 
-      // Extract the auto-generated token from console.log
+      // The log line must be a fingerprint, not the full token — so we
+      // cannot (by design) recover the token from logs. Verify the log
+      // format holds instead.
       const logCalls = consoleSpy.mock.calls.map((c: unknown[]) => c[0]);
       const tokenLog = logCalls.find(
         (msg: unknown) =>
@@ -364,15 +366,12 @@ describe("Analytics server routes (HTTP-level)", () => {
           msg.includes("[analytics] No token configured"),
       );
       expect(tokenLog).toBeDefined();
-      const autoToken = (tokenLog as string).match(
-        /auto-generated token: (\S+)/,
-      )![1];
-
-      // Second request with the auto-generated token should succeed
-      const res2 = await request(server, "GET", "/api/analytics/summary", {
-        Authorization: `Bearer ${autoToken}`,
-      });
-      expect(res2.status).toBe(200);
+      expect(tokenLog as string).toMatch(/fingerprint=[A-Za-z0-9]{8}…/);
+      const urlLog = logCalls.find(
+        (msg: unknown) =>
+          typeof msg === "string" && msg.includes("/analytics?token="),
+      );
+      expect(urlLog).toBeUndefined();
     });
   });
 
