@@ -756,11 +756,74 @@ export function analyticsAuth(
   next();
 }
 
-function parseAnalyticsFilter(req: Request): AnalyticsFilter {
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Result of parsing analytics filter query params.
+ *
+ * When `error` is set, the caller should respond with HTTP 400 using the
+ * supplied `{error, error_description}` body. Otherwise `filter` is safe to
+ * pass through to the DB layer.
+ */
+export type AnalyticsFilterParseResult =
+  | { ok: true; filter: AnalyticsFilter }
+  | {
+      ok: false;
+      status: 400;
+      body: { error: string; error_description: string };
+    };
+
+export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
   const filter: AnalyticsFilter = {};
   if (req.query.tool_type) filter.tool_type = req.query.tool_type as string;
   if (req.query.source) filter.source = req.query.source as string;
-  return filter;
+
+  const fromRaw =
+    typeof req.query.from === "string" ? req.query.from : undefined;
+  const toRaw = typeof req.query.to === "string" ? req.query.to : undefined;
+
+  // Both or neither — half-specified ranges are a client bug.
+  if ((fromRaw && !toRaw) || (!fromRaw && toRaw)) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: "invalid_request",
+        error_description: "from/to must be provided together",
+      },
+    };
+  }
+
+  if (fromRaw && toRaw) {
+    if (!ISO_DATE_RE.test(fromRaw) || !ISO_DATE_RE.test(toRaw)) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: "from/to must be YYYY-MM-DD",
+        },
+      };
+    }
+    // Parse as UTC start-of-day / end-of-day so the inclusive range
+    // covers both endpoints regardless of client time zone.
+    const from = new Date(fromRaw + "T00:00:00.000Z");
+    const to = new Date(toRaw + "T23:59:59.999Z");
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: "from/to must be YYYY-MM-DD",
+        },
+      };
+    }
+    filter.from = from;
+    filter.to = to;
+  }
+
+  return { ok: true, filter };
 }
 
 app.get(
@@ -768,8 +831,12 @@ app.get(
   analyticsAuth,
   async (req: Request, res: Response) => {
     try {
-      const filter = parseAnalyticsFilter(req);
-      const summary = await getAnalyticsSummary(filter);
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
+      const summary = await getAnalyticsSummary(parsed.filter);
       res.json(summary);
     } catch (err) {
       console.error("[analytics] Summary query failed:", err);
@@ -783,10 +850,18 @@ app.get(
   analyticsAuth,
   async (req: Request, res: Response) => {
     try {
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
       const days = parseInt(req.query.days as string) || 7;
       const limit = parseInt(req.query.limit as string) || 50;
-      const filter = parseAnalyticsFilter(req);
-      const queries = await getTopQueries(days, Math.min(limit, 200), filter);
+      const queries = await getTopQueries(
+        days,
+        Math.min(limit, 200),
+        parsed.filter,
+      );
       res.json(queries);
     } catch (err) {
       console.error("[analytics] Top queries failed:", err);
@@ -800,10 +875,18 @@ app.get(
   analyticsAuth,
   async (req: Request, res: Response) => {
     try {
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
       const days = parseInt(req.query.days as string) || 7;
       const limit = parseInt(req.query.limit as string) || 50;
-      const filter = parseAnalyticsFilter(req);
-      const queries = await getEmptyQueries(days, Math.min(limit, 200), filter);
+      const queries = await getEmptyQueries(
+        days,
+        Math.min(limit, 200),
+        parsed.filter,
+      );
       res.json(queries);
     } catch (err) {
       console.error("[analytics] Empty queries failed:", err);
@@ -817,8 +900,13 @@ app.get(
   analyticsAuth,
   async (req: Request, res: Response) => {
     try {
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
       const days = parseInt(req.query.days as string) || 7;
-      const counts = await getToolCounts(days);
+      const counts = await getToolCounts(days, parsed.filter);
       res.json(counts);
     } catch (err) {
       console.error("[analytics] Tool counts failed:", err);

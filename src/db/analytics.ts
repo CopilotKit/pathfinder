@@ -49,6 +49,16 @@ export interface ToolCount {
 export interface AnalyticsFilter {
   tool_type?: string;
   source?: string;
+  /**
+   * Optional inclusive date range. When both `from` and `to` are set the
+   * underlying queries filter on `created_at >= from AND created_at <= to`
+   * instead of the default `NOW() - INTERVAL '<days> days'` window.
+   *
+   * Callers should ensure both are provided together; endpoints reject
+   * half-specified ranges before they reach the DB layer.
+   */
+  from?: Date;
+  to?: Date;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +125,37 @@ function whereAnd(baseClauses: string[], filterClauses: string[]): string {
   return all.length > 0 ? "WHERE " + all.join(" AND ") : "";
 }
 
+/**
+ * Build a date-window clause + params for the given filter, falling back to
+ * a rolling "last N days" window when `from`/`to` are not provided.
+ *
+ * - When `filter.from` and `filter.to` are both set, returns
+ *   `created_at >= $N AND created_at <= $N+1` with the two Date params.
+ * - Otherwise, returns `created_at > NOW() - INTERVAL '1 day' * $N` with the
+ *   `days` number param.
+ *
+ * `startIdx` is the next available `$` placeholder index. The returned
+ * `nextIdx` is the next index to use after this clause.
+ */
+function buildDateWindow(
+  filter: AnalyticsFilter,
+  days: number,
+  startIdx: number,
+): { clauses: string[]; params: unknown[]; nextIdx: number } {
+  if (filter.from && filter.to) {
+    return {
+      clauses: [`created_at >= $${startIdx}`, `created_at <= $${startIdx + 1}`],
+      params: [filter.from, filter.to],
+      nextIdx: startIdx + 2,
+    };
+  }
+  return {
+    clauses: [`created_at > NOW() - INTERVAL '1 day' * $${startIdx}`],
+    params: [days],
+    nextIdx: startIdx + 1,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Read
 // ---------------------------------------------------------------------------
@@ -149,9 +190,9 @@ export async function getAnalyticsSummary(
   );
 
   // 7d summary (filtered) - exclude backfilled rows from latency/empty stats
-  const { clauses: fc2, params: fp2, nextIdx: _ } = buildFilterClauses(filter);
-  const base7d = ["created_at > NOW() - INTERVAL '7 days'"];
-  const summary7dWhere = whereAnd(base7d, fc2);
+  const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
+  const dw2 = buildDateWindow(filter, 7, n2);
+  const summary7dWhere = whereAnd(dw2.clauses, fc2);
   const summary7dRes = await pool.query(
     `SELECT
         count(*)::int AS total,
@@ -159,27 +200,23 @@ export async function getAnalyticsSummary(
         COALESCE(avg(latency_ms) FILTER (WHERE latency_ms >= 0)::int, 0) AS avg_latency
     FROM query_log
     ${summary7dWhere}`,
-    fp2,
+    [...fp2, ...dw2.params],
   );
 
   // Latencies for p95 (exclude backfilled rows with latency_ms=-1)
-  const { clauses: fc3, params: fp3 } = buildFilterClauses(filter);
-  const latencyBase = [
-    "created_at > NOW() - INTERVAL '7 days'",
-    "latency_ms >= 0",
-  ];
+  const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
+  const dw3 = buildDateWindow(filter, 7, n3);
+  const latencyBase = [...dw3.clauses, "latency_ms >= 0"];
   const latencyWhere = whereAnd(latencyBase, fc3);
   const latencyRes = await pool.query(
     `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY latency_ms`,
-    fp3,
+    [...fp3, ...dw3.params],
   );
 
-  // By source (7d, filtered)
-  const { clauses: fc4, params: fp4 } = buildFilterClauses(filter);
-  const sourceBase = [
-    "source_name IS NOT NULL",
-    "created_at > NOW() - INTERVAL '7 days'",
-  ];
+  // By source (filtered)
+  const { clauses: fc4, params: fp4, nextIdx: n4 } = buildFilterClauses(filter);
+  const dw4 = buildDateWindow(filter, 7, n4);
+  const sourceBase = ["source_name IS NOT NULL", ...dw4.clauses];
   const sourceWhere = whereAnd(sourceBase, fc4);
   const bySourceRes = await pool.query(
     `SELECT source_name, count(*)::int AS count
@@ -187,20 +224,20 @@ export async function getAnalyticsSummary(
     ${sourceWhere}
     GROUP BY source_name
     ORDER BY count DESC`,
-    fp4,
+    [...fp4, ...dw4.params],
   );
 
-  // Per day (7d, filtered)
-  const { clauses: fc5, params: fp5 } = buildFilterClauses(filter);
-  const dayBase = ["created_at > NOW() - INTERVAL '7 days'"];
-  const dayWhere = whereAnd(dayBase, fc5);
+  // Per day (filtered)
+  const { clauses: fc5, params: fp5, nextIdx: n5 } = buildFilterClauses(filter);
+  const dw5 = buildDateWindow(filter, 7, n5);
+  const dayWhere = whereAnd(dw5.clauses, fc5);
   const perDayRes = await pool.query(
     `SELECT date_trunc('day', created_at)::date::text AS day, count(*)::int AS count
     FROM query_log
     ${dayWhere}
     GROUP BY day
     ORDER BY day`,
-    fp5,
+    [...fp5, ...dw5.params],
   );
 
   const totalQueries = totalRes.rows[0]?.count ?? 0;
@@ -244,10 +281,8 @@ export async function getTopQueries(
   const pool = getPool();
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
-  const baseClauses = [
-    `created_at > NOW() - INTERVAL '1 day' * $${nextIdx}`,
-    "query_text != '<redacted>'",
-  ];
+  const dw = buildDateWindow(filter, days, nextIdx);
+  const baseClauses = [...dw.clauses, "query_text != '<redacted>'"];
   const where = whereAnd(baseClauses, fc);
 
   const { rows } = await pool.query(
@@ -261,8 +296,8 @@ export async function getTopQueries(
     ${where}
     GROUP BY query_text, tool_name
     ORDER BY count DESC
-    LIMIT $${nextIdx + 1}`,
-    [...fp, days, limit],
+    LIMIT $${dw.nextIdx}`,
+    [...fp, ...dw.params, limit],
   );
 
   return rows.map((r: Record<string, unknown>) => ({
@@ -289,9 +324,10 @@ export async function getEmptyQueries(
   const pool = getPool();
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
+  const dw = buildDateWindow(filter, days, nextIdx);
   const baseClauses = [
     "result_count = 0",
-    `created_at > NOW() - INTERVAL '1 day' * $${nextIdx}`,
+    ...dw.clauses,
     "query_text != '<redacted>'",
   ];
   const where = whereAnd(baseClauses, fc);
@@ -307,8 +343,8 @@ export async function getEmptyQueries(
     ${where}
     GROUP BY query_text, tool_name, source_name
     ORDER BY count DESC
-    LIMIT $${nextIdx + 1}`,
-    [...fp, days, limit],
+    LIMIT $${dw.nextIdx}`,
+    [...fp, ...dw.params, limit],
   );
 
   return rows.map((r: Record<string, unknown>) => ({
@@ -322,18 +358,26 @@ export async function getEmptyQueries(
 
 /**
  * Get query counts grouped by tool type prefix (e.g. "search", "explore").
+ *
+ * Accepts an optional filter with `from`/`to` to use an explicit date range.
+ * When not provided, falls back to the rolling "last N days" window.
  */
-export async function getToolCounts(days: number = 7): Promise<ToolCount[]> {
+export async function getToolCounts(
+  days: number = 7,
+  filter: AnalyticsFilter = {},
+): Promise<ToolCount[]> {
   const pool = getPool();
+  const dw = buildDateWindow(filter, days, 1);
+  const where = "WHERE " + dw.clauses.join(" AND ");
   const { rows } = await pool.query(
     `SELECT
         split_part(tool_name, '-', 1) AS tool_type,
         count(*)::int AS count
     FROM query_log
-    WHERE created_at > NOW() - INTERVAL '1 day' * $1
+    ${where}
     GROUP BY tool_type
     ORDER BY count DESC`,
-    [days],
+    dw.params,
   );
 
   return rows.map((r: Record<string, unknown>) => ({
