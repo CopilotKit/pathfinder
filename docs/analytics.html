@@ -41,6 +41,90 @@
             display: inline-block; padding: 2px 8px; border-radius: 10px;
             font-size: 0.7rem; font-weight: 500; background: #334155; color: #94a3b8;
         }
+
+        /* Filter group layout — tool left, date centered, source right */
+        .filter-row .filter-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .filter-row .filter-group.tool-group { margin-right: auto; }
+        .filter-row .filter-group.date-group { margin-left: auto; margin-right: auto; position: relative; }
+        .filter-row .filter-group.source-group { margin-left: auto; }
+
+        /* Date range selector */
+        .date-pill .date-value {
+            font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.74rem; letter-spacing: -0.01em;
+        }
+        .date-pill .chevron {
+            font-size: 0.65rem; opacity: 0.7; margin-left: 2px;
+            transition: transform 0.15s ease;
+        }
+        .date-pill.open .chevron { transform: rotate(180deg); }
+        .date-pill .cal-icon { font-size: 0.85rem; line-height: 1; }
+
+        .date-popover {
+            position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+            width: 280px; background: #1e293b; border: 1px solid #334155;
+            border-radius: 10px; padding: 8px; z-index: 50;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+        }
+        .date-popover .preset-list { display: flex; flex-direction: column; gap: 1px; }
+        .date-popover .preset {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 7px 10px; border-radius: 6px; font-size: 0.8rem;
+            color: #cbd5e1; cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
+            user-select: none;
+        }
+        .date-popover .preset:hover { background: #273449; color: #e2e8f0; }
+        .date-popover .preset.active { background: rgba(59, 130, 246, 0.15); color: #93c5fd; }
+        .date-popover .preset.active .check { color: #3b82f6; font-weight: 700; }
+        .date-popover .preset .check { opacity: 0; font-size: 0.75rem; }
+        .date-popover .preset.active .check { opacity: 1; }
+
+        .date-popover .divider-h {
+            height: 1px; background: #334155; margin: 6px 2px;
+        }
+        .date-popover .custom-range {
+            padding: 6px 10px 8px;
+        }
+        .date-popover .custom-range-label {
+            font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+            color: #64748b; margin-bottom: 6px;
+        }
+        .date-popover .date-inputs { display: flex; gap: 8px; align-items: center; }
+        .date-popover .date-inputs input {
+            flex: 1; min-width: 0;
+            padding: 6px 8px; border-radius: 6px; border: 1px solid #334155;
+            background: #0f172a; color: #e2e8f0;
+            font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.75rem;
+            transition: border-color 0.15s ease;
+        }
+        .date-popover .date-inputs input:focus {
+            outline: none; border-color: #3b82f6;
+        }
+        .date-popover .date-inputs .arrow { color: #64748b; font-size: 0.75rem; }
+
+        .date-popover .popover-actions {
+            display: flex; justify-content: flex-end; gap: 6px;
+            padding: 8px 6px 4px; border-top: 1px solid #334155; margin-top: 6px;
+        }
+        .date-popover .btn {
+            padding: 6px 14px; border-radius: 6px; border: 1px solid transparent;
+            font-size: 0.78rem; font-weight: 500; cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .date-popover .btn-ghost {
+            background: transparent; color: #94a3b8; border-color: #334155;
+        }
+        .date-popover .btn-ghost:hover { color: #e2e8f0; border-color: #475569; }
+        .date-popover .btn-primary {
+            background: #3b82f6; color: #ffffff;
+        }
+        .date-popover .btn-primary:hover { background: #2563eb; }
+
+        .chart-caption {
+            display: block; margin-top: 8px; color: #64748b;
+            font-size: 0.72rem; text-align: center; font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -53,6 +137,7 @@
         <div class="chart-box">
             <h2 id="dailyChartTitle">Queries per Day (7d)</h2>
             <canvas id="dailyChart"></canvas>
+            <span class="chart-caption">Click a bar to filter to that day</span>
         </div>
         <div class="chart-box">
             <h2>Queries by Source</h2>
@@ -87,6 +172,86 @@
     </div>
 
     <script>
+        // --- Preview mode (MOCKUP ONLY) ---
+        // When ?preview=1 is in the URL, intercept analytics API calls with canned
+        // JSON so charts + tables render without a live backend. This lets the
+        // date-range-selector mockup be visually evaluated against a full page.
+        (function setupPreviewMode() {
+            if (!window.location.search.includes('preview=1')) return;
+            sessionStorage.setItem('pathfinder_analytics_token', 'preview');
+
+            var today = new Date();
+            function dayOffset(n) {
+                var d = new Date(today);
+                d.setDate(d.getDate() - n);
+                return d.toISOString().slice(0, 10);
+            }
+
+            var CANNED = {
+                '/api/analytics/auth-mode': { dev: true },
+                '/api/analytics/summary': {
+                    total_queries: 6128,
+                    total_queries_7d: 1284,
+                    empty_result_rate_7d: 0.074,
+                    empty_result_count_7d: 95,
+                    avg_latency_ms_7d: 142,
+                    p95_latency_ms_7d: 318,
+                    queries_per_day_7d: [
+                        { day: dayOffset(6), count: 172 },
+                        { day: dayOffset(5), count: 198 },
+                        { day: dayOffset(4), count: 156 },
+                        { day: dayOffset(3), count: 221 },
+                        { day: dayOffset(2), count: 189 },
+                        { day: dayOffset(1), count: 204 },
+                        { day: dayOffset(0), count: 144 },
+                    ],
+                    queries_by_source: [
+                        { source_name: 'docs', count: 612 },
+                        { source_name: 'code', count: 398 },
+                        { source_name: 'ag-ui-docs', count: 182 },
+                        { source_name: 'ag-ui-code', count: 92 },
+                    ],
+                },
+                '/api/analytics/tool-counts': [
+                    { tool_type: 'search', count: 874 },
+                    { tool_type: 'explore', count: 410 },
+                ],
+                '/api/analytics/queries': [
+                    { query_text: 'useCopilotAction', tool_name: 'search-docs', count: 82, avg_result_count: 5.4, avg_top_score: 0.89 },
+                    { query_text: 'CopilotSidebar setup', tool_name: 'search-docs', count: 71, avg_result_count: 4.9, avg_top_score: 0.86 },
+                    { query_text: 'useCoAgent state', tool_name: 'search-docs', count: 63, avg_result_count: 5.1, avg_top_score: 0.82 },
+                    { query_text: 'render frontend action', tool_name: 'explore-docs', count: 58, avg_result_count: 3.7, avg_top_score: 0.79 },
+                    { query_text: 'runtime adapter langchain', tool_name: 'search-code', count: 54, avg_result_count: 6.2, avg_top_score: 0.91 },
+                    { query_text: 'CopilotKit provider', tool_name: 'search-docs', count: 49, avg_result_count: 4.4, avg_top_score: 0.84 },
+                    { query_text: 'streaming generative UI', tool_name: 'explore-docs', count: 46, avg_result_count: 3.9, avg_top_score: 0.77 },
+                    { query_text: 'ag-ui event types', tool_name: 'search-ag-ui-docs', count: 41, avg_result_count: 5.8, avg_top_score: 0.88 },
+                    { query_text: 'useCopilotReadable', tool_name: 'search-docs', count: 39, avg_result_count: 4.7, avg_top_score: 0.85 },
+                    { query_text: 'CrewAI integration', tool_name: 'search-code', count: 35, avg_result_count: 5.2, avg_top_score: 0.83 },
+                    { query_text: 'LangGraph state sync', tool_name: 'explore-code', count: 31, avg_result_count: 4.1, avg_top_score: 0.80 },
+                    { query_text: 'human in the loop', tool_name: 'search-docs', count: 29, avg_result_count: 3.8, avg_top_score: 0.76 },
+                ],
+                '/api/analytics/empty-queries': [
+                    { query_text: 'copilotkit redux middleware', tool_name: 'search-docs', source_name: 'docs', count: 11, last_seen: new Date().toISOString() },
+                    { query_text: 'offline mode support', tool_name: 'search-code', source_name: 'code', count: 7, last_seen: new Date(Date.now() - 3600 * 1000 * 8).toISOString() },
+                ],
+            };
+
+            var originalFetch = window.fetch.bind(window);
+            window.fetch = function(url, opts) {
+                if (typeof url === 'string' && url.indexOf('/api/analytics/') === 0) {
+                    var path = url.split('?')[0];
+                    var body = CANNED[path];
+                    if (body !== undefined) {
+                        return Promise.resolve(new Response(JSON.stringify(body), {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' },
+                        }));
+                    }
+                }
+                return originalFetch(url, opts);
+            };
+        })();
+
         // --- State ---
         var activeToolType = null;  // null = "All"
         var activeSource = null;    // null = "All Sources"
@@ -149,26 +314,67 @@
             var row = document.getElementById('filterRow');
             var total = toolCounts.reduce(function(sum, t) { return sum + t.count; }, 0);
 
-            var html = '<span class="pill' + (activeToolType === null ? ' active' : '') + '" data-tool="">'
+            // Tool-type group (left)
+            var toolHtml = '<div class="filter-group tool-group">';
+            toolHtml += '<span class="pill' + (activeToolType === null ? ' active' : '') + '" data-tool="">'
                 + 'All <span class="count">(' + total.toLocaleString() + ')</span></span>';
             toolCounts.forEach(function(t) {
                 var isActive = activeToolType === t.tool_type;
                 var label = t.tool_type.charAt(0).toUpperCase() + t.tool_type.slice(1);
-                html += '<span class="pill' + (isActive ? ' active' : '') + '" data-tool="' + esc(t.tool_type) + '">'
+                toolHtml += '<span class="pill' + (isActive ? ' active' : '') + '" data-tool="' + esc(t.tool_type) + '">'
                     + esc(label) + ' <span class="count">(' + t.count.toLocaleString() + ')</span></span>';
             });
+            toolHtml += '</div>';
 
+            // Date-range group (center) — MOCKUP, not functional
+            var dateHtml = ''
+                + '<!-- MOCKUP — not functional -->'
+                + '<div class="filter-group date-group" id="dateGroup">'
+                +   '<span class="pill date-pill open" aria-expanded="true">'
+                +     '<span class="cal-icon">&#128197;</span>'
+                +     '<span class="date-value">Last 7 days</span>'
+                +     '<span class="chevron">&#9662;</span>'
+                +   '</span>'
+                +   '<div class="date-popover" role="dialog" aria-label="Select date range">'
+                +     '<div class="preset-list">'
+                +       '<div class="preset"><span>Today</span><span class="check">&#10003;</span></div>'
+                +       '<div class="preset active"><span>Last 7 days</span><span class="check">&#10003;</span></div>'
+                +       '<div class="preset"><span>Last 14 days</span><span class="check">&#10003;</span></div>'
+                +       '<div class="preset"><span>Last 30 days</span><span class="check">&#10003;</span></div>'
+                +       '<div class="preset"><span>Last 90 days</span><span class="check">&#10003;</span></div>'
+                +       '<div class="preset"><span>All time</span><span class="check">&#10003;</span></div>'
+                +       '<div class="preset"><span>Custom&hellip;</span><span class="check">&#10003;</span></div>'
+                +     '</div>'
+                +     '<div class="divider-h"></div>'
+                +     '<div class="custom-range">'
+                +       '<div class="custom-range-label">Custom range</div>'
+                +       '<div class="date-inputs">'
+                +         '<input type="text" value="2026-04-13" aria-label="From date" />'
+                +         '<span class="arrow">&rarr;</span>'
+                +         '<input type="text" value="2026-04-20" aria-label="To date" />'
+                +       '</div>'
+                +     '</div>'
+                +     '<div class="popover-actions">'
+                +       '<button type="button" class="btn btn-ghost">Cancel</button>'
+                +       '<button type="button" class="btn btn-primary">Apply</button>'
+                +     '</div>'
+                +   '</div>'
+                + '</div>';
+
+            // Source group (right)
+            var sourceHtml = '';
             if (sources && sources.length > 0) {
-                html += '<span class="spacer"></span>';
-                html += '<span class="pill' + (activeSource === null ? ' active' : '') + '" data-source="">All Sources</span>';
+                sourceHtml += '<div class="filter-group source-group">';
+                sourceHtml += '<span class="pill' + (activeSource === null ? ' active' : '') + '" data-source="">All Sources</span>';
                 sources.forEach(function(s) {
                     var isActive = activeSource === s.source_name;
-                    html += '<span class="pill' + (isActive ? ' active' : '') + '" data-source="' + esc(s.source_name) + '">'
+                    sourceHtml += '<span class="pill' + (isActive ? ' active' : '') + '" data-source="' + esc(s.source_name) + '">'
                         + esc(s.source_name) + ' <span class="count">(' + s.count.toLocaleString() + ')</span></span>';
                 });
+                sourceHtml += '</div>';
             }
 
-            row.innerHTML = html;
+            row.innerHTML = toolHtml + dateHtml + sourceHtml;
             row.querySelectorAll('.pill[data-tool]').forEach(function(pill) {
                 pill.addEventListener('click', function() {
                     var val = this.getAttribute('data-tool');
