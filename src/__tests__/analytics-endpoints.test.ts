@@ -503,9 +503,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
   });
 
   it("rejects to without from with 400", () => {
-    const result = parseAnalyticsFilter(
-      mkReq({ to: "2026-04-20" }) as Request,
-    );
+    const result = parseAnalyticsFilter(mkReq({ to: "2026-04-20" }) as Request);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);

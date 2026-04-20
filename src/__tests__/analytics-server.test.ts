@@ -683,12 +683,9 @@ describe("Analytics server routes (HTTP-level)", () => {
       mockGetEmptyQueries.mockRejectedValueOnce(new Error("db down"));
 
       await startApp();
-      const res = await request(
-        server,
-        "GET",
-        "/api/analytics/empty-queries",
-        { Authorization: "Bearer tok" },
-      );
+      const res = await request(server, "GET", "/api/analytics/empty-queries", {
+        Authorization: "Bearer tok",
+      });
 
       expect(res.status).toBe(500);
       const body = JSON.parse(res.body);

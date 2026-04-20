@@ -777,10 +777,7 @@
         }
         if (!res.ok) {
           var body = await res.json().catch(function (parseErr) {
-            console.error(
-              "[analytics] error body parse failed",
-              parseErr,
-            );
+            console.error("[analytics] error body parse failed", parseErr);
             return {};
           });
           throw new Error(
@@ -1229,9 +1226,7 @@
           if (!isAllTime) {
             statCards.push({
               label: "Queries (" + winLabel + ")",
-              value: safeNumber(
-                summary.total_queries_window,
-              ).toLocaleString(),
+              value: safeNumber(summary.total_queries_window).toLocaleString(),
             });
           }
           // Guard the percentage: NaN * 100 = NaN, and (NaN).toFixed(1) is
