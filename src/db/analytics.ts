@@ -227,7 +227,7 @@ export async function getAnalyticsSummary(
     [...fp2, ...dw2.params],
   );
 
-  // Latencies for p95 (exclude backfilled rows with latency_ms=-1)
+  // Latencies for p95 (exclude backfilled rows where latency_ms < 0)
   const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
   const dw3 = buildDateWindow(filter, days, n3);
   const latencyBase = [...dw3.clauses, "latency_ms >= 0"];
