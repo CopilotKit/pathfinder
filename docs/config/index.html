@@ -623,11 +623,28 @@ https://docs.example.com/getting-started</div>
 
     <p>Point a GitHub webhook at <code>https://your-server/webhooks/github</code> with the <code>push</code> event. Set <code>GITHUB_WEBHOOK_SECRET</code> to match the webhook secret.</p>
 
+    <h2 id="analytics">analytics</h2>
+
+    <p>Optional. Enables query logging and the built-in analytics dashboard at <code>/analytics</code>.</p>
+
+    <div class="code-block"><span class="key">analytics:</span>
+  <span class="key">enabled:</span> <span class="value">false</span>               <span class="comment"># Enable analytics (default: false)</span>
+  <span class="key">log_queries:</span> <span class="value">true</span>            <span class="comment"># Log all search queries (default: true)</span>
+  <span class="key">token:</span> <span class="value">${ANALYTICS_TOKEN}</span>    <span class="comment"># Bearer token for /api/analytics endpoints</span>
+  <span class="key">retention_days:</span> <span class="value">90</span>           <span class="comment"># Days to retain data (default: 90)</span></div>
+
+    <ul>
+        <li><strong>enabled</strong> — When <code>true</code>, Pathfinder logs queries and serves the analytics dashboard at <code>/analytics</code>. Default <code>false</code>.</li>
+        <li><strong>log_queries</strong> — When <code>true</code>, all search queries are logged with latency and result counts. Default <code>true</code> (when analytics is enabled).</li>
+        <li><strong>token</strong> — Bearer token for authenticating requests to <code>/api/analytics/*</code> endpoints. Use the <code>ANALYTICS_TOKEN</code> environment variable. Required when analytics is enabled.</li>
+        <li><strong>retention_days</strong> — How long to keep analytics data before automatic cleanup. Default 90 days.</li>
+    </ul>
+
+    <p>The analytics dashboard provides top queries, empty result tracking, and latency metrics. API endpoints: <code>/api/analytics/summary</code>, <code>/api/analytics/queries</code>, <code>/api/analytics/empty-queries</code>.</p>
+
     <h2 id="authentication">Authentication</h2>
 
-    <p>Pathfinder runs an anonymous OAuth 2.1 ceremonial flow for MCP clients. No user accounts, no sign-up, no dashboard — clients that perform the handshake receive a token whose subject is always <code>anonymous</code>. This satisfies MCP clients that require OAuth (claude.ai, newer Claude Code builds) while keeping Pathfinder a pure knowledge server.</p>
-
-    <p>There is nothing to configure in <code>pathfinder.yaml</code>. The only environment variable required is <code>MCP_JWT_SECRET</code> in production — see the <a href="/deploy#environment-variables">Deployment Guide</a>.</p>
+    <p>Pathfinder runs an anonymous OAuth 2.1 flow for MCP clients automatically — no config needed beyond the <code>MCP_JWT_SECRET</code> environment variable documented in the <a href="/deploy#environment-variables">Deployment Guide</a>. No user accounts, no sign-up, no dashboard — clients that perform the handshake receive a token whose subject is always <code>anonymous</code>. This satisfies MCP clients that require OAuth (claude.ai, newer Claude Code builds) while keeping Pathfinder a pure knowledge server.</p>
 
     <h3 id="auth-endpoints">OAuth endpoints</h3>
 
@@ -653,25 +670,6 @@ https://docs.example.com/getting-started</div>
     </ul>
 
     <p>Clients that see the 401 challenge automatically discover the OAuth server, register, and retry with a valid token. Rotating <code>MCP_JWT_SECRET</code> invalidates all issued tokens at once — clients re-authenticate transparently on the next request.</p>
-
-    <h2 id="analytics">analytics</h2>
-
-    <p>Optional. Enables query logging and the built-in analytics dashboard at <code>/analytics</code>.</p>
-
-    <div class="code-block"><span class="key">analytics:</span>
-  <span class="key">enabled:</span> <span class="value">false</span>               <span class="comment"># Enable analytics (default: false)</span>
-  <span class="key">log_queries:</span> <span class="value">true</span>            <span class="comment"># Log all search queries (default: true)</span>
-  <span class="key">token:</span> <span class="value">${ANALYTICS_TOKEN}</span>    <span class="comment"># Bearer token for /api/analytics endpoints</span>
-  <span class="key">retention_days:</span> <span class="value">90</span>           <span class="comment"># Days to retain data (default: 90)</span></div>
-
-    <ul>
-        <li><strong>enabled</strong> — When <code>true</code>, Pathfinder logs queries and serves the analytics dashboard at <code>/analytics</code>. Default <code>false</code>.</li>
-        <li><strong>log_queries</strong> — When <code>true</code>, all search queries are logged with latency and result counts. Default <code>true</code> (when analytics is enabled).</li>
-        <li><strong>token</strong> — Bearer token for authenticating requests to <code>/api/analytics/*</code> endpoints. Use the <code>ANALYTICS_TOKEN</code> environment variable. Required when analytics is enabled.</li>
-        <li><strong>retention_days</strong> — How long to keep analytics data before automatic cleanup. Default 90 days.</li>
-    </ul>
-
-    <p>The analytics dashboard provides top queries, empty result tracking, and latency metrics. API endpoints: <code>/api/analytics/summary</code>, <code>/api/analytics/queries</code>, <code>/api/analytics/empty-queries</code>.</p>
 
     <h2>Example Configs</h2>
 
