@@ -886,9 +886,18 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
   // After the array rejection above, these are narrowed to string | undefined.
   // Use a typeof check (not `as string` casts) so future changes to rejectArray
   // surface as real type errors instead of silently hiding a bad narrowing.
-  if (typeof req.query.tool_type === "string")
+  // Reject empty strings too: an empty filter value is almost certainly a
+  // client bug (e.g. `?tool_type=` from a blank select) and would otherwise
+  // pass through to LIKE as an unbounded wildcard match.
+  if (
+    typeof req.query.tool_type === "string" &&
+    req.query.tool_type.length > 0
+  ) {
     filter.tool_type = req.query.tool_type;
-  if (typeof req.query.source === "string") filter.source = req.query.source;
+  }
+  if (typeof req.query.source === "string" && req.query.source.length > 0) {
+    filter.source = req.query.source;
+  }
 
   const fromRaw =
     typeof req.query.from === "string" ? req.query.from : undefined;
@@ -919,18 +928,13 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
     }
     // Parse as UTC start-of-day / end-of-day so the inclusive range
     // covers both endpoints regardless of client time zone.
+    //
+    // No explicit isNaN check here: the YYYY-MM-DD regex above already
+    // ensures fromRaw/toRaw are well-formed, and the roundtrip check below
+    // catches any calendar-invalid date (Feb 30 etc.) that `new Date()`
+    // silently rolls forward.
     const from = new Date(fromRaw + "T00:00:00.000Z");
     const to = new Date(toRaw + "T23:59:59.999Z");
-    if (isNaN(from.getTime()) || isNaN(to.getTime())) {
-      return {
-        ok: false,
-        status: 400,
-        body: {
-          error: "invalid_request",
-          error_description: "from/to must be YYYY-MM-DD",
-        },
-      };
-    }
     // Reject calendar-invalid dates (e.g. 2026-02-30 which `new Date()`
     // silently rolls forward to March 2). Re-serialize the parsed Date back
     // to YYYY-MM-DD in UTC and require it to match the original input.
@@ -1201,9 +1205,19 @@ export function registerAnalyticsRoutes(
     // JSON response instead of letting Express's default handler hang / 500.
     res.sendFile(_analyticsHtmlPath, { dotfiles: "allow" }, (err) => {
       if (!err) return;
-      if (res.headersSent) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const code = (err as any).code as string | undefined;
+      if (res.headersSent) {
+        // The response already started streaming; we can't change status
+        // or body. Log so a mid-stream failure is visible rather than
+        // silently dropped.
+        console.error("[analytics] sendFile failed mid-stream:", err);
+        return;
+      }
+      // Type-guarded access to Node's errno code — sendFile can reject with
+      // errors that don't carry one, so check before using.
+      const code =
+        err && typeof err === "object" && "code" in err
+          ? (err as NodeJS.ErrnoException).code
+          : undefined;
       if (code === "ENOENT") {
         res.status(404).json({ error: "analytics dashboard not available" });
         return;
