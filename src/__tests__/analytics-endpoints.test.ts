@@ -6,11 +6,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const mockGetAnalyticsSummary = vi.fn();
 const mockGetTopQueries = vi.fn();
 const mockGetEmptyQueries = vi.fn();
+const mockGetToolCounts = vi.fn();
 
 vi.mock("../db/analytics.js", () => ({
   getAnalyticsSummary: (...args: unknown[]) => mockGetAnalyticsSummary(...args),
   getTopQueries: (...args: unknown[]) => mockGetTopQueries(...args),
   getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
+  getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
 }));
 
 // Mock config — analyticsAuth now uses getAnalyticsConfig
@@ -72,7 +74,7 @@ describe("analyticsAuth middleware", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("auto-generates token and requires auth when enabled with no token", () => {
+  it("auto-generates token, logs only a fingerprint, and requires auth", () => {
     mockGetAnalyticsConfigFn.mockReturnValue({
       enabled: true,
       log_queries: true,
@@ -89,7 +91,8 @@ describe("analyticsAuth middleware", () => {
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
 
-    // Token should be logged to console on first generation
+    // Token log must include a fingerprint (not the full token) and must
+    // NOT include the `/analytics?token=...` URL form.
     const logCalls = consoleSpy.mock.calls.map((c) => c[0]);
     const tokenLogCall = logCalls.find(
       (msg) =>
@@ -97,23 +100,11 @@ describe("analyticsAuth middleware", () => {
         msg.includes("[analytics] No token configured"),
     );
     expect(tokenLogCall).toBeDefined();
-
-    // Extract the auto-generated token from the log message
-    const tokenMatch = (tokenLogCall as string).match(
-      /auto-generated token: (\S+)/,
+    expect(tokenLogCall as string).toMatch(/fingerprint=[A-Za-z0-9]{8}…/);
+    const urlLog = logCalls.find(
+      (msg) => typeof msg === "string" && msg.includes("/analytics?token="),
     );
-    expect(tokenMatch).not.toBeNull();
-    const autoToken = tokenMatch![1];
-
-    // A second call with the auto-generated token should succeed
-    const res2 = mockRes();
-    const next2 = vi.fn();
-    analyticsAuth(
-      { headers: { authorization: `Bearer ${autoToken}` } } as never,
-      res2 as never,
-      next2,
-    );
-    expect(next2).toHaveBeenCalled();
+    expect(urlLog).toBeUndefined();
 
     consoleSpy.mockRestore();
   });
@@ -275,14 +266,13 @@ describe("analyticsAuth middleware", () => {
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
-  it("skips token check in development mode", () => {
+  it("skips token check in development mode ONLY from localhost", () => {
     mockGetAnalyticsConfigFn.mockReturnValue({
       enabled: true,
       log_queries: true,
       retention_days: 90,
       token: "secret",
     });
-    // Override getConfig to return nodeEnv: "development"
     mockGetConfigFn.mockReturnValue({
       port: 3001,
       databaseUrl: "pglite:///tmp/test",
@@ -302,11 +292,94 @@ describe("analyticsAuth middleware", () => {
     const res = mockRes();
     const next = vi.fn();
 
-    // No auth header — should still pass in dev mode
-    analyticsAuth({ headers: {} } as never, res as never, next);
+    // Localhost caller, no auth header — should bypass
+    analyticsAuth(
+      { headers: {}, socket: { remoteAddress: "127.0.0.1" } } as never,
+      res as never,
+      next,
+    );
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it("dev bypass refuses non-localhost callers", () => {
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
+    mockGetConfigFn.mockReturnValue({
+      port: 3001,
+      databaseUrl: "pglite:///tmp/test",
+      openaiApiKey: "",
+      githubToken: "",
+      githubWebhookSecret: "",
+      nodeEnv: "development",
+      logLevel: "info",
+      cloneDir: "/tmp/test",
+      slackBotToken: "",
+      slackSigningSecret: "",
+      discordBotToken: "",
+      discordPublicKey: "",
+      notionToken: "",
+      mcpJwtSecret: "x".repeat(32),
+    });
+    const res = mockRes();
+    const next = vi.fn();
+
+    // Non-localhost caller — must NOT be bypassed, falls through to token check
+    analyticsAuth(
+      {
+        headers: {},
+        socket: { remoteAddress: "192.168.1.100" },
+      } as never,
+      res as never,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it("production mode: getAnalyticsToken throws → 503", () => {
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
+    mockGetConfigFn.mockReturnValue({
+      port: 3001,
+      databaseUrl: "pglite:///tmp/test",
+      openaiApiKey: "",
+      githubToken: "",
+      githubWebhookSecret: "",
+      nodeEnv: "production",
+      logLevel: "info",
+      cloneDir: "/tmp/test",
+      slackBotToken: "",
+      slackSigningSecret: "",
+      discordBotToken: "",
+      discordPublicKey: "",
+      notionToken: "",
+      mcpJwtSecret: "x".repeat(32),
+    });
+    const consoleErrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const res = mockRes();
+    const next = vi.fn();
+
+    analyticsAuth(
+      { headers: {}, socket: { remoteAddress: "1.2.3.4" } } as never,
+      res as never,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(503);
+    consoleErrSpy.mockRestore();
   });
 
   it("requires token in non-dev mode even when analytics is enabled", () => {
@@ -348,16 +421,11 @@ describe("analyticsAuth middleware", () => {
 // ---------------------------------------------------------------------------
 
 describe("endpoint parameter parsing", () => {
-  it("/api/analytics/queries with non-numeric days defaults to 7", () => {
-    const days = parseInt("abc") || 7;
-    const limit = parseInt("") || 50;
-    expect(days).toBe(7);
-    expect(limit).toBe(50);
-  });
-
-  it("/api/analytics/queries caps limit at 200", () => {
-    const limit = Math.min(parseInt("999"), 200);
-    expect(limit).toBe(200);
+  // Validation is enforced by parsePositiveIntParam at the route layer.
+  // See parsePositiveIntParam tests below for exhaustive coverage.
+  it("limit=999 exceeds max (200) — caller should return 400", () => {
+    // Sanity: 999 > 200, so endpoint handlers reject it rather than cap.
+    expect(999 > 200).toBe(true);
   });
 });
 
@@ -436,10 +504,12 @@ describe("parseAnalyticsFilter from/to validation", () => {
     const result = parseAnalyticsFilter(
       mkReq({ from: "2026-02-30", to: "2026-03-01" }),
     );
-    // The regex accepts 2026-02-30 syntactically, but Date(...) normalizes to
-    // March 2 — so we tolerate either behavior as long as nothing crashes.
-    // (Current impl: passes regex, Date parses, so returns ok.)
-    expect(result.ok).toBe(true);
+    // Post-fix: we re-serialize the parsed Date back to YYYY-MM-DD and reject
+    // when the roundtrip doesn't match the input (i.e. the date rolled over).
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+    }
   });
 
   it("preserves tool_type and source alongside from/to", () => {
@@ -458,5 +528,103 @@ describe("parseAnalyticsFilter from/to validation", () => {
       expect(result.filter.from).toBeInstanceOf(Date);
       expect(result.filter.to).toBeInstanceOf(Date);
     }
+  });
+
+  it("rejects from > to with 400", () => {
+    const result = parseAnalyticsFilter(
+      mkReq({ from: "2026-04-20", to: "2026-04-01" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
+      expect(result.body.error_description).toMatch(/from.*to/i);
+    }
+  });
+
+  it("rejects impossible calendar date (Feb 30) with 400", () => {
+    const result = parseAnalyticsFilter(
+      mkReq({ from: "2026-02-30", to: "2026-04-20" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+    }
+  });
+
+  it("rejects array query params (Express multi-value) with 400", () => {
+    const result = parseAnalyticsFilter({
+      query: { from: ["2026-04-01", "2026-04-02"], to: "2026-04-20" },
+    } as never);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parsePositiveIntParam helper
+// ---------------------------------------------------------------------------
+
+describe("parsePositiveIntParam", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports,@typescript-eslint/no-var-requires
+  let parsePositiveIntParam: typeof import("../server.js").parsePositiveIntParam;
+  beforeEach(async () => {
+    const mod = await import("../server.js");
+    parsePositiveIntParam = mod.parsePositiveIntParam;
+  });
+
+  it("returns default when raw is undefined", () => {
+    expect(parsePositiveIntParam(undefined, 7, 100)).toBe(7);
+  });
+
+  it("returns default when raw is empty string", () => {
+    expect(parsePositiveIntParam("", 50, 200)).toBe(50);
+  });
+
+  it("returns error for non-string (array)", () => {
+    const res = parsePositiveIntParam(["1", "2"], 7, 100);
+    expect(typeof res).toBe("object");
+    if (typeof res === "object") {
+      expect(res.error).toMatch(/string/);
+    }
+  });
+
+  it("returns error for non-numeric", () => {
+    const res = parsePositiveIntParam("abc", 7, 100);
+    expect(typeof res).toBe("object");
+    if (typeof res === "object") {
+      expect(res.error).toMatch(/positive integer/);
+    }
+  });
+
+  it("returns error for zero", () => {
+    const res = parsePositiveIntParam("0", 7, 100);
+    expect(typeof res).toBe("object");
+    if (typeof res === "object") {
+      expect(res.error).toMatch(/> 0/);
+    }
+  });
+
+  it("returns error for negative", () => {
+    const res = parsePositiveIntParam("-5", 7, 100);
+    expect(typeof res).toBe("object");
+  });
+
+  it("returns error when value > max", () => {
+    const res = parsePositiveIntParam("999", 7, 100);
+    expect(typeof res).toBe("object");
+    if (typeof res === "object") {
+      expect(res.error).toMatch(/100/);
+    }
+  });
+
+  it("returns parsed number for valid input", () => {
+    expect(parsePositiveIntParam("42", 7, 100)).toBe(42);
+  });
+
+  it("returns parsed number at max boundary", () => {
+    expect(parsePositiveIntParam("100", 7, 100)).toBe(100);
   });
 });

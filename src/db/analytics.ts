@@ -16,13 +16,13 @@ export interface QueryLogEntry {
 
 export interface AnalyticsSummary {
   total_queries: number;
-  total_queries_7d: number;
-  empty_result_count_7d: number;
-  empty_result_rate_7d: number;
-  avg_latency_ms_7d: number;
-  p95_latency_ms_7d: number;
+  total_queries_window: number;
+  empty_result_count_window: number;
+  empty_result_rate_window: number;
+  avg_latency_ms_window: number;
+  p95_latency_ms_window: number;
   queries_by_source: Array<{ source_name: string; count: number }>;
-  queries_per_day_7d: Array<{ day: string; count: number }>;
+  queries_per_day_window: Array<{ day: string; count: number }>;
 }
 
 export interface TopQuery {
@@ -95,6 +95,15 @@ export async function logQuery(
 // ---------------------------------------------------------------------------
 
 /**
+ * Escape LIKE pattern metacharacters so user-supplied values don't act as
+ * wildcards. Applied with an explicit `ESCAPE '\'` clause on the LIKE so
+ * that literal `%`, `_`, and `\` in the input match exactly.
+ */
+function escapeLikePattern(s: string): string {
+  return s.replace(/([\\%_])/g, "\\$1");
+}
+
+/**
  * Build WHERE clause fragments and params for tool_type and source filters.
  * Returns { clauses: string[], params: any[], nextIdx: number }.
  */
@@ -107,8 +116,11 @@ function buildFilterClauses(
   let idx = startIdx;
 
   if (filter.tool_type) {
-    clauses.push(`tool_name LIKE $${idx} || '-%'`);
-    params.push(filter.tool_type);
+    // Escape LIKE metacharacters in user input; declare the escape character
+    // explicitly so `%` and `_` in the input match literally rather than as
+    // wildcards.
+    clauses.push(`tool_name LIKE $${idx} || '-%' ESCAPE '\\'`);
+    params.push(escapeLikePattern(filter.tool_type));
     idx++;
   }
   if (filter.source) {
@@ -259,19 +271,21 @@ export async function getAnalyticsSummary(
 
   return {
     total_queries: totalQueries,
-    total_queries_7d: total7d,
-    empty_result_count_7d: empty7d,
-    empty_result_rate_7d: total7d > 0 ? empty7d / total7d : 0,
-    avg_latency_ms_7d: s.avg_latency ?? 0,
-    p95_latency_ms_7d: p95Latency,
+    total_queries_window: total7d,
+    empty_result_count_window: empty7d,
+    empty_result_rate_window: total7d > 0 ? empty7d / total7d : 0,
+    avg_latency_ms_window: s.avg_latency ?? 0,
+    p95_latency_ms_window: p95Latency,
     queries_by_source: bySourceRes.rows.map((r: Record<string, unknown>) => ({
       source_name: r.source_name as string,
       count: r.count as number,
     })),
-    queries_per_day_7d: perDayRes.rows.map((r: Record<string, unknown>) => ({
-      day: r.day as string,
-      count: r.count as number,
-    })),
+    queries_per_day_window: perDayRes.rows.map(
+      (r: Record<string, unknown>) => ({
+        day: r.day as string,
+        count: r.count as number,
+      }),
+    ),
   };
 }
 
@@ -373,8 +387,21 @@ export async function getToolCounts(
   filter: AnalyticsFilter = {},
 ): Promise<ToolCount[]> {
   const pool = getPool();
-  const dw = buildDateWindow(filter, days, 1);
-  const where = "WHERE " + dw.clauses.join(" AND ");
+
+  // tool_type intentionally ignored: filtering tool counts by tool type would
+  // be circular (asking "what tool types exist given only this one"). We only
+  // honor `source` from the filter here.
+  const { tool_type: _ignoredToolType, ...rest } = filter;
+  void _ignoredToolType;
+  const sourceOnlyFilter: AnalyticsFilter = rest;
+
+  const {
+    clauses: fc,
+    params: fp,
+    nextIdx,
+  } = buildFilterClauses(sourceOnlyFilter);
+  const dw = buildDateWindow(sourceOnlyFilter, days, nextIdx);
+  const where = whereAnd(dw.clauses, fc);
   const { rows } = await pool.query(
     `SELECT
         split_part(tool_name, '-', 1) AS tool_type,
@@ -383,7 +410,7 @@ export async function getToolCounts(
     ${where}
     GROUP BY tool_type
     ORDER BY count DESC`,
-    dw.params,
+    [...fp, ...dw.params],
   );
 
   return rows.map((r: Record<string, unknown>) => ({

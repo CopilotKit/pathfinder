@@ -128,16 +128,16 @@ describe("getAnalyticsSummary", () => {
     const result = await getAnalyticsSummary();
 
     expect(result.total_queries).toBe(1000);
-    expect(result.total_queries_7d).toBe(200);
-    expect(result.empty_result_count_7d).toBe(10);
-    expect(result.empty_result_rate_7d).toBeCloseTo(0.05);
-    expect(result.avg_latency_ms_7d).toBe(45);
+    expect(result.total_queries_window).toBe(200);
+    expect(result.empty_result_count_window).toBe(10);
+    expect(result.empty_result_rate_window).toBeCloseTo(0.05);
+    expect(result.avg_latency_ms_window).toBe(45);
     // p95 of [1..200] sorted: index = floor(200 * 0.95) = 190, value = 191
-    expect(result.p95_latency_ms_7d).toBe(191);
+    expect(result.p95_latency_ms_window).toBe(191);
     expect(result.queries_by_source).toEqual([
       { source_name: "docs", count: 150 },
     ]);
-    expect(result.queries_per_day_7d).toHaveLength(2);
+    expect(result.queries_per_day_window).toHaveLength(2);
   });
 
   it("handles zero queries gracefully", async () => {
@@ -153,10 +153,10 @@ describe("getAnalyticsSummary", () => {
     const result = await getAnalyticsSummary();
 
     expect(result.total_queries).toBe(0);
-    expect(result.empty_result_rate_7d).toBe(0);
-    expect(result.p95_latency_ms_7d).toBe(0);
+    expect(result.empty_result_rate_window).toBe(0);
+    expect(result.p95_latency_ms_window).toBe(0);
     expect(result.queries_by_source).toEqual([]);
-    expect(result.queries_per_day_7d).toEqual([]);
+    expect(result.queries_per_day_window).toEqual([]);
   });
 });
 
@@ -176,7 +176,7 @@ describe("p95 computation edge cases", () => {
       .mockResolvedValueOnce({ rows: [] });
 
     const result = await getAnalyticsSummary();
-    expect(result.p95_latency_ms_7d).toBe(42);
+    expect(result.p95_latency_ms_window).toBe(42);
   });
 
   it("p95 of all identical values returns that value", async () => {
@@ -192,7 +192,7 @@ describe("p95 computation edge cases", () => {
       .mockResolvedValueOnce({ rows: [] });
 
     const result = await getAnalyticsSummary();
-    expect(result.p95_latency_ms_7d).toBe(50);
+    expect(result.p95_latency_ms_window).toBe(50);
   });
 
   it("p95 of two values returns the higher one", async () => {
@@ -209,7 +209,7 @@ describe("p95 computation edge cases", () => {
 
     const result = await getAnalyticsSummary();
     // floor(2 * 0.95) = 1, sorted[1] = 100
-    expect(result.p95_latency_ms_7d).toBe(100);
+    expect(result.p95_latency_ms_window).toBe(100);
   });
 });
 
@@ -483,6 +483,39 @@ describe("getAnalyticsSummary with filters", () => {
   });
 });
 
+describe("getTopQueries LIKE injection hardening", () => {
+  it("escapes '%' and '_' wildcards in tool_type", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "_" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    // The SQL must include an ESCAPE clause or escape the wildcard character
+    // in the parameter value. Verify the wildcard is not passed raw — i.e.
+    // the param should contain an escaped form ('\_') and the SQL should
+    // declare the escape character.
+    const toolParam = params.find(
+      (p: unknown) => typeof p === "string" && p.includes("_"),
+    );
+    expect(typeof toolParam).toBe("string");
+    expect(toolParam).toBe("\\_");
+    // SQL carries an explicit ESCAPE '\' clause so `\_` in the param is treated
+    // as a literal `_` rather than a LIKE wildcard.
+    expect(sql).toContain("ESCAPE '\\'");
+  });
+
+  it("escapes backslash and percent", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "a%b\\c" });
+
+    const [, params] = mockQuery.mock.calls[0];
+    const toolParam = params.find(
+      (p: unknown) => typeof p === "string" && p.length > 0 && p !== "docs",
+    );
+    // Each \, %, _ must be prefixed with a backslash
+    expect(toolParam).toBe("a\\%b\\\\c");
+  });
+});
+
 describe("getTopQueries with filters", () => {
   it("includes tool_type filter in WHERE clause", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
@@ -695,6 +728,44 @@ describe("getToolCounts with from/to range", () => {
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toContain("NOW() - INTERVAL");
     expect(params).toEqual([14]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getToolCounts respects source filter; intentionally ignores tool_type
+// ---------------------------------------------------------------------------
+
+describe("getToolCounts respects source filter", () => {
+  it("applies source filter to WHERE clause", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { source: "docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("source_name =");
+    expect(params).toContain("docs");
+  });
+
+  it("ignores tool_type filter (intentional — would be circular)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { tool_type: "search" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("tool_name LIKE");
+    expect(params).not.toContain("search");
+  });
+
+  it("combines source filter with from/to range", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-20T23:59:59.999Z");
+    await getToolCounts(7, { source: "docs", from, to });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("source_name =");
+    expect(sql).toContain("created_at >=");
+    expect(params).toContain("docs");
+    expect(params).toContain(from);
+    expect(params).toContain(to);
   });
 });
 

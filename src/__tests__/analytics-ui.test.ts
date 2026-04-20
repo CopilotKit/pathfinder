@@ -138,12 +138,12 @@ function canned(daysReturned: number, totalQueries: number) {
   return {
     summary: {
       total_queries: totalQueries,
-      total_queries_7d: 500,
-      empty_result_rate_7d: 0.1,
-      empty_result_count_7d: 50,
-      avg_latency_ms_7d: 100,
-      p95_latency_ms_7d: 300,
-      queries_per_day_7d: perDay,
+      total_queries_window: 500,
+      empty_result_rate_window: 0.1,
+      empty_result_count_window: 50,
+      avg_latency_ms_window: 100,
+      p95_latency_ms_window: 300,
+      queries_per_day_window: perDay,
       queries_by_source: [{ source_name: "docs", count: totalQueries }],
     },
     toolCounts: [{ tool_type: "search", count: totalQueries }],

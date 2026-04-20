@@ -191,12 +191,12 @@
                 '/api/analytics/auth-mode': { dev: true },
                 '/api/analytics/summary': {
                     total_queries: 6128,
-                    total_queries_7d: 1284,
-                    empty_result_rate_7d: 0.074,
-                    empty_result_count_7d: 95,
-                    avg_latency_ms_7d: 142,
-                    p95_latency_ms_7d: 318,
-                    queries_per_day_7d: [
+                    total_queries_window: 1284,
+                    empty_result_rate_window: 0.074,
+                    empty_result_count_window: 95,
+                    avg_latency_ms_window: 142,
+                    p95_latency_ms_window: 318,
+                    queries_per_day_window: [
                         { day: dayOffset(6), count: 172 },
                         { day: dayOffset(5), count: 198 },
                         { day: dayOffset(4), count: 156 },
@@ -262,6 +262,18 @@
         var sourceChartInstance = null;
         var datePopoverOpen = false;
         var dateCustomMode = false;
+        // Preserves source pills across filter changes — tool-type filters
+        // shrink/remove sources from the summary response, but the UI should
+        // still show the full set so users can switch between them.
+        var unfilteredSourcesCache = null;
+        // Monotonic counter to guard against out-of-order load() responses.
+        // A stale response (user clicked fast) would otherwise clobber the
+        // current UI state with old data.
+        var loadGeneration = 0;
+        // Draft custom-range values so a re-render (e.g. outside click on
+        // another filter) doesn't wipe the user's in-progress date picks.
+        var draftFromInput = null;
+        var draftToInput = null;
 
         // Intl formatters (cached)
         var shortDateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
@@ -371,7 +383,7 @@
 
             // Tool-type group (left)
             var toolHtml = '<div class="filter-group tool-group">';
-            toolHtml += '<span class="pill' + (activeToolType === null ? ' active' : '') + '" data-tool="">'
+            toolHtml += '<span class="pill' + (activeToolType === null ? ' active' : '') + '" data-tool-all="1">'
                 + 'All <span class="count">(' + total.toLocaleString() + ')</span></span>';
             toolCounts.forEach(function(t) {
                 var isActive = activeToolType === t.tool_type;
@@ -419,13 +431,14 @@
                 + '<span class="check">&#10003;</span></div>';
 
             // Default the custom-range inputs to whatever is active, falling back to today/week.
+            // Prefer in-progress draft values so re-renders don't clobber user typing.
             var today = new Date();
             function toISO(d) {
                 var y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
                 return y + '-' + m + '-' + dd;
             }
-            var defaultTo = activeTo || toISO(today);
-            var defaultFrom = activeFrom;
+            var defaultTo = draftToInput != null ? draftToInput : (activeTo || toISO(today));
+            var defaultFrom = draftFromInput != null ? draftFromInput : activeFrom;
             if (!defaultFrom) {
                 var back = new Date(today);
                 back.setDate(back.getDate() - 6);
@@ -464,7 +477,7 @@
             var sourceHtml = '';
             if (sources && sources.length > 0) {
                 sourceHtml += '<div class="filter-group source-group">';
-                sourceHtml += '<span class="pill' + (activeSource === null ? ' active' : '') + '" data-source="">All Sources</span>';
+                sourceHtml += '<span class="pill' + (activeSource === null ? ' active' : '') + '" data-source-all="1">All Sources</span>';
                 sources.forEach(function(s) {
                     var isActive = activeSource === s.source_name;
                     sourceHtml += '<span class="pill' + (isActive ? ' active' : '') + '" data-source="' + esc(s.source_name) + '">'
@@ -474,18 +487,18 @@
             }
 
             row.innerHTML = toolHtml + dateHtml + sourceHtml;
-            row.querySelectorAll('.pill[data-tool]').forEach(function(pill) {
+            row.querySelectorAll('.pill[data-tool], .pill[data-tool-all]').forEach(function(pill) {
                 pill.addEventListener('click', function() {
-                    var val = this.getAttribute('data-tool');
-                    activeToolType = val || null;
+                    var isAll = this.hasAttribute('data-tool-all');
+                    activeToolType = isAll ? null : this.getAttribute('data-tool');
                     activeSource = null;
                     load();
                 });
             });
-            row.querySelectorAll('.pill[data-source]').forEach(function(pill) {
+            row.querySelectorAll('.pill[data-source], .pill[data-source-all]').forEach(function(pill) {
                 pill.addEventListener('click', function() {
-                    var val = this.getAttribute('data-source');
-                    activeSource = val || null;
+                    var isAll = this.hasAttribute('data-source-all');
+                    activeSource = isAll ? null : this.getAttribute('data-source');
                     load();
                 });
             });
@@ -511,6 +524,8 @@
                     activeTo = null;
                     datePopoverOpen = false;
                     dateCustomMode = false;
+                    draftFromInput = null;
+                    draftToInput = null;
                     load();
                 });
             });
@@ -527,6 +542,8 @@
                     activeDaysBack = null;
                     datePopoverOpen = false;
                     dateCustomMode = false;
+                    draftFromInput = null;
+                    draftToInput = null;
                     load();
                 });
             }
@@ -541,6 +558,18 @@
                 });
             }
 
+            // Track draft input values so re-renders preserve in-progress edits.
+            var fromInputEl = document.getElementById('dateFromInput');
+            if (fromInputEl) {
+                fromInputEl.addEventListener('input', function() { draftFromInput = this.value; });
+                fromInputEl.addEventListener('change', function() { draftFromInput = this.value; });
+            }
+            var toInputEl = document.getElementById('dateToInput');
+            if (toInputEl) {
+                toInputEl.addEventListener('input', function() { draftToInput = this.value; });
+                toInputEl.addEventListener('change', function() { draftToInput = this.value; });
+            }
+
             // Cancel — close popover without applying
             var cancelBtn = document.getElementById('dateCancelBtn');
             if (cancelBtn) {
@@ -548,6 +577,8 @@
                     e.stopPropagation();
                     datePopoverOpen = false;
                     dateCustomMode = false;
+                    draftFromInput = null;
+                    draftToInput = null;
                     renderFilters(currentToolCounts, currentSources);
                 });
             }
@@ -567,6 +598,8 @@
                     activeDaysBack = null;
                     datePopoverOpen = false;
                     dateCustomMode = false;
+                    draftFromInput = null;
+                    draftToInput = null;
                     load();
                 });
             }
@@ -579,10 +612,18 @@
         }
 
         // Outside-click closes the date popover without applying. Installed once.
-        document.addEventListener('click', function() {
+        // Scoped to clicks outside `#dateGroup` — clicks on other filter pills
+        // shouldn't both trigger a fresh load and tear down the popover, and
+        // clicks inside the group (presets, inputs, buttons) are handled by
+        // the group's own event handlers.
+        document.addEventListener('click', function(e) {
             if (!datePopoverOpen) return;
+            var group = document.getElementById('dateGroup');
+            if (group && group.contains(e.target)) return;
             datePopoverOpen = false;
             dateCustomMode = false;
+            draftFromInput = null;
+            draftToInput = null;
             renderFilters(currentToolCounts, currentSources);
         });
 
@@ -592,6 +633,9 @@
 
         // --- Main load ---
         async function load() {
+            // Race guard — if another load() starts before this one finishes,
+            // the stale response is dropped to avoid clobbering current UI state.
+            var gen = ++loadGeneration;
             try {
                 var fp = buildFilterParams();
                 // Prefix a '?' so the '&' in fp hangs off cleanly; summary needs special handling
@@ -605,6 +649,7 @@
                     fetchJson(emptyUrl),
                     fetchJson(toolCountsUrl),
                 ]);
+                if (gen !== loadGeneration) return;  // stale response — abort
                 var summary = results[0];
                 var topQueries = results[1];
                 var emptyQueries = results[2];
@@ -616,21 +661,28 @@
 
                 // Cache for non-fetching re-renders (e.g. toggling the date popover)
                 currentToolCounts = toolCounts;
-                currentSources = summary.queries_by_source;
+                // When no tool-type filter is active, the summary.queries_by_source
+                // reflects the full set. Snapshot it so that later, when a
+                // tool-type filter shrinks the response, the source pills still
+                // render the complete list.
+                if (activeToolType === null && summary.queries_by_source) {
+                    unfilteredSourcesCache = summary.queries_by_source.slice();
+                }
+                currentSources = unfilteredSourcesCache || summary.queries_by_source;
 
                 // Render filters
-                renderFilters(toolCounts, summary.queries_by_source);
+                renderFilters(toolCounts, currentSources);
 
                 // Stats cards — window label is derived from the active
                 // range so switching presets keeps the labels honest.
                 var winLabel = formatPillLabel();
                 document.getElementById('stats').innerHTML = [
                     { label: 'Total Queries', value: summary.total_queries.toLocaleString() },
-                    { label: 'Queries (' + winLabel + ')', value: summary.total_queries_7d.toLocaleString() },
-                    { label: 'Empty Result Rate (' + winLabel + ')', value: (summary.empty_result_rate_7d * 100).toFixed(1) + '%' },
-                    { label: 'Avg Latency (' + winLabel + ')', value: summary.avg_latency_ms_7d + 'ms' },
-                    { label: 'P95 Latency (' + winLabel + ')', value: summary.p95_latency_ms_7d + 'ms' },
-                    { label: 'Empty Queries (' + winLabel + ')', value: summary.empty_result_count_7d.toLocaleString() },
+                    { label: 'Queries (' + winLabel + ')', value: summary.total_queries_window.toLocaleString() },
+                    { label: 'Empty Result Rate (' + winLabel + ')', value: (summary.empty_result_rate_window * 100).toFixed(1) + '%' },
+                    { label: 'Avg Latency (' + winLabel + ')', value: summary.avg_latency_ms_window + 'ms' },
+                    { label: 'P95 Latency (' + winLabel + ')', value: summary.p95_latency_ms_window + 'ms' },
+                    { label: 'Empty Queries (' + winLabel + ')', value: summary.empty_result_count_window.toLocaleString() },
                 ].map(function(s) { return '<div class="stat-card"><div class="label">' + esc(s.label) + '</div><div class="value">' + s.value + '</div></div>'; }).join('');
 
                 // Table title h2s — also carry the window label.
@@ -647,12 +699,12 @@
                 var titleSuffix = activeToolType ? ' - ' + activeToolType.charAt(0).toUpperCase() + activeToolType.slice(1) : '';
                 document.getElementById('dailyChartTitle').textContent = 'Queries per Day (' + winLabel + ')' + titleSuffix;
 
-                var dayLabels = summary.queries_per_day_7d.map(function(d) { return d.day; });
+                var dayLabels = summary.queries_per_day_window.map(function(d) { return d.day; });
                 dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
                     type: 'bar',
                     data: {
                         labels: dayLabels,
-                        datasets: [{ label: 'Queries', data: summary.queries_per_day_7d.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
+                        datasets: [{ label: 'Queries', data: summary.queries_per_day_window.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
                     },
                     options: {
                         responsive: true,
@@ -666,6 +718,12 @@
                             activeFrom = day;
                             activeTo = day;
                             activeDaysBack = null;
+                            // Close any open popover so its stale state doesn't
+                            // linger on top of the newly-filtered view.
+                            datePopoverOpen = false;
+                            dateCustomMode = false;
+                            draftFromInput = null;
+                            draftToInput = null;
                             load();
                         },
                     },
