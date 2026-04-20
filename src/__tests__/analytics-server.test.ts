@@ -64,8 +64,9 @@ function buildTestApp() {
   const analyticsHtmlPath = path.join(process.cwd(), "docs", "analytics.html");
 
   registerAnalyticsRoutes(app, {
-    getAnalyticsSummary: (...args: Parameters<typeof mockGetAnalyticsSummary>) =>
-      mockGetAnalyticsSummary(...args),
+    getAnalyticsSummary: (
+      ...args: Parameters<typeof mockGetAnalyticsSummary>
+    ) => mockGetAnalyticsSummary(...args),
     getTopQueries: (...args: Parameters<typeof mockGetTopQueries>) =>
       mockGetTopQueries(...args),
     getEmptyQueries: (...args: Parameters<typeof mockGetEmptyQueries>) =>
