@@ -24,6 +24,7 @@ export interface AuthCode {
   clientId: string;
   codeChallenge: string;
   redirectUri: string;
+  resource?: string;
   expiresAt: number;
 }
 
@@ -31,6 +32,7 @@ export interface IssueCodeInput {
   clientId: string;
   codeChallenge: string;
   redirectUri: string;
+  resource?: string;
   ttlMs: number;
 }
 
@@ -66,6 +68,7 @@ export class CodeStore {
       clientId: input.clientId,
       codeChallenge: input.codeChallenge,
       redirectUri: input.redirectUri,
+      resource: input.resource,
       expiresAt,
     });
     return { code, expiresAt };

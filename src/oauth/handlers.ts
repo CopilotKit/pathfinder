@@ -163,6 +163,7 @@ export function authorizeHandler(req: Request, res: Response): void {
   const code_challenge = q.code_challenge;
   const code_challenge_method = q.code_challenge_method;
   const state = q.state;
+  const resource = q.resource;
 
   if (!client_id || !redirect_uri || !code_challenge || !response_type) {
     res.status(400).json({
@@ -216,6 +217,7 @@ export function authorizeHandler(req: Request, res: Response): void {
     clientId: client_id,
     codeChallenge: code_challenge,
     redirectUri: redirect_uri,
+    resource,
     ttlMs: CODE_TTL_MS,
   });
 
@@ -237,12 +239,14 @@ function issueTokenPair(
   origin: string,
   client_id: string,
   secret: string,
+  resource?: string,
 ): { access_token: string; refresh_token: string } {
   const iat = Math.floor(Date.now() / 1000);
+  const aud = resource || origin;
   const access_token = signJWT(
     {
       iss: origin,
-      aud: origin,
+      aud,
       sub: "anonymous",
       client_id,
       iat,
@@ -254,13 +258,14 @@ function issueTokenPair(
   const refresh_token = signJWT(
     {
       iss: origin,
-      aud: origin,
+      aud,
       sub: "anonymous",
       client_id,
       iat,
       exp: iat + REFRESH_TOKEN_TTL_SEC,
       typ: "refresh",
       scope: TOKEN_SCOPE,
+      resource,
     },
     secret,
   );
@@ -322,7 +327,9 @@ export function tokenHandler(req: Request, res: Response): void {
       return;
     }
 
-    const tokens = issueTokenPair(origin, client_id, secret);
+    const storedResource =
+      typeof payload.resource === "string" ? payload.resource : undefined;
+    const tokens = issueTokenPair(origin, client_id, secret, storedResource);
     console.log(
       `[oauth] token refreshed client_id=${client_id} ip=${clientIp(req)}`,
     );
@@ -389,9 +396,10 @@ export function tokenHandler(req: Request, res: Response): void {
     return;
   }
 
-  const tokens = issueTokenPair(origin, client_id, secret);
+  const tokens = issueTokenPair(origin, client_id, secret, record.resource);
+  const aud = record.resource || origin;
   console.log(
-    `[oauth] token issued client_id=${client_id} aud=${origin} exp_in=${TOKEN_TTL_SEC}s`,
+    `[oauth] token issued client_id=${client_id} aud=${aud} exp_in=${TOKEN_TTL_SEC}s`,
   );
   res.status(200).json({
     access_token: tokens.access_token,
@@ -449,9 +457,14 @@ export function bearerMiddleware(
   }
 
   try {
-    const payload = verifyJWT(token, getConfig().mcpJwtSecret, {
-      aud: originOf(req),
-    });
+    // Verify signature + expiry without strict aud check
+    const payload = verifyJWT(token, getConfig().mcpJwtSecret);
+    // Accept aud matching origin with or without trailing slash (RFC 8707 resource)
+    const origin = originOf(req);
+    const validAuds = new Set([origin, `${origin}/`]);
+    if (typeof payload.aud !== "string" || !validAuds.has(payload.aud)) {
+      throw new InvalidAudience();
+    }
     req.auth = {
       sub: payload.sub,
       client_id: (payload.client_id as string) ?? "",
