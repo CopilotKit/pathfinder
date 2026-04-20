@@ -988,6 +988,10 @@ export function parsePositiveIntParam(
   return n;
 }
 
+// Upper bound for the `days` query parameter. Kept at 100000 so the UI's
+// "All time" preset (which sends days=ALL_TIME_DAYS=99999 — see
+// docs/analytics.html) is comfortably under the cap. If you lower MAX_DAYS,
+// make sure it stays >= 99999 or the "All time" preset will 400.
 const MAX_DAYS = 100000;
 const MAX_LIMIT = 200;
 
