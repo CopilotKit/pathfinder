@@ -39,7 +39,11 @@ vi.mock("../config.js", () => ({
 }));
 
 import { getAnalyticsConfig } from "../config.js";
-import { analyticsAuth, parseAnalyticsFilter } from "../server.js";
+import {
+  analyticsAuth,
+  parseAnalyticsFilter,
+  parsePositiveIntParam,
+} from "../server.js";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 
@@ -82,8 +86,18 @@ function buildTestApp() {
           res.status(parsed.status).json(parsed.body);
           return;
         }
-        const days = parseInt(req.query.days as string) || 7;
-        const summary = await mockGetAnalyticsSummary(parsed.filter, days);
+        const daysResult = parsePositiveIntParam(req.query.days, 7, 100000);
+        if (typeof daysResult === "object") {
+          res.status(400).json({
+            error: "invalid_request",
+            error_description: `days ${daysResult.error}`,
+          });
+          return;
+        }
+        const summary = await mockGetAnalyticsSummary(
+          parsed.filter,
+          daysResult,
+        );
         res.json(summary);
       } catch (err) {
         res.status(500).json({ error: "Failed to fetch analytics summary" });
@@ -101,11 +115,25 @@ function buildTestApp() {
           res.status(parsed.status).json(parsed.body);
           return;
         }
-        const days = parseInt(req.query.days as string) || 7;
-        const limit = parseInt(req.query.limit as string) || 50;
+        const daysResult = parsePositiveIntParam(req.query.days, 7, 100000);
+        if (typeof daysResult === "object") {
+          res.status(400).json({
+            error: "invalid_request",
+            error_description: `days ${daysResult.error}`,
+          });
+          return;
+        }
+        const limitResult = parsePositiveIntParam(req.query.limit, 50, 200);
+        if (typeof limitResult === "object") {
+          res.status(400).json({
+            error: "invalid_request",
+            error_description: `limit ${limitResult.error}`,
+          });
+          return;
+        }
         const queries = await mockGetTopQueries(
-          days,
-          Math.min(limit, 200),
+          daysResult,
+          limitResult,
           parsed.filter,
         );
         res.json(queries);
@@ -385,7 +413,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(mockGetTopQueries).toHaveBeenCalledWith(7, 50, {});
     });
 
-    it("caps limit at 200", async () => {
+    it("rejects limit > 200 with 400", async () => {
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
         log_queries: true,
@@ -395,11 +423,15 @@ describe("Analytics server routes (HTTP-level)", () => {
       mockGetTopQueries.mockResolvedValue([]);
 
       await startApp();
-      await request(server, "GET", "/api/analytics/queries?limit=999", {
-        Authorization: "Bearer tok",
-      });
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/queries?limit=999",
+        { Authorization: "Bearer tok" },
+      );
 
-      expect(mockGetTopQueries).toHaveBeenCalledWith(7, 200, {});
+      expect(res.status).toBe(400);
+      expect(mockGetTopQueries).not.toHaveBeenCalled();
     });
   });
 
@@ -575,6 +607,77 @@ describe("Analytics server routes (HTTP-level)", () => {
       const [filterArg] = mockGetAnalyticsSummary.mock.calls[0];
       expect(filterArg.from).toBeInstanceOf(Date);
       expect(filterArg.to).toBeInstanceOf(Date);
+    });
+  });
+
+  // ---- Days/limit param validation ------------------------------------------
+
+  describe("GET /api/analytics/summary (days validation)", () => {
+    function cfg() {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
+    }
+
+    it("rejects from>to with 400", async () => {
+      cfg();
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?from=2026-04-20&to=2026-04-01",
+        { Authorization: "Bearer tok" },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects Feb 30 as invalid calendar date with 400", async () => {
+      cfg();
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?from=2026-02-30&to=2026-04-20",
+        { Authorization: "Bearer tok" },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects days=0 with 400", async () => {
+      cfg();
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/summary?days=0", {
+        Authorization: "Bearer tok",
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects days=-5 with 400", async () => {
+      cfg();
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?days=-5",
+        { Authorization: "Bearer tok" },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects days=abc with 400", async () => {
+      cfg();
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?days=abc",
+        { Authorization: "Bearer tok" },
+      );
+      expect(res.status).toBe(400);
     });
   });
 });

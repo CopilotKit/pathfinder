@@ -483,6 +483,37 @@ describe("getAnalyticsSummary with filters", () => {
   });
 });
 
+describe("getTopQueries LIKE injection hardening", () => {
+  it("escapes '%' and '_' wildcards in tool_type", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "_" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    // The SQL must include an ESCAPE clause or escape the wildcard character
+    // in the parameter value. Verify the wildcard is not passed raw — i.e.
+    // the param should contain an escaped form ('\_') and the SQL should
+    // declare the escape character.
+    const toolParam = params.find((p: unknown) => typeof p === "string" && p.includes("_"));
+    expect(typeof toolParam).toBe("string");
+    expect(toolParam).toBe("\\_");
+    // SQL carries an explicit ESCAPE '\' clause so `\_` in the param is treated
+    // as a literal `_` rather than a LIKE wildcard.
+    expect(sql).toContain("ESCAPE '\\'");
+  });
+
+  it("escapes backslash and percent", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "a%b\\c" });
+
+    const [, params] = mockQuery.mock.calls[0];
+    const toolParam = params.find(
+      (p: unknown) => typeof p === "string" && p.length > 0 && p !== "docs",
+    );
+    // Each \, %, _ must be prefixed with a backslash
+    expect(toolParam).toBe("a\\%b\\\\c");
+  });
+});
+
 describe("getTopQueries with filters", () => {
   it("includes tool_type filter in WHERE clause", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
