@@ -27,7 +27,9 @@ import {
 } from "./rate-limiter.js";
 
 const TOKEN_TTL_SEC = 3600;
+const REFRESH_TOKEN_TTL_SEC = 30 * 24 * 3600; // 30 days
 const CODE_TTL_MS = 600_000;
+const TOKEN_SCOPE = "mcp";
 
 function originOf(req: Request): string {
   const proto = (req.headers["x-forwarded-proto"] as string) || "http";
@@ -90,10 +92,17 @@ export function authorizationServerHandler(req: Request, res: Response): void {
     authorization_endpoint: `${origin}/authorize`,
     token_endpoint: `${origin}/token`,
     registration_endpoint: `${origin}/register`,
+    revocation_endpoint: `${origin}/revoke`,
     response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code"],
+    response_modes_supported: ["query"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["none"],
+    token_endpoint_auth_methods_supported: [
+      "client_secret_basic",
+      "client_secret_post",
+      "none",
+    ],
+    scopes_supported: [TOKEN_SCOPE],
   });
 }
 
@@ -108,10 +117,15 @@ export function registerHandler(req: Request, res: Response): void {
     `[oauth] register body=${JSON.stringify(req.body)} headers.origin=${req.headers.origin} headers.user-agent=${req.headers["user-agent"]}`,
   );
 
-  const body = (req.body ?? {}) as { redirect_uris?: unknown };
+  const body = (req.body ?? {}) as {
+    redirect_uris?: unknown;
+    client_name?: unknown;
+  };
   const redirectUris = Array.isArray(body.redirect_uris)
     ? body.redirect_uris.filter((u): u is string => typeof u === "string")
     : [];
+  const clientName =
+    typeof body.client_name === "string" ? body.client_name : "";
 
   const client = clientStore.register({ redirect_uris: redirectUris });
   console.log(
@@ -119,11 +133,15 @@ export function registerHandler(req: Request, res: Response): void {
   );
   res.status(201).json({
     client_id: client.client_id,
+    client_secret: client.client_secret,
     client_id_issued_at: client.client_id_issued_at,
+    client_secret_issued_at: client.client_secret_issued_at,
+    client_secret_expires_at: client.client_secret_expires_at,
     redirect_uris: client.redirect_uris,
-    token_endpoint_auth_method: "none",
-    grant_types: ["authorization_code"],
+    client_name: clientName,
+    grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
+    token_endpoint_auth_method: "client_secret_basic",
   });
 }
 
@@ -215,6 +233,40 @@ export function authorizeHandler(req: Request, res: Response): void {
 // /token — RFC 6749 authorization_code grant with PKCE verification
 // ──────────────────────────────────────────────────────────────────────
 
+function issueTokenPair(
+  origin: string,
+  client_id: string,
+  secret: string,
+): { access_token: string; refresh_token: string } {
+  const iat = Math.floor(Date.now() / 1000);
+  const access_token = signJWT(
+    {
+      iss: origin,
+      aud: origin,
+      sub: "anonymous",
+      client_id,
+      iat,
+      exp: iat + TOKEN_TTL_SEC,
+      scope: TOKEN_SCOPE,
+    },
+    secret,
+  );
+  const refresh_token = signJWT(
+    {
+      iss: origin,
+      aud: origin,
+      sub: "anonymous",
+      client_id,
+      iat,
+      exp: iat + REFRESH_TOKEN_TTL_SEC,
+      typ: "refresh",
+      scope: TOKEN_SCOPE,
+    },
+    secret,
+  );
+  return { access_token, refresh_token };
+}
+
 export function tokenHandler(req: Request, res: Response): void {
   if (!enforceLimit(tokenLimiter, req, res)) return;
 
@@ -225,14 +277,66 @@ export function tokenHandler(req: Request, res: Response): void {
     `[oauth] token request grant_type=${body.grant_type} code=${String(body.code).slice(0, 8)} client_id=${body.client_id} redirect_uri=${body.redirect_uri} ip=${clientIp(req)}`,
   );
 
-  if (grant_type !== "authorization_code") {
+  if (grant_type !== "authorization_code" && grant_type !== "refresh_token") {
     res.status(400).json({
       error: "unsupported_grant_type",
-      error_description: "Only authorization_code is supported.",
+      error_description:
+        "Only authorization_code and refresh_token are supported.",
     });
     return;
   }
 
+  const origin = originOf(req);
+  const secret = getConfig().mcpJwtSecret;
+
+  if (grant_type === "refresh_token") {
+    const refresh_token = body.refresh_token;
+    const client_id = body.client_id;
+    if (!refresh_token || !client_id) {
+      res.status(400).json({
+        error: "invalid_request",
+        error_description: "Missing required fields: refresh_token, client_id.",
+      });
+      return;
+    }
+
+    let payload;
+    try {
+      payload = verifyJWT(refresh_token, secret, { aud: origin });
+    } catch {
+      res.status(400).json({
+        error: "invalid_grant",
+        error_description: "Invalid or expired refresh token.",
+      });
+      console.warn(
+        `[oauth] refresh invalid/expired token ip=${clientIp(req)} client=${client_id}`,
+      );
+      return;
+    }
+
+    if (payload.typ !== "refresh" || payload.client_id !== client_id) {
+      res.status(400).json({
+        error: "invalid_grant",
+        error_description: "Refresh token does not match the provided client.",
+      });
+      return;
+    }
+
+    const tokens = issueTokenPair(origin, client_id, secret);
+    console.log(
+      `[oauth] token refreshed client_id=${client_id} ip=${clientIp(req)}`,
+    );
+    res.status(200).json({
+      access_token: tokens.access_token,
+      token_type: "Bearer",
+      expires_in: TOKEN_TTL_SEC,
+      refresh_token: tokens.refresh_token,
+      scope: TOKEN_SCOPE,
+    });
+    return;
+  }
+
+  // authorization_code grant
   const code = body.code;
   const verifier = body.code_verifier;
   const client_id = body.client_id;
@@ -285,29 +389,27 @@ export function tokenHandler(req: Request, res: Response): void {
     return;
   }
 
-  const origin = originOf(req);
-  const iat = Math.floor(Date.now() / 1000);
-  const exp = iat + TOKEN_TTL_SEC;
-  const token = signJWT(
-    {
-      iss: origin,
-      aud: origin,
-      sub: "anonymous",
-      client_id,
-      iat,
-      exp,
-    },
-    getConfig().mcpJwtSecret,
-  );
-
+  const tokens = issueTokenPair(origin, client_id, secret);
   console.log(
     `[oauth] token issued client_id=${client_id} aud=${origin} exp_in=${TOKEN_TTL_SEC}s`,
   );
   res.status(200).json({
-    access_token: token,
+    access_token: tokens.access_token,
     token_type: "Bearer",
     expires_in: TOKEN_TTL_SEC,
+    refresh_token: tokens.refresh_token,
+    scope: TOKEN_SCOPE,
   });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// /revoke — RFC 7009 token revocation
+// ──────────────────────────────────────────────────────────────────────
+
+export function revocationHandler(_req: Request, res: Response): void {
+  // RFC 7009: always return 200 regardless of token validity/existence.
+  // We don't maintain a revocation list (tokens are short-lived); just ack.
+  res.status(200).send();
 }
 
 // ──────────────────────────────────────────────────────────────────────
