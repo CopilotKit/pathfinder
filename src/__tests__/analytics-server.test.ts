@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import express, { Request, Response } from "express";
+import express from "express";
 import http from "node:http";
 import path from "node:path";
 
@@ -42,16 +42,16 @@ vi.mock("../config.js", () => ({
 
 import { getAnalyticsConfig } from "../config.js";
 import {
-  analyticsAuth,
-  parseAnalyticsFilter,
-  parsePositiveIntParam,
+  registerAnalyticsRoutes,
+  __resetAnalyticsTokenForTesting,
 } from "../server.js";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 
 // ---------------------------------------------------------------------------
-// Build a minimal Express app that mirrors the analytics routes from server.ts
-// so we can test actual HTTP request/response behavior.
+// Build an Express app using the production registerAnalyticsRoutes() so
+// tests exercise the real handler implementations end-to-end. DB-layer calls
+// are routed through our mocks via the deps hook.
 // ---------------------------------------------------------------------------
 
 function buildTestApp() {
@@ -63,87 +63,18 @@ function buildTestApp() {
   // points into src/__tests__ (source tree) or dist/__tests__ (built).
   const analyticsHtmlPath = path.join(process.cwd(), "docs", "analytics.html");
 
-  // Dashboard HTML route — mirrors server.ts /analytics
-  app.get("/analytics", (_req: Request, res: Response) => {
-    if (!getAnalyticsConfig()?.enabled) {
-      res.status(404).json({ error: "Analytics not enabled" });
-      return;
-    }
-    // `dotfiles: "allow"` is required so the file serves from paths that
-    // contain a dot-prefixed segment (e.g. git worktrees under `.claude/`).
-    // Without it, Express's `send` returns 404 for any path containing a
-    // dotfile component, which is unrelated to the actual file's existence.
-    res.sendFile(analyticsHtmlPath, { dotfiles: "allow" });
+  registerAnalyticsRoutes(app, {
+    getAnalyticsSummary: (
+      ...args: Parameters<typeof mockGetAnalyticsSummary>
+    ) => mockGetAnalyticsSummary(...args),
+    getTopQueries: (...args: Parameters<typeof mockGetTopQueries>) =>
+      mockGetTopQueries(...args),
+    getEmptyQueries: (...args: Parameters<typeof mockGetEmptyQueries>) =>
+      mockGetEmptyQueries(...args),
+    getToolCounts: (...args: Parameters<typeof mockGetToolCounts>) =>
+      mockGetToolCounts(...args),
+    analyticsHtmlPath,
   });
-
-  // API routes with analyticsAuth middleware — mirror the real handlers
-  // so we exercise parseAnalyticsFilter (from/to validation) end-to-end.
-  app.get(
-    "/api/analytics/summary",
-    analyticsAuth,
-    async (req: Request, res: Response) => {
-      try {
-        const parsed = parseAnalyticsFilter(req);
-        if (!parsed.ok) {
-          res.status(parsed.status).json(parsed.body);
-          return;
-        }
-        const daysResult = parsePositiveIntParam(req.query.days, 7, 100000);
-        if (typeof daysResult === "object") {
-          res.status(400).json({
-            error: "invalid_request",
-            error_description: `days ${daysResult.error}`,
-          });
-          return;
-        }
-        const summary = await mockGetAnalyticsSummary(
-          parsed.filter,
-          daysResult,
-        );
-        res.json(summary);
-      } catch (err) {
-        res.status(500).json({ error: "Failed to fetch analytics summary" });
-      }
-    },
-  );
-
-  app.get(
-    "/api/analytics/queries",
-    analyticsAuth,
-    async (req: Request, res: Response) => {
-      try {
-        const parsed = parseAnalyticsFilter(req);
-        if (!parsed.ok) {
-          res.status(parsed.status).json(parsed.body);
-          return;
-        }
-        const daysResult = parsePositiveIntParam(req.query.days, 7, 100000);
-        if (typeof daysResult === "object") {
-          res.status(400).json({
-            error: "invalid_request",
-            error_description: `days ${daysResult.error}`,
-          });
-          return;
-        }
-        const limitResult = parsePositiveIntParam(req.query.limit, 50, 200);
-        if (typeof limitResult === "object") {
-          res.status(400).json({
-            error: "invalid_request",
-            error_description: `limit ${limitResult.error}`,
-          });
-          return;
-        }
-        const queries = await mockGetTopQueries(
-          daysResult,
-          limitResult,
-          parsed.filter,
-        );
-        res.json(queries);
-      } catch (err) {
-        res.status(500).json({ error: "Failed to fetch top queries" });
-      }
-    },
-  );
 
   return app;
 }
@@ -199,6 +130,7 @@ describe("Analytics server routes (HTTP-level)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetAnalyticsTokenForTesting();
     delete process.env.ANALYTICS_TOKEN;
     consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   });

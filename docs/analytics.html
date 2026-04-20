@@ -1,793 +1,1445 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pathfinder Analytics</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 24px; }
-        h1 { font-size: 1.5rem; margin-bottom: 24px; }
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
-        .stat-card { background: #1e293b; border-radius: 8px; padding: 16px; }
-        .stat-card .label { font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; margin-bottom: 4px; }
-        .stat-card .value { font-size: 1.5rem; font-weight: 700; }
-        .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
-        .chart-box { background: #1e293b; border-radius: 8px; padding: 16px; position: relative; }
-        .chart-box h2 { font-size: 1rem; margin-bottom: 12px; }
-        .chart-box canvas { max-height: 300px; }
-        table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 8px; overflow: hidden; margin-bottom: 32px; }
-        th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #334155; }
-        th { background: #0f172a; font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; }
-        .empty { color: #f87171; }
-        .error { color: #f87171; padding: 24px; text-align: center; }
-        @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 24px;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+        margin-bottom: 32px;
+      }
+      .stat-card {
+        background: #1e293b;
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .stat-card .label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        color: #94a3b8;
+        margin-bottom: 4px;
+      }
+      .stat-card .value {
+        font-size: 1.5rem;
+        font-weight: 700;
+      }
+      .chart-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        margin-bottom: 32px;
+      }
+      .chart-box {
+        background: #1e293b;
+        border-radius: 8px;
+        padding: 16px;
+        position: relative;
+      }
+      .chart-box h2 {
+        font-size: 1rem;
+        margin-bottom: 12px;
+      }
+      .chart-box canvas {
+        max-height: 300px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #1e293b;
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 32px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 10px 14px;
+        border-bottom: 1px solid #334155;
+      }
+      th {
+        background: #0f172a;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        color: #94a3b8;
+      }
+      .empty {
+        color: #f87171;
+      }
+      .error {
+        color: #f87171;
+        padding: 24px;
+        text-align: center;
+      }
+      @media (max-width: 768px) {
+        .chart-row {
+          grid-template-columns: 1fr;
+        }
+      }
 
-        /* Filter bar styles */
-        .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; }
-        .filter-row .spacer { flex: 1; }
-        .filter-row .divider { width: 1px; height: 20px; background: #334155; margin: 0 6px; }
-        .filter-row .pill {
-            display: inline-flex; align-items: center; gap: 4px;
-            padding: 5px 12px; border-radius: 20px; border: 1px solid #334155;
-            background: #1e293b; color: #94a3b8; font-size: 0.78rem; font-weight: 500;
-            cursor: pointer; transition: all 0.15s ease; user-select: none;
-        }
-        .filter-row .pill:hover { border-color: #3b82f6; color: #e2e8f0; }
-        .filter-row .pill.active { background: #3b82f6; border-color: #3b82f6; color: #ffffff; }
-        .filter-row .pill .count { opacity: 0.7; font-size: 0.72rem; }
-        .tool-badge {
-            display: inline-block; padding: 2px 8px; border-radius: 10px;
-            font-size: 0.7rem; font-weight: 500; background: #334155; color: #94a3b8;
-        }
+      /* Filter bar styles */
+      .filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 16px;
+      }
+      .filter-row .spacer {
+        flex: 1;
+      }
+      .filter-row .divider {
+        width: 1px;
+        height: 20px;
+        background: #334155;
+        margin: 0 6px;
+      }
+      .filter-row .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        border-radius: 20px;
+        border: 1px solid #334155;
+        background: #1e293b;
+        color: #94a3b8;
+        font-size: 0.78rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        user-select: none;
+      }
+      .filter-row .pill:hover {
+        border-color: #3b82f6;
+        color: #e2e8f0;
+      }
+      .filter-row .pill.active {
+        background: #3b82f6;
+        border-color: #3b82f6;
+        color: #ffffff;
+      }
+      .filter-row .pill .count {
+        opacity: 0.7;
+        font-size: 0.72rem;
+      }
+      .tool-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        background: #334155;
+        color: #94a3b8;
+      }
 
-        /* Filter group layout — tool left, date centered, source right */
-        .filter-row .filter-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-        .filter-row .filter-group.tool-group { margin-right: auto; }
-        .filter-row .filter-group.date-group { margin-left: auto; margin-right: auto; position: relative; }
-        .filter-row .filter-group.source-group { margin-left: auto; }
+      /* Filter group layout — tool left, date centered, source right */
+      .filter-row .filter-group {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+      }
+      .filter-row .filter-group.tool-group {
+        margin-right: auto;
+      }
+      .filter-row .filter-group.date-group {
+        margin-left: auto;
+        margin-right: auto;
+        position: relative;
+      }
+      .filter-row .filter-group.source-group {
+        margin-left: auto;
+      }
 
-        /* Date range selector */
-        .date-pill .date-value {
-            font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 0.74rem; letter-spacing: -0.01em;
-        }
-        .date-pill .chevron {
-            font-size: 0.65rem; opacity: 0.7; margin-left: 2px;
-            transition: transform 0.15s ease;
-        }
-        .date-pill.open .chevron { transform: rotate(180deg); }
-        .date-pill .cal-icon { font-size: 0.85rem; line-height: 1; }
+      /* Date range selector */
+      .date-pill .date-value {
+        font-family:
+          "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+          Consolas, monospace;
+        font-size: 0.74rem;
+        letter-spacing: -0.01em;
+      }
+      .date-pill .chevron {
+        font-size: 0.65rem;
+        opacity: 0.7;
+        margin-left: 2px;
+        transition: transform 0.15s ease;
+      }
+      .date-pill.open .chevron {
+        transform: rotate(180deg);
+      }
+      .date-pill .cal-icon {
+        font-size: 0.85rem;
+        line-height: 1;
+      }
 
-        .date-popover {
-            position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
-            width: 280px; background: #1e293b; border: 1px solid #334155;
-            border-radius: 10px; padding: 8px; z-index: 50;
-            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
-        }
-        .date-popover .preset-list { display: flex; flex-direction: column; gap: 1px; }
-        .date-popover .preset {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 7px 10px; border-radius: 6px; font-size: 0.8rem;
-            color: #cbd5e1; cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
-            user-select: none;
-        }
-        .date-popover .preset:hover { background: #273449; color: #e2e8f0; }
-        .date-popover .preset.active { background: rgba(59, 130, 246, 0.15); color: #93c5fd; }
-        .date-popover .preset.active .check { color: #3b82f6; font-weight: 700; }
-        .date-popover .preset .check { opacity: 0; font-size: 0.75rem; }
-        .date-popover .preset.active .check { opacity: 1; }
+      .date-popover {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: 280px;
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 10px;
+        padding: 8px;
+        z-index: 50;
+        box-shadow:
+          0 10px 28px rgba(0, 0, 0, 0.45),
+          0 2px 6px rgba(0, 0, 0, 0.3);
+      }
+      .date-popover .preset-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .date-popover .preset {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 7px 10px;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        color: #cbd5e1;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          color 0.15s ease;
+        user-select: none;
+      }
+      .date-popover .preset:hover {
+        background: #273449;
+        color: #e2e8f0;
+      }
+      .date-popover .preset.active {
+        background: rgba(59, 130, 246, 0.15);
+        color: #93c5fd;
+      }
+      .date-popover .preset.active .check {
+        color: #3b82f6;
+        font-weight: 700;
+      }
+      .date-popover .preset .check {
+        opacity: 0;
+        font-size: 0.75rem;
+      }
+      .date-popover .preset.active .check {
+        opacity: 1;
+      }
 
-        .date-popover .divider-h {
-            height: 1px; background: #334155; margin: 6px 2px;
-        }
-        .date-popover .custom-range {
-            padding: 6px 10px 8px;
-        }
-        .date-popover .custom-range-label {
-            font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
-            color: #64748b; margin-bottom: 6px;
-        }
-        .date-popover .date-inputs { display: flex; gap: 8px; align-items: center; }
-        .date-popover .date-inputs input {
-            flex: 1; min-width: 0;
-            padding: 6px 8px; border-radius: 6px; border: 1px solid #334155;
-            background: #0f172a; color: #e2e8f0;
-            font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 0.75rem;
-            transition: border-color 0.15s ease;
-        }
-        .date-popover .date-inputs input:focus {
-            outline: none; border-color: #3b82f6;
-        }
-        .date-popover .date-inputs .arrow { color: #64748b; font-size: 0.75rem; }
+      .date-popover .divider-h {
+        height: 1px;
+        background: #334155;
+        margin: 6px 2px;
+      }
+      .date-popover .custom-range {
+        padding: 6px 10px 8px;
+      }
+      .date-popover .custom-range-label {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #64748b;
+        margin-bottom: 6px;
+      }
+      .date-popover .date-inputs {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .date-popover .date-inputs input {
+        flex: 1;
+        min-width: 0;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid #334155;
+        background: #0f172a;
+        color: #e2e8f0;
+        font-family:
+          "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+          Consolas, monospace;
+        font-size: 0.75rem;
+        transition: border-color 0.15s ease;
+      }
+      .date-popover .date-inputs input:focus {
+        outline: none;
+        border-color: #3b82f6;
+      }
+      .date-popover .date-inputs .arrow {
+        color: #64748b;
+        font-size: 0.75rem;
+      }
 
-        .date-popover .popover-actions {
-            display: flex; justify-content: flex-end; gap: 6px;
-            padding: 8px 6px 4px; border-top: 1px solid #334155; margin-top: 6px;
-        }
-        .date-popover .btn {
-            padding: 6px 14px; border-radius: 6px; border: 1px solid transparent;
-            font-size: 0.78rem; font-weight: 500; cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        .date-popover .btn-ghost {
-            background: transparent; color: #94a3b8; border-color: #334155;
-        }
-        .date-popover .btn-ghost:hover { color: #e2e8f0; border-color: #475569; }
-        .date-popover .btn-primary {
-            background: #3b82f6; color: #ffffff;
-        }
-        .date-popover .btn-primary:hover { background: #2563eb; }
+      .date-popover .popover-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+        padding: 8px 6px 4px;
+        border-top: 1px solid #334155;
+        margin-top: 6px;
+      }
+      .date-popover .btn {
+        padding: 6px 14px;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        font-size: 0.78rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .date-popover .btn-ghost {
+        background: transparent;
+        color: #94a3b8;
+        border-color: #334155;
+      }
+      .date-popover .btn-ghost:hover {
+        color: #e2e8f0;
+        border-color: #475569;
+      }
+      .date-popover .btn-primary {
+        background: #3b82f6;
+        color: #ffffff;
+      }
+      .date-popover .btn-primary:hover {
+        background: #2563eb;
+      }
 
-        .chart-caption {
-            display: block; margin-top: 8px; color: #64748b;
-            font-size: 0.72rem; text-align: center; font-style: italic;
-        }
+      .chart-caption {
+        display: block;
+        margin-top: 8px;
+        color: #64748b;
+        font-size: 0.72rem;
+        text-align: center;
+        font-style: italic;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <h1>Pathfinder Analytics</h1>
-    <div id="error" class="error" style="display:none"></div>
+    <div id="error" class="error" style="display: none"></div>
 
     <div class="stats" id="stats"></div>
 
     <div class="chart-row">
-        <div class="chart-box">
-            <h2 id="dailyChartTitle">Queries per Day</h2>
-            <canvas id="dailyChart"></canvas>
-            <span class="chart-caption">Click a bar to filter to that day</span>
-        </div>
-        <div class="chart-box">
-            <h2>Queries by Source</h2>
-            <canvas id="sourceChart"></canvas>
-        </div>
+      <div class="chart-box">
+        <h2 id="dailyChartTitle">Queries per Day</h2>
+        <canvas id="dailyChart"></canvas>
+        <span class="chart-caption">Click a bar to filter to that day</span>
+      </div>
+      <div class="chart-box">
+        <h2>Queries by Source</h2>
+        <canvas id="sourceChart"></canvas>
+      </div>
     </div>
 
-    <div id="filters" style="display:none;">
-        <div class="filter-row" id="filterRow"></div>
+    <div id="filters" style="display: none">
+      <div class="filter-row" id="filterRow"></div>
     </div>
 
-    <h2 id="topQueriesTitle" style="margin-bottom: 12px;">Top Queries</h2>
+    <h2 id="topQueriesTitle" style="margin-bottom: 12px">Top Queries</h2>
     <table id="topQueriesTable">
-        <thead><tr><th>Query</th><th>Tool</th><th>Count</th><th>Avg Results</th><th>Avg Score</th></tr></thead>
-        <tbody></tbody>
+      <thead>
+        <tr>
+          <th>Query</th>
+          <th>Tool</th>
+          <th>Count</th>
+          <th>Avg Results</th>
+          <th>Avg Score</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
     </table>
 
-    <h2 id="emptyQueriesTitle" style="margin-bottom: 12px;">Empty Result Queries <span class="empty">&#x26a0;</span></h2>
+    <h2 id="emptyQueriesTitle" style="margin-bottom: 12px">
+      Empty Result Queries <span class="empty">&#x26a0;</span>
+    </h2>
     <table id="emptyQueriesTable">
-        <thead><tr><th>Query</th><th>Tool</th><th>Source</th><th>Count</th><th>Last Seen</th></tr></thead>
-        <tbody></tbody>
+      <thead>
+        <tr>
+          <th>Query</th>
+          <th>Tool</th>
+          <th>Source</th>
+          <th>Count</th>
+          <th>Last Seen</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
     </table>
 
-    <div id="login" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); align-items:center; justify-content:center; z-index:100;">
-        <div style="background:#1e293b; border-radius:12px; padding:32px; max-width:400px; width:90%;">
-            <h2 style="margin-bottom:16px; font-size:1.2rem;">Analytics Token</h2>
-            <p style="color:#94a3b8; font-size:0.875rem; margin-bottom:16px;">Enter your analytics token. Check the server console output for the auto-generated token, or use your configured ANALYTICS_TOKEN.</p>
-            <input id="tokenInput" type="password" placeholder="Paste token here" style="width:100%; padding:10px 14px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; font-size:0.9rem; margin-bottom:12px;" autofocus>
-            <button id="tokenSubmit" style="width:100%; padding:10px; border-radius:6px; border:none; background:#3b82f6; color:white; font-weight:600; cursor:pointer; font-size:0.9rem;">Access Dashboard</button>
-            <p id="loginError" style="color:#f87171; font-size:0.8rem; margin-top:8px; display:none;"></p>
-        </div>
+    <div
+      id="login"
+      style="
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.8);
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+      "
+    >
+      <div
+        style="
+          background: #1e293b;
+          border-radius: 12px;
+          padding: 32px;
+          max-width: 400px;
+          width: 90%;
+        "
+      >
+        <h2 style="margin-bottom: 16px; font-size: 1.2rem">Analytics Token</h2>
+        <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 16px">
+          Enter your analytics token. Check the server console output for the
+          auto-generated token, or use your configured ANALYTICS_TOKEN.
+        </p>
+        <input
+          id="tokenInput"
+          type="password"
+          placeholder="Paste token here"
+          style="
+            width: 100%;
+            padding: 10px 14px;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            background: #0f172a;
+            color: #e2e8f0;
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+          "
+          autofocus
+        />
+        <button
+          id="tokenSubmit"
+          style="
+            width: 100%;
+            padding: 10px;
+            border-radius: 6px;
+            border: none;
+            background: #3b82f6;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.9rem;
+          "
+        >
+          Access Dashboard
+        </button>
+        <p
+          id="loginError"
+          style="
+            color: #f87171;
+            font-size: 0.8rem;
+            margin-top: 8px;
+            display: none;
+          "
+        ></p>
+      </div>
     </div>
 
     <script>
-        // --- Preview mode (MOCKUP ONLY) ---
-        // When ?preview=1 is in the URL, intercept analytics API calls with canned
-        // JSON so charts + tables render without a live backend. This lets the
-        // date-range-selector mockup be visually evaluated against a full page.
-        (function setupPreviewMode() {
-            if (!window.location.search.includes('preview=1')) return;
-            sessionStorage.setItem('pathfinder_analytics_token', 'preview');
+      // --- Preview mode (MOCKUP ONLY) ---
+      // When ?preview=1 is in the URL, intercept analytics API calls with canned
+      // JSON so charts + tables render without a live backend. This lets the
+      // date-range-selector mockup be visually evaluated against a full page.
+      (function setupPreviewMode() {
+        if (!window.location.search.includes("preview=1")) return;
+        // Flag preview mode on the window so fetchJson/getToken can skip
+        // auth headers, WITHOUT polluting the shared token storage slot.
+        // Writing "preview" to sessionStorage used to bleed into real
+        // /analytics sessions on the same origin (tabs share storage).
+        window.__pathfinderPreview = true;
 
-            var today = new Date();
-            function dayOffset(n) {
-                var d = new Date(today);
-                d.setDate(d.getDate() - n);
-                return d.toISOString().slice(0, 10);
+        var today = new Date();
+        function dayOffset(n) {
+          var d = new Date(today);
+          d.setDate(d.getDate() - n);
+          return d.toISOString().slice(0, 10);
+        }
+
+        var CANNED = {
+          "/api/analytics/auth-mode": { dev: true },
+          "/api/analytics/summary": {
+            total_queries: 6128,
+            total_queries_window: 1284,
+            empty_result_rate_window: 0.074,
+            empty_result_count_window: 95,
+            avg_latency_ms_window: 142,
+            p95_latency_ms_window: 318,
+            queries_per_day_window: [
+              { day: dayOffset(6), count: 172 },
+              { day: dayOffset(5), count: 198 },
+              { day: dayOffset(4), count: 156 },
+              { day: dayOffset(3), count: 221 },
+              { day: dayOffset(2), count: 189 },
+              { day: dayOffset(1), count: 204 },
+              { day: dayOffset(0), count: 144 },
+            ],
+            queries_by_source: [
+              { source_name: "docs", count: 612 },
+              { source_name: "code", count: 398 },
+              { source_name: "ag-ui-docs", count: 182 },
+              { source_name: "ag-ui-code", count: 92 },
+            ],
+          },
+          "/api/analytics/tool-counts": [
+            { tool_type: "search", count: 874 },
+            { tool_type: "explore", count: 410 },
+          ],
+          "/api/analytics/queries": [
+            {
+              query_text: "useCopilotAction",
+              tool_name: "search-docs",
+              count: 82,
+              avg_result_count: 5.4,
+              avg_top_score: 0.89,
+            },
+            {
+              query_text: "CopilotSidebar setup",
+              tool_name: "search-docs",
+              count: 71,
+              avg_result_count: 4.9,
+              avg_top_score: 0.86,
+            },
+            {
+              query_text: "useCoAgent state",
+              tool_name: "search-docs",
+              count: 63,
+              avg_result_count: 5.1,
+              avg_top_score: 0.82,
+            },
+            {
+              query_text: "render frontend action",
+              tool_name: "explore-docs",
+              count: 58,
+              avg_result_count: 3.7,
+              avg_top_score: 0.79,
+            },
+            {
+              query_text: "runtime adapter langchain",
+              tool_name: "search-code",
+              count: 54,
+              avg_result_count: 6.2,
+              avg_top_score: 0.91,
+            },
+            {
+              query_text: "CopilotKit provider",
+              tool_name: "search-docs",
+              count: 49,
+              avg_result_count: 4.4,
+              avg_top_score: 0.84,
+            },
+            {
+              query_text: "streaming generative UI",
+              tool_name: "explore-docs",
+              count: 46,
+              avg_result_count: 3.9,
+              avg_top_score: 0.77,
+            },
+            {
+              query_text: "ag-ui event types",
+              tool_name: "search-ag-ui-docs",
+              count: 41,
+              avg_result_count: 5.8,
+              avg_top_score: 0.88,
+            },
+            {
+              query_text: "useCopilotReadable",
+              tool_name: "search-docs",
+              count: 39,
+              avg_result_count: 4.7,
+              avg_top_score: 0.85,
+            },
+            {
+              query_text: "CrewAI integration",
+              tool_name: "search-code",
+              count: 35,
+              avg_result_count: 5.2,
+              avg_top_score: 0.83,
+            },
+            {
+              query_text: "LangGraph state sync",
+              tool_name: "explore-code",
+              count: 31,
+              avg_result_count: 4.1,
+              avg_top_score: 0.8,
+            },
+            {
+              query_text: "human in the loop",
+              tool_name: "search-docs",
+              count: 29,
+              avg_result_count: 3.8,
+              avg_top_score: 0.76,
+            },
+          ],
+          "/api/analytics/empty-queries": [
+            {
+              query_text: "copilotkit redux middleware",
+              tool_name: "search-docs",
+              source_name: "docs",
+              count: 11,
+              last_seen: new Date().toISOString(),
+            },
+            {
+              query_text: "offline mode support",
+              tool_name: "search-code",
+              source_name: "code",
+              count: 7,
+              last_seen: new Date(Date.now() - 3600 * 1000 * 8).toISOString(),
+            },
+          ],
+        };
+
+        var originalFetch = window.fetch.bind(window);
+        window.fetch = function (url, opts) {
+          if (typeof url === "string" && url.indexOf("/api/analytics/") === 0) {
+            var path = url.split("?")[0];
+            var body = CANNED[path];
+            if (body !== undefined) {
+              return Promise.resolve(
+                new Response(JSON.stringify(body), {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                }),
+              );
             }
+          }
+          return originalFetch(url, opts);
+        };
+      })();
 
-            var CANNED = {
-                '/api/analytics/auth-mode': { dev: true },
-                '/api/analytics/summary': {
-                    total_queries: 6128,
-                    total_queries_window: 1284,
-                    empty_result_rate_window: 0.074,
-                    empty_result_count_window: 95,
-                    avg_latency_ms_window: 142,
-                    p95_latency_ms_window: 318,
-                    queries_per_day_window: [
-                        { day: dayOffset(6), count: 172 },
-                        { day: dayOffset(5), count: 198 },
-                        { day: dayOffset(4), count: 156 },
-                        { day: dayOffset(3), count: 221 },
-                        { day: dayOffset(2), count: 189 },
-                        { day: dayOffset(1), count: 204 },
-                        { day: dayOffset(0), count: 144 },
-                    ],
-                    queries_by_source: [
-                        { source_name: 'docs', count: 612 },
-                        { source_name: 'code', count: 398 },
-                        { source_name: 'ag-ui-docs', count: 182 },
-                        { source_name: 'ag-ui-code', count: 92 },
-                    ],
-                },
-                '/api/analytics/tool-counts': [
-                    { tool_type: 'search', count: 874 },
-                    { tool_type: 'explore', count: 410 },
-                ],
-                '/api/analytics/queries': [
-                    { query_text: 'useCopilotAction', tool_name: 'search-docs', count: 82, avg_result_count: 5.4, avg_top_score: 0.89 },
-                    { query_text: 'CopilotSidebar setup', tool_name: 'search-docs', count: 71, avg_result_count: 4.9, avg_top_score: 0.86 },
-                    { query_text: 'useCoAgent state', tool_name: 'search-docs', count: 63, avg_result_count: 5.1, avg_top_score: 0.82 },
-                    { query_text: 'render frontend action', tool_name: 'explore-docs', count: 58, avg_result_count: 3.7, avg_top_score: 0.79 },
-                    { query_text: 'runtime adapter langchain', tool_name: 'search-code', count: 54, avg_result_count: 6.2, avg_top_score: 0.91 },
-                    { query_text: 'CopilotKit provider', tool_name: 'search-docs', count: 49, avg_result_count: 4.4, avg_top_score: 0.84 },
-                    { query_text: 'streaming generative UI', tool_name: 'explore-docs', count: 46, avg_result_count: 3.9, avg_top_score: 0.77 },
-                    { query_text: 'ag-ui event types', tool_name: 'search-ag-ui-docs', count: 41, avg_result_count: 5.8, avg_top_score: 0.88 },
-                    { query_text: 'useCopilotReadable', tool_name: 'search-docs', count: 39, avg_result_count: 4.7, avg_top_score: 0.85 },
-                    { query_text: 'CrewAI integration', tool_name: 'search-code', count: 35, avg_result_count: 5.2, avg_top_score: 0.83 },
-                    { query_text: 'LangGraph state sync', tool_name: 'explore-code', count: 31, avg_result_count: 4.1, avg_top_score: 0.80 },
-                    { query_text: 'human in the loop', tool_name: 'search-docs', count: 29, avg_result_count: 3.8, avg_top_score: 0.76 },
-                ],
-                '/api/analytics/empty-queries': [
-                    { query_text: 'copilotkit redux middleware', tool_name: 'search-docs', source_name: 'docs', count: 11, last_seen: new Date().toISOString() },
-                    { query_text: 'offline mode support', tool_name: 'search-code', source_name: 'code', count: 7, last_seen: new Date(Date.now() - 3600 * 1000 * 8).toISOString() },
-                ],
-            };
+      // --- State ---
+      var activeToolType = null; // null = "All"
+      var activeSource = null; // null = "All Sources"
+      var activeDaysBack = 7; // number of days for preset window (null when using custom range)
+      var activeFrom = null; // YYYY-MM-DD string or null
+      var activeTo = null; // YYYY-MM-DD string or null
+      var dailyChartInstance = null;
+      var sourceChartInstance = null;
+      var datePopoverOpen = false;
+      var dateCustomMode = false;
+      // Preserves source pills across filter changes — tool-type filters
+      // shrink/remove sources from the summary response, but the UI should
+      // still show the full set so users can switch between them.
+      var unfilteredSourcesCache = null;
+      // Monotonic counter to guard against out-of-order load() responses.
+      // A stale response (user clicked fast) would otherwise clobber the
+      // current UI state with old data.
+      var loadGeneration = 0;
+      // Draft custom-range values so a re-render (e.g. outside click on
+      // another filter) doesn't wipe the user's in-progress date picks.
+      var draftFromInput = null;
+      var draftToInput = null;
 
-            var originalFetch = window.fetch.bind(window);
-            window.fetch = function(url, opts) {
-                if (typeof url === 'string' && url.indexOf('/api/analytics/') === 0) {
-                    var path = url.split('?')[0];
-                    var body = CANNED[path];
-                    if (body !== undefined) {
-                        return Promise.resolve(new Response(JSON.stringify(body), {
-                            status: 200,
-                            headers: { 'Content-Type': 'application/json' },
-                        }));
-                    }
-                }
-                return originalFetch(url, opts);
-            };
-        })();
+      // Intl formatters (cached)
+      var shortDateFmt = new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+      });
 
-        // --- State ---
-        var activeToolType = null;  // null = "All"
-        var activeSource = null;    // null = "All Sources"
-        var activeDaysBack = 7;     // number of days for preset window (null when using custom range)
-        var activeFrom = null;      // YYYY-MM-DD string or null
-        var activeTo = null;        // YYYY-MM-DD string or null
-        var dailyChartInstance = null;
-        var sourceChartInstance = null;
-        var datePopoverOpen = false;
-        var dateCustomMode = false;
-        // Preserves source pills across filter changes — tool-type filters
-        // shrink/remove sources from the summary response, but the UI should
-        // still show the full set so users can switch between them.
-        var unfilteredSourcesCache = null;
-        // Monotonic counter to guard against out-of-order load() responses.
-        // A stale response (user clicked fast) would otherwise clobber the
-        // current UI state with old data.
-        var loadGeneration = 0;
-        // Draft custom-range values so a re-render (e.g. outside click on
-        // another filter) doesn't wipe the user's in-progress date picks.
-        var draftFromInput = null;
-        var draftToInput = null;
+      function parseISODate(s) {
+        // Parse YYYY-MM-DD as a local-noon Date so DST/TZ doesn't shift the day label.
+        var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+        if (!m) return null;
+        return new Date(
+          parseInt(m[1], 10),
+          parseInt(m[2], 10) - 1,
+          parseInt(m[3], 10),
+          12,
+          0,
+          0,
+        );
+      }
 
-        // Intl formatters (cached)
-        var shortDateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+      function todayISO() {
+        // Today's UTC date in YYYY-MM-DD. We anchor on UTC to match what the
+        // server compares against (created_at in UTC) — using local time
+        // here means users near midnight see yesterday's or tomorrow's rows.
+        var d = new Date();
+        var y = d.getUTCFullYear();
+        var m = String(d.getUTCMonth() + 1).padStart(2, "0");
+        var dd = String(d.getUTCDate()).padStart(2, "0");
+        return y + "-" + m + "-" + dd;
+      }
 
-        function parseISODate(s) {
-            // Parse YYYY-MM-DD as a local-noon Date so DST/TZ doesn't shift the day label.
-            var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-            if (!m) return null;
-            return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), 12, 0, 0);
+      function formatPillLabel() {
+        if (activeFrom && activeTo) {
+          // Single-day range collapses to a "Today" label when it is in
+          // fact today, otherwise falls back to the formatted date.
+          if (activeFrom === activeTo) {
+            if (activeFrom === todayISO()) return "Today";
+            var d = parseISODate(activeFrom);
+            return d ? shortDateFmt.format(d) : activeFrom;
+          }
+          var df = parseISODate(activeFrom);
+          var dt = parseISODate(activeTo);
+          if (df && dt)
+            return (
+              shortDateFmt.format(df) + " \u2013 " + shortDateFmt.format(dt)
+            );
+          return activeFrom + " \u2013 " + activeTo;
         }
+        if (activeDaysBack === 7) return "Last 7 days";
+        if (activeDaysBack === 14) return "Last 14 days";
+        if (activeDaysBack === 30) return "Last 30 days";
+        if (activeDaysBack === 90) return "Last 90 days";
+        if (activeDaysBack !== null && activeDaysBack >= 99999)
+          return "All time";
+        if (activeDaysBack !== null) return "Last " + activeDaysBack + " days";
+        return "Custom range";
+      }
 
-        function todayISO() {
-            // Today's UTC date in YYYY-MM-DD. We anchor on UTC to match what the
-            // server compares against (created_at in UTC) — using local time
-            // here means users near midnight see yesterday's or tomorrow's rows.
-            var d = new Date();
-            var y = d.getUTCFullYear();
-            var m = String(d.getUTCMonth() + 1).padStart(2, '0');
-            var dd = String(d.getUTCDate()).padStart(2, '0');
-            return y + '-' + m + '-' + dd;
+      function getToken() {
+        // Preview mode skips real auth — no token, no Authorization header.
+        if (window.__pathfinderPreview) return "";
+        return sessionStorage.getItem("pathfinder_analytics_token") || "";
+      }
+
+      var TOKEN = getToken();
+      var headers = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
+
+      function showLogin() {
+        document.getElementById("login").style.display = "flex";
+        document.getElementById("tokenInput").focus();
+      }
+
+      document
+        .getElementById("tokenSubmit")
+        .addEventListener("click", function () {
+          var input = document.getElementById("tokenInput").value.trim();
+          if (!input) return;
+          sessionStorage.setItem("pathfinder_analytics_token", input);
+          TOKEN = input;
+          headers = { Authorization: "Bearer " + TOKEN };
+          document.getElementById("login").style.display = "none";
+          document.getElementById("loginError").style.display = "none";
+          load();
+        });
+
+      document
+        .getElementById("tokenInput")
+        .addEventListener("keydown", function (e) {
+          if (e.key === "Enter") document.getElementById("tokenSubmit").click();
+        });
+
+      async function fetchJson(url) {
+        var res = await fetch(url, { headers: headers });
+        if (res.status === 401 || res.status === 403) {
+          sessionStorage.removeItem("pathfinder_analytics_token");
+          showLogin();
+          var loginErr = document.getElementById("loginError");
+          loginErr.textContent =
+            res.status === 401 ? "Token required" : "Invalid token";
+          loginErr.style.display = "block";
+          throw new Error("auth");
         }
+        if (!res.ok) {
+          var body = await res.json().catch(function () {
+            return {};
+          });
+          throw new Error(body.error || "HTTP " + res.status);
+        }
+        return res.json();
+      }
 
-        function formatPillLabel() {
-            if (activeFrom && activeTo) {
-                // Single-day range collapses to a "Today" label when it is in
-                // fact today, otherwise falls back to the formatted date.
-                if (activeFrom === activeTo) {
-                    if (activeFrom === todayISO()) return 'Today';
-                    var d = parseISODate(activeFrom);
-                    return d ? shortDateFmt.format(d) : activeFrom;
-                }
-                var df = parseISODate(activeFrom);
-                var dt = parseISODate(activeTo);
-                if (df && dt) return shortDateFmt.format(df) + ' \u2013 ' + shortDateFmt.format(dt);
-                return activeFrom + ' \u2013 ' + activeTo;
+      function buildFilterParams() {
+        var params = [];
+        if (activeToolType)
+          params.push("tool_type=" + encodeURIComponent(activeToolType));
+        if (activeSource)
+          params.push("source=" + encodeURIComponent(activeSource));
+        if (activeFrom && activeTo) {
+          params.push("from=" + encodeURIComponent(activeFrom));
+          params.push("to=" + encodeURIComponent(activeTo));
+        } else if (activeDaysBack !== null) {
+          params.push("days=" + encodeURIComponent(activeDaysBack));
+        }
+        return params.length > 0 ? "&" + params.join("&") : "";
+      }
+
+      // --- Filter UI ---
+      function renderFilters(toolCounts, sources) {
+        var row = document.getElementById("filterRow");
+        toolCounts = Array.isArray(toolCounts) ? toolCounts : [];
+        sources = Array.isArray(sources) ? sources : [];
+        var total = toolCounts.reduce(function (sum, t) {
+          return sum + t.count;
+        }, 0);
+
+        // Tool-type group (left)
+        var toolHtml = '<div class="filter-group tool-group">';
+        toolHtml +=
+          '<span class="pill' +
+          (activeToolType === null ? " active" : "") +
+          '" data-tool-all="1">' +
+          'All <span class="count">(' +
+          total.toLocaleString() +
+          ")</span></span>";
+        toolCounts.forEach(function (t) {
+          var isActive = activeToolType === t.tool_type;
+          var label =
+            t.tool_type.charAt(0).toUpperCase() + t.tool_type.slice(1);
+          toolHtml +=
+            '<span class="pill' +
+            (isActive ? " active" : "") +
+            '" data-tool="' +
+            esc(t.tool_type) +
+            '">' +
+            esc(label) +
+            ' <span class="count">(' +
+            t.count.toLocaleString() +
+            ")</span></span>";
+        });
+        toolHtml += "</div>";
+
+        // Date-range group (center). "Today" is special — it uses an
+        // explicit from=today&to=today range instead of a rolling N-day
+        // window, because `days=1` on the server means "last 24 hours"
+        // (NOW() - INTERVAL '1 day') which straddles today + yesterday
+        // instead of showing only today's data.
+        var presets = [
+          { label: "Today", kind: "today" },
+          { label: "Last 7 days", kind: "days", days: 7 },
+          { label: "Last 14 days", kind: "days", days: 14 },
+          { label: "Last 30 days", kind: "days", days: 30 },
+          { label: "Last 90 days", kind: "days", days: 90 },
+          { label: "All time", kind: "days", days: 99999 },
+        ];
+        var pillLabel = formatPillLabel();
+        var customModeCls = dateCustomMode ? " custom-mode" : "";
+        var openCls = datePopoverOpen ? " open" : "";
+        var todayStr = todayISO();
+        var presetHtml = presets
+          .map(function (p) {
+            var isActive;
+            var attrs;
+            if (p.kind === "today") {
+              // "Today" is active when from === to === today.
+              isActive = activeFrom === todayStr && activeTo === todayStr;
+              attrs = 'data-preset="today"';
+            } else {
+              isActive = activeDaysBack === p.days && !activeFrom;
+              attrs = 'data-days="' + p.days + '"';
             }
-            if (activeDaysBack === 7) return 'Last 7 days';
-            if (activeDaysBack === 14) return 'Last 14 days';
-            if (activeDaysBack === 30) return 'Last 30 days';
-            if (activeDaysBack === 90) return 'Last 90 days';
-            if (activeDaysBack !== null && activeDaysBack >= 99999) return 'All time';
-            if (activeDaysBack !== null) return 'Last ' + activeDaysBack + ' days';
-            return 'Custom range';
+            return (
+              '<div class="preset' +
+              (isActive ? " active" : "") +
+              '" ' +
+              attrs +
+              ">" +
+              "<span>" +
+              esc(p.label) +
+              "</span>" +
+              '<span class="check">&#10003;</span></div>'
+            );
+          })
+          .join("");
+        var customActive = dateCustomMode || (activeFrom && activeTo);
+        presetHtml +=
+          '<div class="preset' +
+          (customActive ? " active" : "") +
+          '" data-custom="1">' +
+          "<span>Custom&hellip;</span>" +
+          '<span class="check">&#10003;</span></div>';
+
+        // Default the custom-range inputs to whatever is active, falling back to today/week.
+        // Prefer in-progress draft values so re-renders don't clobber user typing.
+        var today = new Date();
+        function toISO(d) {
+          var y = d.getFullYear(),
+            m = String(d.getMonth() + 1).padStart(2, "0"),
+            dd = String(d.getDate()).padStart(2, "0");
+          return y + "-" + m + "-" + dd;
+        }
+        var defaultTo =
+          draftToInput != null ? draftToInput : activeTo || toISO(today);
+        var defaultFrom = draftFromInput != null ? draftFromInput : activeFrom;
+        if (!defaultFrom) {
+          var back = new Date(today);
+          back.setDate(back.getDate() - 6);
+          defaultFrom = toISO(back);
+        }
+        var customVisibleStyle = dateCustomMode ? "" : "display:none;";
+
+        var dateHtml =
+          "" +
+          '<div class="filter-group date-group" id="dateGroup">' +
+          '<span class="pill date-pill' +
+          openCls +
+          '" id="datePill" aria-expanded="' +
+          (datePopoverOpen ? "true" : "false") +
+          '">' +
+          '<span class="cal-icon">&#128197;</span>' +
+          '<span class="date-value">' +
+          esc(pillLabel) +
+          "</span>" +
+          '<span class="chevron">&#9662;</span>' +
+          "</span>" +
+          (datePopoverOpen
+            ? '<div class="date-popover' +
+              customModeCls +
+              '" id="datePopover" role="dialog" aria-label="Select date range">' +
+              '<div class="preset-list" id="presetList">' +
+              presetHtml +
+              "</div>" +
+              '<div class="custom-range" id="customRange" style="' +
+              customVisibleStyle +
+              '">' +
+              '<div class="divider-h"></div>' +
+              '<div class="custom-range-label">Custom range</div>' +
+              '<div class="date-inputs">' +
+              '<input type="date" id="dateFromInput" value="' +
+              esc(defaultFrom) +
+              '" aria-label="From date" />' +
+              '<span class="arrow">&rarr;</span>' +
+              '<input type="date" id="dateToInput" value="' +
+              esc(defaultTo) +
+              '" aria-label="To date" />' +
+              "</div>" +
+              '<div class="popover-actions">' +
+              '<button type="button" class="btn btn-ghost" id="dateCancelBtn">Cancel</button>' +
+              '<button type="button" class="btn btn-primary" id="dateApplyBtn">Apply</button>' +
+              "</div>" +
+              "</div>" +
+              "</div>"
+            : "") +
+          "</div>";
+
+        // Source group (right)
+        var sourceHtml = "";
+        if (sources && sources.length > 0) {
+          sourceHtml += '<div class="filter-group source-group">';
+          sourceHtml +=
+            '<span class="pill' +
+            (activeSource === null ? " active" : "") +
+            '" data-source-all="1">All Sources</span>';
+          sources.forEach(function (s) {
+            var isActive = activeSource === s.source_name;
+            sourceHtml +=
+              '<span class="pill' +
+              (isActive ? " active" : "") +
+              '" data-source="' +
+              esc(s.source_name) +
+              '">' +
+              esc(s.source_name) +
+              ' <span class="count">(' +
+              s.count.toLocaleString() +
+              ")</span></span>";
+          });
+          sourceHtml += "</div>";
         }
 
-        function getToken() {
-            return sessionStorage.getItem('pathfinder_analytics_token') || '';
+        row.innerHTML = toolHtml + dateHtml + sourceHtml;
+        row
+          .querySelectorAll(".pill[data-tool], .pill[data-tool-all]")
+          .forEach(function (pill) {
+            pill.addEventListener("click", function () {
+              var isAll = this.hasAttribute("data-tool-all");
+              activeToolType = isAll ? null : this.getAttribute("data-tool");
+              activeSource = null;
+              load();
+            });
+          });
+        row
+          .querySelectorAll(".pill[data-source], .pill[data-source-all]")
+          .forEach(function (pill) {
+            pill.addEventListener("click", function () {
+              var isAll = this.hasAttribute("data-source-all");
+              activeSource = isAll ? null : this.getAttribute("data-source");
+              load();
+            });
+          });
+
+        // Date pill — toggle popover
+        var datePill = document.getElementById("datePill");
+        if (datePill) {
+          datePill.addEventListener("click", function (e) {
+            e.stopPropagation();
+            datePopoverOpen = !datePopoverOpen;
+            if (!datePopoverOpen) dateCustomMode = false;
+            renderFilters(currentToolCounts, currentSources);
+          });
         }
 
-        var TOKEN = getToken();
-        var headers = TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
-
-        function showLogin() {
-            document.getElementById('login').style.display = 'flex';
-            document.getElementById('tokenInput').focus();
-        }
-
-        document.getElementById('tokenSubmit').addEventListener('click', function() {
-            var input = document.getElementById('tokenInput').value.trim();
-            if (!input) return;
-            sessionStorage.setItem('pathfinder_analytics_token', input);
-            TOKEN = input;
-            headers = { 'Authorization': 'Bearer ' + TOKEN };
-            document.getElementById('login').style.display = 'none';
-            document.getElementById('loginError').style.display = 'none';
+        // Preset clicks (rolling "Last N days" windows)
+        row.querySelectorAll(".preset[data-days]").forEach(function (p) {
+          p.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var d = parseInt(this.getAttribute("data-days"), 10);
+            activeDaysBack = d;
+            activeFrom = null;
+            activeTo = null;
+            datePopoverOpen = false;
+            dateCustomMode = false;
+            draftFromInput = null;
+            draftToInput = null;
             load();
+          });
         });
 
-        document.getElementById('tokenInput').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') document.getElementById('tokenSubmit').click();
-        });
-
-        async function fetchJson(url) {
-            var res = await fetch(url, { headers: headers });
-            if (res.status === 401 || res.status === 403) {
-                sessionStorage.removeItem('pathfinder_analytics_token');
-                showLogin();
-                var loginErr = document.getElementById('loginError');
-                loginErr.textContent = res.status === 401 ? 'Token required' : 'Invalid token';
-                loginErr.style.display = 'block';
-                throw new Error('auth');
-            }
-            if (!res.ok) {
-                var body = await res.json().catch(function() { return {}; });
-                throw new Error(body.error || 'HTTP ' + res.status);
-            }
-            return res.json();
+        // "Today" preset — explicit from/to range so the server doesn't
+        // fall back to a 24-hour rolling window.
+        var todayPreset = row.querySelector('.preset[data-preset="today"]');
+        if (todayPreset) {
+          todayPreset.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var t = todayISO();
+            activeFrom = t;
+            activeTo = t;
+            activeDaysBack = null;
+            datePopoverOpen = false;
+            dateCustomMode = false;
+            draftFromInput = null;
+            draftToInput = null;
+            load();
+          });
         }
 
-        function buildFilterParams() {
-            var params = [];
-            if (activeToolType) params.push('tool_type=' + encodeURIComponent(activeToolType));
-            if (activeSource) params.push('source=' + encodeURIComponent(activeSource));
-            if (activeFrom && activeTo) {
-                params.push('from=' + encodeURIComponent(activeFrom));
-                params.push('to=' + encodeURIComponent(activeTo));
-            } else if (activeDaysBack !== null) {
-                params.push('days=' + encodeURIComponent(activeDaysBack));
-            }
-            return params.length > 0 ? '&' + params.join('&') : '';
+        // Custom preset — reveals the date inputs (does not close)
+        var customPreset = row.querySelector(".preset[data-custom]");
+        if (customPreset) {
+          customPreset.addEventListener("click", function (e) {
+            e.stopPropagation();
+            dateCustomMode = true;
+            renderFilters(currentToolCounts, currentSources);
+          });
         }
 
-        // --- Filter UI ---
-        function renderFilters(toolCounts, sources) {
-            var row = document.getElementById('filterRow');
-            var total = toolCounts.reduce(function(sum, t) { return sum + t.count; }, 0);
-
-            // Tool-type group (left)
-            var toolHtml = '<div class="filter-group tool-group">';
-            toolHtml += '<span class="pill' + (activeToolType === null ? ' active' : '') + '" data-tool-all="1">'
-                + 'All <span class="count">(' + total.toLocaleString() + ')</span></span>';
-            toolCounts.forEach(function(t) {
-                var isActive = activeToolType === t.tool_type;
-                var label = t.tool_type.charAt(0).toUpperCase() + t.tool_type.slice(1);
-                toolHtml += '<span class="pill' + (isActive ? ' active' : '') + '" data-tool="' + esc(t.tool_type) + '">'
-                    + esc(label) + ' <span class="count">(' + t.count.toLocaleString() + ')</span></span>';
-            });
-            toolHtml += '</div>';
-
-            // Date-range group (center). "Today" is special — it uses an
-            // explicit from=today&to=today range instead of a rolling N-day
-            // window, because `days=1` on the server means "last 24 hours"
-            // (NOW() - INTERVAL '1 day') which straddles today + yesterday
-            // instead of showing only today's data.
-            var presets = [
-                { label: 'Today',         kind: 'today' },
-                { label: 'Last 7 days',   kind: 'days',  days: 7 },
-                { label: 'Last 14 days',  kind: 'days',  days: 14 },
-                { label: 'Last 30 days',  kind: 'days',  days: 30 },
-                { label: 'Last 90 days',  kind: 'days',  days: 90 },
-                { label: 'All time',      kind: 'days',  days: 99999 },
-            ];
-            var pillLabel = formatPillLabel();
-            var customModeCls = dateCustomMode ? ' custom-mode' : '';
-            var openCls = datePopoverOpen ? ' open' : '';
-            var todayStr = todayISO();
-            var presetHtml = presets.map(function(p) {
-                var isActive;
-                var attrs;
-                if (p.kind === 'today') {
-                    // "Today" is active when from === to === today.
-                    isActive = activeFrom === todayStr && activeTo === todayStr;
-                    attrs = 'data-preset="today"';
-                } else {
-                    isActive = activeDaysBack === p.days && !activeFrom;
-                    attrs = 'data-days="' + p.days + '"';
-                }
-                return '<div class="preset' + (isActive ? ' active' : '') + '" ' + attrs + '>'
-                    + '<span>' + esc(p.label) + '</span>'
-                    + '<span class="check">&#10003;</span></div>';
-            }).join('');
-            var customActive = dateCustomMode || (activeFrom && activeTo);
-            presetHtml += '<div class="preset' + (customActive ? ' active' : '') + '" data-custom="1">'
-                + '<span>Custom&hellip;</span>'
-                + '<span class="check">&#10003;</span></div>';
-
-            // Default the custom-range inputs to whatever is active, falling back to today/week.
-            // Prefer in-progress draft values so re-renders don't clobber user typing.
-            var today = new Date();
-            function toISO(d) {
-                var y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
-                return y + '-' + m + '-' + dd;
-            }
-            var defaultTo = draftToInput != null ? draftToInput : (activeTo || toISO(today));
-            var defaultFrom = draftFromInput != null ? draftFromInput : activeFrom;
-            if (!defaultFrom) {
-                var back = new Date(today);
-                back.setDate(back.getDate() - 6);
-                defaultFrom = toISO(back);
-            }
-            var customVisibleStyle = dateCustomMode ? '' : 'display:none;';
-
-            var dateHtml = ''
-                + '<div class="filter-group date-group" id="dateGroup">'
-                +   '<span class="pill date-pill' + openCls + '" id="datePill" aria-expanded="' + (datePopoverOpen ? 'true' : 'false') + '">'
-                +     '<span class="cal-icon">&#128197;</span>'
-                +     '<span class="date-value">' + esc(pillLabel) + '</span>'
-                +     '<span class="chevron">&#9662;</span>'
-                +   '</span>'
-                +   (datePopoverOpen
-                    ? ('<div class="date-popover' + customModeCls + '" id="datePopover" role="dialog" aria-label="Select date range">'
-                        +   '<div class="preset-list" id="presetList">' + presetHtml + '</div>'
-                        +   '<div class="custom-range" id="customRange" style="' + customVisibleStyle + '">'
-                        +     '<div class="divider-h"></div>'
-                        +     '<div class="custom-range-label">Custom range</div>'
-                        +     '<div class="date-inputs">'
-                        +       '<input type="date" id="dateFromInput" value="' + esc(defaultFrom) + '" aria-label="From date" />'
-                        +       '<span class="arrow">&rarr;</span>'
-                        +       '<input type="date" id="dateToInput" value="' + esc(defaultTo) + '" aria-label="To date" />'
-                        +     '</div>'
-                        +     '<div class="popover-actions">'
-                        +       '<button type="button" class="btn btn-ghost" id="dateCancelBtn">Cancel</button>'
-                        +       '<button type="button" class="btn btn-primary" id="dateApplyBtn">Apply</button>'
-                        +     '</div>'
-                        +   '</div>'
-                        + '</div>')
-                    : '')
-                + '</div>';
-
-            // Source group (right)
-            var sourceHtml = '';
-            if (sources && sources.length > 0) {
-                sourceHtml += '<div class="filter-group source-group">';
-                sourceHtml += '<span class="pill' + (activeSource === null ? ' active' : '') + '" data-source-all="1">All Sources</span>';
-                sources.forEach(function(s) {
-                    var isActive = activeSource === s.source_name;
-                    sourceHtml += '<span class="pill' + (isActive ? ' active' : '') + '" data-source="' + esc(s.source_name) + '">'
-                        + esc(s.source_name) + ' <span class="count">(' + s.count.toLocaleString() + ')</span></span>';
-                });
-                sourceHtml += '</div>';
-            }
-
-            row.innerHTML = toolHtml + dateHtml + sourceHtml;
-            row.querySelectorAll('.pill[data-tool], .pill[data-tool-all]').forEach(function(pill) {
-                pill.addEventListener('click', function() {
-                    var isAll = this.hasAttribute('data-tool-all');
-                    activeToolType = isAll ? null : this.getAttribute('data-tool');
-                    activeSource = null;
-                    load();
-                });
-            });
-            row.querySelectorAll('.pill[data-source], .pill[data-source-all]').forEach(function(pill) {
-                pill.addEventListener('click', function() {
-                    var isAll = this.hasAttribute('data-source-all');
-                    activeSource = isAll ? null : this.getAttribute('data-source');
-                    load();
-                });
-            });
-
-            // Date pill — toggle popover
-            var datePill = document.getElementById('datePill');
-            if (datePill) {
-                datePill.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    datePopoverOpen = !datePopoverOpen;
-                    if (!datePopoverOpen) dateCustomMode = false;
-                    renderFilters(currentToolCounts, currentSources);
-                });
-            }
-
-            // Preset clicks (rolling "Last N days" windows)
-            row.querySelectorAll('.preset[data-days]').forEach(function(p) {
-                p.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    var d = parseInt(this.getAttribute('data-days'), 10);
-                    activeDaysBack = d;
-                    activeFrom = null;
-                    activeTo = null;
-                    datePopoverOpen = false;
-                    dateCustomMode = false;
-                    draftFromInput = null;
-                    draftToInput = null;
-                    load();
-                });
-            });
-
-            // "Today" preset — explicit from/to range so the server doesn't
-            // fall back to a 24-hour rolling window.
-            var todayPreset = row.querySelector('.preset[data-preset="today"]');
-            if (todayPreset) {
-                todayPreset.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    var t = todayISO();
-                    activeFrom = t;
-                    activeTo = t;
-                    activeDaysBack = null;
-                    datePopoverOpen = false;
-                    dateCustomMode = false;
-                    draftFromInput = null;
-                    draftToInput = null;
-                    load();
-                });
-            }
-
-            // Custom preset — reveals the date inputs (does not close)
-            var customPreset = row.querySelector('.preset[data-custom]');
-            if (customPreset) {
-                customPreset.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    dateCustomMode = true;
-                    renderFilters(currentToolCounts, currentSources);
-                });
-            }
-
-            // Track draft input values so re-renders preserve in-progress edits.
-            var fromInputEl = document.getElementById('dateFromInput');
-            if (fromInputEl) {
-                fromInputEl.addEventListener('input', function() { draftFromInput = this.value; });
-                fromInputEl.addEventListener('change', function() { draftFromInput = this.value; });
-            }
-            var toInputEl = document.getElementById('dateToInput');
-            if (toInputEl) {
-                toInputEl.addEventListener('input', function() { draftToInput = this.value; });
-                toInputEl.addEventListener('change', function() { draftToInput = this.value; });
-            }
-
-            // Cancel — close popover without applying
-            var cancelBtn = document.getElementById('dateCancelBtn');
-            if (cancelBtn) {
-                cancelBtn.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    datePopoverOpen = false;
-                    dateCustomMode = false;
-                    draftFromInput = null;
-                    draftToInput = null;
-                    renderFilters(currentToolCounts, currentSources);
-                });
-            }
-
-            // Apply — parse inputs, set range, reload
-            var applyBtn = document.getElementById('dateApplyBtn');
-            if (applyBtn) {
-                applyBtn.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    var f = document.getElementById('dateFromInput').value;
-                    var t = document.getElementById('dateToInput').value;
-                    if (!/^\d{4}-\d{2}-\d{2}$/.test(f) || !/^\d{4}-\d{2}-\d{2}$/.test(t)) return;
-                    // Normalize: if the user picked them backwards, swap so from <= to.
-                    if (f > t) { var tmp = f; f = t; t = tmp; }
-                    activeFrom = f;
-                    activeTo = t;
-                    activeDaysBack = null;
-                    datePopoverOpen = false;
-                    dateCustomMode = false;
-                    draftFromInput = null;
-                    draftToInput = null;
-                    load();
-                });
-            }
-
-            // Prevent clicks inside the popover from bubbling to the outside-click handler
-            var popover = document.getElementById('datePopover');
-            if (popover) {
-                popover.addEventListener('click', function(e) { e.stopPropagation(); });
-            }
+        // Track draft input values so re-renders preserve in-progress edits.
+        var fromInputEl = document.getElementById("dateFromInput");
+        if (fromInputEl) {
+          fromInputEl.addEventListener("input", function () {
+            draftFromInput = this.value;
+          });
+          fromInputEl.addEventListener("change", function () {
+            draftFromInput = this.value;
+          });
+        }
+        var toInputEl = document.getElementById("dateToInput");
+        if (toInputEl) {
+          toInputEl.addEventListener("input", function () {
+            draftToInput = this.value;
+          });
+          toInputEl.addEventListener("change", function () {
+            draftToInput = this.value;
+          });
         }
 
-        // Outside-click closes the date popover without applying. Installed once.
-        // Scoped to clicks outside `#dateGroup` — clicks on other filter pills
-        // shouldn't both trigger a fresh load and tear down the popover, and
-        // clicks inside the group (presets, inputs, buttons) are handled by
-        // the group's own event handlers.
-        document.addEventListener('click', function(e) {
-            if (!datePopoverOpen) return;
-            var group = document.getElementById('dateGroup');
-            if (group && group.contains(e.target)) return;
+        // Cancel — close popover without applying
+        var cancelBtn = document.getElementById("dateCancelBtn");
+        if (cancelBtn) {
+          cancelBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
             datePopoverOpen = false;
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
             renderFilters(currentToolCounts, currentSources);
-        });
-
-        // Cached so date-popover interactions can re-render without another fetch.
-        var currentToolCounts = [];
-        var currentSources = [];
-
-        // --- Main load ---
-        async function load() {
-            // Race guard — if another load() starts before this one finishes,
-            // the stale response is dropped to avoid clobbering current UI state.
-            var gen = ++loadGeneration;
-            try {
-                var fp = buildFilterParams();
-                // Prefix a '?' so the '&' in fp hangs off cleanly; summary needs special handling
-                var summaryUrl = '/api/analytics/summary' + (fp ? '?' + fp.replace(/^&/, '') : '');
-                var queriesUrl = '/api/analytics/queries?limit=50' + fp;
-                var emptyUrl = '/api/analytics/empty-queries?limit=50' + fp;
-                var toolCountsUrl = '/api/analytics/tool-counts' + (fp ? '?' + fp.replace(/^&/, '') : '');
-                var results = await Promise.all([
-                    fetchJson(summaryUrl),
-                    fetchJson(queriesUrl),
-                    fetchJson(emptyUrl),
-                    fetchJson(toolCountsUrl),
-                ]);
-                if (gen !== loadGeneration) return;  // stale response — abort
-                var summary = results[0];
-                var topQueries = results[1];
-                var emptyQueries = results[2];
-                var toolCounts = results[3];
-
-                // Clear any previous error
-                document.getElementById('error').style.display = 'none';
-                document.getElementById('filters').style.display = 'block';
-
-                // Cache for non-fetching re-renders (e.g. toggling the date popover)
-                currentToolCounts = toolCounts;
-                // When no tool-type filter is active, the summary.queries_by_source
-                // reflects the full set. Snapshot it so that later, when a
-                // tool-type filter shrinks the response, the source pills still
-                // render the complete list.
-                if (activeToolType === null && summary.queries_by_source) {
-                    unfilteredSourcesCache = summary.queries_by_source.slice();
-                }
-                currentSources = unfilteredSourcesCache || summary.queries_by_source;
-
-                // Render filters
-                renderFilters(toolCounts, currentSources);
-
-                // Stats cards — window label is derived from the active
-                // range so switching presets keeps the labels honest.
-                var winLabel = formatPillLabel();
-                document.getElementById('stats').innerHTML = [
-                    { label: 'Total Queries', value: summary.total_queries.toLocaleString() },
-                    { label: 'Queries (' + winLabel + ')', value: summary.total_queries_window.toLocaleString() },
-                    { label: 'Empty Result Rate (' + winLabel + ')', value: (summary.empty_result_rate_window * 100).toFixed(1) + '%' },
-                    { label: 'Avg Latency (' + winLabel + ')', value: summary.avg_latency_ms_window + 'ms' },
-                    { label: 'P95 Latency (' + winLabel + ')', value: summary.p95_latency_ms_window + 'ms' },
-                    { label: 'Empty Queries (' + winLabel + ')', value: summary.empty_result_count_window.toLocaleString() },
-                ].map(function(s) { return '<div class="stat-card"><div class="label">' + esc(s.label) + '</div><div class="value">' + s.value + '</div></div>'; }).join('');
-
-                // Table title h2s — also carry the window label.
-                var topTitle = document.getElementById('topQueriesTitle');
-                if (topTitle) topTitle.textContent = 'Top Queries (' + winLabel + ')';
-                var emptyTitle = document.getElementById('emptyQueriesTitle');
-                if (emptyTitle) {
-                    // Preserve the trailing warning icon span.
-                    emptyTitle.innerHTML = 'Empty Result Queries (' + esc(winLabel) + ') <span class="empty">&#x26a0;</span>';
-                }
-
-                // Daily chart - destroy previous instance
-                if (dailyChartInstance) { dailyChartInstance.destroy(); dailyChartInstance = null; }
-                var titleSuffix = activeToolType ? ' - ' + activeToolType.charAt(0).toUpperCase() + activeToolType.slice(1) : '';
-                document.getElementById('dailyChartTitle').textContent = 'Queries per Day (' + winLabel + ')' + titleSuffix;
-
-                var dayLabels = summary.queries_per_day_window.map(function(d) { return d.day; });
-                dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
-                    type: 'bar',
-                    data: {
-                        labels: dayLabels,
-                        datasets: [{ label: 'Queries', data: summary.queries_per_day_window.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: { legend: { display: false } },
-                        scales: { y: { beginAtZero: true } },
-                        onClick: function(_evt, elements) {
-                            if (!elements || elements.length === 0) return;
-                            var idx = elements[0].index;
-                            var day = dayLabels[idx];
-                            if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
-                            activeFrom = day;
-                            activeTo = day;
-                            activeDaysBack = null;
-                            // Close any open popover so its stale state doesn't
-                            // linger on top of the newly-filtered view.
-                            datePopoverOpen = false;
-                            dateCustomMode = false;
-                            draftFromInput = null;
-                            draftToInput = null;
-                            load();
-                        },
-                    },
-                });
-
-                // Source chart - destroy previous instance
-                if (sourceChartInstance) { sourceChartInstance.destroy(); sourceChartInstance = null; }
-                if (summary.queries_by_source.length > 0) {
-                    sourceChartInstance = new Chart(document.getElementById('sourceChart'), {
-                        type: 'doughnut',
-                        data: {
-                            labels: summary.queries_by_source.map(function(s) { return s.source_name; }),
-                            datasets: [{ data: summary.queries_by_source.map(function(s) { return s.count; }), backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'] }],
-                        },
-                        options: { responsive: true },
-                    });
-                }
-
-                // Top queries table (now with Tool column)
-                var topBody = document.querySelector('#topQueriesTable tbody');
-                topBody.innerHTML = topQueries.map(function(q) {
-                    var avgRes = q.avg_result_count != null ? q.avg_result_count.toFixed(1) : '-';
-                    var avgScore = q.avg_top_score != null ? q.avg_top_score.toFixed(2) : '-';
-                    return '<tr><td>' + esc(q.query_text) + '</td><td><span class="tool-badge">' + esc(q.tool_name) + '</span></td><td>' + q.count + '</td><td>' + avgRes + '</td><td>' + avgScore + '</td></tr>';
-                }).join('') || '<tr><td colspan="5">No queries logged yet.</td></tr>';
-
-                // Empty queries table
-                var emptyBody = document.querySelector('#emptyQueriesTable tbody');
-                emptyBody.innerHTML = emptyQueries.map(function(q) {
-                    return '<tr class="empty"><td>' + esc(q.query_text) + '</td><td><span class="tool-badge">' + esc(q.tool_name) + '</span></td><td>' + esc(q.source_name || '-') + '</td><td>' + q.count + '</td><td>' + new Date(q.last_seen).toLocaleString() + '</td></tr>';
-                }).join('') || '<tr><td colspan="5">No empty-result queries.</td></tr>';
-
-            } catch (err) {
-                if (err.message !== 'auth') {
-                    document.getElementById('error').style.display = 'block';
-                    document.getElementById('error').textContent = 'Failed to load analytics: ' + err.message;
-                }
-            }
+          });
         }
 
-        function esc(s) {
-            var d = document.createElement('div');
-            d.textContent = s;
-            return d.innerHTML;
+        // Apply — parse inputs, set range, reload
+        var applyBtn = document.getElementById("dateApplyBtn");
+        if (applyBtn) {
+          applyBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var f = document.getElementById("dateFromInput").value;
+            var t = document.getElementById("dateToInput").value;
+            if (
+              !/^\d{4}-\d{2}-\d{2}$/.test(f) ||
+              !/^\d{4}-\d{2}-\d{2}$/.test(t)
+            )
+              return;
+            // Normalize: if the user picked them backwards, swap so from <= to.
+            if (f > t) {
+              var tmp = f;
+              f = t;
+              t = tmp;
+            }
+            activeFrom = f;
+            activeTo = t;
+            activeDaysBack = null;
+            datePopoverOpen = false;
+            dateCustomMode = false;
+            draftFromInput = null;
+            draftToInput = null;
+            load();
+          });
         }
 
-        // Check if server is in dev mode (skip auth), otherwise require token
-        (async function init() {
-            try {
-                var authMode = await fetch('/api/analytics/auth-mode').then(function(r) { return r.json(); });
-                if (authMode.dev) {
-                    // Dev mode — no token needed
-                    headers = {};
-                    load();
-                    return;
-                }
-            } catch (e) { /* ignore — fall through to normal auth */ }
+        // Prevent clicks inside the popover from bubbling to the outside-click handler
+        var popover = document.getElementById("datePopover");
+        if (popover) {
+          popover.addEventListener("click", function (e) {
+            e.stopPropagation();
+          });
+        }
+      }
 
-            if (!TOKEN) {
-                showLogin();
-            } else {
-                load();
-            }
-        })();
+      // Outside-click closes the date popover without applying. Installed once.
+      // Scoped to clicks outside `#dateGroup` — clicks on other filter pills
+      // shouldn't both trigger a fresh load and tear down the popover, and
+      // clicks inside the group (presets, inputs, buttons) are handled by
+      // the group's own event handlers.
+      document.addEventListener("click", function (e) {
+        if (!datePopoverOpen) return;
+        var group = document.getElementById("dateGroup");
+        if (group && group.contains(e.target)) return;
+        datePopoverOpen = false;
+        dateCustomMode = false;
+        draftFromInput = null;
+        draftToInput = null;
+        renderFilters(currentToolCounts, currentSources);
+      });
+
+      // Cached so date-popover interactions can re-render without another fetch.
+      var currentToolCounts = [];
+      var currentSources = [];
+
+      // --- Main load ---
+      async function load() {
+        // Race guard — if another load() starts before this one finishes,
+        // the stale response is dropped to avoid clobbering current UI state.
+        var gen = ++loadGeneration;
+        try {
+          var fp = buildFilterParams();
+          // Prefix a '?' so the '&' in fp hangs off cleanly; summary needs special handling
+          var summaryUrl =
+            "/api/analytics/summary" + (fp ? "?" + fp.replace(/^&/, "") : "");
+          var queriesUrl = "/api/analytics/queries?limit=50" + fp;
+          var emptyUrl = "/api/analytics/empty-queries?limit=50" + fp;
+          var toolCountsUrl =
+            "/api/analytics/tool-counts" +
+            (fp ? "?" + fp.replace(/^&/, "") : "");
+          var results = await Promise.all([
+            fetchJson(summaryUrl),
+            fetchJson(queriesUrl),
+            fetchJson(emptyUrl),
+            fetchJson(toolCountsUrl),
+          ]);
+          if (gen !== loadGeneration) return; // stale response — abort
+          var summary = results[0];
+          var topQueries = results[1];
+          var emptyQueries = results[2];
+          var toolCounts = results[3];
+
+          // Clear any previous error
+          document.getElementById("error").style.display = "none";
+          document.getElementById("filters").style.display = "block";
+
+          // Cache for non-fetching re-renders (e.g. toggling the date popover)
+          currentToolCounts = toolCounts;
+          // When no tool-type filter is active, the summary.queries_by_source
+          // reflects the full set. Snapshot it so that later, when a
+          // tool-type filter shrinks the response, the source pills still
+          // render the complete list.
+          //
+          // Only cache a non-empty array: caching `[]` would defeat the
+          // cache (both branches would render zero pills, losing pills
+          // that existed pre-filter) — we want a populated snapshot.
+          if (
+            activeToolType === null &&
+            Array.isArray(summary.queries_by_source) &&
+            summary.queries_by_source.length > 0
+          ) {
+            unfilteredSourcesCache = summary.queries_by_source.slice();
+          }
+          // Explicit null-check (not `||`) so an intentionally empty
+          // cached array doesn't silently fall through to the current
+          // summary's sources.
+          currentSources =
+            unfilteredSourcesCache !== null
+              ? unfilteredSourcesCache
+              : Array.isArray(summary.queries_by_source)
+                ? summary.queries_by_source
+                : [];
+
+          // Render filters
+          renderFilters(toolCounts, currentSources);
+
+          // Stats cards — window label is derived from the active
+          // range so switching presets keeps the labels honest.
+          var winLabel = formatPillLabel();
+          // When the window is "All time", the windowed Queries card
+          // would duplicate the Total Queries card (same population),
+          // so omit it for clarity.
+          var isAllTime = activeDaysBack !== null && activeDaysBack >= 99999;
+          var statCards = [
+            {
+              label: "Total Queries",
+              value: summary.total_queries.toLocaleString(),
+            },
+          ];
+          if (!isAllTime) {
+            statCards.push({
+              label: "Queries (" + winLabel + ")",
+              value: summary.total_queries_window.toLocaleString(),
+            });
+          }
+          statCards.push(
+            {
+              label: "Empty Result Rate (" + winLabel + ")",
+              value: (summary.empty_result_rate_window * 100).toFixed(1) + "%",
+            },
+            {
+              label: "Avg Latency (" + winLabel + ")",
+              value: summary.avg_latency_ms_window + "ms",
+            },
+            {
+              label: "P95 Latency (" + winLabel + ")",
+              value: summary.p95_latency_ms_window + "ms",
+            },
+            {
+              label: "Empty Queries (" + winLabel + ")",
+              value: summary.empty_result_count_window.toLocaleString(),
+            },
+          );
+          document.getElementById("stats").innerHTML = statCards
+            .map(function (s) {
+              return (
+                '<div class="stat-card"><div class="label">' +
+                esc(s.label) +
+                '</div><div class="value">' +
+                s.value +
+                "</div></div>"
+              );
+            })
+            .join("");
+
+          // Table title h2s — also carry the window label.
+          var topTitle = document.getElementById("topQueriesTitle");
+          if (topTitle) topTitle.textContent = "Top Queries (" + winLabel + ")";
+          var emptyTitle = document.getElementById("emptyQueriesTitle");
+          if (emptyTitle) {
+            // Build the title with textContent + a real span element so
+            // the warning glyph is preserved without an innerHTML +
+            // string-concat dance (which would need manual escaping and
+            // is easy to break if winLabel ever contains unescaped HTML).
+            emptyTitle.textContent = "Empty Result Queries (" + winLabel + ") ";
+            var warn = document.createElement("span");
+            warn.className = "empty";
+            warn.textContent = "\u26a0";
+            emptyTitle.appendChild(warn);
+          }
+
+          // Daily chart - destroy previous instance
+          if (dailyChartInstance) {
+            dailyChartInstance.destroy();
+            dailyChartInstance = null;
+          }
+          var titleSuffix = activeToolType
+            ? " - " +
+              activeToolType.charAt(0).toUpperCase() +
+              activeToolType.slice(1)
+            : "";
+          document.getElementById("dailyChartTitle").textContent =
+            "Queries per Day (" + winLabel + ")" + titleSuffix;
+
+          var perDayArr = asArray(summary.queries_per_day_window);
+          var dayLabels = perDayArr.map(function (d) {
+            return d.day;
+          });
+          dailyChartInstance = new Chart(
+            document.getElementById("dailyChart"),
+            {
+              type: "bar",
+              data: {
+                labels: dayLabels,
+                datasets: [
+                  {
+                    label: "Queries",
+                    data: perDayArr.map(function (d) {
+                      return d.count;
+                    }),
+                    backgroundColor: "#3b82f6",
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true } },
+                onClick: function (_evt, elements) {
+                  if (!elements || elements.length === 0) return;
+                  var idx = elements[0].index;
+                  var day = dayLabels[idx];
+                  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+                  activeFrom = day;
+                  activeTo = day;
+                  activeDaysBack = null;
+                  // Close any open popover so its stale state doesn't
+                  // linger on top of the newly-filtered view.
+                  datePopoverOpen = false;
+                  dateCustomMode = false;
+                  draftFromInput = null;
+                  draftToInput = null;
+                  load();
+                },
+              },
+            },
+          );
+
+          // Source chart - destroy previous instance
+          if (sourceChartInstance) {
+            sourceChartInstance.destroy();
+            sourceChartInstance = null;
+          }
+          var sourcesArr = asArray(summary.queries_by_source);
+          if (sourcesArr.length > 0) {
+            sourceChartInstance = new Chart(
+              document.getElementById("sourceChart"),
+              {
+                type: "doughnut",
+                data: {
+                  labels: sourcesArr.map(function (s) {
+                    return s.source_name;
+                  }),
+                  datasets: [
+                    {
+                      data: sourcesArr.map(function (s) {
+                        return s.count;
+                      }),
+                      backgroundColor: [
+                        "#3b82f6",
+                        "#10b981",
+                        "#f59e0b",
+                        "#ef4444",
+                        "#8b5cf6",
+                        "#ec4899",
+                      ],
+                    },
+                  ],
+                },
+                options: { responsive: true },
+              },
+            );
+          }
+
+          // Top queries table (now with Tool column)
+          var topBody = document.querySelector("#topQueriesTable tbody");
+          topBody.innerHTML =
+            asArray(topQueries)
+              .map(function (q) {
+                var avgRes =
+                  q.avg_result_count != null
+                    ? q.avg_result_count.toFixed(1)
+                    : "-";
+                var avgScore =
+                  q.avg_top_score != null ? q.avg_top_score.toFixed(2) : "-";
+                return (
+                  "<tr><td>" +
+                  esc(q.query_text) +
+                  '</td><td><span class="tool-badge">' +
+                  esc(q.tool_name) +
+                  "</span></td><td>" +
+                  q.count +
+                  "</td><td>" +
+                  avgRes +
+                  "</td><td>" +
+                  avgScore +
+                  "</td></tr>"
+                );
+              })
+              .join("") ||
+            '<tr><td colspan="5">No queries logged yet.</td></tr>';
+
+          // Empty queries table
+          var emptyBody = document.querySelector("#emptyQueriesTable tbody");
+          emptyBody.innerHTML =
+            asArray(emptyQueries)
+              .map(function (q) {
+                return (
+                  '<tr class="empty"><td>' +
+                  esc(q.query_text) +
+                  '</td><td><span class="tool-badge">' +
+                  esc(q.tool_name) +
+                  "</span></td><td>" +
+                  esc(q.source_name || "-") +
+                  "</td><td>" +
+                  q.count +
+                  "</td><td>" +
+                  new Date(q.last_seen).toLocaleString() +
+                  "</td></tr>"
+                );
+              })
+              .join("") ||
+            '<tr><td colspan="5">No empty-result queries.</td></tr>';
+        } catch (err) {
+          // Stale-response guard also applies to failures: a slow old
+          // request that rejects after a newer load() has already
+          // rendered would otherwise clobber the fresh UI with an error.
+          if (gen !== loadGeneration) return;
+          if (err.message !== "auth") {
+            document.getElementById("error").style.display = "block";
+            document.getElementById("error").textContent =
+              "Failed to load analytics: " + err.message;
+          }
+        }
+      }
+
+      function esc(s) {
+        var d = document.createElement("div");
+        d.textContent = s;
+        return d.innerHTML;
+      }
+
+      // Defensive array normalizer — any field the server returns as a
+      // list should be coerced to one before we call .length / .map() on
+      // it. A malformed or missing response shouldn't throw in the
+      // renderer and blank the whole dashboard.
+      function asArray(x) {
+        return Array.isArray(x) ? x : [];
+      }
+
+      // Check if server is in dev mode (skip auth), otherwise require token
+      (async function init() {
+        // Preview mode renders from canned data with the fetch stub above;
+        // skip both the auth-mode probe and the token prompt entirely.
+        if (window.__pathfinderPreview) {
+          headers = {};
+          load();
+          return;
+        }
+        try {
+          var authMode = await fetch("/api/analytics/auth-mode").then(
+            function (r) {
+              return r.json();
+            },
+          );
+          if (authMode.dev) {
+            // Dev mode — no token needed
+            headers = {};
+            load();
+            return;
+          }
+        } catch (e) {
+          /* ignore — fall through to normal auth */
+        }
+
+        if (!TOKEN) {
+          showLogin();
+        } else {
+          load();
+        }
+      })();
     </script>
-</body>
+  </body>
 </html>

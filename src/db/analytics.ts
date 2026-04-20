@@ -207,15 +207,19 @@ export async function getAnalyticsSummary(
     fp,
   );
 
-  // Windowed summary (filtered) - exclude backfilled rows from latency/empty stats
+  // Windowed summary. Backfilled rows (latency_ms<0) are excluded from all
+  // three aggregates for consistency: otherwise the empty_result_rate_window
+  // denominator would include backfilled rows while the numerator and
+  // avg_latency implicitly exclude them, inflating the rate.
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
-  const summaryWhere = whereAnd(dw2.clauses, fc2);
+  const summaryBase = [...dw2.clauses, "latency_ms >= 0"];
+  const summaryWhere = whereAnd(summaryBase, fc2);
   const summaryRes = await pool.query(
     `SELECT
         count(*)::int AS total,
         count(*) FILTER (WHERE result_count = 0)::int AS empty,
-        COALESCE(avg(latency_ms) FILTER (WHERE latency_ms >= 0)::int, 0) AS avg_latency
+        COALESCE(avg(latency_ms)::int, 0) AS avg_latency
     FROM query_log
     ${summaryWhere}`,
     [...fp2, ...dw2.params],
@@ -260,8 +264,8 @@ export async function getAnalyticsSummary(
 
   const totalQueries = totalRes.rows[0]?.count ?? 0;
   const s = summaryRes.rows[0] ?? {};
-  const total7d = s.total ?? 0;
-  const empty7d = s.empty ?? 0;
+  const totalWindow = s.total ?? 0;
+  const emptyWindow = s.empty ?? 0;
 
   // Compute p95 in application code
   const latencies = latencyRes.rows.map(
@@ -271,9 +275,9 @@ export async function getAnalyticsSummary(
 
   return {
     total_queries: totalQueries,
-    total_queries_window: total7d,
-    empty_result_count_window: empty7d,
-    empty_result_rate_window: total7d > 0 ? empty7d / total7d : 0,
+    total_queries_window: totalWindow,
+    empty_result_count_window: emptyWindow,
+    empty_result_rate_window: totalWindow > 0 ? emptyWindow / totalWindow : 0,
     avg_latency_ms_window: s.avg_latency ?? 0,
     p95_latency_ms_window: p95Latency,
     queries_by_source: bySourceRes.rows.map((r: Record<string, unknown>) => ({
@@ -290,8 +294,9 @@ export async function getAnalyticsSummary(
 }
 
 /**
- * Get top queries by frequency over the last N days.
- * Now includes tool_name in the grouping.
+ * Get top queries by frequency over the last N days, or over the explicit
+ * `filter.from`/`filter.to` range when provided. Groups by (query_text,
+ * tool_name) and orders by count desc.
  */
 export async function getTopQueries(
   days: number = 7,
@@ -425,6 +430,11 @@ export async function getToolCounts(
 
 /**
  * Delete query_log rows older than the specified number of days.
+ *
+ * This is a rolling retention window anchored to NOW(); it does not accept
+ * an AnalyticsFilter. Per-filter deletion isn't a supported operation —
+ * retention is global.
+ *
  * Returns the number of rows deleted.
  */
 export async function cleanupOldQueryLogs(
