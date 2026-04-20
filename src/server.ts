@@ -1107,7 +1107,24 @@ export function registerAnalyticsRoutes(
     // contain a dot-prefixed segment (e.g. git worktrees under `.claude/`).
     // Without it, Express's `send` returns 404 for any path with a dotfile
     // component, regardless of whether the file itself exists.
-    res.sendFile(_analyticsHtmlPath, { dotfiles: "allow" });
+    //
+    // The error callback turns a missing file (ENOENT — can happen if the
+    // package was installed without docs/analytics.html) into a clean 404
+    // JSON response instead of letting Express's default handler hang / 500.
+    res.sendFile(_analyticsHtmlPath, { dotfiles: "allow" }, (err) => {
+      if (!err) return;
+      if (res.headersSent) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const code = (err as any).code as string | undefined;
+      if (code === "ENOENT") {
+        res
+          .status(404)
+          .json({ error: "analytics dashboard not available" });
+        return;
+      }
+      console.error("[analytics] sendFile failed:", err);
+      res.status(500).json({ error: "analytics dashboard unavailable" });
+    });
   });
 }
 

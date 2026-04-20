@@ -9,8 +9,27 @@ fixtures/
 # Scripts
 scripts/
 
-# Docs and website
-docs/
+# Docs and website — exclude everything except the analytics dashboard HTML,
+# which the server serves at runtime via GET /analytics.
+#
+# Note: npm/tar apply .gitignore-style "!" negation rules here. Rather than
+# exclude the whole `docs/` tree and try to carve out analytics.html (which
+# npm treats inconsistently across versions), we exclude each docs artifact
+# individually and leave analytics.html alone.
+docs/*.png
+docs/*.svg
+docs/*.js
+docs/CNAME
+docs/.nojekyll
+docs/index.html
+docs/clients/
+docs/config/
+docs/migrate-from-gitbook/
+docs/migrate-from-local-rag/
+docs/migrate-from-mintlify/
+docs/migrate-from-ragdocs/
+docs/search/
+docs/usage/
 
 # Claude Code plugin
 plugin/
