@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { Request } from "express";
 
 // These tests verify the auth middleware logic and endpoint parameter parsing.
 // They mock the analytics DB functions and test the Express handler logic.
@@ -456,12 +457,15 @@ describe("analyticsAuth middleware", () => {
 // ---------------------------------------------------------------------------
 
 describe("parseAnalyticsFilter from/to validation", () => {
-  function mkReq(query: Record<string, string>): never {
-    return { query } as never;
+  // Returning Partial<Request> (not `never`) so the typed `{query}` shape
+  // is explicit; parseAnalyticsFilter only reads `.query`, so a Partial is
+  // safe here. Call sites cast to Request to satisfy the signature.
+  function mkReq(query: Record<string, string>): Partial<Request> {
+    return { query };
   }
 
   it("returns ok with empty filter when no query params", () => {
-    const result = parseAnalyticsFilter(mkReq({}));
+    const result = parseAnalyticsFilter(mkReq({}) as Request);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.filter.from).toBeUndefined();
@@ -471,7 +475,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
 
   it("parses valid from/to into Date objects on the filter", () => {
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-04-01", to: "2026-04-20" }),
+      mkReq({ from: "2026-04-01", to: "2026-04-20" }) as Request,
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -487,7 +491,9 @@ describe("parseAnalyticsFilter from/to validation", () => {
   });
 
   it("rejects from without to with 400", () => {
-    const result = parseAnalyticsFilter(mkReq({ from: "2026-04-01" }));
+    const result = parseAnalyticsFilter(
+      mkReq({ from: "2026-04-01" }) as Request,
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
@@ -497,7 +503,9 @@ describe("parseAnalyticsFilter from/to validation", () => {
   });
 
   it("rejects to without from with 400", () => {
-    const result = parseAnalyticsFilter(mkReq({ to: "2026-04-20" }));
+    const result = parseAnalyticsFilter(
+      mkReq({ to: "2026-04-20" }) as Request,
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
@@ -506,7 +514,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
 
   it("rejects malformed from with 400", () => {
     const result = parseAnalyticsFilter(
-      mkReq({ from: "invalid", to: "2026-04-20" }),
+      mkReq({ from: "invalid", to: "2026-04-20" }) as Request,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -517,7 +525,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
 
   it("rejects malformed to with 400", () => {
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-04-01", to: "04/20/2026" }),
+      mkReq({ from: "2026-04-01", to: "04/20/2026" }) as Request,
     );
     expect(result.ok).toBe(false);
   });
@@ -526,7 +534,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
     // Feb 30 as `from` rolls forward to March 2 under `new Date()` — we
     // detect that via the YYYY-MM-DD roundtrip check.
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-02-30", to: "2026-03-01" }),
+      mkReq({ from: "2026-02-30", to: "2026-03-01" }) as Request,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -541,7 +549,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
         source: "docs",
         from: "2026-04-01",
         to: "2026-04-20",
-      }),
+      }) as Request,
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -554,7 +562,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
 
   it("rejects from > to with 400", () => {
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-04-20", to: "2026-04-01" }),
+      mkReq({ from: "2026-04-20", to: "2026-04-01" }) as Request,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -568,7 +576,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
     // Second scenario: the wider range proves the rejection is driven by
     // the calendar-date roundtrip check, not by any range-length logic.
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-02-30", to: "2026-04-20" }),
+      mkReq({ from: "2026-02-30", to: "2026-04-20" }) as Request,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
