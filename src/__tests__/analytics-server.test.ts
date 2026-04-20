@@ -39,7 +39,7 @@ vi.mock("../config.js", () => ({
 }));
 
 import { getAnalyticsConfig } from "../config.js";
-import { analyticsAuth } from "../server.js";
+import { analyticsAuth, parseAnalyticsFilter } from "../server.js";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 
@@ -70,13 +70,19 @@ function buildTestApp() {
     res.sendFile(analyticsHtmlPath, { dotfiles: "allow" });
   });
 
-  // API routes with analyticsAuth middleware
+  // API routes with analyticsAuth middleware — mirror the real handlers
+  // so we exercise parseAnalyticsFilter (from/to validation) end-to-end.
   app.get(
     "/api/analytics/summary",
     analyticsAuth,
-    async (_req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
-        const summary = await mockGetAnalyticsSummary();
+        const parsed = parseAnalyticsFilter(req);
+        if (!parsed.ok) {
+          res.status(parsed.status).json(parsed.body);
+          return;
+        }
+        const summary = await mockGetAnalyticsSummary(parsed.filter);
         res.json(summary);
       } catch (err) {
         res.status(500).json({ error: "Failed to fetch analytics summary" });
@@ -89,9 +95,18 @@ function buildTestApp() {
     analyticsAuth,
     async (req: Request, res: Response) => {
       try {
+        const parsed = parseAnalyticsFilter(req);
+        if (!parsed.ok) {
+          res.status(parsed.status).json(parsed.body);
+          return;
+        }
         const days = parseInt(req.query.days as string) || 7;
         const limit = parseInt(req.query.limit as string) || 50;
-        const queries = await mockGetTopQueries(days, Math.min(limit, 200));
+        const queries = await mockGetTopQueries(
+          days,
+          Math.min(limit, 200),
+          parsed.filter,
+        );
         res.json(queries);
       } catch (err) {
         res.status(500).json({ error: "Failed to fetch top queries" });
@@ -349,7 +364,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         Authorization: "Bearer tok",
       });
 
-      expect(mockGetTopQueries).toHaveBeenCalledWith(14, 25);
+      expect(mockGetTopQueries).toHaveBeenCalledWith(14, 25, {});
     });
 
     it("defaults days to 7 and limit to 50 when not provided", async () => {
@@ -366,7 +381,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         Authorization: "Bearer tok",
       });
 
-      expect(mockGetTopQueries).toHaveBeenCalledWith(7, 50);
+      expect(mockGetTopQueries).toHaveBeenCalledWith(7, 50, {});
     });
 
     it("caps limit at 200", async () => {
@@ -383,7 +398,109 @@ describe("Analytics server routes (HTTP-level)", () => {
         Authorization: "Bearer tok",
       });
 
-      expect(mockGetTopQueries).toHaveBeenCalledWith(7, 200);
+      expect(mockGetTopQueries).toHaveBeenCalledWith(7, 200, {});
+    });
+  });
+
+  // ---- from/to date range params ---------------------------------------------
+
+  describe("GET /api/analytics/summary (from/to range)", () => {
+    it("returns 200 with data when from+to are valid", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 5 });
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?from=2026-04-01&to=2026-04-20",
+        { Authorization: "Bearer tok" },
+      );
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.total_queries).toBe(5);
+
+      // filter.from/to should be Date instances
+      const callArg = mockGetAnalyticsSummary.mock.calls[0][0];
+      expect(callArg.from).toBeInstanceOf(Date);
+      expect(callArg.to).toBeInstanceOf(Date);
+    });
+
+    it("returns 400 when from is malformed", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?from=invalid&to=2026-04-20",
+        { Authorization: "Bearer tok" },
+      );
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBe("invalid_request");
+      expect(body.error_description).toMatch(/YYYY-MM-DD/);
+      expect(mockGetAnalyticsSummary).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 when from is provided without to", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?from=2026-04-01",
+        { Authorization: "Bearer tok" },
+      );
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBe("invalid_request");
+      expect(body.error_description).toMatch(/together/);
+      expect(mockGetAnalyticsSummary).not.toHaveBeenCalled();
+    });
+
+    it("returns 200 with backcompat `days` param", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 7 });
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?days=7",
+        { Authorization: "Bearer tok" },
+      );
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.total_queries).toBe(7);
+      const callArg = mockGetAnalyticsSummary.mock.calls[0][0];
+      expect(callArg.from).toBeUndefined();
+      expect(callArg.to).toBeUndefined();
     });
   });
 });
