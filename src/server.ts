@@ -3,8 +3,10 @@ import cors from "cors";
 import { randomUUID } from "node:crypto";
 import { Bash } from "just-bash";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
+import { createSseHandlers, reapIdleSseSessions } from "./sse-handlers.js";
 import { buildBashFilesMap, rebuildBashInstance } from "./mcp/tools/bash-fs.js";
 import { initializeSchema, closePool } from "./db/client.js";
 import {
@@ -243,17 +245,20 @@ app.post("/revoke", revocationHandler);
 // ---------------------------------------------------------------------------
 
 const transports: Record<string, StreamableHTTPServerTransport> = {};
+const sseTransports: Record<string, SSEServerTransport> = {};
 const sessionLastActivity: Record<string, number> = {};
 let SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes default, overridden by config
 let ipLimiter: IpSessionLimiter | undefined;
 let workspaceManager: WorkspaceManager | undefined;
 
-// Reap idle sessions every 5 minutes
+// Reap idle sessions every 5 minutes (both /mcp Streamable HTTP and /sse legacy SSE)
 setInterval(
   () => {
     const now = Date.now();
     let reaped = 0;
     for (const sid of Object.keys(sessionLastActivity)) {
+      // Skip SSE-owned sessions — they're reaped by reapIdleSseSessions below.
+      if (sseTransports[sid]) continue;
       if (now - sessionLastActivity[sid] > SESSION_TTL_MS) {
         delete transports[sid];
         delete sessionLastActivity[sid];
@@ -284,6 +289,36 @@ setInterval(
     if (reaped > 0) {
       console.log(
         `[mcp] Reaped ${reaped} idle sessions (${Object.keys(transports).length} active)`,
+      );
+    }
+
+    // Reap idle SSE sessions. reapIdleSseSessions closes the transport (which
+    // triggers our onclose → removes from sseTransports, ipLimiter, workspace)
+    // and also defensively clears the maps itself.
+    const reapedSse = reapIdleSseSessions({
+      sseTransports,
+      sessionLastActivity,
+      ttlMs: SESSION_TTL_MS,
+      now,
+    });
+    for (const sid of reapedSse) {
+      try {
+        ipLimiter?.remove(sid);
+      } catch (e) {
+        console.error(`[mcp] SSE IP limiter cleanup failed:`, e);
+      }
+      try {
+        workspaceManager?.cleanup(sid);
+      } catch (e) {
+        console.error(
+          `[mcp] SSE workspace cleanup failed for ${sid.slice(0, 8)}:`,
+          e,
+        );
+      }
+    }
+    if (reapedSse.length > 0) {
+      console.log(
+        `[mcp] Reaped ${reapedSse.length} idle SSE sessions (${Object.keys(sseTransports).length} SSE active)`,
       );
     }
   },
@@ -439,6 +474,45 @@ app.delete("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Legacy SSE transport — /sse (GET, opens stream) + /messages (POST, client→server)
+//
+// Claude.ai's web connector and older MCP clients probe /sse before falling
+// back to Streamable HTTP. Hidden showcase docs point users at
+// https://mcp.copilotkit.ai/sse, so we serve both transports side-by-side.
+// ---------------------------------------------------------------------------
+
+const sseHandlers = createSseHandlers({
+  sseTransports,
+  sessionLastActivity,
+  ipLimiter: () => ipLimiter,
+  workspaceManager: () => workspaceManager,
+  createMcpServer: () => {
+    let transportRef: SSEServerTransport | undefined;
+    // The handler creates the transport first, then calls createMcpServer()
+    // and connect(transport). We need the sessionId late-bound so bash tools
+    // can discover it via getSessionId().
+    const server = createMcpServer(
+      bashInstances,
+      sessionStateManager,
+      () => transportRef?.sessionId,
+      bashTelemetry,
+      workspaceManager,
+    );
+    // Intercept connect() so we can capture the transport reference for
+    // the getSessionId closure above.
+    const origConnect = server.connect.bind(server);
+    server.connect = async (t) => {
+      transportRef = t as SSEServerTransport;
+      return origConnect(t);
+    };
+    return server;
+  },
+});
+
+app.get("/sse", ...sseHandlers.getHandler);
+app.post("/messages", ...sseHandlers.postHandler);
 
 // ---------------------------------------------------------------------------
 // Health check
@@ -930,6 +1004,18 @@ export async function startServer(options?: ServerOptions): Promise<void> {
       await bashTelemetry?.flush();
     } catch (e) {
       console.error("[shutdown] Telemetry flush failed:", e);
+    }
+    // Close all open SSE transports so hanging streams don't block exit.
+    for (const sid of Object.keys(sseTransports)) {
+      try {
+        await sseTransports[sid].close();
+      } catch (e) {
+        console.error(
+          `[shutdown] SSE transport close failed for ${sid.slice(0, 8)}:`,
+          e,
+        );
+      }
+      delete sseTransports[sid];
     }
     try {
       workspaceManager?.cleanupAll();
