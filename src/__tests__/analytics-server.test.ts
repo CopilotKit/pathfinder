@@ -6,11 +6,13 @@ import path from "node:path";
 const mockGetAnalyticsSummary = vi.fn();
 const mockGetTopQueries = vi.fn();
 const mockGetEmptyQueries = vi.fn();
+const mockGetToolCounts = vi.fn();
 
 vi.mock("../db/analytics.js", () => ({
   getAnalyticsSummary: (...args: unknown[]) => mockGetAnalyticsSummary(...args),
   getTopQueries: (...args: unknown[]) => mockGetTopQueries(...args),
   getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
+  getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
 }));
 
 vi.mock("../config.js", () => ({
