@@ -104,6 +104,10 @@ export function authorizationServerHandler(req: Request, res: Response): void {
 export function registerHandler(req: Request, res: Response): void {
   if (!enforceLimit(registerLimiter, req, res)) return;
 
+  console.log(
+    `[oauth] register body=${JSON.stringify(req.body)} headers.origin=${req.headers.origin} headers.user-agent=${req.headers["user-agent"]}`,
+  );
+
   const body = (req.body ?? {}) as { redirect_uris?: unknown };
   const redirectUris = Array.isArray(body.redirect_uris)
     ? body.redirect_uris.filter((u): u is string => typeof u === "string")
@@ -129,6 +133,10 @@ export function registerHandler(req: Request, res: Response): void {
 
 export function authorizeHandler(req: Request, res: Response): void {
   if (!enforceLimit(authorizeLimiter, req, res)) return;
+
+  console.log(
+    `[oauth] authorize query=${JSON.stringify(req.query)} ip=${clientIp(req)}`,
+  );
 
   const q = (req.query ?? {}) as Record<string, string | undefined>;
   const response_type = q.response_type;
@@ -213,6 +221,10 @@ export function tokenHandler(req: Request, res: Response): void {
   const body = (req.body ?? {}) as Record<string, string | undefined>;
   const grant_type = body.grant_type;
 
+  console.log(
+    `[oauth] token request grant_type=${body.grant_type} code=${String(body.code).slice(0, 8)} client_id=${body.client_id} redirect_uri=${body.redirect_uri} ip=${clientIp(req)}`,
+  );
+
   if (grant_type !== "authorization_code") {
     res.status(400).json({
       error: "unsupported_grant_type",
@@ -289,7 +301,7 @@ export function tokenHandler(req: Request, res: Response): void {
   );
 
   console.log(
-    `[oauth] token issued client_id=${client_id} ip=${clientIp(req)}`,
+    `[oauth] token issued client_id=${client_id} aud=${origin} exp_in=${TOKEN_TTL_SEC}s`,
   );
   res.status(200).json({
     access_token: token,
@@ -312,6 +324,10 @@ export function bearerMiddleware(
   res: Response,
   next: NextFunction,
 ): void {
+  console.log(
+    `[oauth] /mcp auth_header=${req.headers.authorization ? "bearer" : "none"} method=${req.method} path=${req.path}`,
+  );
+
   const header = req.headers.authorization;
   if (!header || typeof header !== "string") {
     next();
