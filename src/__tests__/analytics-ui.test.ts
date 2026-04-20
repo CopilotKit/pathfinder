@@ -64,6 +64,12 @@ function installChartStub(win: Window & typeof globalThis): {
  * Build a fetch stub that:
  *  - records every URL called
  *  - returns a per-path response from `handlers` (function of query-string)
+ *
+ * Unmocked paths throw instead of returning 404. A 404 leaks into the
+ * page's #error element and silently turns what should be a hard test
+ * failure into a soft one (the test body's positive assertions still
+ * pass because the element exists). Throwing forces missing handlers
+ * to surface immediately in the test run.
  */
 function buildFetchStub(handlers: Record<string, (qs: string) => unknown>) {
   const calls: string[] = [];
@@ -73,7 +79,9 @@ function buildFetchStub(handlers: Record<string, (qs: string) => unknown>) {
     const [path, qs = ""] = u.split("?");
     const handler = handlers[path];
     if (!handler) {
-      return new Response("not mocked: " + u, { status: 404 });
+      throw new Error(
+        `unmocked fetch path in analytics-ui test: ${u} (add to handlers)`,
+      );
     }
     const body = handler(qs);
     return new Response(JSON.stringify(body), {

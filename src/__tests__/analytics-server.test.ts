@@ -41,7 +41,10 @@ vi.mock("../config.js", () => ({
 }));
 
 import { getAnalyticsConfig } from "../config.js";
-import { registerAnalyticsRoutes } from "../server.js";
+import {
+  registerAnalyticsRoutes,
+  __resetAnalyticsTokenForTesting,
+} from "../server.js";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 
@@ -126,6 +129,7 @@ describe("Analytics server routes (HTTP-level)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetAnalyticsTokenForTesting();
     delete process.env.ANALYTICS_TOKEN;
     consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   });
