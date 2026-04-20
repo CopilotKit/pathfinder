@@ -983,116 +983,148 @@ function parseLimitOrError(
   return result;
 }
 
-app.get(
-  "/api/analytics/summary",
-  analyticsAuth,
-  async (req: Request, res: Response) => {
-    try {
-      const parsed = parseAnalyticsFilter(req);
-      if (!parsed.ok) {
-        res.status(parsed.status).json(parsed.body);
-        return;
+/**
+ * Dependency hooks so tests can mount the real analytics routes without
+ * needing a full DB. Defaults resolve to the production implementations.
+ */
+export interface AnalyticsRouteDeps {
+  getAnalyticsSummary?: typeof getAnalyticsSummary;
+  getTopQueries?: typeof getTopQueries;
+  getEmptyQueries?: typeof getEmptyQueries;
+  getToolCounts?: typeof getToolCounts;
+  analyticsHtmlPath?: string;
+}
+
+/**
+ * Register the public analytics routes on an Express app. Split out so tests
+ * can mount the real handlers against a test DB (via `deps`) instead of
+ * reimplementing the logic in a test double.
+ */
+export function registerAnalyticsRoutes(
+  app: express.Express,
+  deps: AnalyticsRouteDeps = {},
+): void {
+  const _getAnalyticsSummary = deps.getAnalyticsSummary ?? getAnalyticsSummary;
+  const _getTopQueries = deps.getTopQueries ?? getTopQueries;
+  const _getEmptyQueries = deps.getEmptyQueries ?? getEmptyQueries;
+  const _getToolCounts = deps.getToolCounts ?? getToolCounts;
+  const _analyticsHtmlPath =
+    deps.analyticsHtmlPath ?? path.resolve(__dirname, "../docs/analytics.html");
+
+  app.get(
+    "/api/analytics/summary",
+    analyticsAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const parsed = parseAnalyticsFilter(req);
+        if (!parsed.ok) {
+          res.status(parsed.status).json(parsed.body);
+          return;
+        }
+        const days = parseDaysOrError(req, res);
+        if (days === undefined) return;
+        const summary = await _getAnalyticsSummary(parsed.filter, days);
+        res.json(summary);
+      } catch (err) {
+        console.error("[analytics] Summary query failed:", err);
+        res.status(500).json({ error: "Failed to fetch analytics summary" });
       }
-      const days = parseDaysOrError(req, res);
-      if (days === undefined) return;
-      const summary = await getAnalyticsSummary(parsed.filter, days);
-      res.json(summary);
-    } catch (err) {
-      console.error("[analytics] Summary query failed:", err);
-      res.status(500).json({ error: "Failed to fetch analytics summary" });
-    }
-  },
-);
+    },
+  );
 
-app.get(
-  "/api/analytics/queries",
-  analyticsAuth,
-  async (req: Request, res: Response) => {
-    try {
-      const parsed = parseAnalyticsFilter(req);
-      if (!parsed.ok) {
-        res.status(parsed.status).json(parsed.body);
-        return;
+  app.get(
+    "/api/analytics/queries",
+    analyticsAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const parsed = parseAnalyticsFilter(req);
+        if (!parsed.ok) {
+          res.status(parsed.status).json(parsed.body);
+          return;
+        }
+        const days = parseDaysOrError(req, res);
+        if (days === undefined) return;
+        const limit = parseLimitOrError(req, res);
+        if (limit === undefined) return;
+        const queries = await _getTopQueries(days, limit, parsed.filter);
+        res.json(queries);
+      } catch (err) {
+        console.error("[analytics] Top queries failed:", err);
+        res.status(500).json({ error: "Failed to fetch top queries" });
       }
-      const days = parseDaysOrError(req, res);
-      if (days === undefined) return;
-      const limit = parseLimitOrError(req, res);
-      if (limit === undefined) return;
-      const queries = await getTopQueries(days, limit, parsed.filter);
-      res.json(queries);
-    } catch (err) {
-      console.error("[analytics] Top queries failed:", err);
-      res.status(500).json({ error: "Failed to fetch top queries" });
-    }
-  },
-);
+    },
+  );
 
-app.get(
-  "/api/analytics/empty-queries",
-  analyticsAuth,
-  async (req: Request, res: Response) => {
-    try {
-      const parsed = parseAnalyticsFilter(req);
-      if (!parsed.ok) {
-        res.status(parsed.status).json(parsed.body);
-        return;
+  app.get(
+    "/api/analytics/empty-queries",
+    analyticsAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const parsed = parseAnalyticsFilter(req);
+        if (!parsed.ok) {
+          res.status(parsed.status).json(parsed.body);
+          return;
+        }
+        const days = parseDaysOrError(req, res);
+        if (days === undefined) return;
+        const limit = parseLimitOrError(req, res);
+        if (limit === undefined) return;
+        const queries = await _getEmptyQueries(days, limit, parsed.filter);
+        res.json(queries);
+      } catch (err) {
+        console.error("[analytics] Empty queries failed:", err);
+        res.status(500).json({ error: "Failed to fetch empty queries" });
       }
-      const days = parseDaysOrError(req, res);
-      if (days === undefined) return;
-      const limit = parseLimitOrError(req, res);
-      if (limit === undefined) return;
-      const queries = await getEmptyQueries(days, limit, parsed.filter);
-      res.json(queries);
-    } catch (err) {
-      console.error("[analytics] Empty queries failed:", err);
-      res.status(500).json({ error: "Failed to fetch empty queries" });
-    }
-  },
-);
+    },
+  );
 
-app.get(
-  "/api/analytics/tool-counts",
-  analyticsAuth,
-  async (req: Request, res: Response) => {
-    try {
-      const parsed = parseAnalyticsFilter(req);
-      if (!parsed.ok) {
-        res.status(parsed.status).json(parsed.body);
-        return;
+  app.get(
+    "/api/analytics/tool-counts",
+    analyticsAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const parsed = parseAnalyticsFilter(req);
+        if (!parsed.ok) {
+          res.status(parsed.status).json(parsed.body);
+          return;
+        }
+        const days = parseDaysOrError(req, res);
+        if (days === undefined) return;
+        const counts = await _getToolCounts(days, parsed.filter);
+        res.json(counts);
+      } catch (err) {
+        console.error("[analytics] Tool counts failed:", err);
+        res.status(500).json({ error: "Failed to fetch tool counts" });
       }
-      const days = parseDaysOrError(req, res);
-      if (days === undefined) return;
-      const counts = await getToolCounts(days, parsed.filter);
-      res.json(counts);
-    } catch (err) {
-      console.error("[analytics] Tool counts failed:", err);
-      res.status(500).json({ error: "Failed to fetch tool counts" });
-    }
-  },
-);
+    },
+  );
 
-app.get("/api/analytics/auth-mode", (req: Request, res: Response) => {
-  const config = getConfig();
-  // Only advertise dev bypass for localhost callers — otherwise a dev server
-  // bound to 0.0.0.0 would invite unauthenticated dashboard access from the
-  // LAN.
-  const dev = config.nodeEnv === "development" && isLocalhostReq(req);
-  res.json({ dev });
-});
-
-app.get("/analytics", (_req: Request, res: Response) => {
-  if (!getAnalyticsConfig()?.enabled) {
-    res.status(404).json({ error: "Analytics not enabled" });
-    return;
-  }
-  // `dotfiles: "allow"` is required so the file serves from paths that contain
-  // a dot-prefixed segment (e.g. git worktrees under `.claude/`). Without it,
-  // Express's `send` returns 404 for any path with a dotfile component,
-  // regardless of whether the file itself exists.
-  res.sendFile(path.resolve(__dirname, "../docs/analytics.html"), {
-    dotfiles: "allow",
+  app.get("/api/analytics/auth-mode", (req: Request, res: Response) => {
+    const config = getConfig();
+    // Only advertise dev bypass for localhost callers — otherwise a dev
+    // server bound to 0.0.0.0 would invite unauthenticated dashboard access
+    // from the LAN.
+    const dev = config.nodeEnv === "development" && isLocalhostReq(req);
+    res.json({ dev });
   });
-});
+
+  app.get("/analytics", (_req: Request, res: Response) => {
+    if (!getAnalyticsConfig()?.enabled) {
+      res.status(404).json({ error: "Analytics not enabled" });
+      return;
+    }
+    // `dotfiles: "allow"` is required so the file serves from paths that
+    // contain a dot-prefixed segment (e.g. git worktrees under `.claude/`).
+    // Without it, Express's `send` returns 404 for any path with a dotfile
+    // component, regardless of whether the file itself exists.
+    res.sendFile(_analyticsHtmlPath, { dotfiles: "allow" });
+  });
+}
+
+// Wire the analytics routes onto the top-level app at import time so the
+// production server exposes them on listen(). Tests that want to mount the
+// real handlers can call registerAnalyticsRoutes() on their own app.
+registerAnalyticsRoutes(app);
 
 // ---------------------------------------------------------------------------
 // Startup
