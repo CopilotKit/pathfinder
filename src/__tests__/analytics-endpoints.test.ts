@@ -42,10 +42,31 @@ vi.mock("../config.js", () => ({
 }));
 
 import { getAnalyticsConfig, getConfig } from "../config.js";
-import { analyticsAuth, parseAnalyticsFilter } from "../server.js";
+import {
+  analyticsAuth,
+  parseAnalyticsFilter,
+  __resetAnalyticsTokenForTesting,
+} from "../server.js";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 const mockGetConfigFn = vi.mocked(getConfig);
+
+const DEFAULT_TEST_CONFIG = {
+  port: 3001,
+  databaseUrl: "pglite:///tmp/test",
+  openaiApiKey: "",
+  githubToken: "",
+  githubWebhookSecret: "",
+  nodeEnv: "test",
+  logLevel: "info",
+  cloneDir: "/tmp/test",
+  slackBotToken: "",
+  slackSigningSecret: "",
+  discordBotToken: "",
+  discordPublicKey: "",
+  notionToken: "",
+  mcpJwtSecret: "x".repeat(32),
+};
 
 function mockRes() {
   const json = vi.fn();
@@ -55,7 +76,15 @@ function mockRes() {
 
 describe("analyticsAuth middleware", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // Reset every test-visible piece of global state: mock state on the
+    // config hooks AND the module-level auto-generated token cached in
+    // server.ts. Without the token reset, order-sensitive tests (like the
+    // "not regenerated" test) would depend on prior tests leaving the
+    // right cached state behind.
+    mockGetAnalyticsConfigFn.mockReset();
+    mockGetConfigFn.mockReset();
+    mockGetConfigFn.mockReturnValue(DEFAULT_TEST_CONFIG);
+    __resetAnalyticsTokenForTesting();
     delete process.env.ANALYTICS_TOKEN;
   });
 
@@ -116,14 +145,23 @@ describe("analyticsAuth middleware", () => {
       retention_days: 90,
     });
 
+    // Bootstrap the auto-generated token by making one call FIRST (with
+    // its log suppressed), then verify subsequent calls don't regenerate.
+    // beforeEach resets the cached token, so this test must create it
+    // explicitly rather than rely on prior-test side effects.
+    const bootstrapSpy = vi
+      .spyOn(console, "log")
+      .mockImplementation(() => {});
+    analyticsAuth({ headers: {} } as never, mockRes() as never, vi.fn());
+    bootstrapSpy.mockRestore();
+
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    // Call analyticsAuth — token already exists from prior test, so no new log expected
+    // Token already exists from bootstrap — no new generation log expected
     const res1 = mockRes();
     analyticsAuth({ headers: {} } as never, res1 as never, vi.fn());
     expect(res1.status).toHaveBeenCalledWith(401);
 
-    // Verify no new token was generated (no log message about auto-generation)
     const logCalls = consoleSpy.mock.calls.map((c) => c[0]);
     const tokenLog = logCalls.find(
       (msg) =>
@@ -132,7 +170,7 @@ describe("analyticsAuth middleware", () => {
     );
     expect(tokenLog).toBeUndefined();
 
-    // Now verify that three consecutive 401 responses all reject the same way
+    // Three consecutive 401 responses all reject the same way, no regen
     const res2 = mockRes();
     analyticsAuth({ headers: {} } as never, res2 as never, vi.fn());
     expect(res2.status).toHaveBeenCalledWith(401);
@@ -141,7 +179,6 @@ describe("analyticsAuth middleware", () => {
     analyticsAuth({ headers: {} } as never, res3 as never, vi.fn());
     expect(res3.status).toHaveBeenCalledWith(401);
 
-    // Still no new token generation logged
     const allLogCalls = consoleSpy.mock.calls.map((c) => c[0]);
     const anyTokenLog = allLogCalls.find(
       (msg) =>
@@ -417,19 +454,6 @@ describe("analyticsAuth middleware", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Endpoint parameter parsing
-// ---------------------------------------------------------------------------
-
-describe("endpoint parameter parsing", () => {
-  // Validation is enforced by parsePositiveIntParam at the route layer.
-  // See parsePositiveIntParam tests below for exhaustive coverage.
-  it("limit=999 exceeds max (200) — caller should return 400", () => {
-    // Sanity: 999 > 200, so endpoint handlers reject it rather than cap.
-    expect(999 > 200).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // parseAnalyticsFilter — from/to validation
 // ---------------------------------------------------------------------------
 
@@ -500,12 +524,12 @@ describe("parseAnalyticsFilter from/to validation", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("rejects impossible calendar dates (Feb 30) with 400", () => {
+  it("rejects from=Feb30 even when to is a valid calendar date", () => {
+    // Feb 30 as `from` rolls forward to March 2 under `new Date()` — we
+    // detect that via the YYYY-MM-DD roundtrip check.
     const result = parseAnalyticsFilter(
       mkReq({ from: "2026-02-30", to: "2026-03-01" }),
     );
-    // Post-fix: we re-serialize the parsed Date back to YYYY-MM-DD and reject
-    // when the roundtrip doesn't match the input (i.e. the date rolled over).
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
@@ -542,7 +566,9 @@ describe("parseAnalyticsFilter from/to validation", () => {
     }
   });
 
-  it("rejects impossible calendar date (Feb 30) with 400", () => {
+  it("rejects from=Feb30 with a far-future to (roundtrip check)", () => {
+    // Second scenario: the wider range proves the rejection is driven by
+    // the calendar-date roundtrip check, not by any range-length logic.
     const result = parseAnalyticsFilter(
       mkReq({ from: "2026-02-30", to: "2026-04-20" }),
     );
