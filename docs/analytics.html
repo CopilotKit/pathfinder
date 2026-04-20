@@ -273,9 +273,23 @@
             return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), 12, 0, 0);
         }
 
+        function todayISO() {
+            // Today's UTC date in YYYY-MM-DD. We anchor on UTC to match what the
+            // server compares against (created_at in UTC) — using local time
+            // here means users near midnight see yesterday's or tomorrow's rows.
+            var d = new Date();
+            var y = d.getUTCFullYear();
+            var m = String(d.getUTCMonth() + 1).padStart(2, '0');
+            var dd = String(d.getUTCDate()).padStart(2, '0');
+            return y + '-' + m + '-' + dd;
+        }
+
         function formatPillLabel() {
             if (activeFrom && activeTo) {
+                // Single-day range collapses to a "Today" label when it is in
+                // fact today, otherwise falls back to the formatted date.
                 if (activeFrom === activeTo) {
+                    if (activeFrom === todayISO()) return 'Today';
                     var d = parseISODate(activeFrom);
                     return d ? shortDateFmt.format(d) : activeFrom;
                 }
@@ -284,7 +298,6 @@
                 if (df && dt) return shortDateFmt.format(df) + ' \u2013 ' + shortDateFmt.format(dt);
                 return activeFrom + ' \u2013 ' + activeTo;
             }
-            if (activeDaysBack === 1) return 'Today';
             if (activeDaysBack === 7) return 'Last 7 days';
             if (activeDaysBack === 14) return 'Last 14 days';
             if (activeDaysBack === 30) return 'Last 30 days';
@@ -368,21 +381,35 @@
             });
             toolHtml += '</div>';
 
-            // Date-range group (center)
+            // Date-range group (center). "Today" is special — it uses an
+            // explicit from=today&to=today range instead of a rolling N-day
+            // window, because `days=1` on the server means "last 24 hours"
+            // (NOW() - INTERVAL '1 day') which straddles today + yesterday
+            // instead of showing only today's data.
             var presets = [
-                { label: 'Today',         days: 1 },
-                { label: 'Last 7 days',   days: 7 },
-                { label: 'Last 14 days',  days: 14 },
-                { label: 'Last 30 days',  days: 30 },
-                { label: 'Last 90 days',  days: 90 },
-                { label: 'All time',      days: 99999 },
+                { label: 'Today',         kind: 'today' },
+                { label: 'Last 7 days',   kind: 'days',  days: 7 },
+                { label: 'Last 14 days',  kind: 'days',  days: 14 },
+                { label: 'Last 30 days',  kind: 'days',  days: 30 },
+                { label: 'Last 90 days',  kind: 'days',  days: 90 },
+                { label: 'All time',      kind: 'days',  days: 99999 },
             ];
             var pillLabel = formatPillLabel();
             var customModeCls = dateCustomMode ? ' custom-mode' : '';
             var openCls = datePopoverOpen ? ' open' : '';
+            var todayStr = todayISO();
             var presetHtml = presets.map(function(p) {
-                var isActive = activeDaysBack === p.days && !activeFrom;
-                return '<div class="preset' + (isActive ? ' active' : '') + '" data-days="' + p.days + '">'
+                var isActive;
+                var attrs;
+                if (p.kind === 'today') {
+                    // "Today" is active when from === to === today.
+                    isActive = activeFrom === todayStr && activeTo === todayStr;
+                    attrs = 'data-preset="today"';
+                } else {
+                    isActive = activeDaysBack === p.days && !activeFrom;
+                    attrs = 'data-days="' + p.days + '"';
+                }
+                return '<div class="preset' + (isActive ? ' active' : '') + '" ' + attrs + '>'
                     + '<span>' + esc(p.label) + '</span>'
                     + '<span class="check">&#10003;</span></div>';
             }).join('');
@@ -474,7 +501,7 @@
                 });
             }
 
-            // Preset clicks
+            // Preset clicks (rolling "Last N days" windows)
             row.querySelectorAll('.preset[data-days]').forEach(function(p) {
                 p.addEventListener('click', function(e) {
                     e.stopPropagation();
@@ -487,6 +514,22 @@
                     load();
                 });
             });
+
+            // "Today" preset — explicit from/to range so the server doesn't
+            // fall back to a 24-hour rolling window.
+            var todayPreset = row.querySelector('.preset[data-preset="today"]');
+            if (todayPreset) {
+                todayPreset.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var t = todayISO();
+                    activeFrom = t;
+                    activeTo = t;
+                    activeDaysBack = null;
+                    datePopoverOpen = false;
+                    dateCustomMode = false;
+                    load();
+                });
+            }
 
             // Custom preset — reveals the date inputs (does not close)
             var customPreset = row.querySelector('.preset[data-custom]');
