@@ -697,22 +697,40 @@
                 // Stats cards — window label is derived from the active
                 // range so switching presets keeps the labels honest.
                 var winLabel = formatPillLabel();
-                document.getElementById('stats').innerHTML = [
+                // When the window is "All time", the windowed Queries card
+                // would duplicate the Total Queries card (same population),
+                // so omit it for clarity.
+                var isAllTime = activeDaysBack !== null && activeDaysBack >= 99999;
+                var statCards = [
                     { label: 'Total Queries', value: summary.total_queries.toLocaleString() },
-                    { label: 'Queries (' + winLabel + ')', value: summary.total_queries_window.toLocaleString() },
+                ];
+                if (!isAllTime) {
+                    statCards.push({ label: 'Queries (' + winLabel + ')', value: summary.total_queries_window.toLocaleString() });
+                }
+                statCards.push(
                     { label: 'Empty Result Rate (' + winLabel + ')', value: (summary.empty_result_rate_window * 100).toFixed(1) + '%' },
                     { label: 'Avg Latency (' + winLabel + ')', value: summary.avg_latency_ms_window + 'ms' },
                     { label: 'P95 Latency (' + winLabel + ')', value: summary.p95_latency_ms_window + 'ms' },
                     { label: 'Empty Queries (' + winLabel + ')', value: summary.empty_result_count_window.toLocaleString() },
-                ].map(function(s) { return '<div class="stat-card"><div class="label">' + esc(s.label) + '</div><div class="value">' + s.value + '</div></div>'; }).join('');
+                );
+                document.getElementById('stats').innerHTML = statCards.map(function(s) {
+                    return '<div class="stat-card"><div class="label">' + esc(s.label) + '</div><div class="value">' + s.value + '</div></div>';
+                }).join('');
 
                 // Table title h2s — also carry the window label.
                 var topTitle = document.getElementById('topQueriesTitle');
                 if (topTitle) topTitle.textContent = 'Top Queries (' + winLabel + ')';
                 var emptyTitle = document.getElementById('emptyQueriesTitle');
                 if (emptyTitle) {
-                    // Preserve the trailing warning icon span.
-                    emptyTitle.innerHTML = 'Empty Result Queries (' + esc(winLabel) + ') <span class="empty">&#x26a0;</span>';
+                    // Build the title with textContent + a real span element so
+                    // the warning glyph is preserved without an innerHTML +
+                    // string-concat dance (which would need manual escaping and
+                    // is easy to break if winLabel ever contains unescaped HTML).
+                    emptyTitle.textContent = 'Empty Result Queries (' + winLabel + ') ';
+                    var warn = document.createElement('span');
+                    warn.className = 'empty';
+                    warn.textContent = '\u26a0';
+                    emptyTitle.appendChild(warn);
                 }
 
                 // Daily chart - destroy previous instance
