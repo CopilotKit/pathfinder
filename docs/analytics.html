@@ -191,12 +191,12 @@
                 '/api/analytics/auth-mode': { dev: true },
                 '/api/analytics/summary': {
                     total_queries: 6128,
-                    total_queries_7d: 1284,
-                    empty_result_rate_7d: 0.074,
-                    empty_result_count_7d: 95,
-                    avg_latency_ms_7d: 142,
-                    p95_latency_ms_7d: 318,
-                    queries_per_day_7d: [
+                    total_queries_window: 1284,
+                    empty_result_rate_window: 0.074,
+                    empty_result_count_window: 95,
+                    avg_latency_ms_window: 142,
+                    p95_latency_ms_window: 318,
+                    queries_per_day_window: [
                         { day: dayOffset(6), count: 172 },
                         { day: dayOffset(5), count: 198 },
                         { day: dayOffset(4), count: 156 },
@@ -678,11 +678,11 @@
                 var winLabel = formatPillLabel();
                 document.getElementById('stats').innerHTML = [
                     { label: 'Total Queries', value: summary.total_queries.toLocaleString() },
-                    { label: 'Queries (' + winLabel + ')', value: summary.total_queries_7d.toLocaleString() },
-                    { label: 'Empty Result Rate (' + winLabel + ')', value: (summary.empty_result_rate_7d * 100).toFixed(1) + '%' },
-                    { label: 'Avg Latency (' + winLabel + ')', value: summary.avg_latency_ms_7d + 'ms' },
-                    { label: 'P95 Latency (' + winLabel + ')', value: summary.p95_latency_ms_7d + 'ms' },
-                    { label: 'Empty Queries (' + winLabel + ')', value: summary.empty_result_count_7d.toLocaleString() },
+                    { label: 'Queries (' + winLabel + ')', value: summary.total_queries_window.toLocaleString() },
+                    { label: 'Empty Result Rate (' + winLabel + ')', value: (summary.empty_result_rate_window * 100).toFixed(1) + '%' },
+                    { label: 'Avg Latency (' + winLabel + ')', value: summary.avg_latency_ms_window + 'ms' },
+                    { label: 'P95 Latency (' + winLabel + ')', value: summary.p95_latency_ms_window + 'ms' },
+                    { label: 'Empty Queries (' + winLabel + ')', value: summary.empty_result_count_window.toLocaleString() },
                 ].map(function(s) { return '<div class="stat-card"><div class="label">' + esc(s.label) + '</div><div class="value">' + s.value + '</div></div>'; }).join('');
 
                 // Table title h2s — also carry the window label.
@@ -699,12 +699,12 @@
                 var titleSuffix = activeToolType ? ' - ' + activeToolType.charAt(0).toUpperCase() + activeToolType.slice(1) : '';
                 document.getElementById('dailyChartTitle').textContent = 'Queries per Day (' + winLabel + ')' + titleSuffix;
 
-                var dayLabels = summary.queries_per_day_7d.map(function(d) { return d.day; });
+                var dayLabels = summary.queries_per_day_window.map(function(d) { return d.day; });
                 dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
                     type: 'bar',
                     data: {
                         labels: dayLabels,
-                        datasets: [{ label: 'Queries', data: summary.queries_per_day_7d.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
+                        datasets: [{ label: 'Queries', data: summary.queries_per_day_window.map(function(d) { return d.count; }), backgroundColor: '#3b82f6' }],
                     },
                     options: {
                         responsive: true,

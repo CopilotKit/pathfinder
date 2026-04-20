@@ -16,13 +16,13 @@ export interface QueryLogEntry {
 
 export interface AnalyticsSummary {
   total_queries: number;
-  total_queries_7d: number;
-  empty_result_count_7d: number;
-  empty_result_rate_7d: number;
-  avg_latency_ms_7d: number;
-  p95_latency_ms_7d: number;
+  total_queries_window: number;
+  empty_result_count_window: number;
+  empty_result_rate_window: number;
+  avg_latency_ms_window: number;
+  p95_latency_ms_window: number;
   queries_by_source: Array<{ source_name: string; count: number }>;
-  queries_per_day_7d: Array<{ day: string; count: number }>;
+  queries_per_day_window: Array<{ day: string; count: number }>;
 }
 
 export interface TopQuery {
@@ -271,16 +271,16 @@ export async function getAnalyticsSummary(
 
   return {
     total_queries: totalQueries,
-    total_queries_7d: total7d,
-    empty_result_count_7d: empty7d,
-    empty_result_rate_7d: total7d > 0 ? empty7d / total7d : 0,
-    avg_latency_ms_7d: s.avg_latency ?? 0,
-    p95_latency_ms_7d: p95Latency,
+    total_queries_window: total7d,
+    empty_result_count_window: empty7d,
+    empty_result_rate_window: total7d > 0 ? empty7d / total7d : 0,
+    avg_latency_ms_window: s.avg_latency ?? 0,
+    p95_latency_ms_window: p95Latency,
     queries_by_source: bySourceRes.rows.map((r: Record<string, unknown>) => ({
       source_name: r.source_name as string,
       count: r.count as number,
     })),
-    queries_per_day_7d: perDayRes.rows.map((r: Record<string, unknown>) => ({
+    queries_per_day_window: perDayRes.rows.map((r: Record<string, unknown>) => ({
       day: r.day as string,
       count: r.count as number,
     })),
