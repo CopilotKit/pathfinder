@@ -623,6 +623,37 @@ https://docs.example.com/getting-started</div>
 
     <p>Point a GitHub webhook at <code>https://your-server/webhooks/github</code> with the <code>push</code> event. Set <code>GITHUB_WEBHOOK_SECRET</code> to match the webhook secret.</p>
 
+    <h2 id="authentication">Authentication</h2>
+
+    <p>Pathfinder runs an anonymous OAuth 2.1 ceremonial flow for MCP clients. No user accounts, no sign-up, no dashboard — clients that perform the handshake receive a token whose subject is always <code>anonymous</code>. This satisfies MCP clients that require OAuth (claude.ai, newer Claude Code builds) while keeping Pathfinder a pure knowledge server.</p>
+
+    <p>There is nothing to configure in <code>pathfinder.yaml</code>. The only environment variable required is <code>MCP_JWT_SECRET</code> in production — see the <a href="/deploy#environment-variables">Deployment Guide</a>.</p>
+
+    <h3 id="auth-endpoints">OAuth endpoints</h3>
+
+    <p>All standard OAuth 2.1 + dynamic client registration endpoints are served automatically:</p>
+
+    <ul>
+        <li><strong><code>/.well-known/oauth-protected-resource</code></strong> — resource metadata (RFC 9728).</li>
+        <li><strong><code>/.well-known/oauth-authorization-server</code></strong> — authorization server metadata (RFC 8414).</li>
+        <li><strong><code>/register</code></strong> — dynamic client registration (RFC 7591). Clients register themselves on first connect.</li>
+        <li><strong><code>/authorize</code></strong> — authorization endpoint. Renders a one-click approve page and redirects with a code.</li>
+        <li><strong><code>/token</code></strong> — token endpoint. Exchanges codes or refresh tokens for access tokens.</li>
+        <li><strong><code>/revoke</code></strong> — token revocation (RFC 7009).</li>
+    </ul>
+
+    <h3 id="auth-bearer">Bearer auth on <code>/mcp</code> and <code>/sse</code></h3>
+
+    <p>Both transport endpoints use <em>opportunistic</em> bearer authentication:</p>
+
+    <ul>
+        <li>Requests without an <code>Authorization</code> header pass through unchanged — useful for clients that don't speak OAuth.</li>
+        <li>Requests with a valid bearer token attach the token claims to the session.</li>
+        <li>Requests with an invalid or expired bearer are rejected with <code>401 Unauthorized</code> and a <code>WWW-Authenticate</code> challenge pointing at the resource metadata endpoint.</li>
+    </ul>
+
+    <p>Clients that see the 401 challenge automatically discover the OAuth server, register, and retry with a valid token. Rotating <code>MCP_JWT_SECRET</code> invalidates all issued tokens at once — clients re-authenticate transparently on the next request.</p>
+
     <h2 id="analytics">analytics</h2>
 
     <p>Optional. Enables query logging and the built-in analytics dashboard at <code>/analytics</code>.</p>
