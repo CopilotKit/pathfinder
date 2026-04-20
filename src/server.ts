@@ -37,6 +37,7 @@ import {
   registerHandler,
   authorizeHandler,
   tokenHandler,
+  revocationHandler,
   bearerMiddleware,
 } from "./oauth/handlers.js";
 import { WorkspaceManager } from "./workspace.js";
@@ -217,6 +218,7 @@ app.get("/.well-known/oauth-authorization-server", authorizationServerHandler);
 app.post("/register", registerHandler);
 app.get("/authorize", authorizeHandler);
 app.post("/token", tokenHandler);
+app.post("/revoke", revocationHandler);
 
 // ---------------------------------------------------------------------------
 // MCP endpoint — session-based (initialize once, then tool calls reuse session)

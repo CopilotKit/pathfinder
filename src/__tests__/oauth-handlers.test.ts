@@ -34,6 +34,7 @@ import {
   registerHandler,
   authorizeHandler,
   tokenHandler,
+  revocationHandler,
   bearerMiddleware,
 } from "../oauth/handlers.js";
 import { clientStore, codeStore } from "../oauth/store.js";
@@ -125,10 +126,21 @@ describe("authorizationServerHandler", () => {
     );
     expect(body.token_endpoint).toBe("https://mcp.example.com/token");
     expect(body.registration_endpoint).toBe("https://mcp.example.com/register");
+    expect(body.revocation_endpoint).toBe("https://mcp.example.com/revoke");
     expect(body.response_types_supported).toContain("code");
+    expect(body.response_modes_supported).toContain("query");
     expect(body.grant_types_supported).toContain("authorization_code");
+    expect(body.grant_types_supported).toContain("refresh_token");
     expect(body.code_challenge_methods_supported).toContain("S256");
-    expect(body.token_endpoint_auth_methods_supported).toContain("none");
+    expect(body.code_challenge_methods_supported).not.toContain("plain");
+    expect(body.token_endpoint_auth_methods_supported).toEqual(
+      expect.arrayContaining([
+        "client_secret_basic",
+        "client_secret_post",
+        "none",
+      ]),
+    );
+    expect(body.scopes_supported).toContain("mcp");
   });
 });
 
@@ -145,6 +157,36 @@ describe("registerHandler", () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
     expect(body.redirect_uris).toEqual(["https://claude.ai/cb"]);
+  });
+
+  it("returns client_secret + secret metadata + updated grant_types", () => {
+    const req = mockReq({
+      body: {
+        redirect_uris: ["https://claude.ai/cb"],
+        client_name: "Claude",
+      },
+    });
+    const res = mockRes();
+    registerHandler(req as never, res as never);
+    const body = res.json.mock.calls[0][0];
+    expect(body.client_secret).toBeDefined();
+    expect(typeof body.client_secret).toBe("string");
+    expect(body.client_secret_issued_at).toBe(body.client_id_issued_at);
+    expect(body.client_secret_expires_at).toBe(0);
+    expect(body.client_name).toBe("Claude");
+    expect(body.grant_types).toEqual(["authorization_code", "refresh_token"]);
+    expect(body.response_types).toEqual(["code"]);
+    expect(body.token_endpoint_auth_method).toBe("client_secret_basic");
+  });
+
+  it("echoes empty client_name when not provided", () => {
+    const req = mockReq({
+      body: { redirect_uris: [] },
+    });
+    const res = mockRes();
+    registerHandler(req as never, res as never);
+    const body = res.json.mock.calls[0][0];
+    expect(body.client_name).toBe("");
   });
 
   it("accepts missing redirect_uris as empty array", () => {
@@ -388,9 +430,9 @@ function pkcePair() {
 }
 
 describe("tokenHandler", () => {
-  it("returns 400 unsupported_grant_type for non-authorization_code", () => {
+  it("returns 400 unsupported_grant_type for unrecognized grant_type", () => {
     const req = mockReq({
-      body: { grant_type: "refresh_token" },
+      body: { grant_type: "client_credentials" },
       headers: {
         host: "mcp.example.com",
         "x-forwarded-proto": "https",
@@ -505,6 +547,9 @@ describe("tokenHandler", () => {
     expect(body.access_token).toBeDefined();
     expect(body.token_type).toBe("Bearer");
     expect(body.expires_in).toBe(3600);
+    expect(body.refresh_token).toBeDefined();
+    expect(typeof body.refresh_token).toBe("string");
+    expect(body.scope).toBe("mcp");
   });
 
   it("decoded JWT contains expected claims with exp - iat === 3600", () => {
@@ -617,6 +662,46 @@ describe("tokenHandler", () => {
     expect(second.json.mock.calls[0][0].error).toBe("invalid_grant");
   });
 
+  it("access_token payload includes scope: 'mcp'", () => {
+    const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    const challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+    const client = clientStore.register({
+      redirect_uris: ["https://x.example/cb"],
+    });
+    const { code } = codeStore.issue({
+      clientId: client.client_id,
+      codeChallenge: challenge,
+      redirectUri: "https://x.example/cb",
+      ttlMs: 600_000,
+    });
+    const req = mockReq({
+      body: {
+        grant_type: "authorization_code",
+        code,
+        code_verifier: verifier,
+        client_id: client.client_id,
+        redirect_uri: "https://x.example/cb",
+      },
+      headers: {
+        host: "mcp.example.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": "8.8.8.10",
+      },
+    });
+    const res = mockRes();
+    tokenHandler(req as never, res as never);
+    const body = res.json.mock.calls[0][0];
+    const [, payloadB64] = (body.access_token as string).split(".");
+    const pad = "=".repeat((4 - (payloadB64.length % 4)) % 4);
+    const payload = JSON.parse(
+      Buffer.from(
+        payloadB64.replace(/-/g, "+").replace(/_/g, "/") + pad,
+        "base64",
+      ).toString("utf8"),
+    );
+    expect(payload.scope).toBe("mcp");
+  });
+
   it("accepts form-encoded bodies (Express urlencoded parser)", () => {
     // The Express urlencoded parser produces req.body the same shape as JSON,
     // so this exercises the same code path. We document that here.
@@ -649,6 +734,172 @@ describe("tokenHandler", () => {
     });
     const res = mockRes();
     tokenHandler(req as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Refresh token grant
+// ──────────────────────────────────────────────────────────────────────
+
+function issueInitialTokens(clientXForwardedFor: string): {
+  client_id: string;
+  refresh_token: string;
+  access_token: string;
+} {
+  const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+  const challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+  const client = clientStore.register({
+    redirect_uris: ["https://x.example/cb"],
+  });
+  const { code } = codeStore.issue({
+    clientId: client.client_id,
+    codeChallenge: challenge,
+    redirectUri: "https://x.example/cb",
+    ttlMs: 600_000,
+  });
+  const req = mockReq({
+    body: {
+      grant_type: "authorization_code",
+      code,
+      code_verifier: verifier,
+      client_id: client.client_id,
+      redirect_uri: "https://x.example/cb",
+    },
+    headers: {
+      host: "mcp.example.com",
+      "x-forwarded-proto": "https",
+      "x-forwarded-for": clientXForwardedFor,
+    },
+  });
+  const res = mockRes();
+  tokenHandler(req as never, res as never);
+  const body = res.json.mock.calls[0][0];
+  return {
+    client_id: client.client_id,
+    refresh_token: body.refresh_token,
+    access_token: body.access_token,
+  };
+}
+
+describe("tokenHandler — refresh_token grant", () => {
+  it("exchanges a valid refresh_token for a new access+refresh pair", () => {
+    const initial = issueInitialTokens("7.7.7.1");
+    const req = mockReq({
+      body: {
+        grant_type: "refresh_token",
+        refresh_token: initial.refresh_token,
+        client_id: initial.client_id,
+      },
+      headers: {
+        host: "mcp.example.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": "7.7.7.2",
+      },
+    });
+    const res = mockRes();
+    tokenHandler(req as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(200);
+    const body = res.json.mock.calls[0][0];
+    expect(body.access_token).toBeDefined();
+    expect(body.token_type).toBe("Bearer");
+    expect(body.expires_in).toBe(3600);
+    expect(body.refresh_token).toBeDefined();
+    expect(body.scope).toBe("mcp");
+  });
+
+  it("returns 400 invalid_request on missing refresh_token or client_id", () => {
+    const req = mockReq({
+      body: { grant_type: "refresh_token" },
+      headers: {
+        host: "mcp.example.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": "7.7.7.3",
+      },
+    });
+    const res = mockRes();
+    tokenHandler(req as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json.mock.calls[0][0].error).toBe("invalid_request");
+  });
+
+  it("returns 400 invalid_grant on garbage refresh token", () => {
+    const req = mockReq({
+      body: {
+        grant_type: "refresh_token",
+        refresh_token: "not.a.valid.jwt",
+        client_id: "anything",
+      },
+      headers: {
+        host: "mcp.example.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": "7.7.7.4",
+      },
+    });
+    const res = mockRes();
+    tokenHandler(req as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json.mock.calls[0][0].error).toBe("invalid_grant");
+  });
+
+  it("returns 400 invalid_grant when access_token is presented as refresh_token (missing typ)", () => {
+    const initial = issueInitialTokens("7.7.7.5");
+    const req = mockReq({
+      body: {
+        grant_type: "refresh_token",
+        refresh_token: initial.access_token, // access token has no typ:"refresh"
+        client_id: initial.client_id,
+      },
+      headers: {
+        host: "mcp.example.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": "7.7.7.6",
+      },
+    });
+    const res = mockRes();
+    tokenHandler(req as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json.mock.calls[0][0].error).toBe("invalid_grant");
+  });
+
+  it("returns 400 invalid_grant when client_id does not match the refresh token", () => {
+    const initial = issueInitialTokens("7.7.7.7");
+    const req = mockReq({
+      body: {
+        grant_type: "refresh_token",
+        refresh_token: initial.refresh_token,
+        client_id: "some-other-client",
+      },
+      headers: {
+        host: "mcp.example.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": "7.7.7.8",
+      },
+    });
+    const res = mockRes();
+    tokenHandler(req as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json.mock.calls[0][0].error).toBe("invalid_grant");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Revocation
+// ──────────────────────────────────────────────────────────────────────
+
+describe("revocationHandler", () => {
+  it("returns 200 for any request body (RFC 7009 always-ack)", () => {
+    const req = mockReq({ body: { token: "whatever" } });
+    const res = mockRes();
+    revocationHandler(req as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.send).toHaveBeenCalled();
+  });
+
+  it("returns 200 when no body is sent", () => {
+    const req = mockReq();
+    const res = mockRes();
+    revocationHandler(req as never, res as never);
     expect(res.status).toHaveBeenCalledWith(200);
   });
 });
