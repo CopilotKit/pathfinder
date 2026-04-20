@@ -379,6 +379,17 @@ describe("cleanupOldQueryLogs", () => {
     const deleted = await cleanupOldQueryLogs(90);
     expect(deleted).toBe(0);
   });
+
+  it("uses <= boundary so retention-edge rows aren't leaked", async () => {
+    // The rolling-window reads use `created_at > NOW() - INTERVAL`. If
+    // cleanup used a strict `<`, rows sitting exactly at the retention
+    // edge would be visible to reads forever but never get cleaned up.
+    // `<=` closes the partition so retention-edge rows are removed.
+    mockQuery.mockResolvedValueOnce({ rowCount: 0 });
+    await cleanupOldQueryLogs(90);
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("created_at <= NOW()");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -426,6 +437,74 @@ describe("getToolCounts", () => {
 // ---------------------------------------------------------------------------
 // Filter support (tool_type, source)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Windowed-aggregate invariant: every windowed query must exclude backfilled
+// rows (latency_ms < 0) so the numerator/denominator line up across the
+// dashboard. The all-time `total_queries` count is the intentional exception
+// — it is inclusive of backfilled rows so the "Total Queries" card shows the
+// real row count.
+// ---------------------------------------------------------------------------
+
+describe("windowed aggregates exclude backfilled rows (latency_ms >= 0)", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it("getAnalyticsSummary: all four windowed subqueries filter latency_ms >= 0", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Indexes 1..4 are the windowed subqueries: summary counts, latency
+    // rows, by-source, per-day. Each must carry the backfill filter.
+    for (let i = 1; i <= 4; i++) {
+      const [sql] = mockQuery.mock.calls[i];
+      expect(sql).toContain("latency_ms >= 0");
+    }
+  });
+
+  it("getAnalyticsSummary: total_queries (index 0) intentionally does NOT filter latency", async () => {
+    // The all-time total count is inclusive by design: the "Total Queries"
+    // card reflects every row, including backfilled historical rows. Only
+    // the windowed cards need the backfill exclusion.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("latency_ms >= 0");
+  });
+
+  it("getTopQueries filters latency_ms >= 0", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50);
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("latency_ms >= 0");
+  });
+
+  it("getEmptyQueries filters latency_ms >= 0", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getEmptyQueries(7, 50);
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("latency_ms >= 0");
+  });
+
+  it("getToolCounts filters latency_ms >= 0", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7);
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("latency_ms >= 0");
+  });
+});
 
 describe("getAnalyticsSummary with filters", () => {
   function mockSummaryQueries() {
