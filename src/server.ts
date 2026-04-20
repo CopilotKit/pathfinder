@@ -775,6 +775,30 @@ export type AnalyticsFilterParseResult =
 
 export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
   const filter: AnalyticsFilter = {};
+
+  // Express parses `?from=a&from=b` as an array — reject those explicitly
+  // along with any other non-string shape (objects from nested parsers).
+  const rejectArray = (
+    name: string,
+  ): AnalyticsFilterParseResult | undefined => {
+    const v = req.query[name];
+    if (v !== undefined && typeof v !== "string") {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: `${name} must be a single string value`,
+        },
+      };
+    }
+    return undefined;
+  };
+  for (const name of ["from", "to", "tool_type", "source", "days", "limit"]) {
+    const err = rejectArray(name);
+    if (err) return err;
+  }
+
   if (req.query.tool_type) filter.tool_type = req.query.tool_type as string;
   if (req.query.source) filter.source = req.query.source as string;
 
@@ -819,11 +843,90 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
         },
       };
     }
+    // Reject calendar-invalid dates (e.g. 2026-02-30 which `new Date()`
+    // silently rolls forward to March 2). Re-serialize the parsed Date back
+    // to YYYY-MM-DD in UTC and require it to match the original input.
+    const fromRoundtrip = from.toISOString().slice(0, 10);
+    const toRoundtrip = to.toISOString().slice(0, 10);
+    if (fromRoundtrip !== fromRaw || toRoundtrip !== toRaw) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: "from/to must be a valid calendar date",
+        },
+      };
+    }
+    // Reject ranges where from > to — clients should swap before sending.
+    if (from.getTime() > to.getTime()) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: "from must be <= to",
+        },
+      };
+    }
     filter.from = from;
     filter.to = to;
   }
 
   return { ok: true, filter };
+}
+
+/**
+ * Parse a query parameter as a positive integer. Returns the default when the
+ * value is absent, or an error object describing why it was rejected. The
+ * error object carries a human-readable `error` field that callers can embed
+ * in an HTTP 400 response body.
+ */
+export function parsePositiveIntParam(
+  raw: unknown,
+  defaultValue: number,
+  max: number,
+): number | { error: string } {
+  if (raw === undefined || raw === null || raw === "") return defaultValue;
+  if (typeof raw !== "string") return { error: "must be a string" };
+  if (!/^\d+$/.test(raw)) return { error: "must be a positive integer" };
+  const n = parseInt(raw, 10);
+  if (n <= 0) return { error: "must be > 0" };
+  if (n > max) return { error: `must be <= ${max}` };
+  return n;
+}
+
+const MAX_DAYS = 100000;
+const MAX_LIMIT = 200;
+
+function parseDaysOrError(
+  req: Request,
+  res: Response,
+): number | undefined {
+  const result = parsePositiveIntParam(req.query.days, 7, MAX_DAYS);
+  if (typeof result === "object") {
+    res.status(400).json({
+      error: "invalid_request",
+      error_description: `days ${result.error}`,
+    });
+    return undefined;
+  }
+  return result;
+}
+
+function parseLimitOrError(
+  req: Request,
+  res: Response,
+): number | undefined {
+  const result = parsePositiveIntParam(req.query.limit, 50, MAX_LIMIT);
+  if (typeof result === "object") {
+    res.status(400).json({
+      error: "invalid_request",
+      error_description: `limit ${result.error}`,
+    });
+    return undefined;
+  }
+  return result;
 }
 
 app.get(
@@ -836,7 +939,8 @@ app.get(
         res.status(parsed.status).json(parsed.body);
         return;
       }
-      const days = parseInt(req.query.days as string) || 7;
+      const days = parseDaysOrError(req, res);
+      if (days === undefined) return;
       const summary = await getAnalyticsSummary(parsed.filter, days);
       res.json(summary);
     } catch (err) {
@@ -856,13 +960,11 @@ app.get(
         res.status(parsed.status).json(parsed.body);
         return;
       }
-      const days = parseInt(req.query.days as string) || 7;
-      const limit = parseInt(req.query.limit as string) || 50;
-      const queries = await getTopQueries(
-        days,
-        Math.min(limit, 200),
-        parsed.filter,
-      );
+      const days = parseDaysOrError(req, res);
+      if (days === undefined) return;
+      const limit = parseLimitOrError(req, res);
+      if (limit === undefined) return;
+      const queries = await getTopQueries(days, limit, parsed.filter);
       res.json(queries);
     } catch (err) {
       console.error("[analytics] Top queries failed:", err);
@@ -881,13 +983,11 @@ app.get(
         res.status(parsed.status).json(parsed.body);
         return;
       }
-      const days = parseInt(req.query.days as string) || 7;
-      const limit = parseInt(req.query.limit as string) || 50;
-      const queries = await getEmptyQueries(
-        days,
-        Math.min(limit, 200),
-        parsed.filter,
-      );
+      const days = parseDaysOrError(req, res);
+      if (days === undefined) return;
+      const limit = parseLimitOrError(req, res);
+      if (limit === undefined) return;
+      const queries = await getEmptyQueries(days, limit, parsed.filter);
       res.json(queries);
     } catch (err) {
       console.error("[analytics] Empty queries failed:", err);
@@ -906,7 +1006,8 @@ app.get(
         res.status(parsed.status).json(parsed.body);
         return;
       }
-      const days = parseInt(req.query.days as string) || 7;
+      const days = parseDaysOrError(req, res);
+      if (days === undefined) return;
       const counts = await getToolCounts(days, parsed.filter);
       res.json(counts);
     } catch (err) {

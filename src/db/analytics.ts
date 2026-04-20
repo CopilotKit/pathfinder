@@ -95,6 +95,15 @@ export async function logQuery(
 // ---------------------------------------------------------------------------
 
 /**
+ * Escape LIKE pattern metacharacters so user-supplied values don't act as
+ * wildcards. Applied with an explicit `ESCAPE '\'` clause on the LIKE so
+ * that literal `%`, `_`, and `\` in the input match exactly.
+ */
+function escapeLikePattern(s: string): string {
+  return s.replace(/([\\%_])/g, "\\$1");
+}
+
+/**
  * Build WHERE clause fragments and params for tool_type and source filters.
  * Returns { clauses: string[], params: any[], nextIdx: number }.
  */
@@ -107,8 +116,11 @@ function buildFilterClauses(
   let idx = startIdx;
 
   if (filter.tool_type) {
-    clauses.push(`tool_name LIKE $${idx} || '-%'`);
-    params.push(filter.tool_type);
+    // Escape LIKE metacharacters in user input; declare the escape character
+    // explicitly so `%` and `_` in the input match literally rather than as
+    // wildcards.
+    clauses.push(`tool_name LIKE $${idx} || '-%' ESCAPE '\\'`);
+    params.push(escapeLikePattern(filter.tool_type));
     idx++;
   }
   if (filter.source) {
