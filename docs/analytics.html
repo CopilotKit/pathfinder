@@ -135,7 +135,7 @@
 
     <div class="chart-row">
         <div class="chart-box">
-            <h2 id="dailyChartTitle">Queries per Day (7d)</h2>
+            <h2 id="dailyChartTitle">Queries per Day</h2>
             <canvas id="dailyChart"></canvas>
             <span class="chart-caption">Click a bar to filter to that day</span>
         </div>
@@ -149,13 +149,13 @@
         <div class="filter-row" id="filterRow"></div>
     </div>
 
-    <h2 style="margin-bottom: 12px;">Top Queries (7d)</h2>
+    <h2 id="topQueriesTitle" style="margin-bottom: 12px;">Top Queries</h2>
     <table id="topQueriesTable">
         <thead><tr><th>Query</th><th>Tool</th><th>Count</th><th>Avg Results</th><th>Avg Score</th></tr></thead>
         <tbody></tbody>
     </table>
 
-    <h2 style="margin-bottom: 12px;">Empty Result Queries (7d) <span class="empty">&#x26a0;</span></h2>
+    <h2 id="emptyQueriesTitle" style="margin-bottom: 12px;">Empty Result Queries <span class="empty">&#x26a0;</span></h2>
     <table id="emptyQueriesTable">
         <thead><tr><th>Query</th><th>Tool</th><th>Source</th><th>Count</th><th>Last Seen</th></tr></thead>
         <tbody></tbody>
@@ -621,20 +621,31 @@
                 // Render filters
                 renderFilters(toolCounts, summary.queries_by_source);
 
-                // Stats cards
+                // Stats cards — window label is derived from the active
+                // range so switching presets keeps the labels honest.
+                var winLabel = formatPillLabel();
                 document.getElementById('stats').innerHTML = [
                     { label: 'Total Queries', value: summary.total_queries.toLocaleString() },
-                    { label: 'Queries (7d)', value: summary.total_queries_7d.toLocaleString() },
-                    { label: 'Empty Result Rate (7d)', value: (summary.empty_result_rate_7d * 100).toFixed(1) + '%' },
-                    { label: 'Avg Latency (7d)', value: summary.avg_latency_ms_7d + 'ms' },
-                    { label: 'P95 Latency (7d)', value: summary.p95_latency_ms_7d + 'ms' },
-                    { label: 'Empty Queries (7d)', value: summary.empty_result_count_7d.toLocaleString() },
-                ].map(function(s) { return '<div class="stat-card"><div class="label">' + s.label + '</div><div class="value">' + s.value + '</div></div>'; }).join('');
+                    { label: 'Queries (' + winLabel + ')', value: summary.total_queries_7d.toLocaleString() },
+                    { label: 'Empty Result Rate (' + winLabel + ')', value: (summary.empty_result_rate_7d * 100).toFixed(1) + '%' },
+                    { label: 'Avg Latency (' + winLabel + ')', value: summary.avg_latency_ms_7d + 'ms' },
+                    { label: 'P95 Latency (' + winLabel + ')', value: summary.p95_latency_ms_7d + 'ms' },
+                    { label: 'Empty Queries (' + winLabel + ')', value: summary.empty_result_count_7d.toLocaleString() },
+                ].map(function(s) { return '<div class="stat-card"><div class="label">' + esc(s.label) + '</div><div class="value">' + s.value + '</div></div>'; }).join('');
+
+                // Table title h2s — also carry the window label.
+                var topTitle = document.getElementById('topQueriesTitle');
+                if (topTitle) topTitle.textContent = 'Top Queries (' + winLabel + ')';
+                var emptyTitle = document.getElementById('emptyQueriesTitle');
+                if (emptyTitle) {
+                    // Preserve the trailing warning icon span.
+                    emptyTitle.innerHTML = 'Empty Result Queries (' + esc(winLabel) + ') <span class="empty">&#x26a0;</span>';
+                }
 
                 // Daily chart - destroy previous instance
                 if (dailyChartInstance) { dailyChartInstance.destroy(); dailyChartInstance = null; }
                 var titleSuffix = activeToolType ? ' - ' + activeToolType.charAt(0).toUpperCase() + activeToolType.slice(1) : '';
-                document.getElementById('dailyChartTitle').textContent = 'Queries per Day (7d)' + titleSuffix;
+                document.getElementById('dailyChartTitle').textContent = 'Queries per Day (' + winLabel + ')' + titleSuffix;
 
                 var dayLabels = summary.queries_per_day_7d.map(function(d) { return d.day; });
                 dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
