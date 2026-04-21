@@ -1630,25 +1630,50 @@
           load();
           return;
         }
+        // Distinguish three outcomes from the auth-mode probe:
+        //   1. Network failure (fetch throws, typically TypeError
+        //      "Failed to fetch") OR HTTP error (!r.ok) → server is
+        //      unreachable; render a clear banner BEFORE prompting for
+        //      a token so the user isn't misled into thinking their
+        //      token is the problem.
+        //   2. Response parses as JSON with authMode.dev === true → dev
+        //      mode, skip auth.
+        //   3. Response parses but authMode.dev is falsy → prod-mode
+        //      server, fall through to the normal token flow silently
+        //      (no warn — this is the expected happy path for prod).
+        var unreachable = false;
         try {
-          var authMode = await fetch("/api/analytics/auth-mode").then(
-            function (r) {
-              return r.json();
-            },
-          );
-          if (authMode.dev) {
-            // Dev mode — no token needed
-            headers = {};
-            load();
-            return;
+          var r = await fetch("/api/analytics/auth-mode");
+          if (!r.ok) {
+            unreachable = true;
+          } else {
+            var authMode = await r.json();
+            if (authMode && authMode.dev) {
+              // Dev mode — no token needed
+              headers = {};
+              load();
+              return;
+            }
           }
         } catch (e) {
-          // Fall through to normal auth. Log so a broken probe is visible
-          // in devtools rather than silently invoking the token prompt.
+          // Network failure (fetch rejected) — distinct from a
+          // successful response that merely lacked authMode.dev.
+          unreachable = true;
           console.warn(
-            "[analytics] auth-mode probe failed; falling back to token auth",
+            "[analytics] auth-mode probe network error; server likely unreachable",
             e,
           );
+        }
+
+        if (unreachable) {
+          // Surface the outage explicitly so the token prompt below
+          // doesn't look like the primary issue. The banner persists
+          // until the next successful load().
+          var errEl = document.getElementById("error");
+          if (errEl) {
+            errEl.style.display = "block";
+            errEl.textContent = "Analytics server unreachable";
+          }
         }
 
         if (!TOKEN) {
