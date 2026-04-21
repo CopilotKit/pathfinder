@@ -14,6 +14,7 @@ import {
   getToolCounts,
   cleanupOldQueryLogs,
   REDACTED_QUERY_TEXT,
+  P95_LATENCY_ROW_CAP,
 } from "../db/analytics.js";
 import type { QueryLogEntry } from "../db/analytics.js";
 
@@ -572,6 +573,82 @@ describe("windowed aggregates exclude backfilled rows (latency_ms >= 0)", () => 
 
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toContain("latency_ms >= 0");
+  });
+});
+
+describe("getAnalyticsSummary p95 latency row cap", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it("emits LIMIT on the latency ORDER BY and binds P95_LATENCY_ROW_CAP", async () => {
+    // PGlite can't percentile_cont; we sort in JS. "All time" (days=99999)
+    // on a busy install would otherwise load every latency row into memory.
+    // The LIMIT caps the sample so memory stays bounded; the cap value is
+    // bound rather than inlined so there's one source of truth.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Index 2 is the latency query (0=total, 1=summary, 2=latency, 3=by-source, 4=per-day).
+    const [sql, params] = mockQuery.mock.calls[2];
+    expect(sql).toMatch(/ORDER BY latency_ms LIMIT \$\d+/);
+    expect(params).toContain(P95_LATENCY_ROW_CAP);
+  });
+
+  it("logs a warn when the latency sample hits the cap (sampled p95)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Return exactly P95_LATENCY_ROW_CAP rows so the cap-hit branch trips.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({
+        rows: Array.from({ length: P95_LATENCY_ROW_CAP }, (_, i) => ({
+          latency_ms: i + 1,
+        })),
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    await getAnalyticsSummary({});
+    const logged = warnSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logged).toContain("[analytics]");
+    expect(logged).toContain("capped");
+    warnSpy.mockRestore();
+  });
+});
+
+describe("getAnalyticsSummary per-day excludes redacted rows", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it("per-day subquery filters query_text != REDACTED_QUERY_TEXT (consistency with top/empty)", async () => {
+    // The daily-chart bars should count the same population surfaced by the
+    // top-queries and empty-queries tables below it. Pre-fix, per-day
+    // included redacted rows while those tables filtered them out, so the
+    // chart total > table total for any window with redacted traffic.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Index 4 is the per-day subquery.
+    const [sql, params] = mockQuery.mock.calls[4];
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(params).toContain(REDACTED_QUERY_TEXT);
   });
 });
 
