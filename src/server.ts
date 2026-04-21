@@ -839,7 +839,24 @@ export function analyticsAuth(
   res: Response,
   next: express.NextFunction,
 ): void {
-  const analyticsCfg = getAnalyticsConfig();
+  // Mirror the getAnalyticsToken() pattern: a throw from the config read
+  // (e.g. corrupt YAML on hot reload, env parse failure) would otherwise
+  // escape the Express middleware as an unhandled exception. Convert it to
+  // a 503 so callers see a stable error shape and operators get a
+  // diagnostic log line.
+  let analyticsCfg: ReturnType<typeof getAnalyticsConfig>;
+  try {
+    analyticsCfg = getAnalyticsConfig();
+  } catch (err) {
+    console.error(
+      `[analytics] auth misconfigured: config read failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    res.status(503).json({
+      error: "misconfigured",
+      error_description: "Analytics config read failed",
+    });
+    return;
+  }
   const config = getConfig();
 
   if (!analyticsCfg?.enabled) {
@@ -1357,7 +1374,10 @@ export function registerAnalyticsRoutes(
         // The response already started streaming; we can't change status
         // or body. Log so a mid-stream failure is visible rather than
         // silently dropped.
-        console.error("[analytics] sendFile failed mid-stream:", err);
+        console.error(
+          `[analytics] sendFile failed mid-stream path=${_analyticsHtmlPath}:`,
+          err,
+        );
         return;
       }
       // Type-guarded access to Node's errno code — sendFile can reject with
@@ -1367,10 +1387,16 @@ export function registerAnalyticsRoutes(
           ? (err as NodeJS.ErrnoException).code
           : undefined;
       if (code === "ENOENT") {
+        console.warn(
+          `[analytics] dashboard HTML missing at ${_analyticsHtmlPath} — serving 404`,
+        );
         res.status(404).json({ error: "analytics dashboard not available" });
         return;
       }
-      console.error("[analytics] sendFile failed:", err);
+      console.error(
+        `[analytics] sendFile failed path=${_analyticsHtmlPath}:`,
+        err,
+      );
       res.status(500).json({ error: "analytics dashboard unavailable" });
     });
   });
