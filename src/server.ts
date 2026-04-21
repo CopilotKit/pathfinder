@@ -1373,61 +1373,79 @@ app.post("/messages", ...sseHandlers.postHandler);
 // Health check
 // ---------------------------------------------------------------------------
 
-app.get("/health", async (_req: Request, res: Response) => {
-  const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
-  const needsDb =
-    hasSearchTools() ||
-    hasKnowledgeTools() ||
-    hasCollectTools() ||
-    hasBashSemanticSearch();
+export interface HealthRouteDeps {
+  getIndexStats?: typeof getIndexStats;
+}
 
-  if (!needsDb) {
-    res.json({
-      status: "ok",
-      server: getServerConfig().server.name,
-      uptime_seconds: uptime,
-      started_at: startedAt.toISOString(),
-      indexing: false,
-      index: "not_configured",
-    });
-    return;
-  }
+export function registerHealthRoute(
+  app: express.Express,
+  deps: HealthRouteDeps = {},
+): void {
+  const _getIndexStats = deps.getIndexStats ?? getIndexStats;
 
-  try {
-    const stats = await getIndexStats();
-    res.json({
-      status: "ok",
-      server: getServerConfig().server.name,
-      uptime_seconds: uptime,
-      started_at: startedAt.toISOString(),
-      indexing:
-        (orchestratorRef as IndexingOrchestrator | null)?.isIndexing() ?? false,
-      index: {
-        total_chunks: stats.totalChunks,
-        by_source: stats.bySource,
-        indexed_repos: stats.indexedRepos,
-        sources: stats.indexStates.map((s) => ({
-          type: s.source_type,
-          key: s.source_key,
-          status: s.status,
-          last_indexed: s.last_indexed_at,
-          commit: s.last_commit_sha?.slice(0, 8) ?? null,
-          error: s.error_message ?? null,
-        })),
-      },
-    });
-  } catch (err) {
-    console.error("[health] Database unavailable:", err);
-    res.status(503).json({
-      status: "degraded",
-      server: getServerConfig().server.name,
-      uptime_seconds: uptime,
-      started_at: startedAt.toISOString(),
-      index: "unavailable",
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-});
+  app.get("/health", async (_req: Request, res: Response) => {
+    const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+    const needsDb =
+      hasSearchTools() ||
+      hasKnowledgeTools() ||
+      hasCollectTools() ||
+      hasBashSemanticSearch();
+
+    if (!needsDb) {
+      res.json({
+        status: "ok",
+        server: getServerConfig().server.name,
+        uptime_seconds: uptime,
+        started_at: startedAt.toISOString(),
+        indexing: false,
+        index: "not_configured",
+      });
+      return;
+    }
+
+    try {
+      const stats = await _getIndexStats();
+      res.json({
+        status: "ok",
+        server: getServerConfig().server.name,
+        uptime_seconds: uptime,
+        started_at: startedAt.toISOString(),
+        indexing:
+          (orchestratorRef as IndexingOrchestrator | null)?.isIndexing() ??
+          false,
+        index: {
+          total_chunks: stats.totalChunks,
+          by_source: stats.bySource,
+          indexed_repos: stats.indexedRepos,
+          sources: stats.indexStates.map((s) => ({
+            type: s.source_type,
+            key: s.source_key,
+            status: s.status,
+            last_indexed: s.last_indexed_at,
+            commit: s.last_commit_sha?.slice(0, 8) ?? null,
+            error: s.error_message ?? null,
+          })),
+        },
+      });
+    } catch (err) {
+      // Log the full error server-side for operators, but never surface
+      // err.message in the response body: /health is unauthenticated and
+      // probed by every load balancer, and errors from the DB driver can
+      // contain DATABASE_URL fragments, table/schema names, and internal
+      // host:port info. Keep the response body to fixed, sanitized fields.
+      console.error("[health] Database unavailable:", err);
+      res.status(503).json({
+        status: "degraded",
+        server: getServerConfig().server.name,
+        uptime_seconds: uptime,
+        started_at: startedAt.toISOString(),
+        index: "unavailable",
+      });
+    }
+  });
+}
+
+registerHealthRoute(app);
 
 // ---------------------------------------------------------------------------
 // llms.txt and llms-full.txt — cached, invalidated on reindex
@@ -1469,10 +1487,52 @@ app.get("/llms-full.txt", async (_req: Request, res: Response) => {
   }
 });
 
-app.get("/faq.txt", async (_req: Request, res: Response) => {
-  try {
-    if (!cachedFaqTxt) {
-      const serverCfg = getServerConfig();
+/**
+ * Deps hook for the /faq.txt handler. Lets tests swap the DB + config
+ * boundaries without reimplementing the handler. Mirrors the pattern used
+ * by registerAnalyticsRoutes().
+ */
+export interface FaqRouteDeps {
+  getFaqChunks?: typeof getFaqChunks;
+  getServerConfig?: typeof getServerConfig;
+}
+
+/**
+ * Reset the module-level /faq.txt cache. Test-only helper so suites can
+ * assert the retry-on-partial-failure behaviour (second request must
+ * re-enter the fetch path when the previous response was partial).
+ */
+export function __resetFaqCacheForTesting(): void {
+  cachedFaqTxt = null;
+}
+
+/**
+ * Register GET /faq.txt. Extracted so tests can mount the real handler
+ * against stubbed deps; the production call site in module init passes no
+ * deps and uses the imported getFaqChunks/getServerConfig.
+ *
+ * Partial-failure policy: if any per-source fetch throws, we serve the
+ * partial result ONCE with `Cache-Control: no-store` and
+ * `X-Partial-Sources: <failed names>` so operators/agents can detect the
+ * gap, and we do NOT populate `cachedFaqTxt`. The next request re-enters
+ * the fetch path. Previously the partial body was cached and served 200
+ * OK until the next reindex invalidation — hours of silent gaps.
+ */
+export function registerFaqRoute(
+  app: express.Express,
+  deps: FaqRouteDeps = {},
+): void {
+  const _getFaqChunks = deps.getFaqChunks ?? getFaqChunks;
+  const _getServerConfig = deps.getServerConfig ?? getServerConfig;
+
+  app.get("/faq.txt", async (_req: Request, res: Response) => {
+    try {
+      if (cachedFaqTxt) {
+        res.type("text/plain").send(cachedFaqTxt);
+        return;
+      }
+
+      const serverCfg = _getServerConfig();
       // Find FAQ sources: sources with category === 'faq'
       const faqSources = serverCfg.sources
         .filter((s) => "category" in s && s.category === "faq")
@@ -1487,39 +1547,54 @@ app.get("/faq.txt", async (_req: Request, res: Response) => {
 
       if (faqSources.length === 0) {
         cachedFaqTxt = generateFaqTxt([], serverCfg.server.name, []);
-      } else {
-        // Fetch FAQ chunks per source with its confidence threshold
-        const allChunks: FaqChunkResult[] = [];
-        for (const src of faqSources) {
-          try {
-            const chunks = await getFaqChunks(
-              [src.name],
-              src.confidenceThreshold,
-            );
-            allChunks.push(...chunks);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error(
-              `[faq.txt] Failed to fetch chunks for source "${src.name}": ${msg}`,
-            );
-          }
-        }
-        cachedFaqTxt = generateFaqTxt(
-          allChunks,
-          serverCfg.server.name,
-          faqSources,
-        );
+        res.type("text/plain").send(cachedFaqTxt);
+        return;
       }
+
+      // Fetch FAQ chunks per source. Track which sources failed so we can
+      // refuse to cache a partial result.
+      const allChunks: FaqChunkResult[] = [];
+      const failedSources: string[] = [];
+      for (const src of faqSources) {
+        try {
+          const chunks = await _getFaqChunks(
+            [src.name],
+            src.confidenceThreshold,
+          );
+          allChunks.push(...chunks);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[faq.txt] Failed to fetch chunks for source "${src.name}": ${msg}`,
+          );
+          failedSources.push(src.name);
+        }
+      }
+
+      const body = generateFaqTxt(allChunks, serverCfg.server.name, faqSources);
+
+      if (failedSources.length > 0) {
+        // Partial result — serve once, do NOT cache, surface the failure
+        // via headers so downstream can alert / filter.
+        res.setHeader("X-Partial-Sources", failedSources.join(","));
+        res.setHeader("Cache-Control", "no-store");
+        res.type("text/plain").send(body);
+        return;
+      }
+
+      cachedFaqTxt = body;
+      res.type("text/plain").send(cachedFaqTxt);
+    } catch (err) {
+      console.error("[faq.txt] Generation failed:", err);
+      res
+        .status(503)
+        .type("text/plain")
+        .send("# Service unavailable\nFAQ index not ready.");
     }
-    res.type("text/plain").send(cachedFaqTxt);
-  } catch (err) {
-    console.error("[faq.txt] Generation failed:", err);
-    res
-      .status(503)
-      .type("text/plain")
-      .send("# Service unavailable\nFAQ index not ready.");
-  }
-});
+  });
+}
+
+registerFaqRoute(app);
 
 // ---------------------------------------------------------------------------
 // skill.md — dynamically generated from server config

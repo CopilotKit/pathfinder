@@ -16,6 +16,7 @@ sources:
     url_derivation:
       strip_prefix: "docs/"
       strip_suffix: ".html"
+      strip_index: true
     file_patterns:
       - "**/*.html"
     chunk:
