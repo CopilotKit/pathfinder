@@ -637,15 +637,13 @@ describe("getTopQueries LIKE injection hardening", () => {
     await getTopQueries(7, 50, { tool_type: "_" });
 
     const [sql, params] = mockQuery.mock.calls[0];
-    // The SQL must include an ESCAPE clause or escape the wildcard character
-    // in the parameter value. Verify the wildcard is not passed raw — i.e.
-    // the param should contain an escaped form ('\_') and the SQL should
-    // declare the escape character.
-    const toolParam = params.find(
-      (p: unknown) => typeof p === "string" && p.includes("_"),
-    );
-    expect(typeof toolParam).toBe("string");
-    expect(toolParam).toBe("|_");
+    // The SQL must include an ESCAPE clause AND the wildcard in the
+    // parameter must be prefixed with the pipe escape character. Assert
+    // on the exact expected param rather than searching by "any string
+    // with an underscore" — the search pattern misfires the moment
+    // another underscore-containing string is added to the call
+    // (sentinel constants, filter literals, etc).
+    expect(params).toContain("|_");
     // SQL carries an explicit ESCAPE '|' clause so `|_` in the param is
     // treated as a literal `_` rather than a LIKE wildcard. We use `|`
     // rather than `\` because Postgres with standard_conforming_strings=on
@@ -658,11 +656,11 @@ describe("getTopQueries LIKE injection hardening", () => {
     await getTopQueries(7, 50, { tool_type: "a%b|c" });
 
     const [, params] = mockQuery.mock.calls[0];
-    const toolParam = params.find(
-      (p: unknown) => typeof p === "string" && p.length > 0 && p !== "docs",
-    );
-    // Each |, %, _ must be prefixed with a literal `|`
-    expect(toolParam).toBe("a|%b||c");
+    // Each |, %, _ must be prefixed with a literal `|`. Assert on the
+    // exact expected param rather than filtering params by "not 'docs'"
+    // — the filter predicate was a leftover from a copy-paste and
+    // nothing in this test sets source="docs" anyway.
+    expect(params).toContain("a|%b||c");
   });
 });
 
