@@ -43,13 +43,6 @@ describe("AnalyticsConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects non-integer retention_days", () => {
-    const result = AnalyticsConfigSchema.safeParse({
-      retention_days: 30.5,
-    });
-    expect(result.success).toBe(false);
-  });
-
   it("rejects negative retention_days", () => {
     const result = AnalyticsConfigSchema.safeParse({
       retention_days: -1,
@@ -57,12 +50,20 @@ describe("AnalyticsConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects retention_days of fractional value", () => {
-    const result = AnalyticsConfigSchema.safeParse({
-      retention_days: 30.7,
-    });
-    expect(result.success).toBe(false);
-  });
+  // Single parametrized test replaces the two near-duplicate
+  // "rejects non-integer / fractional retention_days" cases; covers
+  // typical fractional inputs (whole.5, whole.7) and a floating-point
+  // boundary near zero that an `n > 0 && n === Math.floor(n)` check
+  // would have to reject.
+  it.each([30.5, 30.7, 0.1, 1e-9])(
+    "rejects fractional retention_days %s",
+    (val) => {
+      const result = AnalyticsConfigSchema.safeParse({
+        retention_days: val,
+      });
+      expect(result.success).toBe(false);
+    },
+  );
 
   it("accepts very large retention_days", () => {
     const result = AnalyticsConfigSchema.safeParse({

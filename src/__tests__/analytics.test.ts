@@ -13,6 +13,8 @@ import {
   getEmptyQueries,
   getToolCounts,
   cleanupOldQueryLogs,
+  REDACTED_QUERY_TEXT,
+  P95_LATENCY_ROW_CAP,
 } from "../db/analytics.js";
 import type { QueryLogEntry } from "../db/analytics.js";
 
@@ -58,7 +60,22 @@ describe("logQuery", () => {
     await logQuery(baseEntry, false);
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[1]).toBe("<redacted>");
+    // Assert the whole param array rather than only params[1]; this
+    // matches the shape already used by the non-redacted path test
+    // above so any future drift (column order, extra fields) shows up
+    // the same way on both paths.
+    expect(params).toEqual([
+      baseEntry.tool_name,
+      REDACTED_QUERY_TEXT,
+      baseEntry.result_count,
+      baseEntry.top_score,
+      baseEntry.latency_ms,
+      baseEntry.source_name,
+      baseEntry.session_id,
+    ]);
+    // And pin the literal so the constant can never silently drift to a
+    // different sentinel that downstream reads wouldn't recognize.
+    expect(REDACTED_QUERY_TEXT).toBe("<redacted>");
   });
 
   it("passes null for nullable fields", async () => {
@@ -82,19 +99,29 @@ describe("logQuery", () => {
 // ---------------------------------------------------------------------------
 
 describe("logQuery error handling", () => {
-  it("propagates DB connection error to caller", async () => {
+  it("swallows DB errors so telemetry failures never break tool callers", async () => {
+    // Telemetry is best-effort. A failing pool.query must not propagate to
+    // the caller — otherwise an analytics outage would take down every
+    // tool call. We log with [analytics] prefix and resolve normally.
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockQuery.mockRejectedValueOnce(new Error("connection refused"));
     await expect(
       logQuery({
-        tool_name: "search",
+        tool_name: "search-docs",
         query_text: "test",
         result_count: 0,
         top_score: null,
         latency_ms: 10,
-        source_name: null,
+        source_name: "docs",
         session_id: null,
       }),
-    ).rejects.toThrow("connection refused");
+    ).resolves.toBeUndefined();
+    // Must include the [analytics] prefix and context (tool_name, source_name).
+    const logged = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logged).toContain("[analytics]");
+    expect(logged).toContain("search-docs");
+    expect(logged).toContain("docs");
+    consoleSpy.mockRestore();
   });
 });
 
@@ -104,12 +131,12 @@ describe("logQuery error handling", () => {
 
 describe("getAnalyticsSummary", () => {
   it("returns aggregated summary data", async () => {
-    // Mock order: total, summary7d, latency rows, bySource, perDay
+    // Mock order: total, summaryWindow, latency rows, bySource, perDay
     mockQuery
       .mockResolvedValueOnce({ rows: [{ count: 1000 }] }) // total
       .mockResolvedValueOnce({
         rows: [{ total: 200, empty: 10, avg_latency: 45 }],
-      }) // 7d summary
+      }) // windowed summary
       .mockResolvedValueOnce({
         rows: Array.from({ length: 200 }, (_, i) => ({
           latency_ms: i + 1,
@@ -128,16 +155,16 @@ describe("getAnalyticsSummary", () => {
     const result = await getAnalyticsSummary();
 
     expect(result.total_queries).toBe(1000);
-    expect(result.total_queries_7d).toBe(200);
-    expect(result.empty_result_count_7d).toBe(10);
-    expect(result.empty_result_rate_7d).toBeCloseTo(0.05);
-    expect(result.avg_latency_ms_7d).toBe(45);
+    expect(result.total_queries_window).toBe(200);
+    expect(result.empty_result_count_window).toBe(10);
+    expect(result.empty_result_rate_window).toBeCloseTo(0.05);
+    expect(result.avg_latency_ms_window).toBe(45);
     // p95 of [1..200] sorted: index = floor(200 * 0.95) = 190, value = 191
-    expect(result.p95_latency_ms_7d).toBe(191);
+    expect(result.p95_latency_ms_window).toBe(191);
     expect(result.queries_by_source).toEqual([
       { source_name: "docs", count: 150 },
     ]);
-    expect(result.queries_per_day_7d).toHaveLength(2);
+    expect(result.queries_per_day_window).toHaveLength(2);
   });
 
   it("handles zero queries gracefully", async () => {
@@ -153,10 +180,10 @@ describe("getAnalyticsSummary", () => {
     const result = await getAnalyticsSummary();
 
     expect(result.total_queries).toBe(0);
-    expect(result.empty_result_rate_7d).toBe(0);
-    expect(result.p95_latency_ms_7d).toBe(0);
+    expect(result.empty_result_rate_window).toBe(0);
+    expect(result.p95_latency_ms_window).toBe(0);
     expect(result.queries_by_source).toEqual([]);
-    expect(result.queries_per_day_7d).toEqual([]);
+    expect(result.queries_per_day_window).toEqual([]);
   });
 });
 
@@ -176,7 +203,7 @@ describe("p95 computation edge cases", () => {
       .mockResolvedValueOnce({ rows: [] });
 
     const result = await getAnalyticsSummary();
-    expect(result.p95_latency_ms_7d).toBe(42);
+    expect(result.p95_latency_ms_window).toBe(42);
   });
 
   it("p95 of all identical values returns that value", async () => {
@@ -192,7 +219,7 @@ describe("p95 computation edge cases", () => {
       .mockResolvedValueOnce({ rows: [] });
 
     const result = await getAnalyticsSummary();
-    expect(result.p95_latency_ms_7d).toBe(50);
+    expect(result.p95_latency_ms_window).toBe(50);
   });
 
   it("p95 of two values returns the higher one", async () => {
@@ -209,7 +236,7 @@ describe("p95 computation edge cases", () => {
 
     const result = await getAnalyticsSummary();
     // floor(2 * 0.95) = 1, sorted[1] = 100
-    expect(result.p95_latency_ms_7d).toBe(100);
+    expect(result.p95_latency_ms_window).toBe(100);
   });
 });
 
@@ -260,12 +287,16 @@ describe("getTopQueries", () => {
     expect(params).toContain(10);
   });
 
-  it("excludes redacted queries", async () => {
+  it("excludes redacted queries via bound REDACTED_QUERY_TEXT param", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await getTopQueries();
 
-    const [sql] = mockQuery.mock.calls[0];
-    expect(sql).toContain("query_text != '<redacted>'");
+    const [sql, params] = mockQuery.mock.calls[0];
+    // The clause binds the sentinel instead of inlining '<redacted>' so
+    // REDACTED_QUERY_TEXT is the single source of truth for the value.
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(sql).not.toContain("'<redacted>'");
+    expect(params).toContain(REDACTED_QUERY_TEXT);
   });
 });
 
@@ -273,8 +304,13 @@ describe("getTopQueries", () => {
 // getTopQueries edge cases
 // ---------------------------------------------------------------------------
 
+// The server layer (parseDaysOrError / parseLimitOrError in src/server.ts)
+// already rejects days=0 and limit=0 with a 400 before the request ever
+// reaches the DB. These tests exist as defense-in-depth: they lock in the
+// DB layer's behavior today so a future refactor that moves or removes
+// the server-layer check can't silently introduce a wipe-the-table bug.
 describe("getTopQueries edge cases", () => {
-  it("handles days=0 gracefully", async () => {
+  it("DB layer accepts days=0 without throwing (server layer enforces > 0; this locks down regression if that check ever moves)", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const result = await getTopQueries(0, 50);
     expect(result).toEqual([]);
@@ -282,7 +318,7 @@ describe("getTopQueries edge cases", () => {
     expect(params[0]).toBe(0);
   });
 
-  it("handles limit=0 gracefully", async () => {
+  it("DB layer accepts limit=0 without throwing (server layer enforces > 0; this locks down regression if that check ever moves)", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const result = await getTopQueries(7, 0);
     expect(result).toEqual([]);
@@ -321,6 +357,16 @@ describe("getEmptyQueries", () => {
 
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toContain("result_count = 0");
+  });
+
+  it("excludes redacted queries via bound REDACTED_QUERY_TEXT param", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getEmptyQueries();
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(sql).not.toContain("'<redacted>'");
+    expect(params).toContain(REDACTED_QUERY_TEXT);
   });
 
   it("returns null for missing source_name", async () => {
@@ -379,6 +425,17 @@ describe("cleanupOldQueryLogs", () => {
     const deleted = await cleanupOldQueryLogs(90);
     expect(deleted).toBe(0);
   });
+
+  it("uses <= boundary so retention-edge rows aren't leaked", async () => {
+    // The rolling-window reads use `created_at > NOW() - INTERVAL`. If
+    // cleanup used a strict `<`, rows sitting exactly at the retention
+    // edge would be visible to reads forever but never get cleaned up.
+    // `<=` closes the partition so retention-edge rows are removed.
+    mockQuery.mockResolvedValueOnce({ rowCount: 0 });
+    await cleanupOldQueryLogs(90);
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("created_at <= NOW()");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -386,9 +443,59 @@ describe("cleanupOldQueryLogs", () => {
 // ---------------------------------------------------------------------------
 
 describe("cleanupOldQueryLogs error handling", () => {
-  it("propagates DB error to caller", async () => {
+  it("propagates DB error to caller (after logging)", async () => {
+    // Scheduler catches the throw; we just verify it still propagates
+    // rather than being swallowed like logQuery. Suppress the error log
+    // so test output stays clean.
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockQuery.mockRejectedValueOnce(new Error("disk full"));
     await expect(cleanupOldQueryLogs(90)).rejects.toThrow("disk full");
+    const logged = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logged).toContain("[analytics]");
+    consoleSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cleanupOldQueryLogs input validation
+//
+// Regression guard: cleanupOldQueryLogs(0) would translate to
+// `created_at <= NOW() - 0 days` and wipe the entire table. Same risk with
+// negative values. Both must reject hard (not silently no-op) so a
+// misconfigured retention surfaces in the scheduler's .catch() handler
+// instead of being swallowed on every nightly run.
+// ---------------------------------------------------------------------------
+
+describe("cleanupOldQueryLogs input validation", () => {
+  it("retentionDays=0 throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(0)).rejects.toThrow(
+      /invalid retentionDays=0/,
+    );
+    expect(mockQuery.mock.calls).toHaveLength(0);
+  });
+
+  it("retentionDays=-1 throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(-1)).rejects.toThrow(
+      /invalid retentionDays=-1/,
+    );
+    expect(mockQuery.mock.calls).toHaveLength(0);
+  });
+
+  it("retentionDays=NaN throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(NaN)).rejects.toThrow(
+      /invalid retentionDays=NaN/,
+    );
+    expect(mockQuery.mock.calls).toHaveLength(0);
+  });
+
+  it("retentionDays=Infinity throws and does not query the DB", async () => {
+    // Number.isFinite(Infinity) is false, so the guard rejects it just like
+    // NaN. Locking it in explicitly because `Infinity` is the other
+    // non-finite value that can slip through a naive `value > 0` check.
+    await expect(cleanupOldQueryLogs(Infinity)).rejects.toThrow(
+      /invalid retentionDays=Infinity/,
+    );
+    expect(mockQuery.mock.calls).toHaveLength(0);
   });
 });
 
@@ -427,13 +534,206 @@ describe("getToolCounts", () => {
 // Filter support (tool_type, source)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Windowed-aggregate invariant: every windowed query must exclude backfilled
+// rows (latency_ms < 0) so the numerator/denominator line up across the
+// dashboard. The all-time `total_queries` count is the intentional exception
+// — it is inclusive of backfilled rows so the "Total Queries" card shows the
+// real row count.
+// ---------------------------------------------------------------------------
+
+describe("windowed aggregates exclude backfilled rows (latency_ms >= 0)", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it("getAnalyticsSummary: all four windowed subqueries filter latency_ms >= 0", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Indexes 1..4 are the windowed subqueries: summary counts, latency
+    // rows, by-source, per-day. Each must carry the backfill filter.
+    for (let i = 1; i <= 4; i++) {
+      const [sql] = mockQuery.mock.calls[i];
+      expect(sql).toContain("latency_ms >= 0");
+    }
+  });
+
+  it("getAnalyticsSummary: total_queries (index 0) intentionally does NOT filter latency", async () => {
+    // The all-time total count is inclusive by design: the "Total Queries"
+    // card reflects every row, including backfilled historical rows. Only
+    // the windowed cards need the backfill exclusion.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("latency_ms >= 0");
+  });
+
+  it("getTopQueries filters latency_ms >= 0", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50);
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("latency_ms >= 0");
+  });
+
+  it("getEmptyQueries filters latency_ms >= 0", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getEmptyQueries(7, 50);
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("latency_ms >= 0");
+  });
+
+  it("getToolCounts filters latency_ms >= 0", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7);
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("latency_ms >= 0");
+  });
+});
+
+describe("getAnalyticsSummary p95 latency row cap", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it("emits ORDER BY random() LIMIT on the latency subquery and binds P95_LATENCY_ROW_CAP", async () => {
+    // PGlite can't percentile_cont; we sort in JS. "All time" (days=99999)
+    // on a busy install would otherwise load every latency row into memory.
+    // The LIMIT caps the sample so memory stays bounded; the cap value is
+    // bound rather than inlined so there's one source of truth.
+    //
+    // Random sampling matters: ORDER BY latency_ms LIMIT N would take the
+    // smallest N latencies, systematically under-reporting p95. ORDER BY
+    // random() gives an unbiased sample so the p95 estimate stays accurate
+    // even when the cap is hit.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Index 2 is the latency query (0=total, 1=summary, 2=latency, 3=by-source, 4=per-day).
+    const [sql, params] = mockQuery.mock.calls[2];
+    expect(sql).toMatch(/ORDER BY random\(\)/);
+    expect(sql).toMatch(/LIMIT \$\d+/);
+    // The query fetches cap+1 rows (not cap) to distinguish "exactly the
+    // cap" (all rows returned, no sampling) from "more than the cap" (true
+    // sampling) — a strict LIMIT $cap misreports the exact-match case.
+    expect(params).toContain(P95_LATENCY_ROW_CAP + 1);
+  });
+
+  it("logs a warn when the latency sample hits the cap (sampled p95)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Return P95_LATENCY_ROW_CAP + 1 rows so the overflow branch trips —
+    // exactly cap rows means "all rows returned" (not sampled), so the
+    // cap-hit branch only fires at cap+1.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({
+        rows: Array.from({ length: P95_LATENCY_ROW_CAP + 1 }, (_, i) => ({
+          latency_ms: i + 1,
+        })),
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const result = await getAnalyticsSummary({});
+    const logged = warnSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logged).toContain("[analytics]");
+    expect(logged).toContain("capped");
+    // The cap-hit branch must also surface `p95_latency_sampled: true` on
+    // the response so the UI can render a "(sampled)" badge instead of
+    // implying the value is exact.
+    expect(result.p95_latency_sampled).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it("omits p95_latency_sampled when the cap is not hit", async () => {
+    // Only a handful of latency rows — well below the cap — so the flag
+    // must be absent (treat absence as "exact" to stay backwards-compatible
+    // with older UI builds).
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ latency_ms: 10 }, { latency_ms: 20 }, { latency_ms: 30 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const result = await getAnalyticsSummary({});
+    expect(result.p95_latency_sampled).toBeUndefined();
+  });
+});
+
+describe("getAnalyticsSummary per-day excludes redacted rows", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+  }
+
+  it("per-day subquery filters query_text != REDACTED_QUERY_TEXT (consistency with top/empty)", async () => {
+    // The daily-chart bars should count the same population surfaced by the
+    // top-queries and empty-queries tables below it. Pre-fix, per-day
+    // included redacted rows while those tables filtered them out, so the
+    // chart total > table total for any window with redacted traffic.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Index 4 is the per-day subquery.
+    const [sql, params] = mockQuery.mock.calls[4];
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(params).toContain(REDACTED_QUERY_TEXT);
+  });
+
+  it("latency subquery filters query_text != REDACTED_QUERY_TEXT (p95/avg population alignment)", async () => {
+    // Pre-fix: avg_latency (summary subquery) excluded redacted rows but
+    // p95 (latency subquery) did not. That meant the two latency cards were
+    // computed over different populations, so p95 could be lower than avg
+    // whenever redacted traffic carried unusually high latency (or vice
+    // versa). Aligning both on the same population makes the cards
+    // directly comparable.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Index 2 is the latency subquery (0=total, 1=summary, 2=latency).
+    const [sql, params] = mockQuery.mock.calls[2];
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(params).toContain(REDACTED_QUERY_TEXT);
+  });
+});
+
 describe("getAnalyticsSummary with filters", () => {
   function mockSummaryQueries() {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ count: 500 }] }) // total
       .mockResolvedValueOnce({
         rows: [{ total: 100, empty: 5, avg_latency: 50 }],
-      }) // 7d summary
+      }) // windowed summary
       .mockResolvedValueOnce({ rows: [] }) // latency rows
       .mockResolvedValueOnce({ rows: [] }) // by source
       .mockResolvedValueOnce({ rows: [] }); // per day
@@ -480,6 +780,53 @@ describe("getAnalyticsSummary with filters", () => {
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).not.toContain("tool_name LIKE");
     expect(sql).not.toContain("source_name =");
+  });
+});
+
+describe("getTopQueries LIKE injection hardening", () => {
+  it("escapes '%' and '_' wildcards in tool_type", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "_" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    // The SQL must include an ESCAPE clause AND the wildcard in the
+    // parameter must be prefixed with the pipe escape character. Assert
+    // on the exact expected param rather than searching by "any string
+    // with an underscore" — the search pattern misfires the moment
+    // another underscore-containing string is added to the call
+    // (sentinel constants, filter literals, etc).
+    expect(params).toContain("|_");
+    // SQL carries an explicit ESCAPE '|' clause so `|_` in the param is
+    // treated as a literal `_` rather than a LIKE wildcard. We use `|`
+    // rather than `\` because Postgres with standard_conforming_strings=on
+    // (the default) treats '\\' as two characters, which ESCAPE rejects.
+    expect(sql).toContain("ESCAPE '|'");
+  });
+
+  it("escapes pipe and percent", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "a%b|c" });
+
+    const [, params] = mockQuery.mock.calls[0];
+    // Each |, %, _ must be prefixed with a literal `|`. Assert on the
+    // exact expected param rather than filtering params by "not 'docs'"
+    // — the filter predicate was a leftover from a copy-paste and
+    // nothing in this test sets source="docs" anyway.
+    expect(params).toContain("a|%b||c");
+  });
+
+  it("escapes bare '|' wildcard in tool_type", async () => {
+    // '|' is the ESCAPE character itself — a bare pipe in the filter value
+    // must be escaped (`||`) so Postgres treats it as a literal pipe in the
+    // LIKE pattern rather than the start of a 2-char escape sequence. This
+    // is the "escape the escape" case; the previous tests cover %/_/|
+    // wildcards but don't individually pin a bare pipe.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "a|b" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("ESCAPE '|'");
+    expect(params).toContain("a||b");
   });
 });
 
@@ -534,7 +881,7 @@ describe("getAnalyticsSummary honors days window", () => {
       .mockResolvedValueOnce({ rows: [{ count: 500 }] }) // total
       .mockResolvedValueOnce({
         rows: [{ total: 100, empty: 5, avg_latency: 50 }],
-      }) // 7d summary
+      }) // windowed summary
       .mockResolvedValueOnce({ rows: [] }) // latency rows
       .mockResolvedValueOnce({ rows: [] }) // by source
       .mockResolvedValueOnce({ rows: [] }); // per day
@@ -545,11 +892,14 @@ describe("getAnalyticsSummary honors days window", () => {
     await getAnalyticsSummary({}, 30);
 
     // Skip mock.calls[0] — the totals query has no date window.
+    // With no filter params, days is the first (and only) param on each
+    // windowed subquery. Assert directly on params[0] rather than using
+    // `.not.toContain(7)`, which could accidentally pass for any other
+    // reason a `7` is absent.
     for (let i = 1; i < 5; i++) {
       const [sql, params] = mockQuery.mock.calls[i];
       expect(sql).toContain("NOW() - INTERVAL");
-      expect(params).toContain(30);
-      expect(params).not.toContain(7);
+      expect(params[0]).toBe(30);
     }
   });
 
@@ -695,6 +1045,61 @@ describe("getToolCounts with from/to range", () => {
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toContain("NOW() - INTERVAL");
     expect(params).toEqual([14]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getToolCounts respects source filter; intentionally ignores tool_type
+// ---------------------------------------------------------------------------
+
+describe("getToolCounts respects source filter", () => {
+  it("applies source filter to WHERE clause", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { source: "docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("source_name =");
+    expect(params).toContain("docs");
+  });
+
+  it("ignores tool_type filter (intentional — would be circular)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { tool_type: "search" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("tool_name LIKE");
+    expect(params).not.toContain("search");
+  });
+
+  it("combines source filter with from/to range", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const from = new Date("2026-04-01T00:00:00.000Z");
+    const to = new Date("2026-04-20T23:59:59.999Z");
+    await getToolCounts(7, { source: "docs", from, to });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("source_name =");
+    expect(sql).toContain("created_at >=");
+    expect(params).toContain("docs");
+    expect(params).toContain(from);
+    expect(params).toContain(to);
+  });
+
+  it("honors source and silently drops tool_type when both are supplied", async () => {
+    // Combination regression: the two filter branches ('source' applied,
+    // 'tool_type' dropped) are each exercised individually above, but the
+    // shared filter-stripping path is only hit when both are set at once.
+    // A future refactor that e.g. re-introduces tool_type into the WHERE
+    // clause would need to trip this test rather than either of the
+    // single-filter cases.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { tool_type: "search", source: "docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("tool_name LIKE");
+    expect(sql).toContain("source_name =");
+    expect(params).toContain("docs");
+    expect(params).not.toContain("search");
   });
 });
 
