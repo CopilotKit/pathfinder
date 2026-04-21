@@ -832,13 +832,29 @@
           throw createAnalyticsAuthError();
         }
         if (!res.ok) {
-          var body = await res.json().catch(function (parseErr) {
+          // Fetch the raw body ONCE via text() (body streams are single-use;
+          // clone() to keep res.json()-style callers below uncontaminated in
+          // case the branching ever changes). If it parses as JSON, pull
+          // error_description/error out; if it doesn't, surface the raw
+          // text (capped at 200 chars so a misbehaving proxy that returns
+          // HTML can't blow up the login error banner with a full page).
+          var raw = await res
+            .clone()
+            .text()
+            .catch(function () {
+              return "";
+            });
+          var body = {};
+          try {
+            body = JSON.parse(raw);
+          } catch (parseErr) {
             console.error("[analytics] error body parse failed", parseErr);
-            return {};
-          });
-          throw new Error(
-            body.error_description || body.error || "HTTP " + res.status,
-          );
+          }
+          var msg =
+            body.error_description ||
+            body.error ||
+            (raw ? raw.slice(0, 200) : "HTTP " + res.status);
+          throw new Error(msg);
         }
         return res.json();
       }

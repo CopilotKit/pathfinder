@@ -1202,10 +1202,12 @@ describe("analytics dashboard UI — error banner", () => {
   });
 
   // fetchJson's fallback branch at docs/analytics.html — when a non-2xx
-  // response body isn't valid JSON, `res.json()` rejects, the catch returns
-  // `{}`, and the error message becomes `"HTTP <status>"`. Verify that path
-  // is exercised (not just the JSON-body path above).
-  it("shows #error with 'HTTP 500' when the summary endpoint returns a non-JSON body", async () => {
+  // response body isn't valid JSON, the JSON.parse catch logs + returns
+  // `{}`, and the error message falls back to the raw text body (capped
+  // at 200 chars) rather than a bare "HTTP <status>". Verify the raw
+  // body surfaces through to the error banner so operators get a real
+  // clue about what the upstream returned.
+  it("shows #error with raw body text when the summary endpoint returns non-JSON 500", async () => {
     const endpoints = {
       "/api/analytics/auth-mode": () => ({ dev: true }),
       "/api/analytics/summary": () => ({
@@ -1226,8 +1228,32 @@ describe("analytics dashboard UI — error banner", () => {
 
     const errorEl = dom.window.document.getElementById("error")!;
     expect(errorEl.style.display).toBe("block");
-    // Text should contain "HTTP 500" since the HTML body can't parse as JSON
-    // and the fallback error message is "HTTP " + status.
+    // Raw body surfaces through — "Internal Server Error" is the useful
+    // signal, not the generic "HTTP 500".
+    expect(errorEl.textContent).toContain("Internal Server Error");
+    errSpy.mockRestore();
+  });
+
+  // Empty body with non-2xx status falls all the way through to the
+  // "HTTP <status>" marker since there's nothing else to surface.
+  it("shows #error with 'HTTP 500' marker when the body is empty", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        status: 500,
+        rawBody: "",
+        contentType: "text/plain",
+      }),
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dom } = await loadDashboard(endpoints);
+    await flushAsync();
+
+    const errorEl = dom.window.document.getElementById("error")!;
+    expect(errorEl.style.display).toBe("block");
     expect(errorEl.textContent).toContain("HTTP 500");
     errSpy.mockRestore();
   });
