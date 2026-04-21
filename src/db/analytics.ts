@@ -85,8 +85,9 @@ export interface AnalyticsFilter {
    * Callers should ensure both are provided together. Endpoints reject
    * half-specified ranges, calendar-invalid dates (e.g. Feb 30),
    * array-shape parameters (Express multi-value), and ranges wider than
-   * MAX_DAYS before they reach the DB layer; direct callers (tests,
-   * future internal consumers) must replicate those guards.
+   * `MAX_DAYS` (see `src/server.ts`) before they reach the DB layer;
+   * direct callers (tests, future internal consumers) must replicate
+   * those guards.
    */
   from?: Date;
   to?: Date;
@@ -520,6 +521,24 @@ export async function getEmptyQueries(
  *
  * Accepts an optional filter with `from`/`to` to use an explicit date range.
  * When not provided, falls back to the rolling "last N days" window.
+ *
+ * Population notes (intentional divergences from other windowed aggregates):
+ *
+ *  - Backfilled rows (`latency_ms < 0`) are EXCLUDED, matching every other
+ *    windowed aggregate in this module. Without that filter the tool-type
+ *    donut would include historical backfill while the other cards would
+ *    not, so donut totals wouldn't line up with the summary counts.
+ *  - A `tool_type` filter on the input is silently IGNORED. Filtering the
+ *    "what tool types exist" aggregate by tool type is circular — the
+ *    donut always shows the full type distribution within the selected
+ *    window/source. Only the `source` filter is honored here.
+ *  - Redacted rows (`query_text = REDACTED_QUERY_TEXT`) are deliberately
+ *    NOT excluded. Redacted rows still carry a truthful `tool_name` (only
+ *    `query_text` is scrubbed), so they contribute valid tool-usage signal.
+ *    Excluding them would under-report tools whose configuration sets
+ *    `log_queries: false`. This is a deliberate divergence from
+ *    getAnalyticsSummary / getTopQueries / getEmptyQueries, which all
+ *    exclude redacted rows because their output surfaces query text.
  */
 export async function getToolCounts(
   days: number = 7,
