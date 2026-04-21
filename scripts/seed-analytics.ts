@@ -76,7 +76,10 @@ function randomTimestamp(): Date {
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
     const base = new Date(now - Math.random() * sevenDaysMs);
 
-    // Bias toward business hours (9-18 UTC) — retry up to 3 times
+    // Bias toward business hours (9-18 UTC). With 70% probability, resample
+    // the hour up to 3 times to bias toward business hours; otherwise accept
+    // the original timestamp. This produces a soft skew rather than a hard
+    // clamp, so off-hours traffic still appears in the generated data.
     for (let i = 0; i < 3; i++) {
         const hour = base.getUTCHours();
         if (hour >= 9 && hour <= 18) break;
