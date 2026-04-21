@@ -333,11 +333,16 @@ export async function getAnalyticsSummary(
   ];
   const latencyWhere = whereAnd(latencyBase, fc3);
   const latencyLimitIdx = redactedIdxLatency + 1;
+  // Fetch cap+1 rows so we can distinguish "exactly the cap" (all rows
+  // returned, no sampling) from "more than the cap" (true sampling occurred).
+  // With a strict LIMIT $cap, a dataset with exactly $cap rows would
+  // misreport as sampled even though every row is in the result set. We
+  // slice back to the cap for the actual p95 computation.
   const latencyRes = await pool.query(
     `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY random() LIMIT $${latencyLimitIdx}`,
-    [...fp3, ...dw3.params, REDACTED_QUERY_TEXT, P95_LATENCY_ROW_CAP],
+    [...fp3, ...dw3.params, REDACTED_QUERY_TEXT, P95_LATENCY_ROW_CAP + 1],
   );
-  const p95Sampled = latencyRes.rows.length >= P95_LATENCY_ROW_CAP;
+  const p95Sampled = latencyRes.rows.length > P95_LATENCY_ROW_CAP;
   if (p95Sampled) {
     console.warn(
       `[analytics] getAnalyticsSummary: p95 latency sample capped at ${P95_LATENCY_ROW_CAP} rows; result may be approximate`,
@@ -390,10 +395,11 @@ export async function getAnalyticsSummary(
   const totalWindow = s.total ?? 0;
   const emptyWindow = s.empty ?? 0;
 
-  // Compute p95 in application code
-  const latencies = latencyRes.rows.map(
-    (r: Record<string, unknown>) => r.latency_ms as number,
-  );
+  // Compute p95 in application code. Slice back to the cap so the extra
+  // "overflow probe" row fetched above doesn't skew the sample size.
+  const latencies = latencyRes.rows
+    .slice(0, P95_LATENCY_ROW_CAP)
+    .map((r: Record<string, unknown>) => r.latency_ms as number);
   const p95Latency = computeP95(latencies);
 
   return {
