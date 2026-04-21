@@ -413,8 +413,10 @@
       >
         <h2 style="margin-bottom: 16px; font-size: 1.2rem">Analytics Token</h2>
         <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 16px">
-          Enter your analytics token. Check the server console output for the
-          auto-generated token, or use your configured ANALYTICS_TOKEN.
+          Enter your analytics token. If no token is configured, set
+          ANALYTICS_TOKEN in the server environment &mdash; the
+          auto-generated token is intentionally not printed in full and
+          cannot be recovered from logs.
         </p>
         <input
           id="tokenInput"
