@@ -2,6 +2,76 @@
 // Zod schemas provide runtime validation; TypeScript types are inferred from them.
 
 import { z } from "zod";
+import ipaddr from "ipaddr.js";
+
+/**
+ * Zod validator for a single allowlist entry: either a bare IPv4/IPv6 address
+ * ("160.79.106.35", "2001:db8::1") or a CIDR range ("160.79.106.0/24").
+ *
+ * Validation is two-layered:
+ *   1. Defensive regex pre-check (ALLOWLIST_ENTRY_REGEX below) — rejects
+ *      obviously malformed input before it reaches ipaddr.js.
+ *   2. ipaddr.parseCIDR / ipaddr.parse — the semantic validator that actually
+ *      confirms the address/CIDR is valid.
+ *
+ * The regex exists as defense-in-depth against ipaddr.js tolerance drift:
+ * if a future version of ipaddr.js relaxes what it accepts (e.g. starts
+ * tolerating whitespace, unusual characters, or empty CIDR suffixes), the
+ * regex still rejects those forms so the allowlist cannot be bypassed.
+ *
+ * The regexes reject:
+ *   - any whitespace (leading, trailing, or internal)
+ *   - characters outside the per-family allowed alphabet
+ *   - a negative or non-numeric CIDR suffix
+ *   - an empty CIDR suffix (e.g. "10.0.0.0/")
+ *   - a prefix length outside the per-family valid range (IPv4 0-32,
+ *     IPv6 0-128). Out-of-range prefixes still get rejected downstream by
+ *     ipaddr.js, but catching them at the schema boundary yields a cleaner,
+ *     family-aware error message for operators reading config-validation
+ *     output.
+ *
+ * Two separate regexes are used so that e.g. "10.0.0.0/33" fails with a clear
+ * "not a valid CIDR" message rather than being diffused through ipaddr.js. An
+ * entry matching neither regex is rejected up front.
+ */
+// IPv4 / IPv4-CIDR: decimal octet characters and optional /0–/32.
+const ALLOWLIST_IPV4_REGEX =
+  /^[0-9.]+(\/([0-9]|[1-2][0-9]|3[0-2]))?$/;
+// IPv6 / IPv6-CIDR: hex + colons, optional embedded IPv4 dotted-quad
+// (e.g. ::ffff:127.0.0.1), and optional /0–/128. The alphabet allows `.`
+// specifically for the embedded-v4 suffix form; ipaddr.js then does the real
+// semantic parse.
+const ALLOWLIST_IPV6_REGEX =
+  /^[0-9a-fA-F:.]+(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8]))?$/;
+
+const AllowlistEntrySchema = z.string().superRefine((val, ctx) => {
+  // An IPv4 entry never contains ':'; an IPv6 entry always does. Dispatch on
+  // that so each family gets its own prefix-range validation, and so an
+  // ambiguous-looking string can't slip past (e.g. "10.0.0.0/99" is rejected
+  // by ALLOWLIST_IPV4_REGEX and never evaluated as IPv6 because it has no
+  // ':').
+  const looksIpv6 = val.includes(":");
+  const regex = looksIpv6 ? ALLOWLIST_IPV6_REGEX : ALLOWLIST_IPV4_REGEX;
+  if (!regex.test(val)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Must be a valid IPv4/IPv6 address or CIDR range",
+    });
+    return;
+  }
+  try {
+    if (val.includes("/")) {
+      ipaddr.parseCIDR(val);
+    } else {
+      ipaddr.parse(val);
+    }
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Must be a valid IPv4/IPv6 address or CIDR range",
+    });
+  }
+});
 
 // ── Source configuration schemas ──────────────────────────────────────────────
 
@@ -239,6 +309,23 @@ export const ServerConfigSchema = z
       version: z.string().min(1),
       max_sessions_per_ip: z.number().int().positive().optional(),
       session_ttl_minutes: z.number().int().positive().optional(),
+      // IP/CIDR entries that bypass max_sessions_per_ip. Empty by default.
+      // Example: ["160.79.106.35"] to allowlist the Anthropic Assistant
+      // crawler, or ["10.0.0.0/8"] for an internal health probe range.
+      allowlist: z.array(AllowlistEntrySchema).optional(),
+      // When true, Express is configured with `app.set("trust proxy", true)`
+      // and will populate `req.ip` by walking the `X-Forwarded-For` chain.
+      // When false (the default), `X-Forwarded-For` is IGNORED entirely and
+      // the TCP peer address (`req.socket.remoteAddress`) is used for rate
+      // limiting, allowlist checks, tracing, and analytics.
+      //
+      // SECURITY: Only enable `trust_proxy: true` when this server runs
+      // behind a reverse proxy that strips or rewrites incoming
+      // `X-Forwarded-For` headers. Enabling it on a server directly exposed
+      // to the public internet lets any client spoof their source IP by
+      // sending an `X-Forwarded-For` header — which would let them claim
+      // to be an allowlisted IP and bypass the per-IP session limiter.
+      trust_proxy: z.boolean().optional().default(false),
     }),
     sources: z.array(SourceConfigSchema).min(1),
     tools: z.array(AnyToolConfigSchema).min(1),
