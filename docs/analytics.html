@@ -784,8 +784,16 @@
           sessionStorage.removeItem("pathfinder_analytics_token");
           showLogin();
           var loginErr = document.getElementById("loginError");
+          // Prefer the server-supplied `error_description` when available so
+          // misconfigured-token / disabled-analytics errors surface verbatim
+          // to the operator instead of a generic "Invalid token" which
+          // misleads when the real cause is something else.
+          var errBody = await res.json().catch(function () {
+            return {};
+          });
           loginErr.textContent =
-            res.status === 401 ? "Token required" : "Invalid token";
+            errBody.error_description ||
+            (res.status === 401 ? "Token required" : "Invalid token");
           loginErr.style.display = "block";
           throw createAnalyticsAuthError();
         }
@@ -893,7 +901,14 @@
             );
           })
           .join("");
-        var customActive = dateCustomMode || (activeFrom && activeTo);
+        // "Today" preset sets activeFrom === activeTo === todayStr, which
+        // would otherwise match the `(activeFrom && activeTo)` branch below
+        // and make both "Today" and "Custom..." rows render `.active`.
+        // Exclude the Today case explicitly so only one row highlights.
+        var isTodayRange =
+          activeFrom && activeFrom === activeTo && activeFrom === todayStr;
+        var customActive =
+          dateCustomMode || (activeFrom && activeTo && !isTodayRange);
         presetHtml +=
           '<div class="preset' +
           (customActive ? " active" : "") +
@@ -1492,10 +1507,20 @@
         }
       }
 
+      // Escape for HTML text AND attribute contexts. The DOM-based
+      // `div.textContent = s; return div.innerHTML;` trick only escapes
+      // <, >, &, which is safe for text nodes but NOT for quoted
+      // attribute values. Several call sites interpolate into
+      // `data-*="..."` (source pills, tool pills, etc.), so a value
+      // containing a literal `"` would break out of the attribute and
+      // inject arbitrary markup. Escape the full set explicitly.
       function esc(s) {
-        var d = document.createElement("div");
-        d.textContent = s;
-        return d.innerHTML;
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
       }
 
       // Defensive array normalizer — any field the server returns as a

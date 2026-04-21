@@ -765,3 +765,59 @@ describe("analytics dashboard UI — custom-range apply", () => {
     }
   });
 });
+
+describe("analytics dashboard UI — HTML escaping", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("escapes double quotes in source_name so the data-source attribute stays well-formed", async () => {
+    // A source_name containing a literal `"` must not break out of the
+    // data-source="..." attribute. The old esc() used a div.textContent
+    // round-trip that escaped <, >, & but NOT " — a malicious or
+    // unexpected source name could inject attributes or markup via the
+    // source-filter pill. Verify the DOM we build contains exactly one
+    // pill element (no injection) and the attribute decodes cleanly.
+    const malicious = 'weird" onclick="steal()" x="';
+    const total = 42;
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        total_queries: total,
+        total_queries_window: total,
+        empty_result_rate_window: 0,
+        empty_result_count_window: 0,
+        avg_latency_ms_window: 0,
+        p95_latency_ms_window: 0,
+        queries_per_day_window: [],
+        queries_by_source: [{ source_name: malicious, count: total }],
+      }),
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+
+    // The source filter pills live in #filters. Exactly one real source
+    // pill plus one "All Sources" pill should exist — any injected
+    // element from a broken escape would show up as an extra child.
+    const sourcePills = dom.window.document.querySelectorAll(
+      '.pill[data-source], .pill[data-source-all]',
+    );
+    expect(sourcePills.length).toBe(2);
+
+    // The malicious source_name must round-trip losslessly through the
+    // attribute — getAttribute() decodes HTML entities back to the raw
+    // string. If the `"` wasn't escaped, parsing would have truncated
+    // the attribute at the first quote.
+    const real = Array.from(sourcePills).find((el) =>
+      el.hasAttribute("data-source"),
+    );
+    expect(real).toBeDefined();
+    expect(real!.getAttribute("data-source")).toBe(malicious);
+
+    // No stray onclick attribute should have leaked into the pill.
+    expect(real!.hasAttribute("onclick")).toBe(false);
+  });
+});
