@@ -1,6 +1,11 @@
 server:
   name: pathfinder-docs
   version: "1.4.0"
+  # Anthropic crawler — bypasses per-IP session limit (requires trust_proxy: true to match the forwarded IP)
+  allowlist: ["160.79.106.35"]
+  # Safe to enable: Railway's edge discards any client-supplied X-Forwarded-For
+  # and sets its own trusted value, so the leftmost XFF entry is the real peer.
+  trust_proxy: true
 
 sources:
   - name: pathfinder-docs

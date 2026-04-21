@@ -5,6 +5,32 @@
 server:
   name: my-project-docs
   version: "1.0.0"
+  # max_sessions_per_ip: 20           # Max concurrent MCP sessions per IP (default: 20)
+  #                                   # When exceeded, returns HTTP 429 with JSON
+  #                                   # {error, reason, limit, currentCount, retryAfterSeconds, contact}
+  #                                   # and a Retry-After header.
+  # session_ttl_minutes: 30           # Idle session timeout in minutes (default: 30)
+  # allowlist:                        # IPs / CIDRs that bypass max_sessions_per_ip. Empty by default.
+  #   - "160.79.106.35"               # Example: Anthropic Assistant crawler
+  #   - "10.0.0.0/8"                  # Example: internal health-probe CIDR
+  # NOTE: behind a reverse proxy (Railway, Fly, etc.), allowlist entries only match
+  # when trust_proxy: true. Otherwise the server sees the proxy IP for every request.
+  #
+  # ⚠️  SECURITY WARNING — trust_proxy ⚠️
+  # When true, the server honors X-Forwarded-For and populates req.ip from
+  # the leftmost entry. This is REQUIRED when the server runs behind a
+  # reverse proxy (Railway, Fly, Nginx, etc.) that sets X-Forwarded-For.
+  #
+  # Only enable this when the proxy discards any client-supplied
+  # X-Forwarded-For AND sets its own trusted value. If the proxy passes
+  # through client-supplied X-Forwarded-For, attackers can send
+  # `X-Forwarded-For: 160.79.106.35` to be seen as an allowlisted IP and
+  # BYPASS the rate limiter entirely.
+  #
+  # When false (the default), X-Forwarded-For is ignored and the server
+  # uses the TCP socket's peer address. Leave this false for any server
+  # exposed directly to the public internet.
+  trust_proxy: false
 
 sources:
   - name: docs

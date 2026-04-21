@@ -62,7 +62,14 @@ describe("CollectToolConfigSchema", () => {
         rating: { type: "enum" as const, values: [], required: true },
       },
     };
-    expect(CollectToolConfigSchema.safeParse(config).success).toBe(false);
+    const result = CollectToolConfigSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message);
+      expect(messages.some((m) => m.includes("non-empty values array"))).toBe(
+        true,
+      );
+    }
   });
 
   it("rejects unknown field type", () => {
@@ -397,6 +404,131 @@ describe("ServerConfigSchema", () => {
     };
     const result = ServerConfigSchema.safeParse(config);
     expect(result.success).toBe(false);
+  });
+
+  describe("server.allowlist", () => {
+    const baseTools = [
+      {
+        name: "explore",
+        type: "bash" as const,
+        description: "Explore",
+        sources: ["docs"],
+      },
+    ];
+
+    it("accepts a plain-IP allowlist entry", () => {
+      const config = {
+        ...minimalConfig,
+        server: {
+          ...minimalConfig.server,
+          allowlist: ["160.79.106.35"],
+        },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts a CIDR allowlist entry", () => {
+      const config = {
+        ...minimalConfig,
+        server: {
+          ...minimalConfig.server,
+          allowlist: ["160.79.106.0/24", "2001:db8::/32"],
+        },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts an empty allowlist", () => {
+      const config = {
+        ...minimalConfig,
+        server: {
+          ...minimalConfig.server,
+          allowlist: [],
+        },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed allowlist entry (not an IP or CIDR)", () => {
+      const config = {
+        ...minimalConfig,
+        server: {
+          ...minimalConfig.server,
+          allowlist: ["not-an-ip"],
+        },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects an allowlist with an invalid CIDR suffix", () => {
+      const config = {
+        ...minimalConfig,
+        server: {
+          ...minimalConfig.server,
+          allowlist: ["10.0.0.0/99"],
+        },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    });
+
+    // Edge cases in allowlist-entry validation. The schema has a defensive
+    // regex pre-check (in src/types.ts) plus ipaddr.parseCIDR / ipaddr.parse
+    // as the semantic validator. Each of these entries must be rejected —
+    // if any start passing, either the regex or ipaddr.js has drifted and
+    // the allowlist could be bypassed.
+    it.each([
+      ["negative suffix", "10.0.0.0/-1"],
+      ["non-numeric suffix", "10.0.0.0/abc"],
+      ["empty suffix", "10.0.0.0/"],
+      ["leading whitespace", " 10.0.0.1"],
+      ["trailing whitespace", "10.0.0.0/24 "],
+      ["internal whitespace", "10.0.0. 1"],
+      ["invalid characters (SQL-ish)", "10.0.0.1;DROP"],
+      ["invalid characters (letters in octet)", "10.0.0.1abc"],
+      ["IPv6 out-of-range suffix", "2001:db8::/129"],
+      // Schema-level prefix-length bounds. These MUST be rejected at the
+      // schema boundary (by the regex pre-check), not diffused through
+      // ipaddr.js with a vaguer error. An operator typing "/999" should see a
+      // CIDR-range-out-of-bounds style error, not a generic parse failure.
+      ["IPv4 prefix above 32", "10.0.0.0/33"],
+      ["IPv6 prefix at 129", "::1/129"],
+      ["absurdly large IPv4 prefix", "0.0.0.0/999"],
+      ["absurdly large IPv6 prefix", "::1/999"],
+    ])("rejects an allowlist with %s (%s)", (_label, entry) => {
+      const config = {
+        ...minimalConfig,
+        server: {
+          ...minimalConfig.server,
+          allowlist: [entry],
+        },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects an allowlist that is not an array", () => {
+      const config = {
+        ...minimalConfig,
+        server: {
+          ...minimalConfig.server,
+          allowlist: "160.79.106.35",
+        },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    });
   });
 });
 
