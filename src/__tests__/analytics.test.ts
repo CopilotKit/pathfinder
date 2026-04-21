@@ -13,6 +13,7 @@ import {
   getEmptyQueries,
   getToolCounts,
   cleanupOldQueryLogs,
+  REDACTED_QUERY_TEXT,
 } from "../db/analytics.js";
 import type { QueryLogEntry } from "../db/analytics.js";
 
@@ -58,7 +59,10 @@ describe("logQuery", () => {
     await logQuery(baseEntry, false);
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[1]).toBe("<redacted>");
+    expect(params[1]).toBe(REDACTED_QUERY_TEXT);
+    // And pin the literal so the constant can never silently drift to a
+    // different sentinel that downstream reads wouldn't recognize.
+    expect(REDACTED_QUERY_TEXT).toBe("<redacted>");
   });
 
   it("passes null for nullable fields", async () => {
@@ -82,19 +86,29 @@ describe("logQuery", () => {
 // ---------------------------------------------------------------------------
 
 describe("logQuery error handling", () => {
-  it("propagates DB connection error to caller", async () => {
+  it("swallows DB errors so telemetry failures never break tool callers", async () => {
+    // Telemetry is best-effort. A failing pool.query must not propagate to
+    // the caller — otherwise an analytics outage would take down every
+    // tool call. We log with [analytics] prefix and resolve normally.
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockQuery.mockRejectedValueOnce(new Error("connection refused"));
     await expect(
       logQuery({
-        tool_name: "search",
+        tool_name: "search-docs",
         query_text: "test",
         result_count: 0,
         top_score: null,
         latency_ms: 10,
-        source_name: null,
+        source_name: "docs",
         session_id: null,
       }),
-    ).rejects.toThrow("connection refused");
+    ).resolves.toBeUndefined();
+    // Must include the [analytics] prefix and context (tool_name, source_name).
+    const logged = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logged).toContain("[analytics]");
+    expect(logged).toContain("search-docs");
+    expect(logged).toContain("docs");
+    consoleSpy.mockRestore();
   });
 });
 
@@ -260,12 +274,16 @@ describe("getTopQueries", () => {
     expect(params).toContain(10);
   });
 
-  it("excludes redacted queries", async () => {
+  it("excludes redacted queries via bound REDACTED_QUERY_TEXT param", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await getTopQueries();
 
-    const [sql] = mockQuery.mock.calls[0];
-    expect(sql).toContain("query_text != '<redacted>'");
+    const [sql, params] = mockQuery.mock.calls[0];
+    // The clause binds the sentinel instead of inlining '<redacted>' so
+    // REDACTED_QUERY_TEXT is the single source of truth for the value.
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(sql).not.toContain("'<redacted>'");
+    expect(params).toContain(REDACTED_QUERY_TEXT);
   });
 });
 
@@ -321,6 +339,16 @@ describe("getEmptyQueries", () => {
 
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toContain("result_count = 0");
+  });
+
+  it("excludes redacted queries via bound REDACTED_QUERY_TEXT param", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getEmptyQueries();
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(sql).not.toContain("'<redacted>'");
+    expect(params).toContain(REDACTED_QUERY_TEXT);
   });
 
   it("returns null for missing source_name", async () => {
@@ -397,9 +425,50 @@ describe("cleanupOldQueryLogs", () => {
 // ---------------------------------------------------------------------------
 
 describe("cleanupOldQueryLogs error handling", () => {
-  it("propagates DB error to caller", async () => {
+  it("propagates DB error to caller (after logging)", async () => {
+    // Scheduler catches the throw; we just verify it still propagates
+    // rather than being swallowed like logQuery. Suppress the error log
+    // so test output stays clean.
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockQuery.mockRejectedValueOnce(new Error("disk full"));
     await expect(cleanupOldQueryLogs(90)).rejects.toThrow("disk full");
+    const logged = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logged).toContain("[analytics]");
+    consoleSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cleanupOldQueryLogs input validation
+//
+// Regression guard: cleanupOldQueryLogs(0) would translate to
+// `created_at <= NOW() - 0 days` and wipe the entire table. Same risk with
+// negative values. Both must short-circuit without issuing any DB query.
+// ---------------------------------------------------------------------------
+
+describe("cleanupOldQueryLogs input validation", () => {
+  it("retentionDays=0 returns 0 and does not query the DB", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deleted = await cleanupOldQueryLogs(0);
+    expect(deleted).toBe(0);
+    expect(mockQuery.mock.calls).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+
+  it("retentionDays=-1 returns 0 and does not query the DB", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deleted = await cleanupOldQueryLogs(-1);
+    expect(deleted).toBe(0);
+    expect(mockQuery.mock.calls).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+
+  it("retentionDays=NaN returns 0 and does not query the DB", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deleted = await cleanupOldQueryLogs(NaN);
+    expect(deleted).toBe(0);
+    expect(mockQuery.mock.calls).toHaveLength(0);
+    consoleSpy.mockRestore();
   });
 });
 

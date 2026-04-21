@@ -218,7 +218,12 @@ describe("Analytics server routes (HTTP-level)", () => {
 
       expect(res.status).toBe(401);
       const body = JSON.parse(res.body);
-      expect(body.error).toMatch(/Missing or invalid Authorization/);
+      // Envelope matches the 503 (misconfigured) branch: { error,
+      // error_description } so every auth failure speaks one format.
+      expect(body.error).toBe("unauthorized");
+      expect(body.error_description).toMatch(
+        /Missing or invalid Authorization/,
+      );
     });
 
     it("returns data with a valid token", async () => {
@@ -259,7 +264,8 @@ describe("Analytics server routes (HTTP-level)", () => {
 
       expect(res.status).toBe(403);
       const body = JSON.parse(res.body);
-      expect(body.error).toBe("Invalid analytics token");
+      expect(body.error).toBe("forbidden");
+      expect(body.error_description).toBe("Invalid analytics token");
     });
 
     it("returns 404 when analytics is disabled", async () => {
@@ -447,7 +453,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(mockGetAnalyticsSummary).not.toHaveBeenCalled();
     });
 
-    it("returns 200 with backcompat `days` param", async () => {
+    it("returns 200 with backcompat `days` param and forwards it to the DB layer", async () => {
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
         log_queries: true,
@@ -457,10 +463,13 @@ describe("Analytics server routes (HTTP-level)", () => {
       mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 7 });
 
       await startApp();
+      // Use days=14 (non-default) so a regression that silently drops
+      // `days` and reapplies the default of 7 is caught — with days=7
+      // we can't tell the two apart.
       const res = await request(
         server,
         "GET",
-        "/api/analytics/summary?days=7",
+        "/api/analytics/summary?days=14",
         { Authorization: "Bearer tok" },
       );
 
@@ -470,6 +479,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       const callArg = mockGetAnalyticsSummary.mock.calls[0][0];
       expect(callArg.from).toBeUndefined();
       expect(callArg.to).toBeUndefined();
+      expect(mockGetAnalyticsSummary.mock.calls[0][1]).toBe(14);
     });
 
     // -------------------------------------------------------------------------
@@ -531,10 +541,13 @@ describe("Analytics server routes (HTTP-level)", () => {
       mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
 
       await startApp();
+      // days=14 (non-default) proves the handler parsed and forwarded the
+      // param — with days=7 a regression that drops the value and lets
+      // the default reapply would be invisible.
       await request(
         server,
         "GET",
-        "/api/analytics/summary?from=2026-04-01&to=2026-04-20&days=7",
+        "/api/analytics/summary?from=2026-04-01&to=2026-04-20&days=14",
         { Authorization: "Bearer tok" },
       );
 
@@ -543,7 +556,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       // both are set. Asserting both arguments here keeps the handler
       // behaviour locked down even if the DB precedence rule changes.
       const [filterArg, daysArg] = mockGetAnalyticsSummary.mock.calls[0];
-      expect(daysArg).toBe(7);
+      expect(daysArg).toBe(14);
       expect(filterArg.from).toBeInstanceOf(Date);
       expect(filterArg.to).toBeInstanceOf(Date);
     });
