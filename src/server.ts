@@ -581,61 +581,79 @@ app.post("/messages", ...sseHandlers.postHandler);
 // Health check
 // ---------------------------------------------------------------------------
 
-app.get("/health", async (_req: Request, res: Response) => {
-  const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
-  const needsDb =
-    hasSearchTools() ||
-    hasKnowledgeTools() ||
-    hasCollectTools() ||
-    hasBashSemanticSearch();
+export interface HealthRouteDeps {
+  getIndexStats?: typeof getIndexStats;
+}
 
-  if (!needsDb) {
-    res.json({
-      status: "ok",
-      server: getServerConfig().server.name,
-      uptime_seconds: uptime,
-      started_at: startedAt.toISOString(),
-      indexing: false,
-      index: "not_configured",
-    });
-    return;
-  }
+export function registerHealthRoute(
+  app: express.Express,
+  deps: HealthRouteDeps = {},
+): void {
+  const _getIndexStats = deps.getIndexStats ?? getIndexStats;
 
-  try {
-    const stats = await getIndexStats();
-    res.json({
-      status: "ok",
-      server: getServerConfig().server.name,
-      uptime_seconds: uptime,
-      started_at: startedAt.toISOString(),
-      indexing:
-        (orchestratorRef as IndexingOrchestrator | null)?.isIndexing() ?? false,
-      index: {
-        total_chunks: stats.totalChunks,
-        by_source: stats.bySource,
-        indexed_repos: stats.indexedRepos,
-        sources: stats.indexStates.map((s) => ({
-          type: s.source_type,
-          key: s.source_key,
-          status: s.status,
-          last_indexed: s.last_indexed_at,
-          commit: s.last_commit_sha?.slice(0, 8) ?? null,
-          error: s.error_message ?? null,
-        })),
-      },
-    });
-  } catch (err) {
-    console.error("[health] Database unavailable:", err);
-    res.status(503).json({
-      status: "degraded",
-      server: getServerConfig().server.name,
-      uptime_seconds: uptime,
-      started_at: startedAt.toISOString(),
-      index: "unavailable",
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-});
+  app.get("/health", async (_req: Request, res: Response) => {
+    const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+    const needsDb =
+      hasSearchTools() ||
+      hasKnowledgeTools() ||
+      hasCollectTools() ||
+      hasBashSemanticSearch();
+
+    if (!needsDb) {
+      res.json({
+        status: "ok",
+        server: getServerConfig().server.name,
+        uptime_seconds: uptime,
+        started_at: startedAt.toISOString(),
+        indexing: false,
+        index: "not_configured",
+      });
+      return;
+    }
+
+    try {
+      const stats = await _getIndexStats();
+      res.json({
+        status: "ok",
+        server: getServerConfig().server.name,
+        uptime_seconds: uptime,
+        started_at: startedAt.toISOString(),
+        indexing:
+          (orchestratorRef as IndexingOrchestrator | null)?.isIndexing() ??
+          false,
+        index: {
+          total_chunks: stats.totalChunks,
+          by_source: stats.bySource,
+          indexed_repos: stats.indexedRepos,
+          sources: stats.indexStates.map((s) => ({
+            type: s.source_type,
+            key: s.source_key,
+            status: s.status,
+            last_indexed: s.last_indexed_at,
+            commit: s.last_commit_sha?.slice(0, 8) ?? null,
+            error: s.error_message ?? null,
+          })),
+        },
+      });
+    } catch (err) {
+      // Log the full error server-side for operators, but never surface
+      // err.message in the response body: /health is unauthenticated and
+      // probed by every load balancer, and errors from the DB driver can
+      // contain DATABASE_URL fragments, table/schema names, and internal
+      // host:port info. Keep the response body to fixed, sanitized fields.
+      console.error("[health] Database unavailable:", err);
+      res.status(503).json({
+        status: "degraded",
+        server: getServerConfig().server.name,
+        uptime_seconds: uptime,
+        started_at: startedAt.toISOString(),
+        index: "unavailable",
+      });
+    }
+  });
+}
+
+registerHealthRoute(app);
 
 // ---------------------------------------------------------------------------
 // llms.txt and llms-full.txt — cached, invalidated on reindex
