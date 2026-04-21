@@ -104,12 +104,12 @@ describe("logQuery error handling", () => {
 
 describe("getAnalyticsSummary", () => {
   it("returns aggregated summary data", async () => {
-    // Mock order: total, summary7d, latency rows, bySource, perDay
+    // Mock order: total, summaryWindow, latency rows, bySource, perDay
     mockQuery
       .mockResolvedValueOnce({ rows: [{ count: 1000 }] }) // total
       .mockResolvedValueOnce({
         rows: [{ total: 200, empty: 10, avg_latency: 45 }],
-      }) // 7d summary
+      }) // windowed summary
       .mockResolvedValueOnce({
         rows: Array.from({ length: 200 }, (_, i) => ({
           latency_ms: i + 1,
@@ -512,7 +512,7 @@ describe("getAnalyticsSummary with filters", () => {
       .mockResolvedValueOnce({ rows: [{ count: 500 }] }) // total
       .mockResolvedValueOnce({
         rows: [{ total: 100, empty: 5, avg_latency: 50 }],
-      }) // 7d summary
+      }) // windowed summary
       .mockResolvedValueOnce({ rows: [] }) // latency rows
       .mockResolvedValueOnce({ rows: [] }) // by source
       .mockResolvedValueOnce({ rows: [] }); // per day
@@ -648,7 +648,7 @@ describe("getAnalyticsSummary honors days window", () => {
       .mockResolvedValueOnce({ rows: [{ count: 500 }] }) // total
       .mockResolvedValueOnce({
         rows: [{ total: 100, empty: 5, avg_latency: 50 }],
-      }) // 7d summary
+      }) // windowed summary
       .mockResolvedValueOnce({ rows: [] }) // latency rows
       .mockResolvedValueOnce({ rows: [] }) // by source
       .mockResolvedValueOnce({ rows: [] }); // per day
