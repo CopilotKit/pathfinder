@@ -451,7 +451,9 @@ export async function getTopQueries(
 }
 
 /**
- * Get queries that returned zero results, grouped by query text.
+ * Get queries that returned zero results. Grouped by
+ * (query_text, tool_name, source_name); results with the same query text
+ * but different tool/source appear separately.
  */
 export async function getEmptyQueries(
   days: number = 7,

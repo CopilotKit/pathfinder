@@ -142,6 +142,10 @@ describe("Analytics server routes (HTTP-level)", () => {
 
   afterEach(async () => {
     consoleSpy.mockRestore();
+    // Symmetric with beforeEach: reset env + the server.ts auto-generated
+    // token cache so state can't leak into subsequent tests (matches the
+    // afterEach pattern in analytics-endpoints.test.ts).
+    __resetAnalyticsTokenForTesting();
     delete process.env.ANALYTICS_TOKEN;
     if (server?.listening) {
       await new Promise<void>((resolve) => server.close(() => resolve()));

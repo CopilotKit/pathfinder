@@ -1094,7 +1094,10 @@ export function parsePositiveIntParam(
 // "All time" preset (which sends days=ALL_TIME_DAYS=99999 — see
 // docs/analytics.html) is comfortably under the cap. If you lower MAX_DAYS,
 // make sure it stays >= 99999 or the "All time" preset will 400.
-const MAX_DAYS = 100000;
+//
+// Exported so tests can reference the constant directly instead of
+// hardcoding the numeric literal (keeps one source of truth).
+export const MAX_DAYS = 100000;
 const MAX_LIMIT = 200;
 
 /**
