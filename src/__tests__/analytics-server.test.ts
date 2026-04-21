@@ -13,6 +13,7 @@ vi.mock("../db/analytics.js", () => ({
   getTopQueries: (...args: unknown[]) => mockGetTopQueries(...args),
   getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
   getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
+  getLogQueryFailureCount: () => 0,
 }));
 
 vi.mock("../config.js", () => ({

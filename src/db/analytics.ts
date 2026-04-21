@@ -106,6 +106,38 @@ export interface AnalyticsFilter {
 // ---------------------------------------------------------------------------
 
 /**
+ * Monotonic counter of logQuery insert failures. Incremented from the catch
+ * block below so operators have a single numeric signal for DB-layer
+ * telemetry health without having to scrape [analytics] logQuery log lines.
+ * Exposed through {@link getLogQueryFailureCount} and surfaced in
+ * /api/analytics/summary so the dashboard can show a badge when it drifts.
+ *
+ * Intentionally NOT reset between tool calls or retention-sweep cycles —
+ * the value represents "how many logQuery inserts have failed since this
+ * process started". A restart zeroes it, which matches how other process-
+ * local counters (cache hits, etc.) behave here.
+ */
+let logQueryFailureCount = 0;
+
+/**
+ * Return the current {@link logQueryFailureCount}. Exposed as a function
+ * rather than re-exporting the `let` so callers (and tests) can't mutate
+ * the counter directly — only the catch block below is allowed to bump it.
+ */
+export function getLogQueryFailureCount(): number {
+  return logQueryFailureCount;
+}
+
+/**
+ * Test-only hook: reset the failure counter so tests that exercise the
+ * catch path don't leak state across cases. Not exported from the package
+ * index — only imported by the test file alongside the getter.
+ */
+export function __resetLogQueryFailureCountForTesting(): void {
+  logQueryFailureCount = 0;
+}
+
+/**
  * Log a query to the query_log table.
  * When log_queries is false, query_text is stored as '<redacted>'.
  */
@@ -138,6 +170,12 @@ export async function logQuery(
     // pg-level metadata (error code, detail, position) instead of flattening
     // to `err.message`. Losing the stack on a telemetry failure makes DB
     // regressions much harder to diagnose from prod logs.
+    //
+    // Bump the module-level failure counter so /api/analytics/summary can
+    // surface it — swallowing the error in console.error alone made
+    // DB-layer telemetry health operationally invisible (no metric, no
+    // alert signal, only log-scraping).
+    logQueryFailureCount += 1;
     console.error(
       `[analytics] logQuery failed (tool_name=${entry.tool_name} source_name=${entry.source_name ?? "null"})`,
       err,

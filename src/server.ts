@@ -55,6 +55,7 @@ import {
   getTopQueries,
   getEmptyQueries,
   getToolCounts,
+  getLogQueryFailureCount,
 } from "./db/analytics.js";
 import type { AnalyticsFilter } from "./db/analytics.js";
 import path from "node:path";
@@ -1316,7 +1317,14 @@ export function registerAnalyticsRoutes(
           parsed.filter,
           daysParsed.value,
         );
-        res.json(summary);
+        // Surface the process-local logQuery failure counter alongside
+        // the summary so operators / the dashboard can see telemetry
+        // health without scraping logs. One field, additive — existing
+        // consumers that ignore unknown keys aren't affected.
+        res.json({
+          ...summary,
+          log_query_failures: getLogQueryFailureCount(),
+        });
       } catch (err) {
         console.error(
           `[analytics] Summary query failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value}):`,
