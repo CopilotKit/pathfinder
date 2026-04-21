@@ -221,7 +221,9 @@ describe("Analytics server routes (HTTP-level)", () => {
       // Envelope matches the 503 (misconfigured) branch: { error,
       // error_description } so every auth failure speaks one format.
       expect(body.error).toBe("unauthorized");
-      expect(body.error_description).toMatch(/Missing or invalid Authorization/);
+      expect(body.error_description).toMatch(
+        /Missing or invalid Authorization/,
+      );
     });
 
     it("returns data with a valid token", async () => {
