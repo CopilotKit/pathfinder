@@ -86,9 +86,7 @@ describe("logQuery error handling", () => {
     // Telemetry is best-effort. A failing pool.query must not propagate to
     // the caller — otherwise an analytics outage would take down every
     // tool call. We log with [analytics] prefix and resolve normally.
-    const consoleSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockQuery.mockRejectedValueOnce(new Error("connection refused"));
     await expect(
       logQuery({
@@ -413,9 +411,7 @@ describe("cleanupOldQueryLogs error handling", () => {
     // Scheduler catches the throw; we just verify it still propagates
     // rather than being swallowed like logQuery. Suppress the error log
     // so test output stays clean.
-    const consoleSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockQuery.mockRejectedValueOnce(new Error("disk full"));
     await expect(cleanupOldQueryLogs(90)).rejects.toThrow("disk full");
     const logged = consoleSpy.mock.calls.map((c) => c[0]).join("\n");

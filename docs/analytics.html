@@ -466,9 +466,7 @@
       // JSON so charts + tables render without a live backend. This lets the
       // date-range-selector mockup be visually evaluated against a full page.
       (function setupPreviewMode() {
-        if (
-          new URLSearchParams(window.location.search).get("preview") !== "1"
-        )
+        if (new URLSearchParams(window.location.search).get("preview") !== "1")
           return;
         // Flag preview mode on a window-local property so fetchJson and
         // getToken can short-circuit auth without touching the shared token
