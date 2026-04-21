@@ -1,6 +1,18 @@
 import { getPool } from "./client.js";
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Sentinel written to `query_log.query_text` when a tool is configured with
+ * `log_queries: false`. The top-queries and empty-queries readers exclude
+ * this value so redacted rows don't pollute "frequent search" output. Also
+ * exported so tests can assert the sentinel without duplicating the literal.
+ */
+export const REDACTED_QUERY_TEXT = "<redacted>";
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -74,20 +86,30 @@ export async function logQuery(
   logQueryText: boolean = true,
 ): Promise<void> {
   const pool = getPool();
-  const text = logQueryText ? entry.query_text : "<redacted>";
-  await pool.query(
-    `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id)
+  const text = logQueryText ? entry.query_text : REDACTED_QUERY_TEXT;
+  try {
+    await pool.query(
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [
-      entry.tool_name,
-      text,
-      entry.result_count,
-      entry.top_score,
-      entry.latency_ms,
-      entry.source_name,
-      entry.session_id,
-    ],
-  );
+      [
+        entry.tool_name,
+        text,
+        entry.result_count,
+        entry.top_score,
+        entry.latency_ms,
+        entry.source_name,
+        entry.session_id,
+      ],
+    );
+  } catch (err) {
+    // Telemetry failures must never break tool callers. Swallow the error
+    // after logging with enough context (tool_name + source_name) to
+    // diagnose. The tool result path is the source of truth for the
+    // caller; a missing analytics row is preferable to a failed tool call.
+    console.error(
+      `[analytics] logQuery failed (tool_name=${entry.tool_name} source_name=${entry.source_name ?? "null"}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -96,11 +118,17 @@ export async function logQuery(
 
 /**
  * Escape LIKE pattern metacharacters so user-supplied values don't act as
- * wildcards. Applied with an explicit `ESCAPE '\'` clause on the LIKE so
- * that literal `%`, `_`, and `\` in the input match exactly.
+ * wildcards. Applied with an explicit `ESCAPE '|'` clause on the LIKE so
+ * that literal `%`, `_`, and `|` in the input match exactly.
+ *
+ * We use `|` (pipe) rather than the SQL-standard `\` to sidestep a Postgres
+ * gotcha: with `standard_conforming_strings=on` (the default since 9.1), the
+ * literal `'\\'` is TWO characters, not one, and `ESCAPE` requires exactly
+ * one character. Using `|` keeps the SQL literal unambiguous regardless of
+ * `standard_conforming_strings` mode.
  */
 function escapeLikePattern(s: string): string {
-  return s.replace(/([\\%_])/g, "\\$1");
+  return s.replace(/([|%_])/g, "|$1");
 }
 
 /**
@@ -119,7 +147,7 @@ function buildFilterClauses(
     // Escape LIKE metacharacters in user input; declare the escape character
     // explicitly so `%` and `_` in the input match literally rather than as
     // wildcards.
-    clauses.push(`tool_name LIKE $${idx} || '-%' ESCAPE '\\'`);
+    clauses.push(`tool_name LIKE $${idx} || '-%' ESCAPE '|'`);
     params.push(escapeLikePattern(filter.tool_type));
     idx++;
   }
@@ -207,10 +235,14 @@ export async function getAnalyticsSummary(
     fp,
   );
 
-  // Windowed summary. Backfilled rows (latency_ms<0) are excluded from all
-  // three aggregates for consistency: otherwise the empty_result_rate_window
-  // denominator would include backfilled rows while the numerator and
-  // avg_latency implicitly exclude them, inflating the rate.
+  // Windowed summary. Backfilled rows (latency_ms<0) are excluded from every
+  // windowed aggregate (summary, latency, by-source, per-day, getToolCounts,
+  // getTopQueries, getEmptyQueries) for consistency: otherwise the
+  // empty_result_rate_window denominator would include backfilled rows
+  // while the numerator and avg_latency implicitly exclude them, inflating
+  // the rate. All windowed aggregates exclude `latency_ms < 0`. The only
+  // aggregate that intentionally includes backfilled rows is the all-time
+  // `total_queries` count in this function (see the totals query below).
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
   const summaryBase = [...dw2.clauses, "latency_ms >= 0"];
@@ -225,7 +257,7 @@ export async function getAnalyticsSummary(
     [...fp2, ...dw2.params],
   );
 
-  // Latencies for p95 (exclude backfilled rows with latency_ms=-1)
+  // Latencies for p95 (exclude backfilled rows where latency_ms < 0)
   const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
   const dw3 = buildDateWindow(filter, days, n3);
   const latencyBase = [...dw3.clauses, "latency_ms >= 0"];
@@ -235,10 +267,15 @@ export async function getAnalyticsSummary(
     [...fp3, ...dw3.params],
   );
 
-  // By source (filtered)
+  // By source (filtered). Excludes backfilled rows (latency_ms < 0) so the
+  // doughnut totals line up with summary + per-day.
   const { clauses: fc4, params: fp4, nextIdx: n4 } = buildFilterClauses(filter);
   const dw4 = buildDateWindow(filter, days, n4);
-  const sourceBase = ["source_name IS NOT NULL", ...dw4.clauses];
+  const sourceBase = [
+    "source_name IS NOT NULL",
+    ...dw4.clauses,
+    "latency_ms >= 0",
+  ];
   const sourceWhere = whereAnd(sourceBase, fc4);
   const bySourceRes = await pool.query(
     `SELECT source_name, count(*)::int AS count
@@ -249,10 +286,12 @@ export async function getAnalyticsSummary(
     [...fp4, ...dw4.params],
   );
 
-  // Per day (filtered)
+  // Per day (filtered). Excludes backfilled rows (latency_ms < 0) so the
+  // per-day bars match the summary/latency aggregates above.
   const { clauses: fc5, params: fp5, nextIdx: n5 } = buildFilterClauses(filter);
   const dw5 = buildDateWindow(filter, days, n5);
-  const dayWhere = whereAnd(dw5.clauses, fc5);
+  const dayBase = [...dw5.clauses, "latency_ms >= 0"];
+  const dayWhere = whereAnd(dayBase, fc5);
   const perDayRes = await pool.query(
     `SELECT date_trunc('day', created_at)::date::text AS day, count(*)::int AS count
     FROM query_log
@@ -307,7 +346,15 @@ export async function getTopQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
-  const baseClauses = [...dw.clauses, "query_text != '<redacted>'"];
+  // Bind REDACTED_QUERY_TEXT rather than interpolating the literal so the
+  // sentinel has a single source of truth (the module constant) and the
+  // SQL stays shielded from the value.
+  const redactedIdx = dw.nextIdx;
+  const baseClauses = [
+    ...dw.clauses,
+    `query_text != $${redactedIdx}`,
+    "latency_ms >= 0",
+  ];
   const where = whereAnd(baseClauses, fc);
 
   const { rows } = await pool.query(
@@ -321,21 +368,28 @@ export async function getTopQueries(
     ${where}
     GROUP BY query_text, tool_name
     ORDER BY count DESC
-    LIMIT $${dw.nextIdx}`,
-    [...fp, ...dw.params, limit],
+    LIMIT $${redactedIdx + 1}`,
+    [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],
   );
 
-  return rows.map((r: Record<string, unknown>) => ({
-    query_text: r.query_text as string,
-    tool_name: r.tool_name as string,
-    count: r.count as number,
-    avg_result_count:
+  return rows.map((r: Record<string, unknown>) => {
+    // parseFloat can produce NaN for unexpected values. Guard with
+    // Number.isFinite so stat rendering downstream doesn't produce a
+    // literal "NaN" in the Top Queries table.
+    const avgRc =
       r.avg_result_count != null
         ? parseFloat(r.avg_result_count as string)
-        : null,
-    avg_top_score:
-      r.avg_top_score != null ? parseFloat(r.avg_top_score as string) : null,
-  }));
+        : null;
+    const avgTs =
+      r.avg_top_score != null ? parseFloat(r.avg_top_score as string) : null;
+    return {
+      query_text: r.query_text as string,
+      tool_name: r.tool_name as string,
+      count: r.count as number,
+      avg_result_count: avgRc != null && Number.isFinite(avgRc) ? avgRc : null,
+      avg_top_score: avgTs != null && Number.isFinite(avgTs) ? avgTs : null,
+    };
+  });
 }
 
 /**
@@ -350,10 +404,14 @@ export async function getEmptyQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
+  // Same rationale as getTopQueries: bind the REDACTED_QUERY_TEXT sentinel
+  // so the SQL literal isn't duplicated across reads.
+  const redactedIdx = dw.nextIdx;
   const baseClauses = [
     "result_count = 0",
     ...dw.clauses,
-    "query_text != '<redacted>'",
+    `query_text != $${redactedIdx}`,
+    "latency_ms >= 0",
   ];
   const where = whereAnd(baseClauses, fc);
 
@@ -368,8 +426,8 @@ export async function getEmptyQueries(
     ${where}
     GROUP BY query_text, tool_name, source_name
     ORDER BY count DESC
-    LIMIT $${dw.nextIdx}`,
-    [...fp, ...dw.params, limit],
+    LIMIT $${redactedIdx + 1}`,
+    [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],
   );
 
   return rows.map((r: Record<string, unknown>) => ({
@@ -406,7 +464,10 @@ export async function getToolCounts(
     nextIdx,
   } = buildFilterClauses(sourceOnlyFilter);
   const dw = buildDateWindow(sourceOnlyFilter, days, nextIdx);
-  const where = whereAnd(dw.clauses, fc);
+  // Exclude backfilled rows (latency_ms < 0) so tool counts match the
+  // windowed aggregates used elsewhere (summary, latency, per-day).
+  const baseClauses = [...dw.clauses, "latency_ms >= 0"];
+  const where = whereAnd(baseClauses, fc);
   const { rows } = await pool.query(
     `SELECT
         split_part(tool_name, '-', 1) AS tool_type,
@@ -440,10 +501,38 @@ export async function getToolCounts(
 export async function cleanupOldQueryLogs(
   retentionDays: number,
 ): Promise<number> {
+  // Hard-reject non-positive or non-finite retention. Crucially guards
+  // against `cleanupOldQueryLogs(0)` which would otherwise translate to
+  // `created_at <= NOW() - 0 days` and delete the entire table. NaN and
+  // negatives are rejected for the same reason.
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    console.warn(
+      `[analytics] cleanupOldQueryLogs: invalid retentionDays=${retentionDays}, skipping`,
+    );
+    return 0;
+  }
   const pool = getPool();
-  const result = await pool.query(
-    `DELETE FROM query_log WHERE created_at < NOW() - INTERVAL '1 day' * $1`,
-    [retentionDays],
-  );
-  return result.rowCount ?? 0;
+  // Use `<=` here so the partition is complete vs. the rolling-window reads
+  // (which use `created_at > NOW() - INTERVAL`). With strict `<`, rows sitting
+  // exactly at the retention edge would be visible to reads but not cleaned
+  // up by retention. `<=` is the safer choice — we'd rather delete an extra
+  // row at the boundary than leak rows past the retention window.
+  try {
+    const result = await pool.query(
+      `DELETE FROM query_log WHERE created_at <= NOW() - INTERVAL '1 day' * $1`,
+      [retentionDays],
+    );
+    const rowCount = result.rowCount ?? 0;
+    console.log(
+      `[analytics] cleanupOldQueryLogs: deleted ${rowCount} rows older than ${retentionDays} days`,
+    );
+    return rowCount;
+  } catch (err) {
+    // Log with [analytics] prefix before rethrowing — callers (the
+    // scheduler) handle the error but should always have a log line.
+    console.error(
+      `[analytics] cleanupOldQueryLogs failed (retentionDays=${retentionDays}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    throw err;
+  }
 }

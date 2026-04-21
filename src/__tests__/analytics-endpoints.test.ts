@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { Request } from "express";
 
 // These tests verify the auth middleware logic and endpoint parameter parsing.
 // They mock the analytics DB functions and test the Express handler logic.
@@ -216,6 +217,30 @@ describe("analyticsAuth middleware", () => {
 
     analyticsAuth(
       { headers: { authorization: "Bearer wrong" } } as never,
+      res as never,
+      next,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when same-length token differs by one char (exercises timing-safe path)", () => {
+    // With different-length tokens the short-circuit path in analyticsAuth
+    // rejects before timingSafeEqual runs. Using a same-length 'secrit'
+    // ensures timingSafeEqual is actually invoked — exercising the real
+    // constant-time comparison rather than only the length guard.
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
+    const res = mockRes();
+    const next = vi.fn();
+
+    analyticsAuth(
+      { headers: { authorization: "Bearer secrit" } } as never,
       res as never,
       next,
     );
@@ -456,12 +481,15 @@ describe("analyticsAuth middleware", () => {
 // ---------------------------------------------------------------------------
 
 describe("parseAnalyticsFilter from/to validation", () => {
-  function mkReq(query: Record<string, string>): never {
-    return { query } as never;
+  // Returning Partial<Request> (not `never`) so the typed `{query}` shape
+  // is explicit; parseAnalyticsFilter only reads `.query`, so a Partial is
+  // safe here. Call sites cast to Request to satisfy the signature.
+  function mkReq(query: Record<string, string>): Partial<Request> {
+    return { query };
   }
 
   it("returns ok with empty filter when no query params", () => {
-    const result = parseAnalyticsFilter(mkReq({}));
+    const result = parseAnalyticsFilter(mkReq({}) as Request);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.filter.from).toBeUndefined();
@@ -471,7 +499,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
 
   it("parses valid from/to into Date objects on the filter", () => {
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-04-01", to: "2026-04-20" }),
+      mkReq({ from: "2026-04-01", to: "2026-04-20" }) as Request,
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -487,7 +515,9 @@ describe("parseAnalyticsFilter from/to validation", () => {
   });
 
   it("rejects from without to with 400", () => {
-    const result = parseAnalyticsFilter(mkReq({ from: "2026-04-01" }));
+    const result = parseAnalyticsFilter(
+      mkReq({ from: "2026-04-01" }) as Request,
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
@@ -497,7 +527,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
   });
 
   it("rejects to without from with 400", () => {
-    const result = parseAnalyticsFilter(mkReq({ to: "2026-04-20" }));
+    const result = parseAnalyticsFilter(mkReq({ to: "2026-04-20" }) as Request);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
@@ -506,7 +536,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
 
   it("rejects malformed from with 400", () => {
     const result = parseAnalyticsFilter(
-      mkReq({ from: "invalid", to: "2026-04-20" }),
+      mkReq({ from: "invalid", to: "2026-04-20" }) as Request,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -517,7 +547,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
 
   it("rejects malformed to with 400", () => {
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-04-01", to: "04/20/2026" }),
+      mkReq({ from: "2026-04-01", to: "04/20/2026" }) as Request,
     );
     expect(result.ok).toBe(false);
   });
@@ -526,11 +556,31 @@ describe("parseAnalyticsFilter from/to validation", () => {
     // Feb 30 as `from` rolls forward to March 2 under `new Date()` — we
     // detect that via the YYYY-MM-DD roundtrip check.
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-02-30", to: "2026-03-01" }),
+      mkReq({ from: "2026-02-30", to: "2026-03-01" }) as Request,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
+    }
+  });
+
+  it("drops empty tool_type so it doesn't become an unbounded LIKE wildcard", () => {
+    // Locking in current behavior: `?tool_type=` from a blank select must
+    // not land on the filter. If it did, buildFilterClauses would build
+    // `tool_name LIKE '' || '-%'` — matching every tool_name — which is
+    // almost certainly a client bug, not a "show everything" intent.
+    const result = parseAnalyticsFilter(mkReq({ tool_type: "" }) as Request);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.filter.tool_type).toBeUndefined();
+    }
+  });
+
+  it("drops empty source so it doesn't mask the no-filter case", () => {
+    const result = parseAnalyticsFilter(mkReq({ source: "" }) as Request);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.filter.source).toBeUndefined();
     }
   });
 
@@ -541,7 +591,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
         source: "docs",
         from: "2026-04-01",
         to: "2026-04-20",
-      }),
+      }) as Request,
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -554,7 +604,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
 
   it("rejects from > to with 400", () => {
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-04-20", to: "2026-04-01" }),
+      mkReq({ from: "2026-04-20", to: "2026-04-01" }) as Request,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -568,7 +618,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
     // Second scenario: the wider range proves the rejection is driven by
     // the calendar-date roundtrip check, not by any range-length logic.
     const result = parseAnalyticsFilter(
-      mkReq({ from: "2026-02-30", to: "2026-04-20" }),
+      mkReq({ from: "2026-02-30", to: "2026-04-20" }) as Request,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -576,14 +626,103 @@ describe("parseAnalyticsFilter from/to validation", () => {
     }
   });
 
-  it("rejects array query params (Express multi-value) with 400", () => {
-    const result = parseAnalyticsFilter({
-      query: { from: ["2026-04-01", "2026-04-02"], to: "2026-04-20" },
-    } as never);
+  // Calendar-shape (YYYY-MM-DD) but not a real date. `new Date()` yields
+  // Invalid Date on these; if parseAnalyticsFilter then calls `.toISOString()`
+  // on the NaN timestamp, RangeError escapes and becomes a 500. Every one of
+  // these must surface as a clean 400 with the `invalid_request` envelope.
+  it.each([
+    ["2025-13-01", "invalid month"],
+    ["2025-01-32", "day past 31"],
+    ["2025-00-15", "month zero"],
+    ["2025-04-00", "day zero"],
+  ])("rejects calendar-invalid `from=%s` (%s) with 400, not 500", (from) => {
+    const result = parseAnalyticsFilter(
+      mkReq({ from, to: "2025-12-31" }) as Request,
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
     }
+  });
+
+  it.each([
+    ["2025-13-01", "invalid month"],
+    ["2025-01-32", "day past 31"],
+    ["2025-00-15", "month zero"],
+    ["2025-04-00", "day zero"],
+  ])("rejects calendar-invalid `to=%s` (%s) with 400, not 500", (to) => {
+    const result = parseAnalyticsFilter(
+      mkReq({ from: "2025-01-01", to }) as Request,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
+    }
+  });
+
+  // Express parses repeated query-string keys as arrays (e.g.
+  // `?from=a&from=b`). Every filter param must reject that shape up front
+  // with the same `invalid_request` envelope, regardless of which one tripped.
+  it.each([
+    ["from", { from: ["2026-04-01", "2026-04-02"], to: "2026-04-20" }],
+    ["to", { from: "2026-04-01", to: ["2026-04-20", "2026-04-21"] }],
+    ["days", { days: ["7", "14"] }],
+    ["limit", { limit: ["10", "20"] }],
+    ["tool_type", { tool_type: ["search", "collect"] }],
+    ["source", { source: ["docs", "api"] }],
+  ])(
+    "rejects array query param `%s` (Express multi-value) with 400",
+    (_name, query) => {
+      const result = parseAnalyticsFilter({ query } as never);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.status).toBe(400);
+        expect(result.body.error).toBe("invalid_request");
+      }
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Range-width cap. The server caps from/to span at MAX_DAYS so a client
+  // can't request `from=1970-01-01&to=9999-12-31` and force a scan across
+  // the entire table.
+  //
+  // Important implementation detail: `from` is snapped to UTC start-of-day
+  // and `to` is snapped to UTC end-of-day (23:59:59.999). So a range that
+  // covers N calendar days has (to-from) ≈ N*86400000 - 1 ms, and
+  // Math.ceil((to-from)/86400000) = N. We test both sides of the boundary.
+  // ---------------------------------------------------------------------------
+  describe("parseAnalyticsFilter range-width cap", () => {
+    // Helper that generates a YYYY-MM-DD string N calendar days after
+    // `from`. N=0 returns `from` itself.
+    function addDaysUTC(from: string, n: number): string {
+      const d = new Date(from + "T00:00:00.000Z");
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    }
+
+    it("accepts a range that spans exactly MAX_DAYS calendar days", () => {
+      // MAX_DAYS is 100000 in server.ts — a range of from..from+99999 days
+      // spans 100000 calendar days at UTC-start..UTC-end-of-day resolution.
+      const from = "1970-01-01";
+      const to = addDaysUTC(from, 99999); // MAX_DAYS - 1 offset => MAX_DAYS span
+      const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects a range that spans MAX_DAYS + 1 calendar days with 400", () => {
+      const from = "1970-01-01";
+      const to = addDaysUTC(from, 100000); // 100001-day span
+      const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.status).toBe(400);
+        expect(result.body.error).toBe("invalid_request");
+        expect(result.body.error_description).toMatch(/range.*<=/i);
+      }
+    });
   });
 });
 
@@ -592,7 +731,6 @@ describe("parseAnalyticsFilter from/to validation", () => {
 // ---------------------------------------------------------------------------
 
 describe("parsePositiveIntParam", () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports,@typescript-eslint/no-var-requires
   let parsePositiveIntParam: typeof import("../server.js").parsePositiveIntParam;
   beforeEach(async () => {
     const mod = await import("../server.js");

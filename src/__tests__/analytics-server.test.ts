@@ -40,13 +40,16 @@ vi.mock("../config.js", () => ({
   hasBashSemanticSearch: vi.fn().mockReturnValue(false),
 }));
 
-import { getAnalyticsConfig } from "../config.js";
+import { getAnalyticsConfig, getConfig } from "../config.js";
 import {
   registerAnalyticsRoutes,
   __resetAnalyticsTokenForTesting,
+  getAuthMode,
 } from "../server.js";
+import type { Request } from "express";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
+const mockGetConfigFn = vi.mocked(getConfig);
 
 // ---------------------------------------------------------------------------
 // Build an Express app using the production registerAnalyticsRoutes() so
@@ -215,7 +218,12 @@ describe("Analytics server routes (HTTP-level)", () => {
 
       expect(res.status).toBe(401);
       const body = JSON.parse(res.body);
-      expect(body.error).toMatch(/Missing or invalid Authorization/);
+      // Envelope matches the 503 (misconfigured) branch: { error,
+      // error_description } so every auth failure speaks one format.
+      expect(body.error).toBe("unauthorized");
+      expect(body.error_description).toMatch(
+        /Missing or invalid Authorization/,
+      );
     });
 
     it("returns data with a valid token", async () => {
@@ -256,7 +264,8 @@ describe("Analytics server routes (HTTP-level)", () => {
 
       expect(res.status).toBe(403);
       const body = JSON.parse(res.body);
-      expect(body.error).toBe("Invalid analytics token");
+      expect(body.error).toBe("forbidden");
+      expect(body.error_description).toBe("Invalid analytics token");
     });
 
     it("returns 404 when analytics is disabled", async () => {
@@ -444,7 +453,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(mockGetAnalyticsSummary).not.toHaveBeenCalled();
     });
 
-    it("returns 200 with backcompat `days` param", async () => {
+    it("returns 200 with backcompat `days` param and forwards it to the DB layer", async () => {
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
         log_queries: true,
@@ -454,10 +463,13 @@ describe("Analytics server routes (HTTP-level)", () => {
       mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 7 });
 
       await startApp();
+      // Use days=14 (non-default) so a regression that silently drops
+      // `days` and reapplies the default of 7 is caught — with days=7
+      // we can't tell the two apart.
       const res = await request(
         server,
         "GET",
-        "/api/analytics/summary?days=7",
+        "/api/analytics/summary?days=14",
         { Authorization: "Bearer tok" },
       );
 
@@ -467,6 +479,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       const callArg = mockGetAnalyticsSummary.mock.calls[0][0];
       expect(callArg.from).toBeUndefined();
       expect(callArg.to).toBeUndefined();
+      expect(mockGetAnalyticsSummary.mock.calls[0][1]).toBe(14);
     });
 
     // -------------------------------------------------------------------------
@@ -518,7 +531,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(daysArg).toBe(7);
     });
 
-    it("does not pass `days` to DB when from/to range is active", async () => {
+    it("forwards days param alongside from/to range (DB layer handles precedence)", async () => {
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
         log_queries: true,
@@ -528,16 +541,22 @@ describe("Analytics server routes (HTTP-level)", () => {
       mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
 
       await startApp();
+      // days=14 (non-default) proves the handler parsed and forwarded the
+      // param — with days=7 a regression that drops the value and lets
+      // the default reapply would be invisible.
       await request(
         server,
         "GET",
-        "/api/analytics/summary?from=2026-04-01&to=2026-04-20&days=30",
+        "/api/analytics/summary?from=2026-04-01&to=2026-04-20&days=14",
         { Authorization: "Bearer tok" },
       );
 
-      // `days` still reaches the DB layer as a fallback (default 7), but the
-      // explicit from/to range takes precedence inside buildDateWindow.
-      const [filterArg] = mockGetAnalyticsSummary.mock.calls[0];
+      // The handler forwards both the explicit range (on filter) and the
+      // days param; buildDateWindow inside the DB layer picks from/to when
+      // both are set. Asserting both arguments here keeps the handler
+      // behaviour locked down even if the DB precedence rule changes.
+      const [filterArg, daysArg] = mockGetAnalyticsSummary.mock.calls[0];
+      expect(daysArg).toBe(14);
       expect(filterArg.from).toBeInstanceOf(Date);
       expect(filterArg.to).toBeInstanceOf(Date);
     });
@@ -616,6 +635,229 @@ describe("Analytics server routes (HTTP-level)", () => {
         { Authorization: "Bearer tok" },
       );
       expect(res.status).toBe(400);
+    });
+  });
+
+  // ---- DB error handling (500 path) -----------------------------------------
+  //
+  // Each handler wraps its DB call in a try/catch that logs the error and
+  // returns a generic 500. These tests lock down that contract so a handler
+  // can't accidentally leak a stack trace (or, worse, crash the process).
+  // ---------------------------------------------------------------------------
+
+  describe("DB error handling (500 path)", () => {
+    function cfg() {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+    }
+
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errSpy.mockRestore();
+    });
+
+    it("returns 500 JSON when getAnalyticsSummary throws", async () => {
+      cfg();
+      mockGetAnalyticsSummary.mockRejectedValueOnce(new Error("db down"));
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/summary", {
+        Authorization: "Bearer tok",
+      });
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeTruthy();
+      // Body must not leak internal stack/message detail
+      expect(res.body).not.toContain("db down");
+    });
+
+    it("returns 500 JSON when getTopQueries throws", async () => {
+      cfg();
+      mockGetTopQueries.mockRejectedValueOnce(new Error("db down"));
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/queries", {
+        Authorization: "Bearer tok",
+      });
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeTruthy();
+      expect(res.body).not.toContain("db down");
+    });
+
+    it("returns 500 JSON when getEmptyQueries throws", async () => {
+      cfg();
+      mockGetEmptyQueries.mockRejectedValueOnce(new Error("db down"));
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/empty-queries", {
+        Authorization: "Bearer tok",
+      });
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeTruthy();
+      expect(res.body).not.toContain("db down");
+    });
+
+    it("returns 500 JSON when getToolCounts throws", async () => {
+      cfg();
+      mockGetToolCounts.mockRejectedValueOnce(new Error("db down"));
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/tool-counts", {
+        Authorization: "Bearer tok",
+      });
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeTruthy();
+      expect(res.body).not.toContain("db down");
+    });
+  });
+
+  // ---- /analytics sendFile error paths (ENOENT + non-ENOENT) -----------------
+  //
+  // The dashboard HTML route wraps res.sendFile with an error callback that
+  // maps ENOENT -> 404 (missing install) and any other error -> 500. These
+  // tests cover both branches by pointing analyticsHtmlPath at paths that
+  // won't serve as a regular file.
+  // ---------------------------------------------------------------------------
+
+  describe("GET /analytics file-serve error paths", () => {
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errSpy.mockRestore();
+    });
+
+    function startAppWithHtmlPath(htmlPath: string): Promise<http.Server> {
+      return new Promise((resolve) => {
+        const app = express();
+        app.use(express.json());
+        registerAnalyticsRoutes(app, {
+          getAnalyticsSummary: (
+            ...args: Parameters<typeof mockGetAnalyticsSummary>
+          ) => mockGetAnalyticsSummary(...args),
+          getTopQueries: (...args: Parameters<typeof mockGetTopQueries>) =>
+            mockGetTopQueries(...args),
+          getEmptyQueries: (...args: Parameters<typeof mockGetEmptyQueries>) =>
+            mockGetEmptyQueries(...args),
+          getToolCounts: (...args: Parameters<typeof mockGetToolCounts>) =>
+            mockGetToolCounts(...args),
+          analyticsHtmlPath: htmlPath,
+        });
+        const s = app.listen(0, () => resolve(s));
+      });
+    }
+
+    it("returns 404 when analyticsHtmlPath does not exist (ENOENT)", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      server = await startAppWithHtmlPath(
+        "/nonexistent/definitely-does-not-exist.html",
+      );
+      const res = await request(server, "GET", "/analytics");
+      expect(res.status).toBe(404);
+      expect(res.body).toContain("analytics dashboard not available");
+    });
+
+    it("returns 500 on non-ENOENT sendFile error (e.g. path is a directory)", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      // Pointing at a directory triggers an EISDIR-style error rather than
+      // ENOENT, exercising the "anything else" 500 branch.
+      server = await startAppWithHtmlPath("/tmp");
+      const res = await request(server, "GET", "/analytics");
+      expect(res.status).toBe(500);
+      expect(res.body).toContain("analytics dashboard unavailable");
+    });
+  });
+
+  // ---- getAuthMode() unit tests ---------------------------------------------
+  //
+  // We test the exported helper directly rather than via /api/analytics/auth-
+  // mode over TCP because the test HTTP server always receives requests from
+  // 127.0.0.1 — there's no way to exercise the "non-localhost socket" branch
+  // without either binding to a routable interface (flaky) or spoofing the
+  // socket object on a synthetic Request (what we do here).
+  // ---------------------------------------------------------------------------
+
+  describe("getAuthMode()", () => {
+    beforeEach(() => {
+      mockGetConfigFn.mockReset();
+    });
+
+    function mkReq(remoteAddress: string): Request {
+      return { socket: { remoteAddress } } as unknown as Request;
+    }
+
+    function cfgWithEnv(nodeEnv: string) {
+      mockGetConfigFn.mockReturnValue({
+        port: 3001,
+        databaseUrl: "pglite:///tmp/test",
+        openaiApiKey: "",
+        githubToken: "",
+        githubWebhookSecret: "",
+        nodeEnv,
+        logLevel: "info",
+        cloneDir: "/tmp/test",
+        slackBotToken: "",
+        slackSigningSecret: "",
+        discordBotToken: "",
+        discordPublicKey: "",
+        notionToken: "",
+        mcpJwtSecret: "x".repeat(32),
+      });
+    }
+
+    it("development + localhost (127.0.0.1) -> { dev: true }", () => {
+      cfgWithEnv("development");
+      expect(getAuthMode(mkReq("127.0.0.1"))).toEqual({ dev: true });
+    });
+
+    it("development + localhost (::1) -> { dev: true }", () => {
+      cfgWithEnv("development");
+      expect(getAuthMode(mkReq("::1"))).toEqual({ dev: true });
+    });
+
+    it("development + localhost (::ffff:127.0.0.1) -> { dev: true }", () => {
+      cfgWithEnv("development");
+      expect(getAuthMode(mkReq("::ffff:127.0.0.1"))).toEqual({ dev: true });
+    });
+
+    it("development + non-localhost socket -> { dev: false }", () => {
+      cfgWithEnv("development");
+      expect(getAuthMode(mkReq("192.168.1.100"))).toEqual({ dev: false });
+    });
+
+    it("production + localhost -> { dev: false }", () => {
+      cfgWithEnv("production");
+      expect(getAuthMode(mkReq("127.0.0.1"))).toEqual({ dev: false });
+    });
+
+    it("production + non-localhost -> { dev: false }", () => {
+      cfgWithEnv("production");
+      expect(getAuthMode(mkReq("192.168.1.100"))).toEqual({ dev: false });
     });
   });
 });

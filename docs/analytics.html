@@ -4,7 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pathfinder Analytics</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <!-- Pin to an exact version (not the floating '@4' tag) so an upstream
+         patch release can't silently change what this page executes. SRI
+         hash is omitted for now because we can't generate it offline; this
+         should be added as defense-in-depth. TODO: add integrity="sha384-..."
+         + crossorigin="anonymous"; regen hash whenever the version bumps. -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7"></script>
     <style>
       * {
         box-sizing: border-box;
@@ -461,11 +466,15 @@
       // JSON so charts + tables render without a live backend. This lets the
       // date-range-selector mockup be visually evaluated against a full page.
       (function setupPreviewMode() {
-        if (!window.location.search.includes("preview=1")) return;
-        // Flag preview mode on the window so fetchJson/getToken can skip
-        // auth headers, WITHOUT polluting the shared token storage slot.
-        // Writing "preview" to sessionStorage used to bleed into real
-        // /analytics sessions on the same origin (tabs share storage).
+        if (new URLSearchParams(window.location.search).get("preview") !== "1")
+          return;
+        // Flag preview mode on a window-local property so fetchJson and
+        // getToken can short-circuit auth without touching the shared token
+        // slot in sessionStorage. sessionStorage is scoped per-origin and
+        // shared across tabs, so any sentinel written there (e.g. a
+        // "preview" placeholder) would be picked up by a real /analytics
+        // session on the same origin. Keeping the flag on `window` isolates
+        // the effect to this single page load.
         window.__pathfinderPreview = true;
 
         var today = new Date();
@@ -626,6 +635,34 @@
         };
       })();
 
+      // --- Constants / helpers ---
+      // Upper bound used by the "All time" preset. Server-side MAX_DAYS must
+      // stay >= this value.
+      var ALL_TIME_DAYS = 99999;
+
+      // Dedicated error so load()'s catch block can distinguish auth failures
+      // (which already rendered the login modal) from all other errors
+      // without resorting to `err.message === "auth"` magic string matching.
+      //
+      // Named `createAnalyticsAuthError` to make the factory intent explicit:
+      // it returns a plain `Error` with `err.name === "AnalyticsAuthError"`,
+      // which is what the catch block at load() below checks. Using a `new
+      // SubclassName()` form would suggest `instanceof SubclassName` is the
+      // discriminator, which would be wrong here (this is a factory, not a
+      // class) and break if the error crossed any subclass-stripping boundary.
+      function createAnalyticsAuthError() {
+        var e = new Error("analytics-auth");
+        e.name = "AnalyticsAuthError";
+        return e;
+      }
+
+      // Coerce an unknown value to a finite number for .toLocaleString() —
+      // if the server sends null / undefined / NaN for a counter field, we
+      // render 0 rather than letting toLocaleString() throw or render "NaN".
+      function safeNumber(x) {
+        return typeof x === "number" && Number.isFinite(x) ? x : 0;
+      }
+
       // --- State ---
       var activeToolType = null; // null = "All"
       var activeSource = null; // null = "All Sources"
@@ -670,9 +707,10 @@
       }
 
       function todayISO() {
-        // Today's UTC date in YYYY-MM-DD. We anchor on UTC to match what the
-        // server compares against (created_at in UTC) — using local time
-        // here means users near midnight see yesterday's or tomorrow's rows.
+        // Today's UTC date in YYYY-MM-DD. Server from/to path compares
+        // created_at as UTC. The rolling 'days' path uses NOW() - INTERVAL
+        // which is server-local — keep client/server TZ aligned or prefer
+        // from/to for exact boundaries.
         var d = new Date();
         var y = d.getUTCFullYear();
         var m = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -701,7 +739,7 @@
         if (activeDaysBack === 14) return "Last 14 days";
         if (activeDaysBack === 30) return "Last 30 days";
         if (activeDaysBack === 90) return "Last 90 days";
-        if (activeDaysBack !== null && activeDaysBack >= 99999)
+        if (activeDaysBack !== null && activeDaysBack >= ALL_TIME_DAYS)
           return "All time";
         if (activeDaysBack !== null) return "Last " + activeDaysBack + " days";
         return "Custom range";
@@ -749,13 +787,16 @@
           loginErr.textContent =
             res.status === 401 ? "Token required" : "Invalid token";
           loginErr.style.display = "block";
-          throw new Error("auth");
+          throw createAnalyticsAuthError();
         }
         if (!res.ok) {
-          var body = await res.json().catch(function () {
+          var body = await res.json().catch(function (parseErr) {
+            console.error("[analytics] error body parse failed", parseErr);
             return {};
           });
-          throw new Error(body.error || "HTTP " + res.status);
+          throw new Error(
+            body.error_description || body.error || "HTTP " + res.status,
+          );
         }
         return res.json();
       }
@@ -821,7 +862,7 @@
           { label: "Last 14 days", kind: "days", days: 14 },
           { label: "Last 30 days", kind: "days", days: 30 },
           { label: "Last 90 days", kind: "days", days: 90 },
-          { label: "All time", kind: "days", days: 99999 },
+          { label: "All time", kind: "days", days: ALL_TIME_DAYS },
         ];
         var pillLabel = formatPillLabel();
         var customModeCls = dateCustomMode ? " custom-mode" : "";
@@ -862,19 +903,22 @@
 
         // Default the custom-range inputs to whatever is active, falling back to today/week.
         // Prefer in-progress draft values so re-renders don't clobber user typing.
+        // UTC throughout so the default matches what "Today" preset would send
+        // — otherwise a user in a non-UTC timezone opening the popover near
+        // midnight sees a different date than "Today" would apply.
         var today = new Date();
         function toISO(d) {
-          var y = d.getFullYear(),
-            m = String(d.getMonth() + 1).padStart(2, "0"),
-            dd = String(d.getDate()).padStart(2, "0");
+          var y = d.getUTCFullYear(),
+            m = String(d.getUTCMonth() + 1).padStart(2, "0"),
+            dd = String(d.getUTCDate()).padStart(2, "0");
           return y + "-" + m + "-" + dd;
         }
         var defaultTo =
-          draftToInput != null ? draftToInput : activeTo || toISO(today);
+          draftToInput != null ? draftToInput : activeTo || todayISO();
         var defaultFrom = draftFromInput != null ? draftFromInput : activeFrom;
         if (!defaultFrom) {
           var back = new Date(today);
-          back.setDate(back.getDate() - 6);
+          back.setUTCDate(back.getUTCDate() - 6);
           defaultFrom = toISO(back);
         }
         var customVisibleStyle = dateCustomMode ? "" : "display:none;";
@@ -964,6 +1008,11 @@
             pill.addEventListener("click", function () {
               var isAll = this.hasAttribute("data-source-all");
               activeSource = isAll ? null : this.getAttribute("data-source");
+              // Clearing/changing the source filter means the next fetch
+              // may return a narrower set of sources in summary. Drop the
+              // cache so a later unfiltered response can re-seed it from
+              // the full population.
+              unfilteredSourcesCache = null;
               load();
             });
           });
@@ -991,6 +1040,9 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — sources cached under the previous
+            // window are stale. Let the next unfiltered load refresh it.
+            unfilteredSourcesCache = null;
             load();
           });
         });
@@ -1009,6 +1061,8 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — invalidate source cache.
+            unfilteredSourcesCache = null;
             load();
           });
         }
@@ -1081,6 +1135,8 @@
             dateCustomMode = false;
             draftFromInput = null;
             draftToInput = null;
+            // Date window changed — invalidate source cache.
+            unfilteredSourcesCache = null;
             load();
           });
         }
@@ -1121,11 +1177,16 @@
         var gen = ++loadGeneration;
         try {
           var fp = buildFilterParams();
-          // Prefix a '?' so the '&' in fp hangs off cleanly; summary needs special handling
+          // Prefix a '?' so the '&' in fp hangs off cleanly.
+          // Applies to both summary and tool-counts endpoints: neither has a
+          // hardcoded leading query param (unlike queries/empty-queries which
+          // always start with `?limit=50`), so we strip fp's leading '&' and
+          // prepend a '?' only when fp is non-empty.
           var summaryUrl =
             "/api/analytics/summary" + (fp ? "?" + fp.replace(/^&/, "") : "");
           var queriesUrl = "/api/analytics/queries?limit=50" + fp;
           var emptyUrl = "/api/analytics/empty-queries?limit=50" + fp;
+          // Same '?' / leading-'&' handling as summary above.
           var toolCountsUrl =
             "/api/analytics/tool-counts" +
             (fp ? "?" + fp.replace(/^&/, "") : "");
@@ -1147,16 +1208,23 @@
 
           // Cache for non-fetching re-renders (e.g. toggling the date popover)
           currentToolCounts = toolCounts;
-          // When no tool-type filter is active, the summary.queries_by_source
+          // When NO filters are active, the summary.queries_by_source
           // reflects the full set. Snapshot it so that later, when a
-          // tool-type filter shrinks the response, the source pills still
-          // render the complete list.
+          // tool-type or source filter shrinks the response, the source
+          // pills still render the complete list.
+          //
+          // Must gate on BOTH activeToolType === null AND activeSource === null:
+          // if only activeToolType is checked, a user who picks source=A
+          // then clears the tool filter (keeping source=A) would overwrite
+          // the cache with a single-row response, permanently hiding the
+          // other sources until a full reload.
           //
           // Only cache a non-empty array: caching `[]` would defeat the
           // cache (both branches would render zero pills, losing pills
           // that existed pre-filter) — we want a populated snapshot.
           if (
             activeToolType === null &&
+            activeSource === null &&
             Array.isArray(summary.queries_by_source) &&
             summary.queries_by_source.length > 0
           ) {
@@ -1181,35 +1249,46 @@
           // When the window is "All time", the windowed Queries card
           // would duplicate the Total Queries card (same population),
           // so omit it for clarity.
-          var isAllTime = activeDaysBack !== null && activeDaysBack >= 99999;
+          var isAllTime =
+            activeDaysBack !== null && activeDaysBack >= ALL_TIME_DAYS;
           var statCards = [
             {
               label: "Total Queries",
-              value: summary.total_queries.toLocaleString(),
+              value: safeNumber(summary.total_queries).toLocaleString(),
             },
           ];
           if (!isAllTime) {
             statCards.push({
               label: "Queries (" + winLabel + ")",
-              value: summary.total_queries_window.toLocaleString(),
+              value: safeNumber(summary.total_queries_window).toLocaleString(),
             });
           }
+          // Guard the percentage: NaN * 100 = NaN, and (NaN).toFixed(1) is
+          // "NaN", so an undefined or non-finite rate from the server would
+          // render as "NaN%". Fall back to "-" instead.
+          var rate = summary.empty_result_rate_window;
+          var rateLabel =
+            typeof rate === "number" && Number.isFinite(rate)
+              ? (rate * 100).toFixed(1) + "%"
+              : "-";
           statCards.push(
             {
               label: "Empty Result Rate (" + winLabel + ")",
-              value: (summary.empty_result_rate_window * 100).toFixed(1) + "%",
+              value: rateLabel,
             },
             {
               label: "Avg Latency (" + winLabel + ")",
-              value: summary.avg_latency_ms_window + "ms",
+              value: safeNumber(summary.avg_latency_ms_window) + "ms",
             },
             {
               label: "P95 Latency (" + winLabel + ")",
-              value: summary.p95_latency_ms_window + "ms",
+              value: safeNumber(summary.p95_latency_ms_window) + "ms",
             },
             {
               label: "Empty Queries (" + winLabel + ")",
-              value: summary.empty_result_count_window.toLocaleString(),
+              value: safeNumber(
+                summary.empty_result_count_window,
+              ).toLocaleString(),
             },
           );
           document.getElementById("stats").innerHTML = statCards
@@ -1291,6 +1370,8 @@
                   dateCustomMode = false;
                   draftFromInput = null;
                   draftToInput = null;
+                  // Date window changed — invalidate source cache.
+                  unfilteredSourcesCache = null;
                   load();
                 },
               },
@@ -1338,12 +1419,15 @@
           topBody.innerHTML =
             asArray(topQueries)
               .map(function (q) {
-                var avgRes =
-                  q.avg_result_count != null
-                    ? q.avg_result_count.toFixed(1)
-                    : "-";
-                var avgScore =
-                  q.avg_top_score != null ? q.avg_top_score.toFixed(2) : "-";
+                // Guard with Number.isFinite so a stray NaN / non-finite
+                // value from the backend doesn't render a literal "NaN" in
+                // the table. Matches the backend guard in getTopQueries.
+                var avgRes = Number.isFinite(q.avg_result_count)
+                  ? q.avg_result_count.toFixed(1)
+                  : "\u2014";
+                var avgScore = Number.isFinite(q.avg_top_score)
+                  ? q.avg_top_score.toFixed(2)
+                  : "\u2014";
                 return (
                   "<tr><td>" +
                   esc(q.query_text) +
@@ -1366,6 +1450,16 @@
           emptyBody.innerHTML =
             asArray(emptyQueries)
               .map(function (q) {
+                // Guard against missing / non-parseable last_seen values.
+                // `new Date(undefined).toLocaleString()` yields the literal
+                // string "Invalid Date", which would be rendered raw and
+                // looks like a bug. Fall back to an em dash instead, and
+                // route the result through esc() on interpolation.
+                var lastSeenRaw = q.last_seen ? new Date(q.last_seen) : null;
+                var lastSeenStr =
+                  lastSeenRaw && Number.isFinite(lastSeenRaw.getTime())
+                    ? lastSeenRaw.toLocaleString()
+                    : "\u2014";
                 return (
                   '<tr class="empty"><td>' +
                   esc(q.query_text) +
@@ -1376,7 +1470,7 @@
                   "</td><td>" +
                   q.count +
                   "</td><td>" +
-                  new Date(q.last_seen).toLocaleString() +
+                  esc(lastSeenStr) +
                   "</td></tr>"
                 );
               })
@@ -1387,7 +1481,10 @@
           // request that rejects after a newer load() has already
           // rendered would otherwise clobber the fresh UI with an error.
           if (gen !== loadGeneration) return;
-          if (err.message !== "auth") {
+          // Always log to devtools with full context — the UI banner below
+          // truncates to err.message, which hides stack + non-Error throws.
+          console.error("[analytics] load() failed:", err);
+          if (err.name !== "AnalyticsAuthError") {
             document.getElementById("error").style.display = "block";
             document.getElementById("error").textContent =
               "Failed to load analytics: " + err.message;
@@ -1431,7 +1528,12 @@
             return;
           }
         } catch (e) {
-          /* ignore — fall through to normal auth */
+          // Fall through to normal auth. Log so a broken probe is visible
+          // in devtools rather than silently invoking the token prompt.
+          console.warn(
+            "[analytics] auth-mode probe failed; falling back to token auth",
+            e,
+          );
         }
 
         if (!TOKEN) {

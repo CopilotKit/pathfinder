@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { JSDOM, VirtualConsole } from "jsdom";
 import fs from "node:fs";
 import path from "node:path";
@@ -55,8 +55,7 @@ function installChartStub(win: Window & typeof globalThis): {
       this.destroyed = true;
     }
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (win as any).Chart = ChartStub;
+  Object.assign(win, { Chart: ChartStub });
   return { instances };
 }
 
@@ -114,10 +113,13 @@ async function loadDashboard(
   });
 
   const win = dom.window as unknown as Window & typeof globalThis;
+  // jsdom creates its own Date constructor on window; vitest's fake timers
+  // only patch the test-context global. Forward our (possibly faked) Date into
+  // the jsdom window so `new Date()` inside dashboard code is deterministic.
+  Object.assign(win, { Date: globalThis.Date });
   const { instances } = installChartStub(win);
   const { fetchFn, calls } = buildFetchStub(handlers);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (win as any).fetch = fetchFn;
+  Object.assign(win, { fetch: fetchFn });
 
   // Pull out the inline <script> and execute in the window.
   const scriptEl = dom.window.document.querySelector("script:not([src])");
@@ -186,10 +188,6 @@ function todayUTC(): string {
 // ---------------------------------------------------------------------------
 
 describe("analytics dashboard UI — date preset wiring", () => {
-  beforeEach(() => {
-    // Ensure no lingering preview mode or token from other tests.
-    // jsdom gives a fresh window per test anyway, but be defensive.
-  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -286,92 +284,113 @@ describe("analytics dashboard UI — date preset wiring", () => {
     expect(statsHtml).toContain("9,999");
     expect(statsHtml).not.toContain("1,111");
 
-    // Daily bar chart should be re-rendered with 30 bars.
+    // Daily bar chart should be re-rendered with one bar per day in the
+    // mocked queries_per_day_window. Assert against the mock shape rather
+    // than a hardcoded 30 so the test doesn't drift if the canned payload
+    // width ever changes.
     const lastBarChart = [...chartInstances]
       .reverse()
       .find((c) => c.type === "bar");
     expect(lastBarChart).toBeDefined();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const labels = (lastBarChart as any).data.labels as string[];
-    expect(labels).toHaveLength(30);
+    const mockedSummary = canned(30, 9999).summary;
+    expect(labels).toHaveLength(mockedSummary.queries_per_day_window.length);
   });
 
   it("clicking 'Today' sends from=<today>&to=<today> (both equal, UTC), not days=1", async () => {
-    const endpoints = {
-      "/api/analytics/auth-mode": () => ({ dev: true }),
-      "/api/analytics/summary": (qs: string) => {
-        const p = parseQS(qs);
-        // Return a distinguishing value when the `from`/`to` range is used.
-        const usingRange = Boolean(p.from && p.to);
-        return canned(1, usingRange ? 4242 : 1111).summary;
-      },
-      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
-      "/api/analytics/queries": () => [],
-      "/api/analytics/empty-queries": () => [],
-    };
+    // Freeze Date so "today" is deterministic across timezones and midnight
+    // rollovers. toFake:["Date"] keeps setTimeout real so the flush-microtask
+    // pattern below (`await setTimeout(r, 0)`) still advances normally.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+    try {
+      const endpoints = {
+        "/api/analytics/auth-mode": () => ({ dev: true }),
+        "/api/analytics/summary": (qs: string) => {
+          const p = parseQS(qs);
+          // Return a distinguishing value when the `from`/`to` range is used.
+          const usingRange = Boolean(p.from && p.to);
+          return canned(1, usingRange ? 4242 : 1111).summary;
+        },
+        "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+        "/api/analytics/queries": () => [],
+        "/api/analytics/empty-queries": () => [],
+      };
 
-    const { dom, calls } = await loadDashboard(endpoints);
-    const initial = calls.slice();
+      const { dom, calls } = await loadDashboard(endpoints);
+      const initial = calls.slice();
 
-    // Open popover.
-    const datePill = dom.window.document.getElementById("datePill")!;
-    datePill.dispatchEvent(
-      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
-    );
+      // Open popover.
+      const datePill = dom.window.document.getElementById("datePill")!;
+      datePill.dispatchEvent(
+        new dom.window.MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
 
-    // Click "Today" preset. data-days is whatever the UI chose — the test
-    // only asserts on outbound fetches, which is what actually matters.
-    const todayPreset = Array.from(
-      dom.window.document.querySelectorAll(".preset"),
-    ).find((el) => el.textContent?.trim().startsWith("Today")) as
-      | HTMLElement
-      | undefined;
-    expect(todayPreset).toBeDefined();
-    todayPreset!.dispatchEvent(
-      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
-    );
+      // Click "Today" preset. data-days is whatever the UI chose — the test
+      // only asserts on outbound fetches, which is what actually matters.
+      const todayPreset = Array.from(
+        dom.window.document.querySelectorAll(".preset"),
+      ).find((el) => el.textContent?.trim().startsWith("Today")) as
+        | HTMLElement
+        | undefined;
+      expect(todayPreset).toBeDefined();
+      todayPreset!.dispatchEvent(
+        new dom.window.MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
 
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
 
-    const after = calls.slice(initial.length);
-    const summaryCall = after.find((u) =>
-      u.startsWith("/api/analytics/summary"),
-    );
-    expect(summaryCall).toBeDefined();
-    const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+      const after = calls.slice(initial.length);
+      const summaryCall = after.find((u) =>
+        u.startsWith("/api/analytics/summary"),
+      );
+      expect(summaryCall).toBeDefined();
+      const qs = parseQS(summaryCall!.split("?")[1] ?? "");
 
-    const today = todayUTC();
-    // from and to must both be present AND equal to today's date.
-    expect(qs.from).toBe(today);
-    expect(qs.to).toBe(today);
-    // days= must NOT be sent — "Today" uses explicit range, not rolling window.
-    expect(qs.days).toBeUndefined();
+      // With frozen Date, today is exactly 2026-04-20 in UTC.
+      const today = "2026-04-20";
+      expect(today).toBe(todayUTC());
+      // from and to must both be present AND equal to today's date.
+      expect(qs.from).toBe(today);
+      expect(qs.to).toBe(today);
+      // days= must NOT be sent — "Today" uses explicit range, not rolling window.
+      expect(qs.days).toBeUndefined();
 
-    // Every endpoint must send the explicit range.
-    for (const p of [
-      "/api/analytics/summary",
-      "/api/analytics/tool-counts",
-      "/api/analytics/queries",
-      "/api/analytics/empty-queries",
-    ]) {
-      const call = after.find((u) => u.startsWith(p));
-      expect(call, p + " should be refetched").toBeDefined();
-      const q = parseQS(call!.split("?")[1] ?? "");
-      expect(q.from, p + " from=today").toBe(today);
-      expect(q.to, p + " to=today").toBe(today);
-      expect(q.days, p + " should not send days").toBeUndefined();
+      // Every endpoint must send the explicit range.
+      for (const p of [
+        "/api/analytics/summary",
+        "/api/analytics/tool-counts",
+        "/api/analytics/queries",
+        "/api/analytics/empty-queries",
+      ]) {
+        const call = after.find((u) => u.startsWith(p));
+        expect(call, p + " should be refetched").toBeDefined();
+        const q = parseQS(call!.split("?")[1] ?? "");
+        expect(q.from, p + " from=today").toBe(today);
+        expect(q.to, p + " to=today").toBe(today);
+        expect(q.days, p + " should not send days").toBeUndefined();
+      }
+
+      // Stat card must show the range-using payload, not the default 7-day one.
+      const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+      expect(statsHtml).toContain("4,242");
+
+      // Pill label must say "Today" — not the formatted date.
+      const pillLabel = dom.window.document
+        .querySelector("#datePill .date-value")
+        ?.textContent?.trim();
+      expect(pillLabel).toBe("Today");
+    } finally {
+      vi.useRealTimers();
     }
-
-    // Stat card must show the range-using payload, not the default 7-day one.
-    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
-    expect(statsHtml).toContain("4,242");
-
-    // Pill label must say "Today" — not the formatted date.
-    const pillLabel = dom.window.document
-      .querySelector("#datePill .date-value")
-      ?.textContent?.trim();
-    expect(pillLabel).toBe("Today");
   });
 
   it("clicking 'Last 7 days' AFTER 'Today' switches back to days=7 and updates stats", async () => {
@@ -591,5 +610,158 @@ describe("analytics dashboard UI — dynamic window labels", () => {
     expect(doc.getElementById("topQueriesTitle")!.textContent).toBe(
       "Top Queries (Last 90 days)",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Daily bar chart: clicking a bar should drill down to from=to=that-day.
+// This exercises the onClick handler wired on the daily chart instance so
+// the chart is interactive, not just informational.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — daily bar click drills down", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("invoking the daily-bar onClick with elements[0].index triggers a reload with from=to=<day>", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+    try {
+      const endpoints = {
+        "/api/analytics/auth-mode": () => ({ dev: true }),
+        "/api/analytics/summary": () => canned(3, 500).summary,
+        "/api/analytics/tool-counts": () => canned(3, 500).toolCounts,
+        "/api/analytics/queries": () => [],
+        "/api/analytics/empty-queries": () => [],
+      };
+
+      const { dom, calls, chartInstances } = await loadDashboard(endpoints);
+      const initialCount = calls.length;
+
+      // Grab the most recent bar chart instance — that's the daily chart.
+      const barChart = [...chartInstances]
+        .reverse()
+        .find((c) => c.type === "bar") as
+        | (typeof chartInstances)[number]
+        | undefined;
+      expect(barChart).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const labels = (barChart as any).data.labels as string[];
+      expect(labels.length).toBeGreaterThan(0);
+      const targetDay = labels[0];
+      expect(/^\d{4}-\d{2}-\d{2}$/.test(targetDay)).toBe(true);
+
+      // Invoke the chart's onClick directly — jsdom can't synthesize the
+      // Chart.js-style click event, so we call the handler the same way
+      // Chart.js does internally.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const onClick = (barChart as any).options.onClick as (
+        evt: unknown,
+        elements: Array<{ index: number }>,
+      ) => void;
+      expect(typeof onClick).toBe("function");
+      onClick({}, [{ index: 0 }]);
+
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      const after = calls.slice(initialCount);
+      const summaryCall = after.find((u) =>
+        u.startsWith("/api/analytics/summary"),
+      );
+      expect(summaryCall).toBeDefined();
+      const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+      expect(qs.from).toBe(targetDay);
+      expect(qs.to).toBe(targetDay);
+      expect(qs.days).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom-range popover: typing dates + clicking Apply should send those
+// explicit dates on all four endpoints.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — custom-range apply", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("typing from/to + clicking Apply sends those explicit dates to every endpoint", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(3, 100).summary,
+      "/api/analytics/tool-counts": () => canned(3, 100).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, calls } = await loadDashboard(endpoints);
+    const initialCount = calls.length;
+
+    // Open popover, then click the Custom preset to reveal the inputs.
+    const datePill = dom.window.document.getElementById("datePill")!;
+    datePill.dispatchEvent(
+      new dom.window.MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    const customPreset = dom.window.document.querySelector(
+      ".preset[data-custom]",
+    ) as HTMLElement | null;
+    expect(customPreset).not.toBeNull();
+    customPreset!.dispatchEvent(
+      new dom.window.MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    // Fill both inputs. Use dispatchEvent('input') so draft state updates
+    // the way real user typing would.
+    const fromEl = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    const toEl = dom.window.document.getElementById(
+      "dateToInput",
+    ) as HTMLInputElement;
+    expect(fromEl).not.toBeNull();
+    expect(toEl).not.toBeNull();
+    fromEl.value = "2026-04-05";
+    fromEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    toEl.value = "2026-04-15";
+    toEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    // Click Apply.
+    const applyBtn = dom.window.document.getElementById("dateApplyBtn")!;
+    applyBtn.dispatchEvent(
+      new dom.window.MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const after = calls.slice(initialCount);
+    for (const p of [
+      "/api/analytics/summary",
+      "/api/analytics/tool-counts",
+      "/api/analytics/queries",
+      "/api/analytics/empty-queries",
+    ]) {
+      const call = after.find((u) => u.startsWith(p));
+      expect(call, p + " should be refetched on Apply").toBeDefined();
+      const qs = parseQS(call!.split("?")[1] ?? "");
+      expect(qs.from, p + " from").toBe("2026-04-05");
+      expect(qs.to, p + " to").toBe("2026-04-15");
+      expect(qs.days, p + " should not send days").toBeUndefined();
+    }
   });
 });
