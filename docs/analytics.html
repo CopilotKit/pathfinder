@@ -803,16 +803,28 @@
       async function fetchJson(url) {
         var res = await fetch(url, { headers: headers });
         if (res.status === 401 || res.status === 403) {
-          sessionStorage.removeItem("pathfinder_analytics_token");
-          showLogin();
-          var loginErr = document.getElementById("loginError");
           // Prefer the server-supplied `error_description` when available so
           // misconfigured-token / disabled-analytics errors surface verbatim
           // to the operator instead of a generic "Invalid token" which
           // misleads when the real cause is something else.
-          var errBody = await res.json().catch(function () {
+          var errBody = await res.json().catch(function (parseErr) {
+            console.error("[analytics] auth error body parse failed", parseErr);
             return {};
           });
+          // Only clear the stored token when the server's structured envelope
+          // confirms an auth failure (`error: "unauthorized" | "forbidden"`).
+          // Otherwise a 401/403 injected by an upstream SSO proxy — whose
+          // body shape doesn't match — would wipe a still-valid token and
+          // force the operator to re-paste on every proxy hiccup.
+          if (
+            errBody.error === "unauthorized" ||
+            errBody.error === "forbidden"
+          ) {
+            sessionStorage.removeItem("pathfinder_analytics_token");
+            TOKEN = "";
+          }
+          showLogin();
+          var loginErr = document.getElementById("loginError");
           loginErr.textContent =
             errBody.error_description ||
             (res.status === 401 ? "Token required" : "Invalid token");
