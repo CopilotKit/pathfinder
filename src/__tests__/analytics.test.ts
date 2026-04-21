@@ -456,32 +456,31 @@ describe("cleanupOldQueryLogs error handling", () => {
 //
 // Regression guard: cleanupOldQueryLogs(0) would translate to
 // `created_at <= NOW() - 0 days` and wipe the entire table. Same risk with
-// negative values. Both must short-circuit without issuing any DB query.
+// negative values. Both must reject hard (not silently no-op) so a
+// misconfigured retention surfaces in the scheduler's .catch() handler
+// instead of being swallowed on every nightly run.
 // ---------------------------------------------------------------------------
 
 describe("cleanupOldQueryLogs input validation", () => {
-  it("retentionDays=0 returns 0 and does not query the DB", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const deleted = await cleanupOldQueryLogs(0);
-    expect(deleted).toBe(0);
+  it("retentionDays=0 throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(0)).rejects.toThrow(
+      /invalid retentionDays=0/,
+    );
     expect(mockQuery.mock.calls).toHaveLength(0);
-    consoleSpy.mockRestore();
   });
 
-  it("retentionDays=-1 returns 0 and does not query the DB", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const deleted = await cleanupOldQueryLogs(-1);
-    expect(deleted).toBe(0);
+  it("retentionDays=-1 throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(-1)).rejects.toThrow(
+      /invalid retentionDays=-1/,
+    );
     expect(mockQuery.mock.calls).toHaveLength(0);
-    consoleSpy.mockRestore();
   });
 
-  it("retentionDays=NaN returns 0 and does not query the DB", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const deleted = await cleanupOldQueryLogs(NaN);
-    expect(deleted).toBe(0);
+  it("retentionDays=NaN throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(NaN)).rejects.toThrow(
+      /invalid retentionDays=NaN/,
+    );
     expect(mockQuery.mock.calls).toHaveLength(0);
-    consoleSpy.mockRestore();
   });
 });
 
