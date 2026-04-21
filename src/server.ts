@@ -779,11 +779,7 @@ export function registerFaqRoute(
         }
       }
 
-      const body = generateFaqTxt(
-        allChunks,
-        serverCfg.server.name,
-        faqSources,
-      );
+      const body = generateFaqTxt(allChunks, serverCfg.server.name, faqSources);
 
       if (failedSources.length > 0) {
         // Partial result — serve once, do NOT cache, surface the failure

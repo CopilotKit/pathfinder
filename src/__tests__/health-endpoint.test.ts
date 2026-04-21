@@ -56,9 +56,7 @@ function request(
       (res) => {
         let body = "";
         res.on("data", (chunk) => (body += chunk));
-        res.on("end", () =>
-          resolve({ status: res.statusCode ?? 0, body }),
-        );
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
       },
     );
     req.on("error", reject);
@@ -85,9 +83,7 @@ describe("GET /health — 503 body must not leak DB error details", () => {
     }
   });
 
-  function startApp(
-    getIndexStats: () => Promise<unknown>,
-  ): Promise<void> {
+  function startApp(getIndexStats: () => Promise<unknown>): Promise<void> {
     return new Promise((resolve) => {
       const app = express();
       registerHealthRoute(app, {

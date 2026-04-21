@@ -42,10 +42,7 @@ vi.mock("../config.js", () => ({
   hasBashSemanticSearch: vi.fn().mockReturnValue(false),
 }));
 
-import {
-  registerFaqRoute,
-  __resetFaqCacheForTesting,
-} from "../server.js";
+import { registerFaqRoute, __resetFaqCacheForTesting } from "../server.js";
 
 function buildTestApp(): express.Express {
   const app = express();
@@ -126,22 +123,20 @@ describe("GET /faq.txt — partial-failure handling", () => {
   it("does not cache the partial response when a source fetch fails, and retries on the next request", async () => {
     // faq-good returns chunks; faq-broken throws. Both calls should go
     // through on the SECOND request because we refused to cache.
-    mockGetFaqChunks.mockImplementation(
-      async (sourceNames: string[]) => {
-        if (sourceNames.includes("faq-broken")) {
-          throw new Error("upstream timeout");
-        }
-        return [
-          {
-            source_name: "faq-good",
-            source_url: null,
-            title: "How do I X?",
-            content: "Q: How do I X?\n\nA: You X.",
-            chunk_index: 0,
-          },
-        ];
-      },
-    );
+    mockGetFaqChunks.mockImplementation(async (sourceNames: string[]) => {
+      if (sourceNames.includes("faq-broken")) {
+        throw new Error("upstream timeout");
+      }
+      return [
+        {
+          source_name: "faq-good",
+          source_url: null,
+          title: "How do I X?",
+          content: "Q: How do I X?\n\nA: You X.",
+          chunk_index: 0,
+        },
+      ];
+    });
 
     await startApp();
 
@@ -225,14 +220,12 @@ describe("GET /faq.txt — partial-failure handling", () => {
       tools: [],
     });
 
-    mockGetFaqChunks.mockImplementation(
-      async (sourceNames: string[]) => {
-        if (sourceNames[0].startsWith("faq-broken")) {
-          throw new Error("boom");
-        }
-        return [];
-      },
-    );
+    mockGetFaqChunks.mockImplementation(async (sourceNames: string[]) => {
+      if (sourceNames[0].startsWith("faq-broken")) {
+        throw new Error("boom");
+      }
+      return [];
+    });
 
     await startApp();
 
