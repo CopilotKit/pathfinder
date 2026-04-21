@@ -882,6 +882,148 @@ describe("Analytics server routes (HTTP-level)", () => {
     });
   });
 
+  // ---- /api/analytics/auth-mode HTTP-level tests ----------------------------
+  //
+  // End-to-end coverage for the public (unauthenticated) auth-mode endpoint.
+  // These complement the getAuthMode() unit tests below by locking down the
+  // wiring: no auth middleware, JSON body shape, and dev/prod branches.
+  //
+  // The test `request()` helper connects over TCP from 127.0.0.1, so the
+  // dev + localhost branch is reachable end-to-end. The non-localhost branch
+  // can't be exercised over TCP (the server always sees a loopback socket),
+  // so that case uses direct handler invocation with a synthetic Request —
+  // matching the strategy in the getAuthMode() unit tests below.
+  // ---------------------------------------------------------------------------
+
+  describe("GET /api/analytics/auth-mode", () => {
+    it("dev mode from localhost -> 200 + { dev: true }", async () => {
+      mockGetConfigFn.mockReturnValue({
+        port: 3001,
+        databaseUrl: "pglite:///tmp/test",
+        openaiApiKey: "",
+        githubToken: "",
+        githubWebhookSecret: "",
+        nodeEnv: "development",
+        logLevel: "info",
+        cloneDir: "/tmp/test",
+        slackBotToken: "",
+        slackSigningSecret: "",
+        discordBotToken: "",
+        discordPublicKey: "",
+        notionToken: "",
+        mcpJwtSecret: "x".repeat(32),
+      });
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+
+      await startApp();
+      // No Authorization header — the endpoint must be public.
+      const res = await request(server, "GET", "/api/analytics/auth-mode");
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toEqual({ dev: true });
+    });
+
+    it("dev mode from non-localhost -> { dev: false } (direct handler invocation)", () => {
+      // The test HTTP server always sees 127.0.0.1, so this branch must be
+      // exercised by calling getAuthMode() directly with a synthetic Request
+      // whose socket.remoteAddress is non-loopback. Mirrors the strategy in
+      // the getAuthMode() unit-tests describe below.
+      mockGetConfigFn.mockReturnValue({
+        port: 3001,
+        databaseUrl: "pglite:///tmp/test",
+        openaiApiKey: "",
+        githubToken: "",
+        githubWebhookSecret: "",
+        nodeEnv: "development",
+        logLevel: "info",
+        cloneDir: "/tmp/test",
+        slackBotToken: "",
+        slackSigningSecret: "",
+        discordBotToken: "",
+        discordPublicKey: "",
+        notionToken: "",
+        mcpJwtSecret: "x".repeat(32),
+      });
+      const fakeReq = {
+        socket: { remoteAddress: "203.0.113.7" },
+      } as unknown as Request;
+      expect(getAuthMode(fakeReq)).toEqual({ dev: false });
+    });
+
+    it("prod mode from localhost -> 200 + { dev: false }", async () => {
+      mockGetConfigFn.mockReturnValue({
+        port: 3001,
+        databaseUrl: "pglite:///tmp/test",
+        openaiApiKey: "",
+        githubToken: "",
+        githubWebhookSecret: "",
+        nodeEnv: "production",
+        logLevel: "info",
+        cloneDir: "/tmp/test",
+        slackBotToken: "",
+        slackSigningSecret: "",
+        discordBotToken: "",
+        discordPublicKey: "",
+        notionToken: "",
+        mcpJwtSecret: "x".repeat(32),
+      });
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/auth-mode");
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toEqual({ dev: false });
+    });
+
+    it("endpoint is public — accessible without Authorization header even when a token is configured", async () => {
+      // Regression guard: auth-mode is the one endpoint the dashboard hits
+      // BEFORE the operator has supplied a token. If it ever gets gated by
+      // analyticsAuth, the dashboard can never advertise dev-bypass and the
+      // login prompt is mandatory even on localhost.
+      mockGetConfigFn.mockReturnValue({
+        port: 3001,
+        databaseUrl: "pglite:///tmp/test",
+        openaiApiKey: "",
+        githubToken: "",
+        githubWebhookSecret: "",
+        nodeEnv: "production",
+        logLevel: "info",
+        cloneDir: "/tmp/test",
+        slackBotToken: "",
+        slackSigningSecret: "",
+        discordBotToken: "",
+        discordPublicKey: "",
+        notionToken: "",
+        mcpJwtSecret: "x".repeat(32),
+      });
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+
+      await startApp();
+      // No Authorization header, token configured — a gated endpoint would
+      // 401 here. auth-mode must return 200.
+      const res = await request(server, "GET", "/api/analytics/auth-mode");
+      expect(res.status).toBe(200);
+    });
+  });
+
   // ---- getAuthMode() unit tests ---------------------------------------------
   //
   // We test the exported helper directly rather than via /api/analytics/auth-
