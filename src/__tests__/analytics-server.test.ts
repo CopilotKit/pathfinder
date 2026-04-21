@@ -329,6 +329,36 @@ describe("Analytics server routes (HTTP-level)", () => {
       const body = JSON.parse(res.body);
       expect(body.error).toBe("Analytics not enabled");
     });
+
+    // Regression guard for the analyticsAuth middleware's config-throw
+    // path: a corrupt YAML reload / env parse failure can make
+    // getAnalyticsConfig() throw. Without the try/catch wrapper the throw
+    // would escape as an unhandled Express exception (generic 500). The
+    // middleware catches + converts to a 503 with the structured envelope
+    // `{ error, error_description }` so operators see a stable shape.
+    it("returns 503 with misconfigured envelope when getAnalyticsConfig throws", async () => {
+      mockGetAnalyticsConfigFn.mockImplementation(() => {
+        throw new Error("corrupt yaml");
+      });
+      // Silence the intentional `[analytics] auth misconfigured: config read
+      // failed` console.error so test output stays clean.
+      const consoleErrSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/summary", {
+        Authorization: "Bearer whatever",
+      });
+
+      expect(res.status).toBe(503);
+      const body = JSON.parse(res.body);
+      expect(body).toEqual({
+        error: "misconfigured",
+        error_description: "Analytics config read failed",
+      });
+      consoleErrSpy.mockRestore();
+    });
   });
 
   // ---- Auto-generated token via HTTP ---------------------------------------

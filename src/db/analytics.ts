@@ -626,11 +626,10 @@ export async function cleanupOldQueryLogs(
     );
   }
   const pool = getPool();
-  // Use `<=` here so the partition is complete vs. the rolling-window reads
-  // (which use `created_at > NOW() - INTERVAL`). With strict `<`, rows sitting
-  // exactly at the retention edge would be visible to reads but not cleaned
-  // up by retention. `<=` is the safer choice — we'd rather delete an extra
-  // row at the boundary than leak rows past the retention window.
+  // Reads use strict `>`, so the edge row `created_at == NOW() - INTERVAL '1 day' * N`
+  // is invisible to reads. If cleanup also used strict `<`, that edge row would never
+  // be visible OR purged — effectively immortal. Using `<=` here closes the partition
+  // so every row past the retention cutoff is reachable by cleanup.
   try {
     const result = await pool.query(
       `DELETE FROM query_log WHERE created_at <= NOW() - INTERVAL '1 day' * $1`,
