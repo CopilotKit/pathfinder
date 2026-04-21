@@ -49,6 +49,14 @@ export interface AnalyticsSummary {
   empty_result_rate_window: number;
   avg_latency_ms_window: number;
   p95_latency_ms_window: number;
+  /**
+   * True when the p95 latency was computed over a random sample capped at
+   * {@link P95_LATENCY_ROW_CAP} rows rather than the full population. The
+   * UI surfaces this as a "(sampled)" badge so operators know the reading
+   * is approximate. Only set when the cap was actually hit; otherwise
+   * omitted so existing consumers can treat absence as "exact".
+   */
+  p95_latency_sampled?: boolean;
   queries_by_source: Array<{ source_name: string; count: number }>;
   queries_per_day_window: Array<{ day: string; count: number }>;
 }
@@ -329,7 +337,8 @@ export async function getAnalyticsSummary(
     `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY random() LIMIT $${latencyLimitIdx}`,
     [...fp3, ...dw3.params, REDACTED_QUERY_TEXT, P95_LATENCY_ROW_CAP],
   );
-  if (latencyRes.rows.length >= P95_LATENCY_ROW_CAP) {
+  const p95Sampled = latencyRes.rows.length >= P95_LATENCY_ROW_CAP;
+  if (p95Sampled) {
     console.warn(
       `[analytics] getAnalyticsSummary: p95 latency sample capped at ${P95_LATENCY_ROW_CAP} rows; result may be approximate`,
     );
@@ -394,6 +403,9 @@ export async function getAnalyticsSummary(
     empty_result_rate_window: totalWindow > 0 ? emptyWindow / totalWindow : 0,
     avg_latency_ms_window: s.avg_latency ?? 0,
     p95_latency_ms_window: p95Latency,
+    // Only set when the cap was actually hit so existing consumers (tests,
+    // older UI builds) can treat the absence of the flag as "exact".
+    ...(p95Sampled ? { p95_latency_sampled: true } : {}),
     queries_by_source: bySourceRes.rows.map((r: Record<string, unknown>) => ({
       source_name: r.source_name as string,
       count: r.count as number,
@@ -518,27 +530,19 @@ export async function getEmptyQueries(
 
 /**
  * Get query counts grouped by tool type prefix (e.g. "search", "explore").
+ * Accepts an optional `from`/`to` filter for an explicit date range; falls
+ * back to the rolling "last N days" window when unset.
  *
- * Accepts an optional filter with `from`/`to` to use an explicit date range.
- * When not provided, falls back to the rolling "last N days" window.
- *
- * Population notes (intentional divergences from other windowed aggregates):
- *
- *  - Backfilled rows (`latency_ms < 0`) are EXCLUDED, matching every other
- *    windowed aggregate in this module. Without that filter the tool-type
- *    donut would include historical backfill while the other cards would
- *    not, so donut totals wouldn't line up with the summary counts.
- *  - A `tool_type` filter on the input is silently IGNORED. Filtering the
- *    "what tool types exist" aggregate by tool type is circular — the
- *    donut always shows the full type distribution within the selected
- *    window/source. Only the `source` filter is honored here.
- *  - Redacted rows (`query_text = REDACTED_QUERY_TEXT`) are deliberately
- *    NOT excluded. Redacted rows still carry a truthful `tool_name` (only
- *    `query_text` is scrubbed), so they contribute valid tool-usage signal.
- *    Excluding them would under-report tools whose configuration sets
- *    `log_queries: false`. This is a deliberate divergence from
- *    getAnalyticsSummary / getTopQueries / getEmptyQueries, which all
- *    exclude redacted rows because their output surfaces query text.
+ * Intentional divergences from other aggregates:
+ *  - Backfilled rows (`latency_ms < 0`) excluded (matches every other
+ *    windowed aggregate; keeps donut totals aligned with the summary cards).
+ *  - Input `tool_type` filter silently ignored — filtering the tool-type
+ *    donut by tool type is circular; only `source` is honored here.
+ *  - Redacted rows (`query_text = REDACTED_QUERY_TEXT`) NOT excluded —
+ *    `tool_name` survives redaction, so they contribute valid tool-usage
+ *    signal. Deliberate divergence from the other readers (summary,
+ *    top-queries, empty-queries) which DO exclude redacted because their
+ *    output surfaces query text.
  */
 export async function getToolCounts(
   days: number = 7,
@@ -600,11 +604,15 @@ export async function cleanupOldQueryLogs(
   // against `cleanupOldQueryLogs(0)` which would otherwise translate to
   // `created_at <= NOW() - 0 days` and delete the entire table. NaN and
   // negatives are rejected for the same reason.
+  //
+  // Throws rather than returning 0 so a misconfigured retention surfaces
+  // loudly in the scheduler's .catch() handler instead of being silently
+  // no-op'd on every nightly run. The caller (orchestrator.ts) already
+  // has a .catch that logs — this just makes sure the log happens.
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
-    console.warn(
-      `[analytics] cleanupOldQueryLogs: invalid retentionDays=${retentionDays}, skipping`,
+    throw new Error(
+      `[analytics] cleanupOldQueryLogs: invalid retentionDays=${retentionDays} (must be a positive finite number)`,
     );
-    return 0;
   }
   const pool = getPool();
   // Use `<=` here so the partition is complete vs. the rolling-window reads

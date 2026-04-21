@@ -5,11 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pathfinder Analytics</title>
     <!-- Pin to an exact version (not the floating '@4' tag) so an upstream
-         patch release can't silently change what this page executes. SRI
-         hash is omitted for now because we can't generate it offline; this
-         should be added as defense-in-depth. TODO: add integrity="sha384-..."
-         + crossorigin="anonymous"; regen hash whenever the version bumps. -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7"></script>
+         patch release can't silently change what this page executes. The
+         integrity hash binds the execution to a specific bytes-on-disk
+         payload; if jsdelivr ever serves a different body (compromised
+         CDN, cache poisoning, deliberate hotfix) the browser will refuse
+         to run it. Regenerate the hash alongside any version bump:
+
+           curl -L https://cdn.jsdelivr.net/npm/chart.js@<ver> > /tmp/cjs \
+             && openssl dgst -sha384 -binary /tmp/cjs \
+             | openssl base64 -A
+    -->
+    <script
+      src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7"
+      integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC"
+      crossorigin="anonymous"
+    ></script>
     <style>
       * {
         box-sizing: border-box;
@@ -688,7 +698,7 @@
       // --- State ---
       var activeToolType = null; // null = "All"
       var activeSource = null; // null = "All Sources"
-      var activeDaysBack = 7; // rolling-window size in days; null whenever explicit from/to is active (Today preset or Custom range)
+      var activeDaysBack = 7; // rolling-window size in days; convention: set to null whenever explicit from/to is active (Today preset, chart drill-down, Custom range). All date-setter branches enforce this by hand.
       var activeFrom = null; // YYYY-MM-DD string or null
       var activeTo = null; // YYYY-MM-DD string or null
       var dailyChartInstance = null;
@@ -832,13 +842,29 @@
           throw createAnalyticsAuthError();
         }
         if (!res.ok) {
-          var body = await res.json().catch(function (parseErr) {
+          // Fetch the raw body ONCE via text() (body streams are single-use;
+          // clone() to keep res.json()-style callers below uncontaminated in
+          // case the branching ever changes). If it parses as JSON, pull
+          // error_description/error out; if it doesn't, surface the raw
+          // text (capped at 200 chars so a misbehaving proxy that returns
+          // HTML can't blow up the login error banner with a full page).
+          var raw = await res
+            .clone()
+            .text()
+            .catch(function () {
+              return "";
+            });
+          var body = {};
+          try {
+            body = JSON.parse(raw);
+          } catch (parseErr) {
             console.error("[analytics] error body parse failed", parseErr);
-            return {};
-          });
-          throw new Error(
-            body.error_description || body.error || "HTTP " + res.status,
-          );
+          }
+          var msg =
+            body.error_description ||
+            body.error ||
+            (raw ? raw.slice(0, 200) : "HTTP " + res.status);
+          throw new Error(msg);
         }
         return res.json();
       }
@@ -1330,8 +1356,19 @@
               value: safeNumber(summary.avg_latency_ms_window) + "ms",
             },
             {
-              label: "P95 Latency (" + winLabel + ")",
-              value: safeNumber(summary.p95_latency_ms_window) + "ms",
+              // When the server had to randomly sample latencies to compute
+              // p95 (row count exceeded P95_LATENCY_ROW_CAP), prepend a '~'
+              // and append a "(sampled)" suffix so operators know the value
+              // is approximate rather than exact.
+              label:
+                "P95 Latency (" +
+                winLabel +
+                ")" +
+                (summary.p95_latency_sampled ? " (sampled)" : ""),
+              value:
+                (summary.p95_latency_sampled ? "~" : "") +
+                safeNumber(summary.p95_latency_ms_window) +
+                "ms",
             },
             {
               label: "Empty Queries (" + winLabel + ")",
@@ -1603,25 +1640,50 @@
           load();
           return;
         }
+        // Distinguish three outcomes from the auth-mode probe:
+        //   1. Network failure (fetch throws, typically TypeError
+        //      "Failed to fetch") OR HTTP error (!r.ok) → server is
+        //      unreachable; render a clear banner BEFORE prompting for
+        //      a token so the user isn't misled into thinking their
+        //      token is the problem.
+        //   2. Response parses as JSON with authMode.dev === true → dev
+        //      mode, skip auth.
+        //   3. Response parses but authMode.dev is falsy → prod-mode
+        //      server, fall through to the normal token flow silently
+        //      (no warn — this is the expected happy path for prod).
+        var unreachable = false;
         try {
-          var authMode = await fetch("/api/analytics/auth-mode").then(
-            function (r) {
-              return r.json();
-            },
-          );
-          if (authMode.dev) {
-            // Dev mode — no token needed
-            headers = {};
-            load();
-            return;
+          var r = await fetch("/api/analytics/auth-mode");
+          if (!r.ok) {
+            unreachable = true;
+          } else {
+            var authMode = await r.json();
+            if (authMode && authMode.dev) {
+              // Dev mode — no token needed
+              headers = {};
+              load();
+              return;
+            }
           }
         } catch (e) {
-          // Fall through to normal auth. Log so a broken probe is visible
-          // in devtools rather than silently invoking the token prompt.
+          // Network failure (fetch rejected) — distinct from a
+          // successful response that merely lacked authMode.dev.
+          unreachable = true;
           console.warn(
-            "[analytics] auth-mode probe failed; falling back to token auth",
+            "[analytics] auth-mode probe network error; server likely unreachable",
             e,
           );
+        }
+
+        if (unreachable) {
+          // Surface the outage explicitly so the token prompt below
+          // doesn't look like the primary issue. The banner persists
+          // until the next successful load().
+          var errEl = document.getElementById("error");
+          if (errEl) {
+            errEl.style.display = "block";
+            errEl.textContent = "Analytics server unreachable";
+          }
         }
 
         if (!TOKEN) {

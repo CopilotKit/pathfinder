@@ -304,8 +304,13 @@ describe("getTopQueries", () => {
 // getTopQueries edge cases
 // ---------------------------------------------------------------------------
 
+// The server layer (parseDaysOrError / parseLimitOrError in src/server.ts)
+// already rejects days=0 and limit=0 with a 400 before the request ever
+// reaches the DB. These tests exist as defense-in-depth: they lock in the
+// DB layer's behavior today so a future refactor that moves or removes
+// the server-layer check can't silently introduce a wipe-the-table bug.
 describe("getTopQueries edge cases", () => {
-  it("handles days=0 gracefully", async () => {
+  it("DB layer accepts days=0 without throwing (server layer enforces > 0; this locks down regression if that check ever moves)", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const result = await getTopQueries(0, 50);
     expect(result).toEqual([]);
@@ -313,7 +318,7 @@ describe("getTopQueries edge cases", () => {
     expect(params[0]).toBe(0);
   });
 
-  it("handles limit=0 gracefully", async () => {
+  it("DB layer accepts limit=0 without throwing (server layer enforces > 0; this locks down regression if that check ever moves)", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const result = await getTopQueries(7, 0);
     expect(result).toEqual([]);
@@ -456,32 +461,31 @@ describe("cleanupOldQueryLogs error handling", () => {
 //
 // Regression guard: cleanupOldQueryLogs(0) would translate to
 // `created_at <= NOW() - 0 days` and wipe the entire table. Same risk with
-// negative values. Both must short-circuit without issuing any DB query.
+// negative values. Both must reject hard (not silently no-op) so a
+// misconfigured retention surfaces in the scheduler's .catch() handler
+// instead of being swallowed on every nightly run.
 // ---------------------------------------------------------------------------
 
 describe("cleanupOldQueryLogs input validation", () => {
-  it("retentionDays=0 returns 0 and does not query the DB", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const deleted = await cleanupOldQueryLogs(0);
-    expect(deleted).toBe(0);
+  it("retentionDays=0 throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(0)).rejects.toThrow(
+      /invalid retentionDays=0/,
+    );
     expect(mockQuery.mock.calls).toHaveLength(0);
-    consoleSpy.mockRestore();
   });
 
-  it("retentionDays=-1 returns 0 and does not query the DB", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const deleted = await cleanupOldQueryLogs(-1);
-    expect(deleted).toBe(0);
+  it("retentionDays=-1 throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(-1)).rejects.toThrow(
+      /invalid retentionDays=-1/,
+    );
     expect(mockQuery.mock.calls).toHaveLength(0);
-    consoleSpy.mockRestore();
   });
 
-  it("retentionDays=NaN returns 0 and does not query the DB", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const deleted = await cleanupOldQueryLogs(NaN);
-    expect(deleted).toBe(0);
+  it("retentionDays=NaN throws and does not query the DB", async () => {
+    await expect(cleanupOldQueryLogs(NaN)).rejects.toThrow(
+      /invalid retentionDays=NaN/,
+    );
     expect(mockQuery.mock.calls).toHaveLength(0);
-    consoleSpy.mockRestore();
   });
 });
 
@@ -635,11 +639,33 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
-    await getAnalyticsSummary({});
+    const result = await getAnalyticsSummary({});
     const logged = warnSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(logged).toContain("[analytics]");
     expect(logged).toContain("capped");
+    // The cap-hit branch must also surface `p95_latency_sampled: true` on
+    // the response so the UI can render a "(sampled)" badge instead of
+    // implying the value is exact.
+    expect(result.p95_latency_sampled).toBe(true);
     warnSpy.mockRestore();
+  });
+
+  it("omits p95_latency_sampled when the cap is not hit", async () => {
+    // Only a handful of latency rows — well below the cap — so the flag
+    // must be absent (treat absence as "exact" to stay backwards-compatible
+    // with older UI builds).
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ latency_ms: 10 }, { latency_ms: 20 }, { latency_ms: 30 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const result = await getAnalyticsSummary({});
+    expect(result.p95_latency_sampled).toBeUndefined();
   });
 });
 

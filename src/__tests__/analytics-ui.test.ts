@@ -1202,10 +1202,12 @@ describe("analytics dashboard UI — error banner", () => {
   });
 
   // fetchJson's fallback branch at docs/analytics.html — when a non-2xx
-  // response body isn't valid JSON, `res.json()` rejects, the catch returns
-  // `{}`, and the error message becomes `"HTTP <status>"`. Verify that path
-  // is exercised (not just the JSON-body path above).
-  it("shows #error with 'HTTP 500' when the summary endpoint returns a non-JSON body", async () => {
+  // response body isn't valid JSON, the JSON.parse catch logs + returns
+  // `{}`, and the error message falls back to the raw text body (capped
+  // at 200 chars) rather than a bare "HTTP <status>". Verify the raw
+  // body surfaces through to the error banner so operators get a real
+  // clue about what the upstream returned.
+  it("shows #error with raw body text when the summary endpoint returns non-JSON 500", async () => {
     const endpoints = {
       "/api/analytics/auth-mode": () => ({ dev: true }),
       "/api/analytics/summary": () => ({
@@ -1226,8 +1228,32 @@ describe("analytics dashboard UI — error banner", () => {
 
     const errorEl = dom.window.document.getElementById("error")!;
     expect(errorEl.style.display).toBe("block");
-    // Text should contain "HTTP 500" since the HTML body can't parse as JSON
-    // and the fallback error message is "HTTP " + status.
+    // Raw body surfaces through — "Internal Server Error" is the useful
+    // signal, not the generic "HTTP 500".
+    expect(errorEl.textContent).toContain("Internal Server Error");
+    errSpy.mockRestore();
+  });
+
+  // Empty body with non-2xx status falls all the way through to the
+  // "HTTP <status>" marker since there's nothing else to surface.
+  it("shows #error with 'HTTP 500' marker when the body is empty", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        status: 500,
+        rawBody: "",
+        contentType: "text/plain",
+      }),
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dom } = await loadDashboard(endpoints);
+    await flushAsync();
+
+    const errorEl = dom.window.document.getElementById("error")!;
+    expect(errorEl.style.display).toBe("block");
     expect(errorEl.textContent).toContain("HTTP 500");
     errSpy.mockRestore();
   });
@@ -1416,5 +1442,172 @@ describe("analytics dashboard UI — custom-range invalid input", () => {
     // invalid string to "" on jsdom, so we intentionally don't assert
     // on fromEl.value — the input-value retention is a browser detail,
     // not part of the Apply-handler contract.)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Preview mode (?preview=1): the inline `setupPreviewMode` IIFE installs
+// its OWN window.fetch stub that returns canned JSON for /api/analytics/*
+// paths. This test loads the page WITHOUT stubbing window.fetch ourselves
+// and asserts that (a) the canned totals render to the stats card and (b)
+// the MOCK DATA banner is injected. If the preview interceptor regresses,
+// real fetch would be invoked against /api/analytics/summary and jsdom
+// would reject (no network), blanking the dashboard — this test catches
+// that regression end-to-end.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — preview mode (?preview=1)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders canned totals and MOCK DATA banner without hitting real fetch", async () => {
+    const html = fs.readFileSync(
+      path.join(process.cwd(), "docs", "analytics.html"),
+      "utf8",
+    );
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", () => {});
+    const dom = new JSDOM(html, {
+      runScripts: "outside-only",
+      // Critical: preview=1 is what flips the IIFE on.
+      url: "http://localhost/analytics?preview=1",
+      pretendToBeVisual: true,
+      virtualConsole,
+    });
+
+    const win = dom.window as unknown as Window & typeof globalThis;
+    Object.assign(win, { Date: globalThis.Date });
+    // jsdom 21+ provides Response on the window, but older versions
+    // don't. The preview IIFE calls `new Response(...)` directly, so
+    // forward the node Response constructor if the window lacks it.
+    if (typeof (win as { Response?: unknown }).Response === "undefined") {
+      Object.assign(win, { Response: globalThis.Response });
+    }
+    installChartStub(win);
+
+    // Do NOT replace window.fetch with a stub. Instead, wrap the real
+    // jsdom fetch with a spy so we can assert it was NEVER invoked with
+    // a /api/analytics/* URL — the preview-mode interceptor should
+    // short-circuit all such calls from inside the dashboard script.
+    // jsdom's built-in fetch attempts a real network call and throws
+    // "TypeError: Failed to fetch" on localhost, which would blank the
+    // dashboard if the interceptor missed a path.
+    const fetchSpy = vi.fn(win.fetch?.bind(win) ?? (() => Promise.reject()));
+    Object.assign(win, { fetch: fetchSpy });
+
+    const scriptEl = dom.window.document.querySelector("script:not([src])");
+    if (!scriptEl) throw new Error("inline script not found in analytics.html");
+    const code = scriptEl.textContent ?? "";
+    dom.window.eval(code);
+
+    // Flush microtasks several times so the preview IIFE's fetch
+    // overwrite + init() + all awaited loads (summary, tool-counts,
+    // queries, empty-queries) resolve. The init() chain is at least 3
+    // async hops deep (auth-mode skip → load() → Promise.all fetches).
+    for (let i = 0; i < 10; i++) await flushAsync();
+
+    // Preview flag must have been set by the IIFE.
+    expect(
+      (win as unknown as { __pathfinderPreview?: boolean }).__pathfinderPreview,
+    ).toBe(true);
+    // Also verify window.fetch was overridden by the preview IIFE (it
+    // replaces win.fetch with its own interceptor). If this fails, the
+    // URL search-params check in setupPreviewMode didn't flip.
+    expect(win.fetch).not.toBe(fetchSpy);
+
+    // Stats card renders the canned total — 6128 is the literal in
+    // CANNED[/api/analytics/summary].total_queries (see analytics.html).
+    // Locale-formatted as "6,128" when rendered.
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("6,128");
+
+    // "MOCK DATA" watermark banner must be visible so screenshots can't
+    // be confused for live dashboards.
+    expect(dom.window.document.body.textContent).toContain("MOCK DATA");
+
+    // Sanity check: the dashboard code path never invoked the SPY's
+    // unwrapped fetch with a real /api/analytics/* URL — the preview
+    // IIFE's own window.fetch override intercepts those paths and
+    // returns canned Responses directly without delegating to the
+    // wrapped original. (The IIFE captures originalFetch = window.fetch
+    // at IIFE-invocation time; after that point, every call inside
+    // setupPreviewMode's override bypasses our spy.)
+    //
+    // However, since the IIFE's override runs BEFORE init(), and our
+    // spy was installed BEFORE the script was evaluated, the spy is
+    // also the `originalFetch` captured by the IIFE. Calls for
+    // /api/analytics/* are short-circuited inside the override (not
+    // delegated). So the spy is only invoked for non-analytics URLs
+    // (i.e. nothing). Assert no /api/analytics/ call reached the spy:
+    const analyticsCalls = fetchSpy.mock.calls.filter((args) => {
+      const url = args[0];
+      return typeof url === "string" && url.indexOf("/api/analytics/") === 0;
+    });
+    expect(analyticsCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// p95 sampled-ness rendering
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — p95 sampled badge", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders a '(sampled)' suffix and '~' prefix when summary.p95_latency_sampled is true", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        total_queries: 1000,
+        total_queries_window: 500,
+        empty_result_rate_window: 0,
+        empty_result_count_window: 0,
+        avg_latency_ms_window: 100,
+        p95_latency_ms_window: 250,
+        p95_latency_sampled: true,
+        queries_per_day_window: [],
+        queries_by_source: [],
+      }),
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    // Approximate prefix on the numeric value
+    expect(statsHtml).toContain("~250ms");
+    // "(sampled)" badge on the P95 card label
+    expect(statsHtml).toMatch(/P95 Latency[^<]*\(sampled\)/);
+  });
+
+  it("omits sampled indicators when the flag is absent", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        total_queries: 1000,
+        total_queries_window: 500,
+        empty_result_rate_window: 0,
+        empty_result_count_window: 0,
+        avg_latency_ms_window: 100,
+        p95_latency_ms_window: 250,
+        queries_per_day_window: [],
+        queries_by_source: [],
+      }),
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("250ms");
+    expect(statsHtml).not.toContain("~250ms");
+    expect(statsHtml).not.toContain("(sampled)");
   });
 });

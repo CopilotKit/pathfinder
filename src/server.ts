@@ -1097,9 +1097,12 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
 
 /**
  * Parse a query parameter as a positive integer. Returns the default when the
- * value is absent, or an error object describing why it was rejected. The
- * error object carries a human-readable `error` field that callers can embed
- * in an HTTP 400 response body.
+ * value is absent. On invalid input, returns `{ error: string }` where
+ * `error` is a human-readable phrase (e.g. "must be > 0"). The wrapper
+ * functions `parseDaysOrError` / `parseLimitOrError` embed this string into
+ * the `error_description` field of the 400 envelope (not a top-level
+ * `error` field — that slot carries the machine-readable "invalid_request"
+ * code).
  */
 export function parsePositiveIntParam(
   raw: unknown,
@@ -1201,24 +1204,32 @@ export function registerAnalyticsRoutes(
     "/api/analytics/summary",
     analyticsAuth,
     async (req: Request, res: Response) => {
+      // Parse outside the try/catch so the 500 error log below can read
+      // `parsed.filter` and `daysParsed.value` for request-context logging.
+      // Parsers don't throw — they return ok/error envelopes — so this keeps
+      // the 500 branch reserved for DB-layer failures while still surfacing
+      // exactly which filter/window blew up.
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
+      const daysParsed = parseDaysOrError(req);
+      if (!daysParsed.ok) {
+        res.status(daysParsed.status).json(daysParsed.body);
+        return;
+      }
       try {
-        const parsed = parseAnalyticsFilter(req);
-        if (!parsed.ok) {
-          res.status(parsed.status).json(parsed.body);
-          return;
-        }
-        const daysParsed = parseDaysOrError(req);
-        if (!daysParsed.ok) {
-          res.status(daysParsed.status).json(daysParsed.body);
-          return;
-        }
         const summary = await _getAnalyticsSummary(
           parsed.filter,
           daysParsed.value,
         );
         res.json(summary);
       } catch (err) {
-        console.error("[analytics] Summary query failed:", err);
+        console.error(
+          `[analytics] Summary query failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value}):`,
+          err,
+        );
         res.status(500).json({ error: "Failed to fetch analytics summary" });
       }
     },
@@ -1228,22 +1239,22 @@ export function registerAnalyticsRoutes(
     "/api/analytics/queries",
     analyticsAuth,
     async (req: Request, res: Response) => {
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
+      const daysParsed = parseDaysOrError(req);
+      if (!daysParsed.ok) {
+        res.status(daysParsed.status).json(daysParsed.body);
+        return;
+      }
+      const limitParsed = parseLimitOrError(req);
+      if (!limitParsed.ok) {
+        res.status(limitParsed.status).json(limitParsed.body);
+        return;
+      }
       try {
-        const parsed = parseAnalyticsFilter(req);
-        if (!parsed.ok) {
-          res.status(parsed.status).json(parsed.body);
-          return;
-        }
-        const daysParsed = parseDaysOrError(req);
-        if (!daysParsed.ok) {
-          res.status(daysParsed.status).json(daysParsed.body);
-          return;
-        }
-        const limitParsed = parseLimitOrError(req);
-        if (!limitParsed.ok) {
-          res.status(limitParsed.status).json(limitParsed.body);
-          return;
-        }
         const queries = await _getTopQueries(
           daysParsed.value,
           limitParsed.value,
@@ -1251,7 +1262,10 @@ export function registerAnalyticsRoutes(
         );
         res.json(queries);
       } catch (err) {
-        console.error("[analytics] Top queries failed:", err);
+        console.error(
+          `[analytics] Top queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value}):`,
+          err,
+        );
         res.status(500).json({ error: "Failed to fetch top queries" });
       }
     },
@@ -1261,22 +1275,22 @@ export function registerAnalyticsRoutes(
     "/api/analytics/empty-queries",
     analyticsAuth,
     async (req: Request, res: Response) => {
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
+      const daysParsed = parseDaysOrError(req);
+      if (!daysParsed.ok) {
+        res.status(daysParsed.status).json(daysParsed.body);
+        return;
+      }
+      const limitParsed = parseLimitOrError(req);
+      if (!limitParsed.ok) {
+        res.status(limitParsed.status).json(limitParsed.body);
+        return;
+      }
       try {
-        const parsed = parseAnalyticsFilter(req);
-        if (!parsed.ok) {
-          res.status(parsed.status).json(parsed.body);
-          return;
-        }
-        const daysParsed = parseDaysOrError(req);
-        if (!daysParsed.ok) {
-          res.status(daysParsed.status).json(daysParsed.body);
-          return;
-        }
-        const limitParsed = parseLimitOrError(req);
-        if (!limitParsed.ok) {
-          res.status(limitParsed.status).json(limitParsed.body);
-          return;
-        }
         const queries = await _getEmptyQueries(
           daysParsed.value,
           limitParsed.value,
@@ -1284,7 +1298,10 @@ export function registerAnalyticsRoutes(
         );
         res.json(queries);
       } catch (err) {
-        console.error("[analytics] Empty queries failed:", err);
+        console.error(
+          `[analytics] Empty queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value}):`,
+          err,
+        );
         res.status(500).json({ error: "Failed to fetch empty queries" });
       }
     },
@@ -1294,21 +1311,24 @@ export function registerAnalyticsRoutes(
     "/api/analytics/tool-counts",
     analyticsAuth,
     async (req: Request, res: Response) => {
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
+      const daysParsed = parseDaysOrError(req);
+      if (!daysParsed.ok) {
+        res.status(daysParsed.status).json(daysParsed.body);
+        return;
+      }
       try {
-        const parsed = parseAnalyticsFilter(req);
-        if (!parsed.ok) {
-          res.status(parsed.status).json(parsed.body);
-          return;
-        }
-        const daysParsed = parseDaysOrError(req);
-        if (!daysParsed.ok) {
-          res.status(daysParsed.status).json(daysParsed.body);
-          return;
-        }
         const counts = await _getToolCounts(daysParsed.value, parsed.filter);
         res.json(counts);
       } catch (err) {
-        console.error("[analytics] Tool counts failed:", err);
+        console.error(
+          `[analytics] Tool counts failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value}):`,
+          err,
+        );
         res.status(500).json({ error: "Failed to fetch tool counts" });
       }
     },
