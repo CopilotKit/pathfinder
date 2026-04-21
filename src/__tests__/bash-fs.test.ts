@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildBashFilesMap } from "../mcp/tools/bash-fs.js";
 import type { SourceConfig } from "../types.js";
 
@@ -98,5 +98,61 @@ describe("buildBashFilesMap", () => {
     ];
     const map = await buildBashFilesMap(sources);
     expect(Object.keys(map)).toHaveLength(0);
+  });
+
+  describe("missing-path warnings", () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it("does NOT warn when a repo-backed source's clone directory is not yet populated", async () => {
+      // Simulates the startup race: the orchestrator hasn't cloned yet,
+      // so the resolved path doesn't exist — but that's expected and should
+      // not fire a misleading "path does not exist" warning.
+      const sources: SourceConfig[] = [
+        {
+          name: "pathfinder-docs",
+          type: "markdown",
+          repo: "https://github.com/CopilotKit/pathfinder",
+          path: "docs",
+          file_patterns: ["**/*.md"],
+          chunk: { target_tokens: 600, overlap_tokens: 50 },
+        },
+      ];
+      const map = await buildBashFilesMap(sources, {
+        cloneDir: "/tmp/does-not-exist-pathfinder-test",
+      });
+      expect(Object.keys(map)).toHaveLength(0);
+      const missingPathWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+        String(call[0] ?? "").includes("path does not exist"),
+      );
+      expect(missingPathWarnings).toHaveLength(0);
+    });
+
+    it("DOES warn when a local (no-repo) source's path does not exist", async () => {
+      // True misconfiguration: user pointed at a path that doesn't exist
+      // and there's no repo to later populate it. Must still fire.
+      const sources: SourceConfig[] = [
+        {
+          name: "local-ghost",
+          type: "markdown",
+          path: "fixtures/definitely-not-here-" + Date.now(),
+          file_patterns: ["**/*.md"],
+          chunk: { target_tokens: 600, overlap_tokens: 50 },
+        },
+      ];
+      const map = await buildBashFilesMap(sources);
+      expect(Object.keys(map)).toHaveLength(0);
+      const missingPathWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+        String(call[0] ?? "").includes("path does not exist"),
+      );
+      expect(missingPathWarnings.length).toBeGreaterThan(0);
+    });
   });
 });
