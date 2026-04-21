@@ -1498,7 +1498,13 @@
                   if (!elements || elements.length === 0) return;
                   var idx = elements[0].index;
                   var day = dayLabels[idx];
-                  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+                  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+                    console.warn(
+                      "[analytics] daily chart drill-down: malformed day label",
+                      { idx: idx, day: day },
+                    );
+                    return;
+                  }
                   activeFrom = day;
                   activeTo = day;
                   activeDaysBack = null;
@@ -1572,7 +1578,7 @@
                   '</td><td><span class="tool-badge">' +
                   esc(q.tool_name) +
                   "</span></td><td>" +
-                  q.count +
+                  esc(String(q.count)) +
                   "</td><td>" +
                   avgRes +
                   "</td><td>" +
@@ -1606,7 +1612,7 @@
                   "</span></td><td>" +
                   esc(q.source_name || "-") +
                   "</td><td>" +
-                  q.count +
+                  esc(String(q.count)) +
                   "</td><td>" +
                   esc(lastSeenStr) +
                   "</td></tr>"
