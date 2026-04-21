@@ -816,9 +816,19 @@
           if (e.key === "Enter") document.getElementById("tokenSubmit").click();
         });
 
-      async function fetchJson(url) {
+      async function fetchJson(url, fetchGen) {
         var res = await fetch(url, { headers: headers });
         if (res.status === 401 || res.status === 403) {
+          // Stale-generation guard: if the caller (load()) passed its
+          // generation AND the active loadGeneration has since advanced,
+          // this 401/403 belongs to a superseded request. Bail early
+          // WITHOUT mutating TOKEN / headers / sessionStorage — the
+          // newer load() may have been kicked off after the user pasted
+          // a fresh valid token, and clobbering that token here would
+          // force a spurious re-login.
+          if (fetchGen !== undefined && fetchGen !== loadGeneration) {
+            throw createAnalyticsAuthError();
+          }
           // Prefer the server-supplied `error_description` when available so
           // misconfigured-token / disabled-analytics errors surface verbatim
           // to the operator instead of a generic "Invalid token" which
@@ -1300,10 +1310,10 @@
             "/api/analytics/tool-counts" +
             (fp ? "?" + fp.replace(/^&/, "") : "");
           var results = await Promise.all([
-            fetchJson(summaryUrl),
-            fetchJson(queriesUrl),
-            fetchJson(emptyUrl),
-            fetchJson(toolCountsUrl),
+            fetchJson(summaryUrl, gen),
+            fetchJson(queriesUrl, gen),
+            fetchJson(emptyUrl, gen),
+            fetchJson(toolCountsUrl, gen),
           ]);
           if (gen !== loadGeneration) return; // stale response — abort
           var summary = results[0];
