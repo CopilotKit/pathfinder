@@ -668,6 +668,22 @@ describe("getAnalyticsSummary per-day excludes redacted rows", () => {
     expect(sql).toMatch(/query_text != \$\d+/);
     expect(params).toContain(REDACTED_QUERY_TEXT);
   });
+
+  it("latency subquery filters query_text != REDACTED_QUERY_TEXT (p95/avg population alignment)", async () => {
+    // Pre-fix: avg_latency (summary subquery) excluded redacted rows but
+    // p95 (latency subquery) did not. That meant the two latency cards were
+    // computed over different populations, so p95 could be lower than avg
+    // whenever redacted traffic carried unusually high latency (or vice
+    // versa). Aligning both on the same population makes the cards
+    // directly comparable.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Index 2 is the latency subquery (0=total, 1=summary, 2=latency).
+    const [sql, params] = mockQuery.mock.calls[2];
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(params).toContain(REDACTED_QUERY_TEXT);
+  });
 });
 
 describe("getAnalyticsSummary with filters", () => {
@@ -756,6 +772,20 @@ describe("getTopQueries LIKE injection hardening", () => {
     // — the filter predicate was a leftover from a copy-paste and
     // nothing in this test sets source="docs" anyway.
     expect(params).toContain("a|%b||c");
+  });
+
+  it("escapes bare '|' wildcard in tool_type", async () => {
+    // '|' is the ESCAPE character itself — a bare pipe in the filter value
+    // must be escaped (`||`) so Postgres treats it as a literal pipe in the
+    // LIKE pattern rather than the start of a 2-char escape sequence. This
+    // is the "escape the escape" case; the previous tests cover %/_/|
+    // wildcards but don't individually pin a bare pipe.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "a|b" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("ESCAPE '|'");
+    expect(params).toContain("a||b");
   });
 });
 
@@ -1012,6 +1042,23 @@ describe("getToolCounts respects source filter", () => {
     expect(params).toContain("docs");
     expect(params).toContain(from);
     expect(params).toContain(to);
+  });
+
+  it("honors source and silently drops tool_type when both are supplied", async () => {
+    // Combination regression: the two filter branches ('source' applied,
+    // 'tool_type' dropped) are each exercised individually above, but the
+    // shared filter-stripping path is only hit when both are set at once.
+    // A future refactor that e.g. re-introduces tool_type into the WHERE
+    // clause would need to trip this test rather than either of the
+    // single-filter cases.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { tool_type: "search", source: "docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("tool_name LIKE");
+    expect(sql).toContain("source_name =");
+    expect(params).toContain("docs");
+    expect(params).not.toContain("search");
   });
 });
 
