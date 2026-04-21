@@ -466,7 +466,10 @@
       // JSON so charts + tables render without a live backend. This lets the
       // date-range-selector mockup be visually evaluated against a full page.
       (function setupPreviewMode() {
-        if (!window.location.search.includes("preview=1")) return;
+        if (
+          new URLSearchParams(window.location.search).get("preview") !== "1"
+        )
+          return;
         // Flag preview mode on a window-local property so fetchJson and
         // getToken can short-circuit auth without touching the shared token
         // slot in sessionStorage. sessionStorage is scoped per-origin and
@@ -699,9 +702,10 @@
       }
 
       function todayISO() {
-        // Today's UTC date in YYYY-MM-DD. We anchor on UTC to match what the
-        // server compares against (created_at in UTC) — using local time
-        // here means users near midnight see yesterday's or tomorrow's rows.
+        // Today's UTC date in YYYY-MM-DD. Server from/to path compares
+        // created_at as UTC. The rolling 'days' path uses NOW() - INTERVAL
+        // which is server-local — keep client/server TZ aligned or prefer
+        // from/to for exact boundaries.
         var d = new Date();
         var y = d.getUTCFullYear();
         var m = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -894,19 +898,22 @@
 
         // Default the custom-range inputs to whatever is active, falling back to today/week.
         // Prefer in-progress draft values so re-renders don't clobber user typing.
+        // UTC throughout so the default matches what "Today" preset would send
+        // — otherwise a user in a non-UTC timezone opening the popover near
+        // midnight sees a different date than "Today" would apply.
         var today = new Date();
         function toISO(d) {
-          var y = d.getFullYear(),
-            m = String(d.getMonth() + 1).padStart(2, "0"),
-            dd = String(d.getDate()).padStart(2, "0");
+          var y = d.getUTCFullYear(),
+            m = String(d.getUTCMonth() + 1).padStart(2, "0"),
+            dd = String(d.getUTCDate()).padStart(2, "0");
           return y + "-" + m + "-" + dd;
         }
         var defaultTo =
-          draftToInput != null ? draftToInput : activeTo || toISO(today);
+          draftToInput != null ? draftToInput : activeTo || todayISO();
         var defaultFrom = draftFromInput != null ? draftFromInput : activeFrom;
         if (!defaultFrom) {
           var back = new Date(today);
-          back.setDate(back.getDate() - 6);
+          back.setUTCDate(back.getUTCDate() - 6);
           defaultFrom = toISO(back);
         }
         var customVisibleStyle = dateCustomMode ? "" : "display:none;";
@@ -1165,11 +1172,16 @@
         var gen = ++loadGeneration;
         try {
           var fp = buildFilterParams();
-          // Prefix a '?' so the '&' in fp hangs off cleanly; summary needs special handling
+          // Prefix a '?' so the '&' in fp hangs off cleanly.
+          // Applies to both summary and tool-counts endpoints: neither has a
+          // hardcoded leading query param (unlike queries/empty-queries which
+          // always start with `?limit=50`), so we strip fp's leading '&' and
+          // prepend a '?' only when fp is non-empty.
           var summaryUrl =
             "/api/analytics/summary" + (fp ? "?" + fp.replace(/^&/, "") : "");
           var queriesUrl = "/api/analytics/queries?limit=50" + fp;
           var emptyUrl = "/api/analytics/empty-queries?limit=50" + fp;
+          // Same '?' / leading-'&' handling as summary above.
           var toolCountsUrl =
             "/api/analytics/tool-counts" +
             (fp ? "?" + fp.replace(/^&/, "") : "");
@@ -1451,6 +1463,9 @@
           // request that rejects after a newer load() has already
           // rendered would otherwise clobber the fresh UI with an error.
           if (gen !== loadGeneration) return;
+          // Always log to devtools with full context — the UI banner below
+          // truncates to err.message, which hides stack + non-Error throws.
+          console.error("[analytics] load() failed:", err);
           if (err.name !== "AnalyticsAuthError") {
             document.getElementById("error").style.display = "block";
             document.getElementById("error").textContent =
