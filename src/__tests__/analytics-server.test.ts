@@ -135,6 +135,12 @@ describe("Analytics server routes (HTTP-level)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset the analytics-config mock at the top level so order-dependency
+    // between tests can't cause one test's mockReturnValue to leak into the
+    // next. Each test still sets its own value explicitly; this just
+    // prevents accidental inheritance across describe blocks. Matches the
+    // pattern used in analytics-endpoints.test.ts.
+    mockGetAnalyticsConfigFn.mockReset();
     __resetAnalyticsTokenForTesting();
     delete process.env.ANALYTICS_TOKEN;
     consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
