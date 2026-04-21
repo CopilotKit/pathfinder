@@ -635,6 +635,27 @@
           }
           return originalFetch(url, opts);
         };
+
+        // Visible watermark so preview mode can't be confused for a live
+        // dashboard in a screenshot / screen-share. Prepended on DOM ready
+        // and paired with top-padding on body to avoid overlapping the h1.
+        function injectPreviewBanner() {
+          var banner = document.createElement("div");
+          banner.setAttribute(
+            "style",
+            "position:fixed;top:0;left:0;right:0;background:#ffc107;color:#000;padding:8px;text-align:center;font-weight:bold;z-index:9999",
+          );
+          banner.textContent =
+            "MOCK DATA — preview mode, not a live dashboard";
+          document.body.insertBefore(banner, document.body.firstChild);
+          // Push page content down so the fixed banner doesn't overlap it.
+          document.body.style.paddingTop = "40px";
+        }
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", injectPreviewBanner);
+        } else {
+          injectPreviewBanner();
+        }
       })();
 
       // --- Constants / helpers ---
@@ -1523,10 +1544,17 @@
           // Always log to devtools with full context — the UI banner below
           // truncates to err.message, which hides stack + non-Error throws.
           console.error("[analytics] load() failed:", err);
-          if (err.name !== "AnalyticsAuthError") {
+          // Defensive fallbacks: a throw of a non-Error (e.g. a string,
+          // undefined from `throw undefined`, or a plain object) has no
+          // `.message` / `.name`. Interpolating `err.message` directly
+          // would render "Failed to load analytics: undefined"; String(err)
+          // degrades more gracefully.
+          var msg = err && err.message ? err.message : String(err);
+          var name = err && err.name ? err.name : "";
+          if (name !== "AnalyticsAuthError") {
             document.getElementById("error").style.display = "block";
             document.getElementById("error").textContent =
-              "Failed to load analytics: " + err.message;
+              "Failed to load analytics: " + msg;
           }
         }
       }
