@@ -70,6 +70,17 @@ function installChartStub(win: Window & typeof globalThis): {
  * pass because the element exists). Throwing forces missing handlers
  * to surface immediately in the test run.
  */
+/**
+ * Flush two rounds of microtasks. Double-`await setTimeout(r, 0)` is
+ * needed because the dashboard's load() chain does an auth-mode fetch
+ * that then triggers the real data fetches; a single flush covers only
+ * the first hop. Named helper makes intent explicit at call sites.
+ */
+async function flushAsync(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 function buildFetchStub(handlers: Record<string, (qs: string) => unknown>) {
   const calls: string[] = [];
   const fetchFn = vi.fn(async (url: string | URL) => {
@@ -128,8 +139,7 @@ async function loadDashboard(
   dom.window.eval(code);
 
   // Init runs async (auth-mode check → load). Flush microtasks.
-  await new Promise((r) => setTimeout(r, 0));
-  await new Promise((r) => setTimeout(r, 0));
+  await flushAsync();
 
   return { dom, calls, chartInstances: instances };
 }
@@ -240,8 +250,7 @@ describe("analytics dashboard UI — date preset wiring", () => {
     );
 
     // Let the reload resolve.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsync();
 
     // Collect only the URLs issued AFTER the preset click.
     const afterClick = calls.slice(initialCalls.length);
@@ -330,14 +339,14 @@ describe("analytics dashboard UI — date preset wiring", () => {
         }),
       );
 
-      // Click "Today" preset. data-days is whatever the UI chose — the test
-      // only asserts on outbound fetches, which is what actually matters.
-      const todayPreset = Array.from(
-        dom.window.document.querySelectorAll(".preset"),
-      ).find((el) => el.textContent?.trim().startsWith("Today")) as
-        | HTMLElement
-        | undefined;
-      expect(todayPreset).toBeDefined();
+      // Click "Today" preset. The preset row carries a stable
+      // `data-preset="today"` attribute — match on that instead of text
+      // content so a future label rename (e.g. "Today only") doesn't
+      // silently break the test.
+      const todayPreset = dom.window.document.querySelector(
+        '.preset[data-preset="today"]',
+      ) as HTMLElement | null;
+      expect(todayPreset).not.toBeNull();
       todayPreset!.dispatchEvent(
         new dom.window.MouseEvent("click", {
           bubbles: true,
@@ -345,8 +354,7 @@ describe("analytics dashboard UI — date preset wiring", () => {
         }),
       );
 
-      await new Promise((r) => setTimeout(r, 0));
-      await new Promise((r) => setTimeout(r, 0));
+      await flushAsync();
 
       const after = calls.slice(initial.length);
       const summaryCall = after.find((u) =>
@@ -415,14 +423,13 @@ describe("analytics dashboard UI — date preset wiring", () => {
       .dispatchEvent(
         new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
       );
-    const todayPreset = Array.from(
-      dom.window.document.querySelectorAll(".preset"),
-    ).find((el) => el.textContent?.trim().startsWith("Today")) as HTMLElement;
+    const todayPreset = dom.window.document.querySelector(
+      '.preset[data-preset="today"]',
+    ) as HTMLElement;
     todayPreset.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
     );
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsync();
 
     // Snapshot of fetches so far.
     const beforeSwitch = calls.length;
@@ -439,8 +446,7 @@ describe("analytics dashboard UI — date preset wiring", () => {
     seven.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
     );
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsync();
 
     const after = calls.slice(beforeSwitch);
     const summaryCall = after.find((u) =>
@@ -492,8 +498,7 @@ describe("analytics dashboard UI — dynamic window labels", () => {
     preset!.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
     );
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsync();
   }
 
   async function clickToday(dom: JSDOM) {
@@ -502,16 +507,13 @@ describe("analytics dashboard UI — dynamic window labels", () => {
       .dispatchEvent(
         new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
       );
-    const todayPreset = Array.from(
-      dom.window.document.querySelectorAll(".preset"),
-    ).find((el) => el.textContent?.trim().startsWith("Today")) as
-      | HTMLElement
-      | undefined;
+    const todayPreset = dom.window.document.querySelector(
+      '.preset[data-preset="today"]',
+    ) as HTMLElement | null;
     todayPreset!.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
     );
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsync();
   }
 
   it("default load shows 'Last 7 days' window label on stat cards, chart title, and table headers", async () => {
@@ -663,8 +665,7 @@ describe("analytics dashboard UI — daily bar click drills down", () => {
       expect(typeof onClick).toBe("function");
       onClick({}, [{ index: 0 }]);
 
-      await new Promise((r) => setTimeout(r, 0));
-      await new Promise((r) => setTimeout(r, 0));
+      await flushAsync();
 
       const after = calls.slice(initialCount);
       const summaryCall = after.find((u) =>
@@ -746,8 +747,7 @@ describe("analytics dashboard UI — custom-range apply", () => {
       }),
     );
 
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsync();
 
     const after = calls.slice(initialCount);
     for (const p of [
@@ -763,5 +763,219 @@ describe("analytics dashboard UI — custom-range apply", () => {
       expect(qs.to, p + " to").toBe("2026-04-15");
       expect(qs.days, p + " should not send days").toBeUndefined();
     }
+  });
+});
+
+describe("analytics dashboard UI — HTML escaping", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("escapes double quotes in source_name so the data-source attribute stays well-formed", async () => {
+    // A source_name containing a literal `"` must not break out of the
+    // data-source="..." attribute. The old esc() used a div.textContent
+    // round-trip that escaped <, >, & but NOT " — a malicious or
+    // unexpected source name could inject attributes or markup via the
+    // source-filter pill. Verify the DOM we build contains exactly one
+    // pill element (no injection) and the attribute decodes cleanly.
+    const malicious = 'weird" onclick="steal()" x="';
+    const total = 42;
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        total_queries: total,
+        total_queries_window: total,
+        empty_result_rate_window: 0,
+        empty_result_count_window: 0,
+        avg_latency_ms_window: 0,
+        p95_latency_ms_window: 0,
+        queries_per_day_window: [],
+        queries_by_source: [{ source_name: malicious, count: total }],
+      }),
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+
+    // The source filter pills live in #filters. Exactly one real source
+    // pill plus one "All Sources" pill should exist — any injected
+    // element from a broken escape would show up as an extra child.
+    const sourcePills = dom.window.document.querySelectorAll(
+      ".pill[data-source], .pill[data-source-all]",
+    );
+    expect(sourcePills.length).toBe(2);
+
+    // The malicious source_name must round-trip losslessly through the
+    // attribute — getAttribute() decodes HTML entities back to the raw
+    // string. If the `"` wasn't escaped, parsing would have truncated
+    // the attribute at the first quote.
+    const real = Array.from(sourcePills).find((el) =>
+      el.hasAttribute("data-source"),
+    );
+    expect(real).toBeDefined();
+    expect(real!.getAttribute("data-source")).toBe(malicious);
+
+    // No stray onclick attribute should have leaked into the pill.
+    expect(real!.hasAttribute("onclick")).toBe(false);
+  });
+});
+
+describe("analytics dashboard UI — unfilteredSourcesCache", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Shared summary builder: the server narrows queries_by_source based on
+  // active filters (like the real /api/analytics/summary handler does).
+  // Without the client-side cache, applying a filter would make the
+  // source-filter pills collapse down to just the filtered sources and
+  // leave the user unable to switch back to the other sources without a
+  // full reload.
+  const FULL_SOURCES = [
+    { source_name: "docs", count: 30 },
+    { source_name: "api", count: 20 },
+    { source_name: "blog", count: 10 },
+  ];
+
+  function summaryHandlerFor(total: number) {
+    return (qs: string) => {
+      const params = new URLSearchParams(qs);
+      const source = params.get("source");
+      const toolType = params.get("tool_type");
+      // Narrow the by-source list when filters are active, the way a
+      // real server would. When source is set, return just that source;
+      // when tool_type is set (alone or with source), return a subset.
+      let bySource;
+      if (source) {
+        bySource = FULL_SOURCES.filter((s) => s.source_name === source);
+      } else if (toolType) {
+        // tool_type alone returns only the sources that actually have
+        // that tool — simulate by returning just the first one.
+        bySource = FULL_SOURCES.slice(0, 1);
+      } else {
+        bySource = FULL_SOURCES.slice();
+      }
+      return {
+        total_queries: total,
+        total_queries_window: total,
+        empty_result_rate_window: 0,
+        empty_result_count_window: 0,
+        avg_latency_ms_window: 100,
+        p95_latency_ms_window: 200,
+        queries_per_day_window: [],
+        queries_by_source: bySource,
+      };
+    };
+  }
+
+  function buildEndpoints(total: number = 60) {
+    return {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": summaryHandlerFor(total),
+      "/api/analytics/tool-counts": () => [
+        { tool_type: "search", count: total },
+        { tool_type: "explore", count: total / 2 },
+      ],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+  }
+
+  function sourcePillNames(dom: JSDOM): string[] {
+    const pills = dom.window.document.querySelectorAll(
+      ".pill[data-source]",
+    ) as NodeListOf<HTMLElement>;
+    return Array.from(pills).map((p) => p.getAttribute("data-source") ?? "");
+  }
+
+  it("renders all unfiltered sources as pills on initial load", async () => {
+    const { dom } = await loadDashboard(buildEndpoints());
+    expect(sourcePillNames(dom).sort()).toEqual(["api", "blog", "docs"].sort());
+  });
+
+  it("preserves all sources in pills after applying a tool_type filter", async () => {
+    const { dom } = await loadDashboard(buildEndpoints());
+    // Click the explore tool pill — this applies tool_type=explore
+    // which narrows the server's queries_by_source response, but the
+    // unfilteredSourcesCache (populated on the initial unfiltered load)
+    // should keep the full pill set visible so the user can still pick
+    // any source to cross-filter.
+    const explorePill = dom.window.document.querySelector(
+      '.pill[data-tool="explore"]',
+    ) as HTMLElement | null;
+    expect(explorePill).not.toBeNull();
+    explorePill!.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    expect(sourcePillNames(dom).sort()).toEqual(["api", "blog", "docs"].sort());
+  });
+
+  it("invalidates the cache when a source filter is applied so pills reflect the filtered response", async () => {
+    // Source-filter clicks explicitly drop the cache (see analytics.html
+    // — "Clearing/changing the source filter means the next fetch may
+    // return a narrower set of sources in summary"). The next fetch's
+    // narrower response re-seeds what pills render.
+    const { dom } = await loadDashboard(buildEndpoints());
+    expect(sourcePillNames(dom).length).toBe(3);
+
+    const docsPill = dom.window.document.querySelector(
+      '.pill[data-source="docs"]',
+    ) as HTMLElement | null;
+    expect(docsPill).not.toBeNull();
+    docsPill!.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    // Only the filtered source remains — cache was dropped and the
+    // narrower summary response re-seeded the pill list.
+    expect(sourcePillNames(dom)).toEqual(["docs"]);
+  });
+
+  it("invalidates the cache when the date preset changes so the next load reseeds from a fresh unfiltered fetch", async () => {
+    // Start with the full set.
+    const { dom } = await loadDashboard(buildEndpoints());
+    expect(sourcePillNames(dom).length).toBe(3);
+
+    // Apply tool_type=explore — the cache retains the full set behind
+    // this narrowed view.
+    const explorePill = dom.window.document.querySelector(
+      '.pill[data-tool="explore"]',
+    ) as HTMLElement | null;
+    explorePill!.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+    expect(sourcePillNames(dom).length).toBe(3);
+
+    // Changing the date preset should invalidate the cache — sources
+    // counted under the old window are not the right snapshot for the
+    // new window. The next fetch still carries tool_type=explore though,
+    // so the narrow-by-tool response is what repopulates the pills.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const thirty = dom.window.document.querySelector(
+      '.preset[data-days="30"]',
+    ) as HTMLElement | null;
+    expect(thirty).not.toBeNull();
+    thirty!.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    // The tool_type filter is still active, so the server returns a
+    // narrowed by-source list (our handler returns [FULL_SOURCES[0]]
+    // when tool_type is set). The cache was invalidated on the preset
+    // change, so the pills now reflect that narrowed response rather
+    // than the stale cache — exactly the "fresh fetch on date change"
+    // contract.
+    expect(sourcePillNames(dom)).toEqual(["docs"]);
   });
 });
