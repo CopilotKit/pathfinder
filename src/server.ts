@@ -1695,6 +1695,39 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     } catch (e) {
       console.error("[shutdown] Workspace cleanup failed:", e);
     }
+    // Drain the HTTP server BEFORE closing the DB pool and exiting. Without
+    // this, in-flight requests get dropped mid-response and open keep-alive
+    // connections are severed. `server.close()` stops accepting NEW
+    // connections and resolves once all in-flight ones have completed;
+    // combined with a safety timeout so a wedged keep-alive can't block
+    // shutdown past the orchestrator's kill-deadline.
+    try {
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const done = (): void => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        const timeout = setTimeout(() => {
+          console.error(
+            "[shutdown] HTTP server close timed out after 5s — forcing exit",
+          );
+          done();
+        }, 5000);
+        // Clear the timer on resolve so it can't keep the event loop alive.
+        timeout.unref?.();
+        server.close((err) => {
+          clearTimeout(timeout);
+          if (err) {
+            console.error("[shutdown] HTTP server close failed:", err);
+          }
+          done();
+        });
+      });
+    } catch (e) {
+      console.error("[shutdown] HTTP server close threw:", e);
+    }
     try {
       await closePool();
     } catch (e) {
