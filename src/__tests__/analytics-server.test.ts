@@ -417,6 +417,53 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(res.status).toBe(400);
       expect(mockGetTopQueries).not.toHaveBeenCalled();
     });
+
+    // parsePositiveIntParam is shared across summary / queries /
+    // empty-queries / tool-counts. Each handler needs its own end-to-end
+    // assertion so a future refactor that forgets to wire the validator
+    // into one of the paths surfaces here rather than silently passing
+    // a malformed value into the DB layer.
+    it("rejects limit > 200 on /api/analytics/empty-queries with 400", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetEmptyQueries.mockResolvedValue([]);
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/empty-queries?limit=999",
+        { Authorization: "Bearer tok" },
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockGetEmptyQueries).not.toHaveBeenCalled();
+    });
+
+    it("rejects days=abc on /api/analytics/tool-counts with 400", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetToolCounts.mockResolvedValue([]);
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/tool-counts?days=abc",
+        { Authorization: "Bearer tok" },
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockGetToolCounts).not.toHaveBeenCalled();
+    });
   });
 
   // ---- from/to date range params ---------------------------------------------
