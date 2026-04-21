@@ -96,11 +96,17 @@ export async function logQuery(
 
 /**
  * Escape LIKE pattern metacharacters so user-supplied values don't act as
- * wildcards. Applied with an explicit `ESCAPE '\'` clause on the LIKE so
- * that literal `%`, `_`, and `\` in the input match exactly.
+ * wildcards. Applied with an explicit `ESCAPE '|'` clause on the LIKE so
+ * that literal `%`, `_`, and `|` in the input match exactly.
+ *
+ * We use `|` (pipe) rather than the SQL-standard `\` to sidestep a Postgres
+ * gotcha: with `standard_conforming_strings=on` (the default since 9.1), the
+ * literal `'\\'` is TWO characters, not one, and `ESCAPE` requires exactly
+ * one character. Using `|` keeps the SQL literal unambiguous regardless of
+ * `standard_conforming_strings` mode.
  */
 function escapeLikePattern(s: string): string {
-  return s.replace(/([\\%_])/g, "\\$1");
+  return s.replace(/([|%_])/g, "|$1");
 }
 
 /**
@@ -119,7 +125,7 @@ function buildFilterClauses(
     // Escape LIKE metacharacters in user input; declare the escape character
     // explicitly so `%` and `_` in the input match literally rather than as
     // wildcards.
-    clauses.push(`tool_name LIKE $${idx} || '-%' ESCAPE '\\'`);
+    clauses.push(`tool_name LIKE $${idx} || '-%' ESCAPE '|'`);
     params.push(escapeLikePattern(filter.tool_type));
     idx++;
   }
@@ -208,11 +214,13 @@ export async function getAnalyticsSummary(
   );
 
   // Windowed summary. Backfilled rows (latency_ms<0) are excluded from every
-  // windowed aggregate (summary, latency, by-source, per-day, and also
-  // getToolCounts) for consistency: otherwise the empty_result_rate_window
-  // denominator would include backfilled rows while the numerator and
-  // avg_latency implicitly exclude them, inflating the rate. All windowed
-  // aggregates exclude `latency_ms < 0`.
+  // windowed aggregate (summary, latency, by-source, per-day, getToolCounts,
+  // getTopQueries, getEmptyQueries) for consistency: otherwise the
+  // empty_result_rate_window denominator would include backfilled rows
+  // while the numerator and avg_latency implicitly exclude them, inflating
+  // the rate. All windowed aggregates exclude `latency_ms < 0`. The only
+  // aggregate that intentionally includes backfilled rows is the all-time
+  // `total_queries` count in this function (see the totals query below).
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
   const summaryBase = [...dw2.clauses, "latency_ms >= 0"];
@@ -316,7 +324,11 @@ export async function getTopQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
-  const baseClauses = [...dw.clauses, "query_text != '<redacted>'"];
+  const baseClauses = [
+    ...dw.clauses,
+    "query_text != '<redacted>'",
+    "latency_ms >= 0",
+  ];
   const where = whereAnd(baseClauses, fc);
 
   const { rows } = await pool.query(
@@ -363,6 +375,7 @@ export async function getEmptyQueries(
     "result_count = 0",
     ...dw.clauses,
     "query_text != '<redacted>'",
+    "latency_ms >= 0",
   ];
   const where = whereAnd(baseClauses, fc);
 

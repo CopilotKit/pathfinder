@@ -591,6 +591,47 @@ describe("parseAnalyticsFilter from/to validation", () => {
       expect(result.status).toBe(400);
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // Range-width cap. The server caps from/to span at MAX_DAYS so a client
+  // can't request `from=1970-01-01&to=9999-12-31` and force a scan across
+  // the entire table.
+  //
+  // Important implementation detail: `from` is snapped to UTC start-of-day
+  // and `to` is snapped to UTC end-of-day (23:59:59.999). So a range that
+  // covers N calendar days has (to-from) ≈ N*86400000 - 1 ms, and
+  // Math.ceil((to-from)/86400000) = N. We test both sides of the boundary.
+  // ---------------------------------------------------------------------------
+  describe("parseAnalyticsFilter range-width cap", () => {
+    // Helper that generates a YYYY-MM-DD string N calendar days after
+    // `from`. N=0 returns `from` itself.
+    function addDaysUTC(from: string, n: number): string {
+      const d = new Date(from + "T00:00:00.000Z");
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    }
+
+    it("accepts a range that spans exactly MAX_DAYS calendar days", () => {
+      // MAX_DAYS is 100000 in server.ts — a range of from..from+99999 days
+      // spans 100000 calendar days at UTC-start..UTC-end-of-day resolution.
+      const from = "1970-01-01";
+      const to = addDaysUTC(from, 99999); // MAX_DAYS - 1 offset => MAX_DAYS span
+      const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects a range that spans MAX_DAYS + 1 calendar days with 400", () => {
+      const from = "1970-01-01";
+      const to = addDaysUTC(from, 100000); // 100001-day span
+      const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.status).toBe(400);
+        expect(result.body.error).toBe("invalid_request");
+        expect(result.body.error_description).toMatch(/range.*<=/i);
+      }
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -598,7 +639,6 @@ describe("parseAnalyticsFilter from/to validation", () => {
 // ---------------------------------------------------------------------------
 
 describe("parsePositiveIntParam", () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports,@typescript-eslint/no-var-requires
   let parsePositiveIntParam: typeof import("../server.js").parsePositiveIntParam;
   beforeEach(async () => {
     const mod = await import("../server.js");

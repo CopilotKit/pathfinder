@@ -40,13 +40,16 @@ vi.mock("../config.js", () => ({
   hasBashSemanticSearch: vi.fn().mockReturnValue(false),
 }));
 
-import { getAnalyticsConfig } from "../config.js";
+import { getAnalyticsConfig, getConfig } from "../config.js";
 import {
   registerAnalyticsRoutes,
   __resetAnalyticsTokenForTesting,
+  getAuthMode,
 } from "../server.js";
+import type { Request } from "express";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
+const mockGetConfigFn = vi.mocked(getConfig);
 
 // ---------------------------------------------------------------------------
 // Build an Express app using the production registerAnalyticsRoutes() so
@@ -706,6 +709,142 @@ describe("Analytics server routes (HTTP-level)", () => {
       const body = JSON.parse(res.body);
       expect(body.error).toBeTruthy();
       expect(res.body).not.toContain("db down");
+    });
+  });
+
+  // ---- /analytics sendFile error paths (ENOENT + non-ENOENT) -----------------
+  //
+  // The dashboard HTML route wraps res.sendFile with an error callback that
+  // maps ENOENT -> 404 (missing install) and any other error -> 500. These
+  // tests cover both branches by pointing analyticsHtmlPath at paths that
+  // won't serve as a regular file.
+  // ---------------------------------------------------------------------------
+
+  describe("GET /analytics file-serve error paths", () => {
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errSpy.mockRestore();
+    });
+
+    function startAppWithHtmlPath(htmlPath: string): Promise<http.Server> {
+      return new Promise((resolve) => {
+        const app = express();
+        app.use(express.json());
+        registerAnalyticsRoutes(app, {
+          getAnalyticsSummary: (
+            ...args: Parameters<typeof mockGetAnalyticsSummary>
+          ) => mockGetAnalyticsSummary(...args),
+          getTopQueries: (...args: Parameters<typeof mockGetTopQueries>) =>
+            mockGetTopQueries(...args),
+          getEmptyQueries: (...args: Parameters<typeof mockGetEmptyQueries>) =>
+            mockGetEmptyQueries(...args),
+          getToolCounts: (...args: Parameters<typeof mockGetToolCounts>) =>
+            mockGetToolCounts(...args),
+          analyticsHtmlPath: htmlPath,
+        });
+        const s = app.listen(0, () => resolve(s));
+      });
+    }
+
+    it("returns 404 when analyticsHtmlPath does not exist (ENOENT)", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      server = await startAppWithHtmlPath(
+        "/nonexistent/definitely-does-not-exist.html",
+      );
+      const res = await request(server, "GET", "/analytics");
+      expect(res.status).toBe(404);
+      expect(res.body).toContain("analytics dashboard not available");
+    });
+
+    it("returns 500 on non-ENOENT sendFile error (e.g. path is a directory)", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      // Pointing at a directory triggers an EISDIR-style error rather than
+      // ENOENT, exercising the "anything else" 500 branch.
+      server = await startAppWithHtmlPath("/tmp");
+      const res = await request(server, "GET", "/analytics");
+      expect(res.status).toBe(500);
+      expect(res.body).toContain("analytics dashboard unavailable");
+    });
+  });
+
+  // ---- getAuthMode() unit tests ---------------------------------------------
+  //
+  // We test the exported helper directly rather than via /api/analytics/auth-
+  // mode over TCP because the test HTTP server always receives requests from
+  // 127.0.0.1 — there's no way to exercise the "non-localhost socket" branch
+  // without either binding to a routable interface (flaky) or spoofing the
+  // socket object on a synthetic Request (what we do here).
+  // ---------------------------------------------------------------------------
+
+  describe("getAuthMode()", () => {
+    beforeEach(() => {
+      mockGetConfigFn.mockReset();
+    });
+
+    function mkReq(remoteAddress: string): Request {
+      return { socket: { remoteAddress } } as unknown as Request;
+    }
+
+    function cfgWithEnv(nodeEnv: string) {
+      mockGetConfigFn.mockReturnValue({
+        port: 3001,
+        databaseUrl: "pglite:///tmp/test",
+        openaiApiKey: "",
+        githubToken: "",
+        githubWebhookSecret: "",
+        nodeEnv,
+        logLevel: "info",
+        cloneDir: "/tmp/test",
+        slackBotToken: "",
+        slackSigningSecret: "",
+        discordBotToken: "",
+        discordPublicKey: "",
+        notionToken: "",
+        mcpJwtSecret: "x".repeat(32),
+      });
+    }
+
+    it("development + localhost (127.0.0.1) -> { dev: true }", () => {
+      cfgWithEnv("development");
+      expect(getAuthMode(mkReq("127.0.0.1"))).toEqual({ dev: true });
+    });
+
+    it("development + localhost (::1) -> { dev: true }", () => {
+      cfgWithEnv("development");
+      expect(getAuthMode(mkReq("::1"))).toEqual({ dev: true });
+    });
+
+    it("development + localhost (::ffff:127.0.0.1) -> { dev: true }", () => {
+      cfgWithEnv("development");
+      expect(getAuthMode(mkReq("::ffff:127.0.0.1"))).toEqual({ dev: true });
+    });
+
+    it("development + non-localhost socket -> { dev: false }", () => {
+      cfgWithEnv("development");
+      expect(getAuthMode(mkReq("192.168.1.100"))).toEqual({ dev: false });
+    });
+
+    it("production + localhost -> { dev: false }", () => {
+      cfgWithEnv("production");
+      expect(getAuthMode(mkReq("127.0.0.1"))).toEqual({ dev: false });
+    });
+
+    it("production + non-localhost -> { dev: false }", () => {
+      cfgWithEnv("production");
+      expect(getAuthMode(mkReq("192.168.1.100"))).toEqual({ dev: false });
     });
   });
 });
