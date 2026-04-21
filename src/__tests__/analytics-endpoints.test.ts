@@ -47,6 +47,7 @@ import {
   analyticsAuth,
   parseAnalyticsFilter,
   __resetAnalyticsTokenForTesting,
+  MAX_DAYS,
 } from "../server.js";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
@@ -564,38 +565,49 @@ describe("parseAnalyticsFilter from/to validation", () => {
     }
   });
 
-  it("drops empty tool_type so it doesn't become an unbounded LIKE wildcard", () => {
-    // Locking in current behavior: `?tool_type=` from a blank select must
-    // not land on the filter. If it did, buildFilterClauses would build
-    // `tool_name LIKE '' || '-%'` — matching every tool_name — which is
-    // almost certainly a client bug, not a "show everything" intent.
+  it("rejects empty tool_type with 400 so it doesn't become an unbounded LIKE wildcard", () => {
+    // `?tool_type=` from a blank select is almost certainly a client bug:
+    // if the empty value landed on the filter, buildFilterClauses would
+    // build `tool_name LIKE '' || '-%'` — matching every tool_name — which
+    // is not "show everything" intent. Returning 400 surfaces the client
+    // bug instead of silently dropping the param.
     const result = parseAnalyticsFilter(mkReq({ tool_type: "" }) as Request);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.filter.tool_type).toBeUndefined();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
+      expect(result.body.error_description).toBe(
+        "tool_type must be a non-empty string",
+      );
     }
   });
 
-  it("drops empty source so it doesn't mask the no-filter case", () => {
+  it("rejects empty source with 400 so it doesn't mask the no-filter case", () => {
     const result = parseAnalyticsFilter(mkReq({ source: "" }) as Request);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.filter.source).toBeUndefined();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
+      expect(result.body.error_description).toBe(
+        "source must be a non-empty string",
+      );
     }
   });
 
-  it("keeps a non-empty filter when a sibling filter is empty (no cross-field bleed)", () => {
-    // Regression guard: if empty-string handling for one field ever
-    // bleeds into another (e.g. early-return on any empty value), the
-    // populated sibling would silently drop off the filter. Mix
-    // tool_type="" with source="docs" to lock down per-field semantics.
+  it("rejects empty tool_type even when a sibling filter is valid (no cross-field bleed)", () => {
+    // Regression guard: the empty-string rejection must fire even when
+    // another filter is populated. Mix tool_type="" with source="docs" to
+    // lock down per-field semantics — tool_type="" trips the 400 first.
     const result = parseAnalyticsFilter(
       mkReq({ tool_type: "", source: "docs" }) as Request,
     );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.filter.tool_type).toBeUndefined();
-      expect(result.filter.source).toBe("docs");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
+      expect(result.body.error_description).toBe(
+        "tool_type must be a non-empty string",
+      );
     }
   });
 
@@ -719,17 +731,19 @@ describe("parseAnalyticsFilter from/to validation", () => {
     }
 
     it("accepts a range that spans exactly MAX_DAYS calendar days", () => {
-      // MAX_DAYS is 100000 in server.ts — a range of from..from+99999 days
-      // spans 100000 calendar days at UTC-start..UTC-end-of-day resolution.
+      // A range of from..from+(MAX_DAYS-1) days spans MAX_DAYS calendar
+      // days at UTC-start..UTC-end-of-day resolution. Import MAX_DAYS from
+      // server.ts instead of hardcoding the numeric so tests don't drift
+      // if the cap is ever retuned.
       const from = "1970-01-01";
-      const to = addDaysUTC(from, 99999); // MAX_DAYS - 1 offset => MAX_DAYS span
+      const to = addDaysUTC(from, MAX_DAYS - 1);
       const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
       expect(result.ok).toBe(true);
     });
 
     it("rejects a range that spans MAX_DAYS + 1 calendar days with 400", () => {
       const from = "1970-01-01";
-      const to = addDaysUTC(from, 100000); // 100001-day span
+      const to = addDaysUTC(from, MAX_DAYS); // (MAX_DAYS+1)-day span
       const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
       expect(result.ok).toBe(false);
       if (!result.ok) {

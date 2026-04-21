@@ -942,16 +942,34 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
   // After the array rejection above, these are narrowed to string | undefined.
   // Use a typeof check (not `as string` casts) so future changes to rejectArray
   // surface as real type errors instead of silently hiding a bad narrowing.
-  // Reject empty strings too: an empty filter value is almost certainly a
-  // client bug (e.g. `?tool_type=` from a blank select) and would otherwise
-  // pass through to LIKE as an unbounded wildcard match.
-  if (
-    typeof req.query.tool_type === "string" &&
-    req.query.tool_type.length > 0
-  ) {
+  // Reject empty strings with 400: an empty filter value is almost certainly
+  // a client bug (e.g. `?tool_type=` from a blank select) and would otherwise
+  // pass through to LIKE as an unbounded wildcard match. Returning 400 makes
+  // the bug visible rather than silently dropping the param.
+  if (typeof req.query.tool_type === "string") {
+    if (req.query.tool_type.length === 0) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: "tool_type must be a non-empty string",
+        },
+      };
+    }
     filter.tool_type = req.query.tool_type;
   }
-  if (typeof req.query.source === "string" && req.query.source.length > 0) {
+  if (typeof req.query.source === "string") {
+    if (req.query.source.length === 0) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: "source must be a non-empty string",
+        },
+      };
+    }
     filter.source = req.query.source;
   }
 
@@ -1076,7 +1094,10 @@ export function parsePositiveIntParam(
 // "All time" preset (which sends days=ALL_TIME_DAYS=99999 — see
 // docs/analytics.html) is comfortably under the cap. If you lower MAX_DAYS,
 // make sure it stays >= 99999 or the "All time" preset will 400.
-const MAX_DAYS = 100000;
+//
+// Exported so tests can reference the constant directly instead of
+// hardcoding the numeric literal (keeps one source of truth).
+export const MAX_DAYS = 100000;
 const MAX_LIMIT = 200;
 
 /**

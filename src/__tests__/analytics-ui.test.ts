@@ -74,13 +74,21 @@ async function flushAsync(): Promise<void> {
  * Handler response shape:
  *   - Bare value → JSON body, status 200.
  *   - { status, body } → custom HTTP status + body (for error-path tests).
+ *   - { status, rawBody, contentType? } → raw string body with explicit
+ *     content-type. Use this for non-JSON 5xx payloads to exercise the
+ *     `res.json().catch(...)` branch in fetchJson.
  *   - Promise<either> → deferred response, useful for racing out-of-order
  *     load() responses.
  */
 type HandlerResult =
   | unknown
   | { status: number; body: unknown }
-  | Promise<unknown | { status: number; body: unknown }>;
+  | { status: number; rawBody: string; contentType?: string }
+  | Promise<
+      | unknown
+      | { status: number; body: unknown }
+      | { status: number; rawBody: string; contentType?: string }
+    >;
 
 function isStatusBody(v: unknown): v is { status: number; body: unknown } {
   return (
@@ -89,6 +97,19 @@ function isStatusBody(v: unknown): v is { status: number; body: unknown } {
     "status" in v &&
     typeof (v as { status: unknown }).status === "number" &&
     "body" in v
+  );
+}
+
+function isStatusRawBody(
+  v: unknown,
+): v is { status: number; rawBody: string; contentType?: string } {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    "status" in v &&
+    typeof (v as { status: unknown }).status === "number" &&
+    "rawBody" in v &&
+    typeof (v as { rawBody: unknown }).rawBody === "string"
   );
 }
 
@@ -120,6 +141,14 @@ function buildFetchStub(
     // Await so handlers can return Promises (deferred responses) for
     // race-condition testing.
     const result = await handler(qs);
+    if (isStatusRawBody(result)) {
+      return new Response(result.rawBody, {
+        status: result.status,
+        headers: {
+          "Content-Type": result.contentType ?? "text/plain",
+        },
+      });
+    }
     if (isStatusBody(result)) {
       return new Response(JSON.stringify(result.body), {
         status: result.status,
@@ -1169,6 +1198,127 @@ describe("analytics dashboard UI — error banner", () => {
     expect(errorEl.style.display).toBe("none");
     const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
     expect(statsHtml).toContain("8,888");
+    errSpy.mockRestore();
+  });
+
+  // fetchJson's fallback branch at docs/analytics.html — when a non-2xx
+  // response body isn't valid JSON, `res.json()` rejects, the catch returns
+  // `{}`, and the error message becomes `"HTTP <status>"`. Verify that path
+  // is exercised (not just the JSON-body path above).
+  it("shows #error with 'HTTP 500' when the summary endpoint returns a non-JSON body", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        status: 500,
+        rawBody: "<html><body>Internal Server Error</body></html>",
+        contentType: "text/html",
+      }),
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+    // Swallow the intentional console.error from load()'s catch + the
+    // fetchJson parse-fail log, since the test assertion lives on the
+    // banner, not the logs.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dom } = await loadDashboard(endpoints);
+    await flushAsync();
+
+    const errorEl = dom.window.document.getElementById("error")!;
+    expect(errorEl.style.display).toBe("block");
+    // Text should contain "HTTP 500" since the HTML body can't parse as JSON
+    // and the fallback error message is "HTTP " + status.
+    expect(errorEl.textContent).toContain("HTTP 500");
+    errSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchJson 401/403 auth-failure path: token must be wiped, login modal
+// must be shown, and the server-supplied error_description must render in
+// the login error slot. This exercises the pre-fetchJson-body branch.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — fetchJson 401/403 auth failure", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("401 summary response clears stored token, shows login, and renders error_description", async () => {
+    const endpoints = {
+      // Non-dev mode so a token is required — this steers init() through
+      // the real token-probe code path instead of the dev short-circuit.
+      "/api/analytics/auth-mode": () => ({ dev: false }),
+      "/api/analytics/summary": () => ({
+        status: 401,
+        body: { error: "unauthorized", error_description: "token expired" },
+      }),
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+    // Prime sessionStorage with a stale token BEFORE the page loads so the
+    // dashboard picks it up as TOKEN at init time. We need to seed the
+    // storage via the jsdom window — not the test's process.sessionStorage —
+    // so plumb it in by instrumenting loadDashboard inline instead of using
+    // the helper (which clobbers window.fetch after doc load).
+    const html = fs.readFileSync(
+      path.join(process.cwd(), "docs", "analytics.html"),
+      "utf8",
+    );
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", () => {});
+    const dom = new JSDOM(html, {
+      runScripts: "outside-only",
+      url: "http://localhost/analytics",
+      pretendToBeVisual: true,
+      virtualConsole,
+    });
+    const win = dom.window as unknown as Window & typeof globalThis;
+    Object.assign(win, { Date: globalThis.Date });
+    // Chart stub.
+    class ChartStub {
+      type: string;
+      data: unknown;
+      options: unknown;
+      constructor(
+        _ctx: unknown,
+        cfg: { type: string; data: unknown; options: unknown },
+      ) {
+        this.type = cfg.type;
+        this.data = cfg.data;
+        this.options = cfg.options;
+      }
+      destroy() {}
+    }
+    Object.assign(win, { Chart: ChartStub });
+    // Seed the stale token before the inline script runs.
+    dom.window.sessionStorage.setItem(
+      "pathfinder_analytics_token",
+      "old-token",
+    );
+    const { fetchFn } = buildFetchStub(endpoints);
+    Object.assign(win, { fetch: fetchFn });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const scriptEl = dom.window.document.querySelector("script:not([src])");
+    const code = scriptEl?.textContent ?? "";
+    dom.window.eval(code);
+    await flushAsync();
+    await flushAsync();
+
+    // Token must be wiped from sessionStorage — fetchJson strips it on 401.
+    expect(
+      dom.window.sessionStorage.getItem("pathfinder_analytics_token"),
+    ).toBeNull();
+
+    // Login modal is visible.
+    const login = dom.window.document.getElementById("login")!;
+    expect(login.style.display).toBe("flex");
+
+    // Server-supplied error_description surfaces verbatim in loginError.
+    const loginErr = dom.window.document.getElementById("loginError")!;
+    expect(loginErr.textContent).toBe("token expired");
     errSpy.mockRestore();
   });
 });
