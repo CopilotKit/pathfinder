@@ -304,8 +304,13 @@ describe("getTopQueries", () => {
 // getTopQueries edge cases
 // ---------------------------------------------------------------------------
 
+// The server layer (parseDaysOrError / parseLimitOrError in src/server.ts)
+// already rejects days=0 and limit=0 with a 400 before the request ever
+// reaches the DB. These tests exist as defense-in-depth: they lock in the
+// DB layer's behavior today so a future refactor that moves or removes
+// the server-layer check can't silently introduce a wipe-the-table bug.
 describe("getTopQueries edge cases", () => {
-  it("handles days=0 gracefully", async () => {
+  it("DB layer accepts days=0 without throwing (server layer enforces > 0; this locks down regression if that check ever moves)", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const result = await getTopQueries(0, 50);
     expect(result).toEqual([]);
@@ -313,7 +318,7 @@ describe("getTopQueries edge cases", () => {
     expect(params[0]).toBe(0);
   });
 
-  it("handles limit=0 gracefully", async () => {
+  it("DB layer accepts limit=0 without throwing (server layer enforces > 0; this locks down regression if that check ever moves)", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const result = await getTopQueries(7, 0);
     expect(result).toEqual([]);
