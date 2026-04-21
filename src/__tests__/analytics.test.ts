@@ -487,6 +487,16 @@ describe("cleanupOldQueryLogs input validation", () => {
     );
     expect(mockQuery.mock.calls).toHaveLength(0);
   });
+
+  it("retentionDays=Infinity throws and does not query the DB", async () => {
+    // Number.isFinite(Infinity) is false, so the guard rejects it just like
+    // NaN. Locking it in explicitly because `Infinity` is the other
+    // non-finite value that can slip through a naive `value > 0` check.
+    await expect(cleanupOldQueryLogs(Infinity)).rejects.toThrow(
+      /invalid retentionDays=Infinity/,
+    );
+    expect(mockQuery.mock.calls).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -621,19 +631,24 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
     const [sql, params] = mockQuery.mock.calls[2];
     expect(sql).toMatch(/ORDER BY random\(\)/);
     expect(sql).toMatch(/LIMIT \$\d+/);
-    expect(params).toContain(P95_LATENCY_ROW_CAP);
+    // The query fetches cap+1 rows (not cap) to distinguish "exactly the
+    // cap" (all rows returned, no sampling) from "more than the cap" (true
+    // sampling) — a strict LIMIT $cap misreports the exact-match case.
+    expect(params).toContain(P95_LATENCY_ROW_CAP + 1);
   });
 
   it("logs a warn when the latency sample hits the cap (sampled p95)", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // Return exactly P95_LATENCY_ROW_CAP rows so the cap-hit branch trips.
+    // Return P95_LATENCY_ROW_CAP + 1 rows so the overflow branch trips —
+    // exactly cap rows means "all rows returned" (not sampled), so the
+    // cap-hit branch only fires at cap+1.
     mockQuery
       .mockResolvedValueOnce({ rows: [{ count: 500 }] })
       .mockResolvedValueOnce({
         rows: [{ total: 100, empty: 5, avg_latency: 50 }],
       })
       .mockResolvedValueOnce({
-        rows: Array.from({ length: P95_LATENCY_ROW_CAP }, (_, i) => ({
+        rows: Array.from({ length: P95_LATENCY_ROW_CAP + 1 }, (_, i) => ({
           latency_ms: i + 1,
         })),
       })

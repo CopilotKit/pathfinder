@@ -313,9 +313,7 @@ export class IndexingOrchestrator {
               }
             })
             .catch((err) => {
-              console.error(
-                `[analytics] Cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
+              console.error("[analytics] Cleanup failed:", err);
             });
         }
       }
