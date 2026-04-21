@@ -1369,7 +1369,7 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     // startup() isn't expected to run twice in a process lifetime, but a
     // stray re-entry would leak a second interval that shutdown() can't
     // clean up (only the most recent handle lives in the module slot). The
-    // sessionReaperInterval init below uses the same defensive guard.
+    // sessionReaperInterval init above uses the same defensive guard.
     bashTelemetry = new BashTelemetry(insertCollectedData);
     if (!telemetryFlushInterval) {
       telemetryFlushInterval = setInterval(() => {

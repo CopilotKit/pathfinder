@@ -12,6 +12,16 @@ import { getPool } from "./client.js";
  */
 export const REDACTED_QUERY_TEXT = "<redacted>";
 
+/**
+ * Cap on the number of latency rows fetched for p95 computation. PGlite
+ * doesn't support `percentile_cont`, so we pull latencies to JS and sort
+ * them; on "All time" (days=99999) with a busy install this would be
+ * unbounded. 100k rows is a safe ceiling (~0.8 MB for int latencies) and
+ * preserves correctness for any realistic dataset. When the LIMIT is hit
+ * we log a warning so the operator knows the reading is sampled.
+ */
+export const P95_LATENCY_ROW_CAP = 100000;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -66,8 +76,11 @@ export interface AnalyticsFilter {
    * underlying queries filter on `created_at >= from AND created_at <= to`
    * instead of the default `NOW() - INTERVAL '<days> days'` window.
    *
-   * Callers should ensure both are provided together; endpoints reject
-   * half-specified ranges before they reach the DB layer.
+   * Callers should ensure both are provided together. Endpoints reject
+   * half-specified ranges, calendar-invalid dates (e.g. Feb 30),
+   * array-shape parameters (Express multi-value), and ranges wider than
+   * MAX_DAYS before they reach the DB layer; direct callers (tests,
+   * future internal consumers) must replicate those guards.
    */
   from?: Date;
   to?: Date;
@@ -204,6 +217,10 @@ function buildDateWindow(
  * Compute p95 latency in application code instead of SQL.
  * PGlite does NOT support percentile_cont(), so we fetch all latencies
  * and compute the percentile in JS.
+ *
+ * Uses nearest-rank (index = floor(n * 0.95)), not linear interpolation —
+ * results may differ by one sample from Postgres' `percentile_cont(0.95)`
+ * query.
  */
 function computeP95(latencies: number[]): number {
   if (latencies.length === 0) return 0;
@@ -245,14 +262,15 @@ export async function getAnalyticsSummary(
   // `total_queries` count in this function (see the totals query below).
   //
   // Redacted rows (query_text = REDACTED_QUERY_TEXT) are also excluded from
-  // the summary `total`/`empty` counts so `empty_result_rate_window` matches
-  // the population surfaced by getEmptyQueries() — which filters redacted
-  // out. Without this, the rate denominator (summary) would include
-  // redacted rows while the visible empty-queries list omits them, so
-  // clicking through to the list would show fewer entries than the rate
-  // suggests. Keeping the filter scoped to `total`/`empty` (not latency or
-  // per-day/by-source) preserves the existing semantics of those other
-  // aggregates.
+  // the summary `total`/`empty` counts AND the per-day bars so
+  // `empty_result_rate_window` and the daily-chart totals match the
+  // population surfaced by getEmptyQueries() / getTopQueries() — which also
+  // filter redacted out. Without this, the rate denominator (summary) would
+  // include redacted rows while the visible empty-queries list omits them,
+  // so clicking through to the list would show fewer entries than the rate
+  // suggests. Latency + by-source intentionally stay inclusive of redacted
+  // rows (the per-day subquery was aligned in CR Round 8 for consistency
+  // with the tables; latency/by-source semantics are unchanged).
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
   const redactedIdx2 = dw2.nextIdx;
@@ -272,15 +290,24 @@ export async function getAnalyticsSummary(
     [...fp2, ...dw2.params, REDACTED_QUERY_TEXT],
   );
 
-  // Latencies for p95 (exclude backfilled rows where latency_ms < 0)
+  // Latencies for p95 (exclude backfilled rows where latency_ms < 0).
+  // Capped at P95_LATENCY_ROW_CAP so "All time" on a busy install doesn't
+  // load an unbounded result into JS. When the cap is hit we log a warn so
+  // the reading is known to be sampled rather than exact.
   const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
   const dw3 = buildDateWindow(filter, days, n3);
   const latencyBase = [...dw3.clauses, "latency_ms >= 0"];
   const latencyWhere = whereAnd(latencyBase, fc3);
+  const latencyLimitIdx = dw3.nextIdx;
   const latencyRes = await pool.query(
-    `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY latency_ms`,
-    [...fp3, ...dw3.params],
+    `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY latency_ms LIMIT $${latencyLimitIdx}`,
+    [...fp3, ...dw3.params, P95_LATENCY_ROW_CAP],
   );
+  if (latencyRes.rows.length >= P95_LATENCY_ROW_CAP) {
+    console.warn(
+      `[analytics] getAnalyticsSummary: p95 latency sample capped at ${P95_LATENCY_ROW_CAP} rows; result may be approximate`,
+    );
+  }
 
   // By source (filtered). Excludes backfilled rows (latency_ms < 0) so the
   // doughnut totals line up with summary + per-day.
@@ -301,11 +328,18 @@ export async function getAnalyticsSummary(
     [...fp4, ...dw4.params],
   );
 
-  // Per day (filtered). Excludes backfilled rows (latency_ms < 0) so the
-  // per-day bars match the summary/latency aggregates above.
+  // Per day (filtered). Excludes backfilled rows (latency_ms < 0) AND
+  // redacted rows (query_text = REDACTED_QUERY_TEXT) so the per-day bars
+  // match the summary/latency aggregates above AND the top-queries /
+  // empty-queries tables below — all of which filter redacted out.
   const { clauses: fc5, params: fp5, nextIdx: n5 } = buildFilterClauses(filter);
   const dw5 = buildDateWindow(filter, days, n5);
-  const dayBase = [...dw5.clauses, "latency_ms >= 0"];
+  const redactedIdx5 = dw5.nextIdx;
+  const dayBase = [
+    ...dw5.clauses,
+    "latency_ms >= 0",
+    `query_text != $${redactedIdx5}`,
+  ];
   const dayWhere = whereAnd(dayBase, fc5);
   const perDayRes = await pool.query(
     `SELECT date_trunc('day', created_at)::date::text AS day, count(*)::int AS count
@@ -313,7 +347,7 @@ export async function getAnalyticsSummary(
     ${dayWhere}
     GROUP BY day
     ORDER BY day`,
-    [...fp5, ...dw5.params],
+    [...fp5, ...dw5.params, REDACTED_QUERY_TEXT],
   );
 
   const totalQueries = totalRes.rows[0]?.count ?? 0;

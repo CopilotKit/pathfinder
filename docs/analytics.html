@@ -668,7 +668,7 @@
       // --- State ---
       var activeToolType = null; // null = "All"
       var activeSource = null; // null = "All Sources"
-      var activeDaysBack = 7; // number of days for preset window (null when using custom range)
+      var activeDaysBack = 7; // rolling-window size in days; null whenever explicit from/to is active (Today preset or Custom range)
       var activeFrom = null; // YYYY-MM-DD string or null
       var activeTo = null; // YYYY-MM-DD string or null
       var dailyChartInstance = null;
@@ -1353,6 +1353,13 @@
           var dayLabels = perDayArr.map(function (d) {
             return d.day;
           });
+          // Per-day tick thinning: on wide windows ("All time" or a custom
+          // range > ~200 days) the x-axis collapses to an unreadable
+          // smear. Keep every label in `data.labels` (so onClick still
+          // drills down correctly by index) but render only every Nth
+          // tick label. Threshold 200 ≈ ~7-month window; beyond that we
+          // show one label per week. Bars themselves are not downsampled.
+          var labelStride = dayLabels.length > 200 ? 7 : 1;
           dailyChartInstance = new Chart(
             document.getElementById("dailyChart"),
             {
@@ -1372,7 +1379,22 @@
               options: {
                 responsive: true,
                 plugins: { legend: { display: false } },
-                scales: { y: { beginAtZero: true } },
+                scales: {
+                  x: {
+                    ticks: {
+                      // Only show every Nth label for wide windows; index
+                      // refers to the position in data.labels so bar
+                      // interaction semantics are unchanged.
+                      callback: function (_val, index) {
+                        return index % labelStride === 0
+                          ? dayLabels[index]
+                          : "";
+                      },
+                      autoSkip: false,
+                    },
+                  },
+                  y: { beginAtZero: true },
+                },
                 onClick: function (_evt, elements) {
                   if (!elements || elements.length === 0) return;
                   var idx = elements[0].index;
