@@ -773,6 +773,20 @@ describe("getTopQueries LIKE injection hardening", () => {
     // nothing in this test sets source="docs" anyway.
     expect(params).toContain("a|%b||c");
   });
+
+  it("escapes bare '|' wildcard in tool_type", async () => {
+    // '|' is the ESCAPE character itself — a bare pipe in the filter value
+    // must be escaped (`||`) so Postgres treats it as a literal pipe in the
+    // LIKE pattern rather than the start of a 2-char escape sequence. This
+    // is the "escape the escape" case; the previous tests cover %/_/|
+    // wildcards but don't individually pin a bare pipe.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { tool_type: "a|b" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("ESCAPE '|'");
+    expect(params).toContain("a||b");
+  });
 });
 
 describe("getTopQueries with filters", () => {
@@ -1028,6 +1042,23 @@ describe("getToolCounts respects source filter", () => {
     expect(params).toContain("docs");
     expect(params).toContain(from);
     expect(params).toContain(to);
+  });
+
+  it("honors source and silently drops tool_type when both are supplied", async () => {
+    // Combination regression: the two filter branches ('source' applied,
+    // 'tool_type' dropped) are each exercised individually above, but the
+    // shared filter-stripping path is only hit when both are set at once.
+    // A future refactor that e.g. re-introduces tool_type into the WHERE
+    // clause would need to trip this test rather than either of the
+    // single-filter cases.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { tool_type: "search", source: "docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("tool_name LIKE");
+    expect(sql).toContain("source_name =");
+    expect(params).toContain("docs");
+    expect(params).not.toContain("search");
   });
 });
 

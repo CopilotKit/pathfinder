@@ -739,6 +739,16 @@ describe("parseAnalyticsFilter from/to validation", () => {
       const to = addDaysUTC(from, MAX_DAYS - 1);
       const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
       expect(result.ok).toBe(true);
+      // Boundary values must also be populated onto filter.from/to as the
+      // expected UTC Date instances — this pins the ISO-string → Date
+      // conversion (from at UTC-start-of-day, to at UTC-end-of-day).
+      // Pre-this-assertion, a subtle bug that accepted the range but set
+      // the wrong date bounds (e.g. local-time midnight, or a missed
+      // 23:59:59.999 suffix) would slip past this block.
+      if (result.ok) {
+        expect(result.filter.from!.toISOString()).toBe(from + "T00:00:00.000Z");
+        expect(result.filter.to!.toISOString()).toBe(to + "T23:59:59.999Z");
+      }
     });
 
     it("rejects a range that spans MAX_DAYS + 1 calendar days with 400", () => {

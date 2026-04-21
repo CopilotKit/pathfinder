@@ -1231,6 +1231,34 @@ describe("analytics dashboard UI — error banner", () => {
     expect(errorEl.textContent).toContain("HTTP 500");
     errSpy.mockRestore();
   });
+
+  it("shows #error with String(err) fallback when the summary handler rejects with a non-Error", async () => {
+    // load()'s catch uses `err && err.message ? err.message : String(err)`
+    // so a non-Error throw (a plain string, undefined, etc.) degrades
+    // gracefully to String(err) instead of rendering "undefined". This
+    // locks down that fallback — pre-fix, interpolating `err.message`
+    // directly would surface "Failed to load analytics: undefined" for
+    // any non-Error reject.
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      // Reject with a plain string. The handler returns a pre-rejected
+      // Promise so buildFetchStub's `await handler(qs)` propagates it out
+      // through fetchFn, tripping load()'s catch rather than fetchJson's.
+      "/api/analytics/summary": () => Promise.reject("network down"),
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dom } = await loadDashboard(endpoints);
+    await flushAsync();
+
+    const errorEl = dom.window.document.getElementById("error")!;
+    expect(errorEl.style.display).toBe("block");
+    expect(errorEl.textContent).toContain("Failed to load analytics");
+    expect(errorEl.textContent).toContain("network down");
+    errSpy.mockRestore();
+  });
 });
 
 // ---------------------------------------------------------------------------
