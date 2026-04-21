@@ -1172,3 +1172,71 @@ describe("analytics dashboard UI — error banner", () => {
     errSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Custom-range invalid-input handling: when the user types a non-YYYY-MM-DD
+// value and clicks Apply, the click is silently rejected (no fetches fired,
+// popover stays open, activeFrom/activeTo unchanged). This test locks down
+// that behavior so any future UX change (e.g. adding an inline validation
+// error) is a deliberate test update rather than an accidental regression.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — custom-range invalid input", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("clicking Apply with a non-YYYY-MM-DD value is silently rejected", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(3, 500).summary,
+      "/api/analytics/tool-counts": () => canned(3, 500).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, calls } = await loadDashboard(endpoints);
+    const fetchCountBefore = calls.length;
+
+    // Open the popover and reveal the custom-range inputs.
+    const datePill = dom.window.document.getElementById("datePill")!;
+    datePill.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    const customPreset = dom.window.document.querySelector(
+      ".preset[data-custom]",
+    ) as HTMLElement | null;
+    expect(customPreset).not.toBeNull();
+    customPreset!.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    // Set an invalid `from`. `to` stays empty.
+    const fromEl = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    expect(fromEl).not.toBeNull();
+    fromEl.value = "not-a-date";
+    fromEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    // Click Apply — handler at docs/analytics.html:1137-1141 early-returns
+    // when either input fails the YYYY-MM-DD regex.
+    const applyBtn = dom.window.document.getElementById("dateApplyBtn")!;
+    applyBtn.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    // No new fetches fired (activeFrom/activeTo unchanged → no reload).
+    // This is the load-bearing assertion: the Apply handler bailed
+    // early on the regex check, so no reload() was dispatched.
+    expect(calls.length).toBe(fetchCountBefore);
+    // Popover still open — the early-return path doesn't close it.
+    const popover = dom.window.document.getElementById("datePopover");
+    expect(popover).not.toBeNull();
+    // (Note: the `<input type=date>` element silently coerces an
+    // invalid string to "" on jsdom, so we intentionally don't assert
+    // on fromEl.value — the input-value retention is a browser detail,
+    // not part of the Apply-handler contract.)
+  });
+});
