@@ -643,7 +643,6 @@ describe("parseAnalyticsFilter from/to validation", () => {
 // ---------------------------------------------------------------------------
 
 describe("parsePositiveIntParam", () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports,@typescript-eslint/no-var-requires
   let parsePositiveIntParam: typeof import("../server.js").parsePositiveIntParam;
   beforeEach(async () => {
     const mod = await import("../server.js");
