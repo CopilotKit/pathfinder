@@ -60,17 +60,6 @@ function installChartStub(win: Window & typeof globalThis): {
 }
 
 /**
- * Build a fetch stub that:
- *  - records every URL called
- *  - returns a per-path response from `handlers` (function of query-string)
- *
- * Unmocked paths throw instead of returning 404. A 404 leaks into the
- * page's #error element and silently turns what should be a hard test
- * failure into a soft one (the test body's positive assertions still
- * pass because the element exists). Throwing forces missing handlers
- * to surface immediately in the test run.
- */
-/**
  * Flush two rounds of microtasks. Double-`await setTimeout(r, 0)` is
  * needed because the dashboard's load() chain does an auth-mode fetch
  * that then triggers the real data fetches; a single flush covers only
@@ -81,7 +70,42 @@ async function flushAsync(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
 }
 
-function buildFetchStub(handlers: Record<string, (qs: string) => unknown>) {
+/**
+ * Handler response shape:
+ *   - Bare value → JSON body, status 200.
+ *   - { status, body } → custom HTTP status + body (for error-path tests).
+ *   - Promise<either> → deferred response, useful for racing out-of-order
+ *     load() responses.
+ */
+type HandlerResult =
+  | unknown
+  | { status: number; body: unknown }
+  | Promise<unknown | { status: number; body: unknown }>;
+
+function isStatusBody(v: unknown): v is { status: number; body: unknown } {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    "status" in v &&
+    typeof (v as { status: unknown }).status === "number" &&
+    "body" in v
+  );
+}
+
+/**
+ * Build a fetch stub that:
+ *  - records every URL called
+ *  - returns a per-path response from `handlers` (function of query-string)
+ *
+ * Unmocked paths throw instead of returning 404. A 404 leaks into the
+ * page's #error element and silently turns what should be a hard test
+ * failure into a soft one (the test body's positive assertions still
+ * pass because the element exists). Throwing forces missing handlers
+ * to surface immediately in the test run.
+ */
+function buildFetchStub(
+  handlers: Record<string, (qs: string) => HandlerResult>,
+) {
   const calls: string[] = [];
   const fetchFn = vi.fn(async (url: string | URL) => {
     const u = typeof url === "string" ? url : url.toString();
@@ -93,8 +117,16 @@ function buildFetchStub(handlers: Record<string, (qs: string) => unknown>) {
         `unmocked fetch path in analytics-ui test: ${u} (add to handlers)`,
       );
     }
-    const body = handler(qs);
-    return new Response(JSON.stringify(body), {
+    // Await so handlers can return Promises (deferred responses) for
+    // race-condition testing.
+    const result = await handler(qs);
+    if (isStatusBody(result)) {
+      return new Response(JSON.stringify(result.body), {
+        status: result.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify(result), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -103,7 +135,7 @@ function buildFetchStub(handlers: Record<string, (qs: string) => unknown>) {
 }
 
 async function loadDashboard(
-  handlers: Record<string, (qs: string) => unknown>,
+  handlers: Record<string, (qs: string) => HandlerResult>,
 ): Promise<{
   dom: JSDOM;
   calls: string[];
@@ -977,5 +1009,166 @@ describe("analytics dashboard UI — unfilteredSourcesCache", () => {
     // than the stale cache — exactly the "fresh fetch on date change"
     // contract.
     expect(sourcePillNames(dom)).toEqual(["docs"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadGeneration race guard: if the user clicks preset B before preset A's
+// response resolves, A's stale payload must NOT clobber the UI with old data.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — loadGeneration race guard", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("stale summary response from an earlier click is discarded (only the latest click's data renders)", async () => {
+    // Deferred promise for the "Last 30 days" summary response so we can
+    // force its resolution to happen after the "Last 7 days" click fires.
+    let resolveThirty: ((v: unknown) => void) | null = null;
+    const thirtyPending = new Promise((resolve) => {
+      resolveThirty = resolve;
+    });
+
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": (qs: string) => {
+        const p = parseQS(qs);
+        const days = p.days ? parseInt(p.days, 10) : 7;
+        if (days === 30) {
+          // Return the pending promise; test will resolve it AFTER the
+          // 7-day click has been dispatched, forcing out-of-order arrival.
+          return thirtyPending.then(() => canned(30, 3000).summary);
+        }
+        if (days === 7) {
+          return canned(7, 7777).summary;
+        }
+        return canned(days, 1111).summary;
+      },
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+
+    // Click "Last 30 days" — this fires a load() that will hang on the
+    // deferred summary response.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const thirty = Array.from(
+      dom.window.document.querySelectorAll(".preset[data-days]"),
+    ).find((el) => el.getAttribute("data-days") === "30") as HTMLElement;
+    thirty.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    // Click "Last 7 days" BEFORE 30's deferred promise resolves. This
+    // bumps loadGeneration; 30's response will then be dropped when it
+    // finally arrives.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const seven = Array.from(
+      dom.window.document.querySelectorAll(".preset[data-days]"),
+    ).find((el) => el.getAttribute("data-days") === "7") as HTMLElement;
+    seven.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    // Now let the 30-day response finally resolve (stale).
+    resolveThirty!(undefined);
+
+    // Flush microtasks so both pending summary responses settle.
+    await flushAsync();
+    await flushAsync();
+
+    // Only preset B's (7-day) data should render; preset A's (30-day) is
+    // discarded by the loadGeneration guard.
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("7,777");
+    expect(statsHtml).not.toContain("3,000");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dashboard error-banner path: a non-2xx from the summary endpoint should
+// surface in #error, and a subsequent successful load should hide it again.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — error banner", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("shows #error with 'Failed to load analytics' when the summary endpoint returns HTTP 500", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        status: 500,
+        body: { error: "internal", error_description: "db exploded" },
+      }),
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+    // Swallow the [analytics] load() console.error — it's intentional and
+    // the test assertion lives on the banner, not on the log.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dom } = await loadDashboard(endpoints);
+    // One extra flush in case the catch block's rendering lands after
+    // the default loadDashboard flush.
+    await flushAsync();
+
+    const errorEl = dom.window.document.getElementById("error")!;
+    expect(errorEl.style.display).toBe("block");
+    expect(errorEl.textContent).toContain("Failed to load analytics");
+    errSpy.mockRestore();
+  });
+
+  it("hides #error on a subsequent successful load", async () => {
+    let failNext = true;
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => {
+        if (failNext) {
+          failNext = false;
+          return {
+            status: 500,
+            body: { error: "internal", error_description: "transient" },
+          };
+        }
+        return canned(7, 8888).summary;
+      },
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dom } = await loadDashboard(endpoints);
+    await flushAsync();
+
+    // First load failed — banner is visible.
+    const errorEl = dom.window.document.getElementById("error")!;
+    expect(errorEl.style.display).toBe("block");
+
+    // Trigger a fresh load. On the failure path #filters stays hidden so
+    // there's no datePill to click — invoke the dashboard's global load()
+    // directly instead, which is what any user-initiated retry funnels
+    // through in the happy path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (dom.window as any).load();
+    await flushAsync();
+
+    // Second load succeeded — banner hidden, stats rendered.
+    expect(errorEl.style.display).toBe("none");
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("8,888");
+    errSpy.mockRestore();
   });
 });
