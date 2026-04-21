@@ -337,6 +337,12 @@
       .date-popover .btn-primary:hover {
         background: #2563eb;
       }
+      .date-popover .date-error {
+        color: #d33;
+        font-size: 12px;
+        margin-top: 4px;
+        display: none;
+      }
 
       .chart-caption {
         display: block;
@@ -1038,6 +1044,7 @@
               esc(defaultTo) +
               '" aria-label="To date" />' +
               "</div>" +
+              '<div class="date-error" id="dateError" role="alert" aria-live="polite"></div>' +
               '<div class="popover-actions">' +
               '<button type="button" class="btn btn-ghost" id="dateCancelBtn">Cancel</button>' +
               '<button type="button" class="btn btn-primary" id="dateApplyBtn">Apply</button>' +
@@ -1195,13 +1202,31 @@
         if (applyBtn) {
           applyBtn.addEventListener("click", function (e) {
             e.stopPropagation();
-            var f = document.getElementById("dateFromInput").value;
-            var t = document.getElementById("dateToInput").value;
+            var dateErr = document.getElementById("dateError");
+            var f = (
+              document.getElementById("dateFromInput").value || ""
+            ).trim();
+            var t = (
+              document.getElementById("dateToInput").value || ""
+            ).trim();
             if (
               !/^\d{4}-\d{2}-\d{2}$/.test(f) ||
               !/^\d{4}-\d{2}-\d{2}$/.test(t)
-            )
+            ) {
+              if (dateErr) {
+                dateErr.textContent = "Dates must be YYYY-MM-DD format";
+                dateErr.style.display = "block";
+              }
+              console.warn(
+                "[analytics] dateApply rejected malformed input",
+                { from: f, to: t },
+              );
               return;
+            }
+            if (dateErr) {
+              dateErr.style.display = "none";
+              dateErr.textContent = "";
+            }
             // Normalize: if the user picked them backwards, swap so from <= to.
             if (f > t) {
               var tmp = f;

@@ -1379,10 +1379,10 @@ describe("analytics dashboard UI — fetchJson 401/403 auth failure", () => {
 
 // ---------------------------------------------------------------------------
 // Custom-range invalid-input handling: when the user types a non-YYYY-MM-DD
-// value and clicks Apply, the click is silently rejected (no fetches fired,
-// popover stays open, activeFrom/activeTo unchanged). This test locks down
-// that behavior so any future UX change (e.g. adding an inline validation
-// error) is a deliberate test update rather than an accidental regression.
+// value and clicks Apply, the handler renders an inline error, logs a warn,
+// and does NOT fire a fetch. Popover stays open so the user can correct the
+// value. Locks down the UX contract so silent-rejection regressions are
+// caught, and so re-validating with a good value clears the error + reloads.
 // ---------------------------------------------------------------------------
 
 describe("analytics dashboard UI — custom-range invalid input", () => {
@@ -1390,7 +1390,7 @@ describe("analytics dashboard UI — custom-range invalid input", () => {
     vi.restoreAllMocks();
   });
 
-  it("clicking Apply with a non-YYYY-MM-DD value is silently rejected", async () => {
+  it("clicking Apply with a non-YYYY-MM-DD value shows an inline error and blocks fetch", async () => {
     const endpoints = {
       "/api/analytics/auth-mode": () => ({ dev: true }),
       "/api/analytics/summary": () => canned(3, 500).summary,
@@ -1401,6 +1401,12 @@ describe("analytics dashboard UI — custom-range invalid input", () => {
 
     const { dom, calls } = await loadDashboard(endpoints);
     const fetchCountBefore = calls.length;
+
+    // Silence the console.warn emitted by the Apply handler's rejected path
+    // so test output stays clean — we assert on DOM state, not log bodies.
+    const warnSpy = vi
+      .spyOn(dom.window.console, "warn")
+      .mockImplementation(() => {});
 
     // Open the popover and reveal the custom-range inputs.
     const datePill = dom.window.document.getElementById("datePill")!;
@@ -1423,8 +1429,8 @@ describe("analytics dashboard UI — custom-range invalid input", () => {
     fromEl.value = "not-a-date";
     fromEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
 
-    // Click Apply — handler at docs/analytics.html:1137-1141 early-returns
-    // when either input fails the YYYY-MM-DD regex.
+    // Click Apply — handler early-returns when either input fails the
+    // YYYY-MM-DD regex, and renders an inline error.
     const applyBtn = dom.window.document.getElementById("dateApplyBtn")!;
     applyBtn.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
@@ -1432,16 +1438,45 @@ describe("analytics dashboard UI — custom-range invalid input", () => {
     await flushAsync();
 
     // No new fetches fired (activeFrom/activeTo unchanged → no reload).
-    // This is the load-bearing assertion: the Apply handler bailed
-    // early on the regex check, so no reload() was dispatched.
     expect(calls.length).toBe(fetchCountBefore);
     // Popover still open — the early-return path doesn't close it.
     const popover = dom.window.document.getElementById("datePopover");
     expect(popover).not.toBeNull();
-    // (Note: the `<input type=date>` element silently coerces an
-    // invalid string to "" on jsdom, so we intentionally don't assert
-    // on fromEl.value — the input-value retention is a browser detail,
-    // not part of the Apply-handler contract.)
+    // Inline error is visible with the expected message.
+    const dateErr = dom.window.document.getElementById(
+      "dateError",
+    ) as HTMLElement | null;
+    expect(dateErr).not.toBeNull();
+    expect(dateErr!.style.display).toBe("block");
+    expect(dateErr!.textContent).toBe("Dates must be YYYY-MM-DD format");
+    // Handler warns to devtools so operators can correlate a silent UI.
+    expect(warnSpy).toHaveBeenCalled();
+
+    // Re-validate with a valid date range — error clears, fetch issues.
+    const fromEl2 = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    const toEl2 = dom.window.document.getElementById(
+      "dateToInput",
+    ) as HTMLInputElement;
+    fromEl2.value = "2024-01-01";
+    fromEl2.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    toEl2.value = "2024-01-31";
+    toEl2.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    const applyBtn2 = dom.window.document.getElementById("dateApplyBtn")!;
+    applyBtn2.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    // New fetches fired (load() issues multiple analytics GETs).
+    expect(calls.length).toBeGreaterThan(fetchCountBefore);
+    // Error was cleared before the successful apply — because the popover
+    // closes on a valid apply, the #dateError element is torn down; assert
+    // that the popover is closed (no stale error DOM left behind).
+    const popoverAfter = dom.window.document.getElementById("datePopover");
+    expect(popoverAfter).toBeNull();
   });
 });
 
