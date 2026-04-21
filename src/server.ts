@@ -23,7 +23,11 @@ import {
   hasCollectTools,
   hasBashSemanticSearch,
 } from "./config.js";
-import { isSlackSourceConfig, isDiscordSourceConfig } from "./types.js";
+import {
+  isSlackSourceConfig,
+  isDiscordSourceConfig,
+  type FaqChunkResult,
+} from "./types.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
@@ -652,7 +656,7 @@ app.get("/faq.txt", async (_req: Request, res: Response) => {
         cachedFaqTxt = generateFaqTxt([], serverCfg.server.name, []);
       } else {
         // Fetch FAQ chunks per source with its confidence threshold
-        const allChunks = [];
+        const allChunks: FaqChunkResult[] = [];
         for (const src of faqSources) {
           try {
             const chunks = await getFaqChunks(
