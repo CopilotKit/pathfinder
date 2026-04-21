@@ -569,9 +569,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
     // not land on the filter. If it did, buildFilterClauses would build
     // `tool_name LIKE '' || '-%'` — matching every tool_name — which is
     // almost certainly a client bug, not a "show everything" intent.
-    const result = parseAnalyticsFilter(
-      mkReq({ tool_type: "" }) as Request,
-    );
+    const result = parseAnalyticsFilter(mkReq({ tool_type: "" }) as Request);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.filter.tool_type).toBeUndefined();

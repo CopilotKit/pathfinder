@@ -370,8 +370,7 @@ export async function getTopQueries(
       query_text: r.query_text as string,
       tool_name: r.tool_name as string,
       count: r.count as number,
-      avg_result_count:
-        avgRc != null && Number.isFinite(avgRc) ? avgRc : null,
+      avg_result_count: avgRc != null && Number.isFinite(avgRc) ? avgRc : null,
       avg_top_score: avgTs != null && Number.isFinite(avgTs) ? avgTs : null,
     };
   });

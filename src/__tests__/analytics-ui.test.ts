@@ -640,7 +640,9 @@ describe("analytics dashboard UI — daily bar click drills down", () => {
       const initialCount = calls.length;
 
       // Grab the most recent bar chart instance — that's the daily chart.
-      const barChart = [...chartInstances].reverse().find((c) => c.type === "bar") as
+      const barChart = [...chartInstances]
+        .reverse()
+        .find((c) => c.type === "bar") as
         | (typeof chartInstances)[number]
         | undefined;
       expect(barChart).toBeDefined();
