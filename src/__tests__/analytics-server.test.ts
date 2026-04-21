@@ -1188,4 +1188,57 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(body).toMatchObject({ error: "unauthorized" });
     });
   });
+
+  // ---- auth-mode disabled contract -----------------------------------------
+  // /api/analytics/auth-mode is intentionally public (the dashboard hits
+  // it before the login prompt), but when analytics itself is disabled
+  // the endpoint must mirror the 404 contract other analytics routes
+  // use — otherwise the endpoint becomes a probe for analytics presence/
+  // absence on servers that don't have it configured.
+  describe("GET /api/analytics/auth-mode disabled-state contract", () => {
+    it("returns 404 Analytics-not-enabled when analytics is disabled", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue(undefined);
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/auth-mode");
+      expect(res.status).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({ error: "Analytics not enabled" });
+    });
+
+    it("returns 200 with dev flag when analytics is enabled", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/auth-mode");
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toHaveProperty("dev");
+      // In the vitest `test` NODE_ENV the dev bypass is always off, so
+      // the response is a flat { dev: false }. Assert the shape, not the
+      // value of `dev` — the dev/localhost combinatorics are covered in
+      // the getAuthMode() unit tests above.
+      expect(typeof body.dev).toBe("boolean");
+    });
+
+    it("returns 503 misconfigured when getAnalyticsConfig() throws", async () => {
+      // Hot-reload / bad-YAML scenarios: a throw from the config read
+      // must NOT escape the handler as an unhandled exception. Mirror
+      // the analyticsAuth 503 envelope so every failure shape is
+      // uniform.
+      mockGetAnalyticsConfigFn.mockImplementation(() => {
+        throw new Error("config read boom");
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/auth-mode");
+      expect(res.status).toBe(503);
+      const body = JSON.parse(res.body);
+      expect(body).toMatchObject({ error: "misconfigured" });
+      errSpy.mockRestore();
+    });
+  });
 });

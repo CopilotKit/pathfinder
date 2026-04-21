@@ -1427,6 +1427,29 @@ export function registerAnalyticsRoutes(
   );
 
   app.get("/api/analytics/auth-mode", (req: Request, res: Response) => {
+    // When analytics is disabled, mirror the 404 contract the analyticsAuth
+    // middleware uses for every other /api/analytics/* route. Without this
+    // the endpoint would silently return `{ dev: false }` even on servers
+    // where analytics isn't configured, letting unauthenticated callers
+    // probe for analytics presence/absence and giving the dashboard
+    // misleading signal about whether the prod-mode flow is viable at all.
+    let analyticsCfg: ReturnType<typeof getAnalyticsConfig>;
+    try {
+      analyticsCfg = getAnalyticsConfig();
+    } catch (err) {
+      console.error(
+        `[analytics] auth-mode config read failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      res.status(503).json({
+        error: "misconfigured",
+        error_description: "Analytics config read failed",
+      });
+      return;
+    }
+    if (!analyticsCfg?.enabled) {
+      res.status(404).json({ error: "Analytics not enabled" });
+      return;
+    }
     res.json(getAuthMode(req));
   });
 
