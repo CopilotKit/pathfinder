@@ -695,10 +695,52 @@ app.get("/llms-full.txt", async (_req: Request, res: Response) => {
   }
 });
 
-app.get("/faq.txt", async (_req: Request, res: Response) => {
-  try {
-    if (!cachedFaqTxt) {
-      const serverCfg = getServerConfig();
+/**
+ * Deps hook for the /faq.txt handler. Lets tests swap the DB + config
+ * boundaries without reimplementing the handler. Mirrors the pattern used
+ * by registerAnalyticsRoutes().
+ */
+export interface FaqRouteDeps {
+  getFaqChunks?: typeof getFaqChunks;
+  getServerConfig?: typeof getServerConfig;
+}
+
+/**
+ * Reset the module-level /faq.txt cache. Test-only helper so suites can
+ * assert the retry-on-partial-failure behaviour (second request must
+ * re-enter the fetch path when the previous response was partial).
+ */
+export function __resetFaqCacheForTesting(): void {
+  cachedFaqTxt = null;
+}
+
+/**
+ * Register GET /faq.txt. Extracted so tests can mount the real handler
+ * against stubbed deps; the production call site in module init passes no
+ * deps and uses the imported getFaqChunks/getServerConfig.
+ *
+ * Partial-failure policy: if any per-source fetch throws, we serve the
+ * partial result ONCE with `Cache-Control: no-store` and
+ * `X-Partial-Sources: <failed names>` so operators/agents can detect the
+ * gap, and we do NOT populate `cachedFaqTxt`. The next request re-enters
+ * the fetch path. Previously the partial body was cached and served 200
+ * OK until the next reindex invalidation — hours of silent gaps.
+ */
+export function registerFaqRoute(
+  app: express.Express,
+  deps: FaqRouteDeps = {},
+): void {
+  const _getFaqChunks = deps.getFaqChunks ?? getFaqChunks;
+  const _getServerConfig = deps.getServerConfig ?? getServerConfig;
+
+  app.get("/faq.txt", async (_req: Request, res: Response) => {
+    try {
+      if (cachedFaqTxt) {
+        res.type("text/plain").send(cachedFaqTxt);
+        return;
+      }
+
+      const serverCfg = _getServerConfig();
       // Find FAQ sources: sources with category === 'faq'
       const faqSources = serverCfg.sources
         .filter((s) => "category" in s && s.category === "faq")
@@ -713,39 +755,58 @@ app.get("/faq.txt", async (_req: Request, res: Response) => {
 
       if (faqSources.length === 0) {
         cachedFaqTxt = generateFaqTxt([], serverCfg.server.name, []);
-      } else {
-        // Fetch FAQ chunks per source with its confidence threshold
-        const allChunks: FaqChunkResult[] = [];
-        for (const src of faqSources) {
-          try {
-            const chunks = await getFaqChunks(
-              [src.name],
-              src.confidenceThreshold,
-            );
-            allChunks.push(...chunks);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error(
-              `[faq.txt] Failed to fetch chunks for source "${src.name}": ${msg}`,
-            );
-          }
-        }
-        cachedFaqTxt = generateFaqTxt(
-          allChunks,
-          serverCfg.server.name,
-          faqSources,
-        );
+        res.type("text/plain").send(cachedFaqTxt);
+        return;
       }
+
+      // Fetch FAQ chunks per source. Track which sources failed so we can
+      // refuse to cache a partial result.
+      const allChunks: FaqChunkResult[] = [];
+      const failedSources: string[] = [];
+      for (const src of faqSources) {
+        try {
+          const chunks = await _getFaqChunks(
+            [src.name],
+            src.confidenceThreshold,
+          );
+          allChunks.push(...chunks);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[faq.txt] Failed to fetch chunks for source "${src.name}": ${msg}`,
+          );
+          failedSources.push(src.name);
+        }
+      }
+
+      const body = generateFaqTxt(
+        allChunks,
+        serverCfg.server.name,
+        faqSources,
+      );
+
+      if (failedSources.length > 0) {
+        // Partial result — serve once, do NOT cache, surface the failure
+        // via headers so downstream can alert / filter.
+        res.setHeader("X-Partial-Sources", failedSources.join(","));
+        res.setHeader("Cache-Control", "no-store");
+        res.type("text/plain").send(body);
+        return;
+      }
+
+      cachedFaqTxt = body;
+      res.type("text/plain").send(cachedFaqTxt);
+    } catch (err) {
+      console.error("[faq.txt] Generation failed:", err);
+      res
+        .status(503)
+        .type("text/plain")
+        .send("# Service unavailable\nFAQ index not ready.");
     }
-    res.type("text/plain").send(cachedFaqTxt);
-  } catch (err) {
-    console.error("[faq.txt] Generation failed:", err);
-    res
-      .status(503)
-      .type("text/plain")
-      .send("# Service unavailable\nFAQ index not ready.");
-  }
-});
+  });
+}
+
+registerFaqRoute(app);
 
 // ---------------------------------------------------------------------------
 // skill.md — dynamically generated from server config
