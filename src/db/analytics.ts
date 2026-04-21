@@ -174,9 +174,15 @@ function computeP95(latencies: number[]): number {
 
 /**
  * Get a summary of analytics data.
+ *
+ * `days` controls the rolling "last N days" window for the non-total
+ * subqueries (summary counts, latency, per-day, by-source). When the caller
+ * supplies `filter.from`/`filter.to`, that explicit range takes precedence
+ * and `days` is ignored — see {@link buildDateWindow}.
  */
 export async function getAnalyticsSummary(
   filter: AnalyticsFilter = {},
+  days: number = 7,
 ): Promise<AnalyticsSummary> {
   const pool = getPool();
 
@@ -189,23 +195,23 @@ export async function getAnalyticsSummary(
     fp,
   );
 
-  // 7d summary (filtered) - exclude backfilled rows from latency/empty stats
+  // Windowed summary (filtered) - exclude backfilled rows from latency/empty stats
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
-  const dw2 = buildDateWindow(filter, 7, n2);
-  const summary7dWhere = whereAnd(dw2.clauses, fc2);
-  const summary7dRes = await pool.query(
+  const dw2 = buildDateWindow(filter, days, n2);
+  const summaryWhere = whereAnd(dw2.clauses, fc2);
+  const summaryRes = await pool.query(
     `SELECT
         count(*)::int AS total,
         count(*) FILTER (WHERE result_count = 0)::int AS empty,
         COALESCE(avg(latency_ms) FILTER (WHERE latency_ms >= 0)::int, 0) AS avg_latency
     FROM query_log
-    ${summary7dWhere}`,
+    ${summaryWhere}`,
     [...fp2, ...dw2.params],
   );
 
   // Latencies for p95 (exclude backfilled rows with latency_ms=-1)
   const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
-  const dw3 = buildDateWindow(filter, 7, n3);
+  const dw3 = buildDateWindow(filter, days, n3);
   const latencyBase = [...dw3.clauses, "latency_ms >= 0"];
   const latencyWhere = whereAnd(latencyBase, fc3);
   const latencyRes = await pool.query(
@@ -215,7 +221,7 @@ export async function getAnalyticsSummary(
 
   // By source (filtered)
   const { clauses: fc4, params: fp4, nextIdx: n4 } = buildFilterClauses(filter);
-  const dw4 = buildDateWindow(filter, 7, n4);
+  const dw4 = buildDateWindow(filter, days, n4);
   const sourceBase = ["source_name IS NOT NULL", ...dw4.clauses];
   const sourceWhere = whereAnd(sourceBase, fc4);
   const bySourceRes = await pool.query(
@@ -229,7 +235,7 @@ export async function getAnalyticsSummary(
 
   // Per day (filtered)
   const { clauses: fc5, params: fp5, nextIdx: n5 } = buildFilterClauses(filter);
-  const dw5 = buildDateWindow(filter, 7, n5);
+  const dw5 = buildDateWindow(filter, days, n5);
   const dayWhere = whereAnd(dw5.clauses, fc5);
   const perDayRes = await pool.query(
     `SELECT date_trunc('day', created_at)::date::text AS day, count(*)::int AS count
@@ -241,7 +247,7 @@ export async function getAnalyticsSummary(
   );
 
   const totalQueries = totalRes.rows[0]?.count ?? 0;
-  const s = summary7dRes.rows[0] ?? {};
+  const s = summaryRes.rows[0] ?? {};
   const total7d = s.total ?? 0;
   const empty7d = s.empty ?? 0;
 
