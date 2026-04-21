@@ -803,7 +803,7 @@ describe("analytics dashboard UI — HTML escaping", () => {
     // pill plus one "All Sources" pill should exist — any injected
     // element from a broken escape would show up as an extra child.
     const sourcePills = dom.window.document.querySelectorAll(
-      '.pill[data-source], .pill[data-source-all]',
+      ".pill[data-source], .pill[data-source-all]",
     );
     expect(sourcePills.length).toBe(2);
 
@@ -892,9 +892,7 @@ describe("analytics dashboard UI — unfilteredSourcesCache", () => {
 
   it("renders all unfiltered sources as pills on initial load", async () => {
     const { dom } = await loadDashboard(buildEndpoints());
-    expect(sourcePillNames(dom).sort()).toEqual(
-      ["api", "blog", "docs"].sort(),
-    );
+    expect(sourcePillNames(dom).sort()).toEqual(["api", "blog", "docs"].sort());
   });
 
   it("preserves all sources in pills after applying a tool_type filter", async () => {
@@ -913,9 +911,7 @@ describe("analytics dashboard UI — unfilteredSourcesCache", () => {
     );
     await flushAsync();
 
-    expect(sourcePillNames(dom).sort()).toEqual(
-      ["api", "blog", "docs"].sort(),
-    );
+    expect(sourcePillNames(dom).sort()).toEqual(["api", "blog", "docs"].sort());
   });
 
   it("invalidates the cache when a source filter is applied so pills reflect the filtered response", async () => {
