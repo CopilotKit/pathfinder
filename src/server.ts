@@ -1097,9 +1097,12 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
 
 /**
  * Parse a query parameter as a positive integer. Returns the default when the
- * value is absent, or an error object describing why it was rejected. The
- * error object carries a human-readable `error` field that callers can embed
- * in an HTTP 400 response body.
+ * value is absent. On invalid input, returns `{ error: string }` where
+ * `error` is a human-readable phrase (e.g. "must be > 0"). The wrapper
+ * functions `parseDaysOrError` / `parseLimitOrError` embed this string into
+ * the `error_description` field of the 400 envelope (not a top-level
+ * `error` field — that slot carries the machine-readable "invalid_request"
+ * code).
  */
 export function parsePositiveIntParam(
   raw: unknown,
