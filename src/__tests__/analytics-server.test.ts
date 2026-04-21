@@ -45,8 +45,9 @@ import {
   registerAnalyticsRoutes,
   __resetAnalyticsTokenForTesting,
   getAuthMode,
+  analyticsAuth,
 } from "../server.js";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 const mockGetConfigFn = vi.mocked(getConfig);
@@ -1095,6 +1096,66 @@ describe("Analytics server routes (HTTP-level)", () => {
     it("production + non-localhost -> { dev: false }", () => {
       cfgWithEnv("production");
       expect(getAuthMode(mkReq("192.168.1.100"))).toEqual({ dev: false });
+    });
+
+    // Security regression guard for the X-Forwarded-For spoof vector:
+    // isLocalhostReq() trusts ONLY req.socket.remoteAddress. If someone on
+    // the LAN reaches a dev server bound to 0.0.0.0 and sends
+    // `X-Forwarded-For: 127.0.0.1`, the proxy header MUST NOT be honored
+    // — otherwise a forged header promotes the caller to dev bypass.
+    it("X-Forwarded-For: 127.0.0.1 from a non-loopback socket does NOT grant dev bypass", () => {
+      cfgWithEnv("development");
+      // Synthetic Request whose socket is LAN-originated but whose
+      // forwarded-for header claims loopback. The helper intentionally
+      // ignores headers — assert it stays at `dev: false`.
+      const fakeReq = {
+        socket: { remoteAddress: "192.168.1.100" },
+        headers: { "x-forwarded-for": "127.0.0.1" },
+      } as unknown as Request;
+      expect(getAuthMode(fakeReq)).toEqual({ dev: false });
+    });
+
+    it("analyticsAuth rejects when socket is LAN and X-Forwarded-For claims loopback", () => {
+      // Pair the getAuthMode() assertion with a middleware-level check:
+      // the dev bypass path inside analyticsAuth() also funnels through
+      // isLocalhostReq(), so a spoofed XFF must still require a token.
+      cfgWithEnv("development");
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "real-token",
+      });
+
+      const req = {
+        socket: { remoteAddress: "192.168.1.100" },
+        // No Authorization header. XFF claims localhost but the middleware
+        // reads only req.socket.remoteAddress via isLocalhostReq.
+        headers: { "x-forwarded-for": "127.0.0.1" },
+      } as unknown as Request;
+
+      let status = 0;
+      let body: unknown = null;
+      const next = vi.fn();
+      const res = {
+        status(code: number) {
+          status = code;
+          return this;
+        },
+        json(payload: unknown) {
+          body = payload;
+          return this;
+        },
+      } as unknown as Response;
+
+      analyticsAuth(req, res, next);
+
+      // The dev bypass path would have called next() — it must not.
+      expect(next).not.toHaveBeenCalled();
+      // Without an Authorization header + non-dev path, the middleware
+      // responds 401 (token required).
+      expect(status).toBe(401);
+      expect(body).toMatchObject({ error: "unauthorized" });
     });
   });
 });
