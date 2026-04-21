@@ -626,15 +626,63 @@ describe("parseAnalyticsFilter from/to validation", () => {
     }
   });
 
-  it("rejects array query params (Express multi-value) with 400", () => {
-    const result = parseAnalyticsFilter({
-      query: { from: ["2026-04-01", "2026-04-02"], to: "2026-04-20" },
-    } as never);
+  // Calendar-shape (YYYY-MM-DD) but not a real date. `new Date()` yields
+  // Invalid Date on these; if parseAnalyticsFilter then calls `.toISOString()`
+  // on the NaN timestamp, RangeError escapes and becomes a 500. Every one of
+  // these must surface as a clean 400 with the `invalid_request` envelope.
+  it.each([
+    ["2025-13-01", "invalid month"],
+    ["2025-01-32", "day past 31"],
+    ["2025-00-15", "month zero"],
+    ["2025-04-00", "day zero"],
+  ])("rejects calendar-invalid `from=%s` (%s) with 400, not 500", (from) => {
+    const result = parseAnalyticsFilter(
+      mkReq({ from, to: "2025-12-31" }) as Request,
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
     }
   });
+
+  it.each([
+    ["2025-13-01", "invalid month"],
+    ["2025-01-32", "day past 31"],
+    ["2025-00-15", "month zero"],
+    ["2025-04-00", "day zero"],
+  ])("rejects calendar-invalid `to=%s` (%s) with 400, not 500", (to) => {
+    const result = parseAnalyticsFilter(
+      mkReq({ from: "2025-01-01", to }) as Request,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
+    }
+  });
+
+  // Express parses repeated query-string keys as arrays (e.g.
+  // `?from=a&from=b`). Every filter param must reject that shape up front
+  // with the same `invalid_request` envelope, regardless of which one tripped.
+  it.each([
+    ["from", { from: ["2026-04-01", "2026-04-02"], to: "2026-04-20" }],
+    ["to", { from: "2026-04-01", to: ["2026-04-20", "2026-04-21"] }],
+    ["days", { days: ["7", "14"] }],
+    ["limit", { limit: ["10", "20"] }],
+    ["tool_type", { tool_type: ["search", "collect"] }],
+    ["source", { source: ["docs", "api"] }],
+  ])(
+    "rejects array query param `%s` (Express multi-value) with 400",
+    (_name, query) => {
+      const result = parseAnalyticsFilter({ query } as never);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.status).toBe(400);
+        expect(result.body.error).toBe("invalid_request");
+      }
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // Range-width cap. The server caps from/to span at MAX_DAYS so a client

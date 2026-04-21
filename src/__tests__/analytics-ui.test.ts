@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { JSDOM, VirtualConsole } from "jsdom";
 import fs from "node:fs";
 import path from "node:path";
