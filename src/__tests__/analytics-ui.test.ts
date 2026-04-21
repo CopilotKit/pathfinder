@@ -1648,6 +1648,217 @@ describe("analytics dashboard UI — p95 sampled badge", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Today preset double-highlight regression: clicking Today sets activeFrom =
+// activeTo = todayISO() AND clears activeDaysBack. The preset renderer gates
+// the days-kind `isActive` check on `activeDaysBack === p.days && !activeFrom`
+// so a days preset can't ALSO highlight while Today is active. If the
+// `!activeFrom` guard ever regresses, two presets would render with the
+// .active class — visually confusing and semantically wrong.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — Today preset exclusive highlight", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("after clicking Today, re-opening the popover shows exactly one .preset.active and it is Today", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(1, 500).summary,
+      "/api/analytics/tool-counts": () => canned(1, 500).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+    const doc = dom.window.document;
+
+    // Open popover, click Today.
+    doc
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const todayPreset = doc.querySelector(
+      '.preset[data-preset="today"]',
+    ) as HTMLElement;
+    todayPreset.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    // Re-open the popover so renderFilters runs again — this is the path
+    // that would render multiple .active pills if the guard regresses.
+    doc
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+
+    const activePresets = doc.querySelectorAll(".preset.active");
+    expect(activePresets.length).toBe(1);
+    const active = activePresets[0] as HTMLElement;
+    expect(active.getAttribute("data-preset")).toBe("today");
+    // Belt-and-suspenders: text content also identifies Today.
+    expect(active.textContent?.trim().startsWith("Today")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Daily bar chart drill-down: when the chart's labels array contains a
+// malformed value (not YYYY-MM-DD), the onClick handler must warn via
+// console.warn with a stable prefix AND skip the load() reload entirely so
+// the UI doesn't kick off a fetch with garbage `from=`/`to=` params.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — daily chart drill-down malformed-day rejection", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("onClick with a malformed day label warns and does not issue a fetch", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => {
+        // Poison queries_per_day_window[0].day with a garbage label so
+        // dayLabels[idx] fails the YYYY-MM-DD regex.
+        const s = canned(3, 500).summary;
+        s.queries_per_day_window[0]!.day = "garbage";
+        return s;
+      },
+      "/api/analytics/tool-counts": () => canned(3, 500).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, calls, chartInstances } = await loadDashboard(endpoints);
+    const fetchCountBefore = calls.length;
+
+    // Spy on console.warn to assert the stable log prefix fired.
+    const warnSpy = vi
+      .spyOn(dom.window.console, "warn")
+      .mockImplementation(() => {});
+
+    // Grab the most recent bar chart instance — that's the daily chart.
+    const barChart = [...chartInstances]
+      .reverse()
+      .find((c) => c.type === "bar") as
+      | (typeof chartInstances)[number]
+      | undefined;
+    expect(barChart).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const labels = (barChart as any).data.labels as string[];
+    expect(labels[0]).toBe("garbage");
+
+    // Invoke onClick with the malformed label's index.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onClick = (barChart as any).options.onClick as (
+      evt: unknown,
+      elements: Array<{ index: number }>,
+    ) => void;
+    expect(typeof onClick).toBe("function");
+    onClick({}, [{ index: 0 }]);
+
+    await flushAsync();
+
+    // No new fetches — the drill-down reload was blocked by the regex check.
+    expect(calls.length).toBe(fetchCountBefore);
+    // The stable prefix must be logged so operators can correlate.
+    const warnCalls = warnSpy.mock.calls;
+    const hit = warnCalls.find(
+      (args) =>
+        typeof args[0] === "string" &&
+        (args[0] as string).includes(
+          "[analytics] daily chart drill-down: malformed day label",
+        ),
+    );
+    expect(hit).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom-range Apply swaps backwards input: if the user enters from >
+// to, the handler normalizes so the outbound fetch URL always sends
+// from <= to. Locks down the swap behavior so a future refactor that
+// drops the swap would surface loudly.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — custom-range backwards swap", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("typing from > to and clicking Apply sends swapped from <= to to every endpoint", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(3, 100).summary,
+      "/api/analytics/tool-counts": () => canned(3, 100).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, calls } = await loadDashboard(endpoints);
+    const initialCount = calls.length;
+
+    // Open popover + reveal custom inputs.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const customPreset = dom.window.document.querySelector(
+      ".preset[data-custom]",
+    ) as HTMLElement;
+    customPreset.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    // Type backwards range: from=2024-01-31, to=2024-01-01.
+    const fromEl = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    const toEl = dom.window.document.getElementById(
+      "dateToInput",
+    ) as HTMLInputElement;
+    fromEl.value = "2024-01-31";
+    fromEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    toEl.value = "2024-01-01";
+    toEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    // Click Apply.
+    const applyBtn = dom.window.document.getElementById("dateApplyBtn")!;
+    applyBtn.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    const after = calls.slice(initialCount);
+    const summaryCall = after.find((u) =>
+      u.startsWith("/api/analytics/summary"),
+    );
+    expect(summaryCall).toBeDefined();
+    // The outbound URL must contain the swapped range — from=2024-01-01
+    // (smaller) and to=2024-01-31 (larger). Match the literal substring
+    // so the exact concatenation order is locked down.
+    expect(summaryCall!).toContain("from=2024-01-01");
+    expect(summaryCall!).toContain("to=2024-01-31");
+    // Also verify via parsed QS for any of the four endpoints.
+    for (const p of [
+      "/api/analytics/summary",
+      "/api/analytics/tool-counts",
+      "/api/analytics/queries",
+      "/api/analytics/empty-queries",
+    ]) {
+      const call = after.find((u) => u.startsWith(p));
+      expect(call, p + " should be refetched").toBeDefined();
+      const qs = parseQS(call!.split("?")[1] ?? "");
+      expect(qs.from, p + " from (swapped)").toBe("2024-01-01");
+      expect(qs.to, p + " to (swapped)").toBe("2024-01-31");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // fetchJson stale-401 generation guard: a 401/403 whose originating load()
 // has been superseded must NOT wipe a freshly-pasted valid token. The
 // fetchJson(url, gen) guard compares `gen` to the current loadGeneration and
