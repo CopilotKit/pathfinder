@@ -1278,6 +1278,21 @@ export interface AnalyticsRouteDeps {
 }
 
 /**
+ * Resolve the default on-disk location of the analytics dashboard HTML
+ * (`docs/analytics.html`) relative to this module. Exported so tests can
+ * pin the path computation deterministically instead of asserting on a
+ * live HTTP response that behaves differently depending on whether the
+ * tests run against the source tree (src/) or the compiled output (dist/).
+ *
+ * A typo in the relative segment would break BOTH environments, so
+ * locking the computed path down here gives the test a single hard
+ * assertion regardless of transport.
+ */
+export function getDefaultAnalyticsHtmlPath(): string {
+  return path.resolve(__dirname, "../docs/analytics.html");
+}
+
+/**
  * Register the public analytics routes on an Express app. Split out so tests
  * can mount the real handlers against a test DB (via `deps`) instead of
  * reimplementing the logic in a test double.
@@ -1291,7 +1306,7 @@ export function registerAnalyticsRoutes(
   const _getEmptyQueries = deps.getEmptyQueries ?? getEmptyQueries;
   const _getToolCounts = deps.getToolCounts ?? getToolCounts;
   const _analyticsHtmlPath =
-    deps.analyticsHtmlPath ?? path.resolve(__dirname, "../docs/analytics.html");
+    deps.analyticsHtmlPath ?? getDefaultAnalyticsHtmlPath();
 
   app.get(
     "/api/analytics/summary",

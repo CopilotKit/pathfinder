@@ -47,6 +47,8 @@ import {
   __resetAnalyticsTokenForTesting,
   getAuthMode,
   analyticsAuth,
+  getDefaultAnalyticsHtmlPath,
+  MAX_DAYS,
 } from "../server.js";
 import type { Request, Response } from "express";
 
@@ -215,13 +217,34 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(res.headers["content-type"]).toMatch(/text\/html/);
     });
 
-    // Every other test in this file passes an explicit analyticsHtmlPath
-    // via deps. The default path (resolved relative to server.ts's
-    // __dirname) is the production code path and was previously not
-    // exercised by any test — a regression that breaks the default
-    // resolver (e.g. a typo in the `../docs/analytics.html` relative
-    // segment) would ship invisibly. This test locks it down.
-    it("serves HTML from the default analyticsHtmlPath when no override is provided", async () => {
+    // The default analyticsHtmlPath (resolved relative to server.ts's
+    // __dirname) is the production code path and was previously only
+    // exercised via an if/else HTTP test that asserted success in either
+    // branch — a regression that broke the resolver would have passed
+    // the test silently. We now lock it down with two deterministic
+    // assertions that don't depend on whether the test runs against
+    // src/ or dist/:
+    //   1. `getDefaultAnalyticsHtmlPath()` returns the documented path
+    //      shape (module-relative, ends with docs/analytics.html). A
+    //      typo in the relative segment would change this string.
+    //   2. Mounting with an explicit override that points at the same
+    //      location the default resolver would return serves the real
+    //      HTML file end-to-end. Because the file ships in the repo,
+    //      this is environment-independent.
+    it("default analyticsHtmlPath resolves to docs/analytics.html relative to the server module", () => {
+      const resolved = getDefaultAnalyticsHtmlPath();
+      // Must be absolute (path.resolve always returns absolute).
+      expect(path.isAbsolute(resolved)).toBe(true);
+      // The trailing segment is the contract — any change to the
+      // literal in server.ts would surface here.
+      expect(resolved.endsWith(path.join("docs", "analytics.html"))).toBe(true);
+      // Must NOT point inside the src/ or dist/ tree (the resolver's
+      // `../docs/...` relative segment walks OUT of src/dist, so a typo
+      // that left it inside would fail this guard).
+      expect(resolved).not.toMatch(/[/\\](src|dist)[/\\]docs[/\\]/);
+    });
+
+    it("serves HTML at /analytics when mounted with the default-resolver path pointing at the real file", async () => {
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
         log_queries: true,
@@ -229,26 +252,28 @@ describe("Analytics server routes (HTTP-level)", () => {
         token: "tok",
       });
 
-      // Register routes WITHOUT an analyticsHtmlPath override so the
-      // default resolver in registerAnalyticsRoutes fires.
+      // Use the test-repo's known-good path shape (docs/analytics.html
+      // in process.cwd()). This matches what the default resolver
+      // returns when running against the source tree, so the positive
+      // case is fully covered even when __dirname-relative resolution
+      // would otherwise land outside the repo under some runners.
       server = await new Promise<http.Server>((resolve) => {
         const app = express();
         app.use(express.json());
-        registerAnalyticsRoutes(app);
+        registerAnalyticsRoutes(app, {
+          analyticsHtmlPath: path.join(
+            process.cwd(),
+            "docs",
+            "analytics.html",
+          ),
+        });
         const s = app.listen(0, () => resolve(s));
       });
       const res = await request(server, "GET", "/analytics");
 
-      if (res.status === 200) {
-        expect(res.headers["content-type"]).toMatch(/text\/html/);
-        expect(res.body).toContain("<title>Pathfinder Analytics</title>");
-      } else {
-        // Deterministic 404 if the default path doesn't resolve in this
-        // test environment — either way, the route's behavior for the
-        // default path is locked in.
-        expect(res.status).toBe(404);
-        expect(res.body).toContain("analytics dashboard not available");
-      }
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/text\/html/);
+      expect(res.body).toContain("<title>Pathfinder Analytics</title>");
     });
   });
 
@@ -1188,6 +1213,61 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(status).toBe(401);
       expect(body).toMatchObject({ error: "unauthorized" });
     });
+  });
+
+  // ---- MAX_DAYS HTTP integration --------------------------------------------
+  // parseDaysOrError was unit-tested directly, but no end-to-end test
+  // exercised it through the live Express handlers — so a regression that
+  // removed the days-parse gate from one of the four routes would ship
+  // unnoticed. One assertion per route, all via the same fixture.
+  describe("MAX_DAYS HTTP integration (end-to-end 400 on days > MAX_DAYS)", () => {
+    const routes: Array<{ path: string; hasLimit: boolean }> = [
+      { path: "/api/analytics/summary", hasLimit: false },
+      { path: "/api/analytics/queries", hasLimit: true },
+      { path: "/api/analytics/empty-queries", hasLimit: true },
+      { path: "/api/analytics/tool-counts", hasLimit: false },
+    ];
+
+    for (const route of routes) {
+      it(`GET ${route.path}?days=MAX_DAYS+1 returns 400 with invalid_request envelope`, async () => {
+        mockGetAnalyticsConfigFn.mockReturnValue({
+          enabled: true,
+          log_queries: true,
+          retention_days: 90,
+          token: "tok",
+        });
+        // DB layer must NOT be called — parser short-circuits upstream.
+        mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
+        mockGetTopQueries.mockResolvedValue([]);
+        mockGetEmptyQueries.mockResolvedValue([]);
+        mockGetToolCounts.mockResolvedValue([]);
+
+        await startApp();
+        const over = MAX_DAYS + 1;
+        const res = await request(
+          server,
+          "GET",
+          `${route.path}?days=${over}`,
+          {
+            Authorization: "Bearer tok",
+          },
+        );
+
+        expect(res.status).toBe(400);
+        const body = JSON.parse(res.body);
+        expect(body).toMatchObject({ error: "invalid_request" });
+        // Error description mentions the days param and the cap so
+        // operators can map the 400 back to the input without having to
+        // grep source.
+        expect(body.error_description).toMatch(/days/);
+        // None of the DB-layer mocks should have been called — the
+        // parser runs before the handler body.
+        expect(mockGetAnalyticsSummary).not.toHaveBeenCalled();
+        expect(mockGetTopQueries).not.toHaveBeenCalled();
+        expect(mockGetEmptyQueries).not.toHaveBeenCalled();
+        expect(mockGetToolCounts).not.toHaveBeenCalled();
+      });
+    }
   });
 
   // ---- auth-mode disabled contract -----------------------------------------
