@@ -643,7 +643,14 @@
       // Dedicated error so load()'s catch block can distinguish auth failures
       // (which already rendered the login modal) from all other errors
       // without resorting to `err.message === "auth"` magic string matching.
-      function AnalyticsAuthError() {
+      //
+      // Named `createAnalyticsAuthError` to make the factory intent explicit:
+      // it returns a plain `Error` with `err.name === "AnalyticsAuthError"`,
+      // which is what the catch block at load() below checks. Using a `new
+      // SubclassName()` form would suggest `instanceof SubclassName` is the
+      // discriminator, which would be wrong here (this is a factory, not a
+      // class) and break if the error crossed any subclass-stripping boundary.
+      function createAnalyticsAuthError() {
         var e = new Error("analytics-auth");
         e.name = "AnalyticsAuthError";
         return e;
@@ -780,7 +787,7 @@
           loginErr.textContent =
             res.status === 401 ? "Token required" : "Invalid token";
           loginErr.style.display = "block";
-          throw AnalyticsAuthError();
+          throw createAnalyticsAuthError();
         }
         if (!res.ok) {
           var body = await res.json().catch(function (parseErr) {
@@ -1443,6 +1450,16 @@
           emptyBody.innerHTML =
             asArray(emptyQueries)
               .map(function (q) {
+                // Guard against missing / non-parseable last_seen values.
+                // `new Date(undefined).toLocaleString()` yields the literal
+                // string "Invalid Date", which would be rendered raw and
+                // looks like a bug. Fall back to an em dash instead, and
+                // route the result through esc() on interpolation.
+                var lastSeenRaw = q.last_seen ? new Date(q.last_seen) : null;
+                var lastSeenStr =
+                  lastSeenRaw && Number.isFinite(lastSeenRaw.getTime())
+                    ? lastSeenRaw.toLocaleString()
+                    : "\u2014";
                 return (
                   '<tr class="empty"><td>' +
                   esc(q.query_text) +
@@ -1453,7 +1470,7 @@
                   "</td><td>" +
                   q.count +
                   "</td><td>" +
-                  new Date(q.last_seen).toLocaleString() +
+                  esc(lastSeenStr) +
                   "</td></tr>"
                 );
               })
