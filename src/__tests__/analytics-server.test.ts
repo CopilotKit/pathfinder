@@ -218,7 +218,10 @@ describe("Analytics server routes (HTTP-level)", () => {
 
       expect(res.status).toBe(401);
       const body = JSON.parse(res.body);
-      expect(body.error).toMatch(/Missing or invalid Authorization/);
+      // Envelope matches the 503 (misconfigured) branch: { error,
+      // error_description } so every auth failure speaks one format.
+      expect(body.error).toBe("unauthorized");
+      expect(body.error_description).toMatch(/Missing or invalid Authorization/);
     });
 
     it("returns data with a valid token", async () => {
@@ -259,7 +262,8 @@ describe("Analytics server routes (HTTP-level)", () => {
 
       expect(res.status).toBe(403);
       const body = JSON.parse(res.body);
-      expect(body.error).toBe("Invalid analytics token");
+      expect(body.error).toBe("forbidden");
+      expect(body.error_description).toBe("Invalid analytics token");
     });
 
     it("returns 404 when analytics is disabled", async () => {

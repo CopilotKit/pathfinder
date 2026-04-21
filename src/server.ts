@@ -104,6 +104,14 @@ const sessionStateManager = new SessionStateManager();
 let bashTelemetry: BashTelemetry | undefined;
 let telemetryFlushInterval: ReturnType<typeof setInterval> | undefined;
 
+// Pending webhook-triggered bash-refresh timers. Each webhook delivery
+// schedules a setTimeout to refresh bash instances after a brief delay
+// (post-reindex). Without tracking these handles, a shutdown() racing
+// with an in-flight webhook would leave the timers armed and keep the
+// Node event loop alive, delaying process exit. We add handles on
+// scheduling, remove them on fire, and clear the entire set on shutdown.
+const pendingBashRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
+
 async function refreshBashInstances(
   sourceNames: string[],
   logPrefix = "webhook",
@@ -155,11 +163,16 @@ app.post(
       const bashTools = serverCfg.tools.filter((t) => t.type === "bash");
       if (bashTools.length > 0) {
         const REFRESH_DELAY_MS = 30_000;
-        setTimeout(() => {
+        // Track the timer handle so shutdown() can cancel any refresh
+        // still pending. The self-delete in the callback keeps the Set
+        // from accumulating stale handles after the timer fires.
+        const handle: ReturnType<typeof setTimeout> = setTimeout(() => {
+          pendingBashRefreshTimers.delete(handle);
           refreshBashInstances(serverCfg.sources.map((s) => s.name)).catch(
             (err) => console.error("[webhook] Bash refresh failed:", err),
           );
         }, REFRESH_DELAY_MS);
+        pendingBashRefreshTimers.add(handle);
       }
     } catch (err) {
       console.error("[webhook] Handler error:", err);
@@ -843,8 +856,12 @@ export function analyticsAuth(
 
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    // Match the 503 branch's envelope shape ({error, error_description})
+    // so every failure surface speaks one format.
     res.status(401).json({
-      error: "Missing or invalid Authorization header. Use: Bearer <token>",
+      error: "unauthorized",
+      error_description:
+        "Missing or invalid Authorization header. Use: Bearer <token>",
     });
     return;
   }
@@ -859,7 +876,10 @@ export function analyticsAuth(
     providedBuf.length !== tokenBuf.length ||
     !timingSafeEqual(providedBuf, tokenBuf)
   ) {
-    res.status(403).json({ error: "Invalid analytics token" });
+    res.status(403).json({
+      error: "forbidden",
+      error_description: "Invalid analytics token",
+    });
     return;
   }
 
@@ -1341,18 +1361,24 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     await initializeSchema();
     console.log("[startup] Database schema ready.");
 
-    // Set up bash telemetry with periodic flush
+    // Set up bash telemetry with periodic flush. Guard against double-init:
+    // startup() isn't expected to run twice in a process lifetime, but a
+    // stray re-entry would leak a second interval that shutdown() can't
+    // clean up (only the most recent handle lives in the module slot). The
+    // sessionReaperInterval init below uses the same defensive guard.
     bashTelemetry = new BashTelemetry(insertCollectedData);
-    telemetryFlushInterval = setInterval(() => {
-      bashTelemetry
-        ?.flush()
-        .catch((err) =>
-          console.error(
-            "[telemetry] Periodic flush failed:",
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
-    }, 60_000);
+    if (!telemetryFlushInterval) {
+      telemetryFlushInterval = setInterval(() => {
+        bashTelemetry
+          ?.flush()
+          .catch((err) =>
+            console.error(
+              "[telemetry] Periodic flush failed:",
+              err instanceof Error ? err.message : String(err),
+            ),
+          );
+      }, 60_000);
+    }
     console.log("[startup] Bash telemetry enabled (60s flush interval).");
   }
 
@@ -1464,23 +1490,35 @@ export async function startServer(options?: ServerOptions): Promise<void> {
       clearInterval(sessionReaperInterval);
       sessionReaperInterval = undefined;
     }
+    // Cancel any webhook-triggered bash-refresh timers that haven't fired
+    // yet — otherwise they can hold the event loop open past shutdown.
+    if (pendingBashRefreshTimers.size > 0) {
+      for (const handle of pendingBashRefreshTimers) clearTimeout(handle);
+      pendingBashRefreshTimers.clear();
+    }
     try {
       await bashTelemetry?.flush();
     } catch (e) {
       console.error("[shutdown] Telemetry flush failed:", e);
     }
     // Close all open SSE transports so hanging streams don't block exit.
-    for (const sid of Object.keys(sseTransports)) {
-      try {
-        await sseTransports[sid].close();
-      } catch (e) {
+    // Run closes in parallel via Promise.allSettled: with serial `await`,
+    // one slow stream stalls every subsequent close and can push shutdown
+    // past the orchestrator's kill-deadline. allSettled also guarantees
+    // every transport is attempted even if earlier ones reject.
+    const sids = Object.keys(sseTransports);
+    const closeResults = await Promise.allSettled(
+      sids.map((sid) => sseTransports[sid].close()),
+    );
+    closeResults.forEach((result, i) => {
+      if (result.status === "rejected") {
         console.error(
-          `[shutdown] SSE transport close failed for ${sid.slice(0, 8)}:`,
-          e,
+          `[shutdown] SSE transport close failed for ${sids[i].slice(0, 8)}:`,
+          result.reason,
         );
       }
-      delete sseTransports[sid];
-    }
+      delete sseTransports[sids[i]];
+    });
     try {
       workspaceManager?.cleanupAll();
     } catch (e) {
