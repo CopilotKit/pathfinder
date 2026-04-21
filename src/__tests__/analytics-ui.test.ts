@@ -1508,8 +1508,9 @@ describe("analytics dashboard UI — preview mode (?preview=1)", () => {
     for (let i = 0; i < 10; i++) await flushAsync();
 
     // Preview flag must have been set by the IIFE.
-    expect((win as unknown as { __pathfinderPreview?: boolean })
-      .__pathfinderPreview).toBe(true);
+    expect(
+      (win as unknown as { __pathfinderPreview?: boolean }).__pathfinderPreview,
+    ).toBe(true);
     // Also verify window.fetch was overridden by the preview IIFE (it
     // replaces win.fetch with its own interceptor). If this fails, the
     // URL search-params check in setupPreviewMode didn't flip.
@@ -1541,9 +1542,7 @@ describe("analytics dashboard UI — preview mode (?preview=1)", () => {
     // (i.e. nothing). Assert no /api/analytics/ call reached the spy:
     const analyticsCalls = fetchSpy.mock.calls.filter((args) => {
       const url = args[0];
-      return (
-        typeof url === "string" && url.indexOf("/api/analytics/") === 0
-      );
+      return typeof url === "string" && url.indexOf("/api/analytics/") === 0;
     });
     expect(analyticsCalls).toHaveLength(0);
   });
