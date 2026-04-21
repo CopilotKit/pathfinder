@@ -243,9 +243,24 @@ export async function getAnalyticsSummary(
   // the rate. All windowed aggregates exclude `latency_ms < 0`. The only
   // aggregate that intentionally includes backfilled rows is the all-time
   // `total_queries` count in this function (see the totals query below).
+  //
+  // Redacted rows (query_text = REDACTED_QUERY_TEXT) are also excluded from
+  // the summary `total`/`empty` counts so `empty_result_rate_window` matches
+  // the population surfaced by getEmptyQueries() — which filters redacted
+  // out. Without this, the rate denominator (summary) would include
+  // redacted rows while the visible empty-queries list omits them, so
+  // clicking through to the list would show fewer entries than the rate
+  // suggests. Keeping the filter scoped to `total`/`empty` (not latency or
+  // per-day/by-source) preserves the existing semantics of those other
+  // aggregates.
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
-  const summaryBase = [...dw2.clauses, "latency_ms >= 0"];
+  const redactedIdx2 = dw2.nextIdx;
+  const summaryBase = [
+    ...dw2.clauses,
+    "latency_ms >= 0",
+    `query_text != $${redactedIdx2}`,
+  ];
   const summaryWhere = whereAnd(summaryBase, fc2);
   const summaryRes = await pool.query(
     `SELECT
@@ -254,7 +269,7 @@ export async function getAnalyticsSummary(
         COALESCE(avg(latency_ms)::int, 0) AS avg_latency
     FROM query_log
     ${summaryWhere}`,
-    [...fp2, ...dw2.params],
+    [...fp2, ...dw2.params, REDACTED_QUERY_TEXT],
   );
 
   // Latencies for p95 (exclude backfilled rows where latency_ms < 0)
