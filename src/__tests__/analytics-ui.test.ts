@@ -1646,3 +1646,129 @@ describe("analytics dashboard UI — p95 sampled badge", () => {
     expect(statsHtml).not.toContain("(sampled)");
   });
 });
+
+// ---------------------------------------------------------------------------
+// fetchJson stale-401 generation guard: a 401/403 whose originating load()
+// has been superseded must NOT wipe a freshly-pasted valid token. The
+// fetchJson(url, gen) guard compares `gen` to the current loadGeneration and
+// throws without touching TOKEN / headers / sessionStorage when stale.
+// Scenario: user has invalid token → load() gen=1 fires → user pastes new
+// valid token → load() gen=2 fires → the gen=1 401 arrives. Pre-guard it
+// clobbered the new token; post-guard the new token survives.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — fetchJson stale-401 generation guard", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a stale 401 from gen=1 does NOT wipe a valid token set by gen=2", async () => {
+    // Deferred gen=1 401: held open until AFTER the user pastes a new
+    // valid token and gen=2 kicks off. When it finally resolves, the
+    // guard must detect the stale generation and early-return.
+    let resolveStale401:
+      | ((v: { status: number; body: unknown }) => void)
+      | null = null;
+    const stale401Pending = new Promise<{ status: number; body: unknown }>(
+      (resolve) => {
+        resolveStale401 = resolve;
+      },
+    );
+    // gen=2 responses (valid token path) — plain 200s.
+    let summaryCallCount = 0;
+    const endpoints = {
+      // Non-dev mode so a token is required for fetchJson.
+      "/api/analytics/auth-mode": () => ({ dev: false }),
+      "/api/analytics/summary": () => {
+        summaryCallCount++;
+        if (summaryCallCount === 1) {
+          // gen=1 request hangs on the deferred 401.
+          return stale401Pending;
+        }
+        // gen=2 request succeeds.
+        return canned(7, 9999).summary;
+      },
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    // Inline the loadDashboard dance so we can seed sessionStorage + prime
+    // the window.fetch stub BEFORE the script evaluates.
+    const html = fs.readFileSync(
+      path.join(process.cwd(), "docs", "analytics.html"),
+      "utf8",
+    );
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", () => {});
+    const dom = new JSDOM(html, {
+      runScripts: "outside-only",
+      url: "http://localhost/analytics",
+      pretendToBeVisual: true,
+      virtualConsole,
+    });
+    const win = dom.window as unknown as Window & typeof globalThis;
+    Object.assign(win, { Date: globalThis.Date });
+    installChartStub(win);
+    // Seed a stale token so gen=1 fires (TOKEN is truthy → load() path).
+    dom.window.sessionStorage.setItem(
+      "pathfinder_analytics_token",
+      "old-invalid-token",
+    );
+    const { fetchFn } = buildFetchStub(endpoints);
+    Object.assign(win, { fetch: fetchFn });
+    // Silence fetchJson's intentional console.error on the 401 body parse
+    // — the fixture returns structured JSON so it won't trigger, but the
+    // error banner's catch may log. We assert on DOM/state, not logs.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const scriptEl = dom.window.document.querySelector("script:not([src])");
+    const code = scriptEl?.textContent ?? "";
+    dom.window.eval(code);
+    // gen=1 load fires; its fetches are pending on stale401Pending.
+    await flushAsync();
+
+    // User pastes a new valid token via the login handler. This sets
+    // TOKEN + headers + sessionStorage AND calls load() (= gen=2).
+    const tokenInput = dom.window.document.getElementById(
+      "tokenInput",
+    ) as HTMLInputElement;
+    tokenInput.value = "new-valid-token";
+    const tokenSubmit = dom.window.document.getElementById("tokenSubmit")!;
+    tokenSubmit.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    // Let gen=2 start and (since gen=2 handler returns synchronously)
+    // begin resolving its fetches.
+    await flushAsync();
+
+    // NOW resolve the stale gen=1 401. Without the generation guard this
+    // would clobber TOKEN + sessionStorage and force a re-login.
+    resolveStale401!({
+      status: 401,
+      body: { error: "unauthorized", error_description: "token expired" },
+    });
+    // Flush microtasks so the stale handler runs and the gen=2 happy path
+    // finishes rendering.
+    await flushAsync();
+    await flushAsync();
+    await flushAsync();
+
+    // The freshly-pasted token must survive — the stale 401 short-circuited
+    // via the generation guard without touching TOKEN / sessionStorage.
+    expect(
+      dom.window.sessionStorage.getItem("pathfinder_analytics_token"),
+    ).toBe("new-valid-token");
+
+    // Login modal must be hidden — gen=2 succeeded. A regression
+    // (un-guarded stale 401) would re-open the login modal.
+    const login = dom.window.document.getElementById("login")!;
+    expect(login.style.display).toBe("none");
+
+    // gen=2 data rendered in the stats card.
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("9,999");
+
+    errSpy.mockRestore();
+  });
+});
