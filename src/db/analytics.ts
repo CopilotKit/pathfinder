@@ -1,6 +1,18 @@
 import { getPool } from "./client.js";
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Sentinel written to `query_log.query_text` when a tool is configured with
+ * `log_queries: false`. The top-queries and empty-queries readers exclude
+ * this value so redacted rows don't pollute "frequent search" output. Also
+ * exported so tests can assert the sentinel without duplicating the literal.
+ */
+export const REDACTED_QUERY_TEXT = "<redacted>";
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -74,7 +86,7 @@ export async function logQuery(
   logQueryText: boolean = true,
 ): Promise<void> {
   const pool = getPool();
-  const text = logQueryText ? entry.query_text : "<redacted>";
+  const text = logQueryText ? entry.query_text : REDACTED_QUERY_TEXT;
   try {
     await pool.query(
       `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id)
@@ -334,9 +346,13 @@ export async function getTopQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
+  // Bind REDACTED_QUERY_TEXT rather than interpolating the literal so the
+  // sentinel has a single source of truth (the module constant) and the
+  // SQL stays shielded from the value.
+  const redactedIdx = dw.nextIdx;
   const baseClauses = [
     ...dw.clauses,
-    "query_text != '<redacted>'",
+    `query_text != $${redactedIdx}`,
     "latency_ms >= 0",
   ];
   const where = whereAnd(baseClauses, fc);
@@ -352,8 +368,8 @@ export async function getTopQueries(
     ${where}
     GROUP BY query_text, tool_name
     ORDER BY count DESC
-    LIMIT $${dw.nextIdx}`,
-    [...fp, ...dw.params, limit],
+    LIMIT $${redactedIdx + 1}`,
+    [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],
   );
 
   return rows.map((r: Record<string, unknown>) => {
@@ -388,10 +404,13 @@ export async function getEmptyQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
+  // Same rationale as getTopQueries: bind the REDACTED_QUERY_TEXT sentinel
+  // so the SQL literal isn't duplicated across reads.
+  const redactedIdx = dw.nextIdx;
   const baseClauses = [
     "result_count = 0",
     ...dw.clauses,
-    "query_text != '<redacted>'",
+    `query_text != $${redactedIdx}`,
     "latency_ms >= 0",
   ];
   const where = whereAnd(baseClauses, fc);
@@ -407,8 +426,8 @@ export async function getEmptyQueries(
     ${where}
     GROUP BY query_text, tool_name, source_name
     ORDER BY count DESC
-    LIMIT $${dw.nextIdx}`,
-    [...fp, ...dw.params, limit],
+    LIMIT $${redactedIdx + 1}`,
+    [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],
   );
 
   return rows.map((r: Record<string, unknown>) => ({
