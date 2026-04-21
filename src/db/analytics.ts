@@ -134,8 +134,13 @@ export async function logQuery(
     // after logging with enough context (tool_name + source_name) to
     // diagnose. The tool result path is the source of truth for the
     // caller; a missing analytics row is preferable to a failed tool call.
+    // Pass err as the second arg so V8 preserves the stack trace and any
+    // pg-level metadata (error code, detail, position) instead of flattening
+    // to `err.message`. Losing the stack on a telemetry failure makes DB
+    // regressions much harder to diagnose from prod logs.
     console.error(
-      `[analytics] logQuery failed (tool_name=${entry.tool_name} source_name=${entry.source_name ?? "null"}): ${err instanceof Error ? err.message : String(err)}`,
+      `[analytics] logQuery failed (tool_name=${entry.tool_name} source_name=${entry.source_name ?? "null"})`,
+      err,
     );
   }
 }
@@ -638,9 +643,12 @@ export async function cleanupOldQueryLogs(
     return rowCount;
   } catch (err) {
     // Log with [analytics] prefix before rethrowing — callers (the
-    // scheduler) handle the error but should always have a log line.
+    // scheduler) handle the error but should always have a log line. Pass
+    // err as the second arg so V8 preserves the stack + pg error metadata
+    // rather than collapsing to err.message.
     console.error(
-      `[analytics] cleanupOldQueryLogs failed (retentionDays=${retentionDays}): ${err instanceof Error ? err.message : String(err)}`,
+      `[analytics] cleanupOldQueryLogs failed (retentionDays=${retentionDays})`,
+      err,
     );
     throw err;
   }
