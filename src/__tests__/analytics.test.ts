@@ -60,7 +60,19 @@ describe("logQuery", () => {
     await logQuery(baseEntry, false);
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[1]).toBe(REDACTED_QUERY_TEXT);
+    // Assert the whole param array rather than only params[1]; this
+    // matches the shape already used by the non-redacted path test
+    // above so any future drift (column order, extra fields) shows up
+    // the same way on both paths.
+    expect(params).toEqual([
+      baseEntry.tool_name,
+      REDACTED_QUERY_TEXT,
+      baseEntry.result_count,
+      baseEntry.top_score,
+      baseEntry.latency_ms,
+      baseEntry.source_name,
+      baseEntry.session_id,
+    ]);
     // And pin the literal so the constant can never silently drift to a
     // different sentinel that downstream reads wouldn't recognize.
     expect(REDACTED_QUERY_TEXT).toBe("<redacted>");
