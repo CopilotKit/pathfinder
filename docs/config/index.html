@@ -251,13 +251,25 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
   <span class="key">name:</span> <span class="value">my-project-docs</span>             <span class="comment"># Server name, exposed in MCP metadata</span>
   <span class="key">version:</span> <span class="value">1.0.0</span>                    <span class="comment"># Server version string</span>
   <span class="key">max_sessions_per_ip:</span> <span class="value">20</span>           <span class="comment"># Max concurrent MCP sessions per IP (default: 20)</span>
-  <span class="key">session_ttl_minutes:</span> <span class="value">30</span>           <span class="comment"># Idle session timeout in minutes (default: 30)</span></div>
+  <span class="key">session_ttl_minutes:</span> <span class="value">30</span>           <span class="comment"># Idle session timeout in minutes (default: 30)</span>
+  <span class="key">allowlist:</span>                       <span class="comment"># IPs / CIDRs that bypass max_sessions_per_ip (default: [])</span>
+    <span class="comment"># NOTE: entries match the per-request client IP only. Behind a reverse proxy</span>
+    <span class="comment"># (Railway, Fly, Nginx, etc.) the server only ever sees the proxy's TCP socket</span>
+    <span class="comment"># peer as the client IP. That IP is not stable across deploys and should not be</span>
+    <span class="comment"># allowlisted — set trust_proxy: true to trust X-Forwarded-For instead.</span>
+    <span class="comment"># Directly-exposed servers use the socket peer.</span>
+    - <span class="value">"160.79.106.35"</span>              <span class="comment"># Example: Anthropic Assistant crawler</span>
+    - <span class="value">"10.0.0.0/8"</span>                 <span class="comment"># Example: internal health-probe CIDR</span>
+  <span class="key">trust_proxy:</span> <span class="value">false</span>                  <span class="comment"># Honor X-Forwarded-For (default: false — see warning below)</span></div>
 
     <ul>
         <li><strong>name</strong> — Identifies the server in MCP tool descriptions. Required.</li>
         <li><strong>version</strong> — Semantic version string. Required.</li>
         <li><strong>max_sessions_per_ip</strong> — Rate limiting. Prevents a single IP from opening too many concurrent sessions. Optional, defaults to 20.</li>
         <li><strong>session_ttl_minutes</strong> — Sessions with no activity for this many minutes are cleaned up. Optional, defaults to 30.</li>
+        <li><strong>allowlist</strong> — Array of IPv4/IPv6 addresses or CIDR ranges that bypass <code>max_sessions_per_ip</code> entirely. Use for trusted crawlers (e.g. <code>160.79.106.35</code> — Anthropic Assistant) or internal health-probe ranges. Optional, defaults to empty. Entries are matched against the per-request client IP — <strong>behind a reverse proxy this requires <code>trust_proxy: true</code></strong>; with the default <code>trust_proxy: false</code> the server only sees the proxy's TCP socket address and no upstream client IP will ever match. Directly-exposed servers use the socket peer and need no extra config. Clients that hit the limit receive a <code>429</code> with a descriptive JSON body (<code>error</code>, <code>reason</code>, <code>limit</code>, <code>currentCount</code>, <code>retryAfterSeconds</code>, <code>contact</code>) and a <code>Retry-After</code> header.</li>
+        <li><strong>trust_proxy</strong> — Whether to honor the <code>X-Forwarded-For</code> header for client-IP resolution (used by rate limiting, allowlist checks, tracing, and analytics). When <code>true</code>, the server populates <code>req.ip</code> from the leftmost entry of <code>X-Forwarded-For</code>. This is REQUIRED when the server runs behind a reverse proxy (Railway, Fly, Nginx, etc.) that sets <code>X-Forwarded-For</code>. Optional, defaults to <code>false</code>.
+            <strong>⚠️ Security:</strong> only enable this when the proxy discards any client-supplied <code>X-Forwarded-For</code> AND sets its own trusted value. If the proxy passes through client-supplied <code>X-Forwarded-For</code>, attackers can send <code>X-Forwarded-For: 160.79.106.35</code> to be seen as an allowlisted IP and bypass the rate limiter entirely. When <code>false</code> (default), <code>X-Forwarded-For</code> is ignored and the server uses the TCP socket's peer address.</li>
     </ul>
 
     <h2 id="sources">sources</h2>
@@ -311,6 +323,8 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
         <li><strong>chunk</strong> — Use <code>target_tokens</code>/<code>overlap_tokens</code> for markdown and raw-text sources. Use <code>target_lines</code>/<code>overlap_lines</code> for code sources.</li>
     </ul>
 
+    <p><em>Note: The <code>chunk</code> config is available on all source types, but the effect varies. Markdown, raw-text, HTML, and document sources use token-based chunks (<code>target_tokens</code>/<code>overlap_tokens</code>). Code sources use line-based chunks (<code>target_lines</code>/<code>overlap_lines</code>). For Slack and Discord, the Q&amp;A chunker produces one chunk per Q&amp;A pair and chunk settings have no effect. For Notion, the markdown chunker respects <code>target_tokens</code> and <code>overlap_tokens</code>.</em></p>
+
     <h3 id="source-markdown">Source type: markdown</h3>
 
     <p>Splits content on Markdown headings and uses token-based chunks. Best for documentation written in <code>.md</code> or <code>.mdx</code> files. Configure with <code>target_tokens</code> and <code>overlap_tokens</code>.</p>
@@ -325,7 +339,7 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
 
     <h3 id="source-html">Source type: html</h3>
 
-    <p>Parses HTML structure, extracts text content, and uses token-based chunks. Added in v1.4. Best for static sites, rendered documentation, or any HTML content.</p>
+    <p>Parses HTML structure, extracts text content, and uses token-based chunks. Best for static sites, rendered documentation, or any HTML content.</p>
 
     <h3 id="source-slack">Source type: slack</h3>
 
@@ -389,8 +403,8 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
     <p>Index Notion pages and database entries as searchable markdown documents. Blocks are recursively converted to markdown, and database entry properties are serialized as YAML frontmatter.</p>
 
     <div class="code-block"><span class="key">sources:</span>
-  - name: notion-wiki
-    type: notion
+  - <span class="key">name:</span> <span class="value">notion-wiki</span>
+    <span class="key">type:</span> <span class="value">notion</span>
     <span class="key">root_pages:</span>
       - <span class="value">"abc123def456..."</span>         <span class="comment"># Notion page IDs to index (including children)</span>
     <span class="key">databases:</span>
@@ -411,8 +425,6 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
     <p>If both <code>root_pages</code> and <code>databases</code> are empty, all pages accessible to the integration token are indexed. Requires <code>NOTION_TOKEN</code> environment variable.</p>
 
     <p>By default, Notion sources are indexed as documents and referenced by <code>search</code> tools. To also make them available via <code>knowledge</code> tools and the <code>/faq.txt</code> endpoint, add <code>category: faq</code> to the source config — useful for Notion databases structured as Q&amp;A or FAQ collections.</p>
-
-    <p><em>Note: The <code>chunk</code> config is available on all source types. For Slack and Discord, the Q&amp;A chunker produces one chunk per Q&amp;A pair (chunk settings have no effect). For Notion, the markdown chunker respects <code>target_tokens</code> and <code>overlap_tokens</code>.</em></p>
 
     <h3 id="source-document">Source type: document</h3>
 
@@ -630,13 +642,16 @@ https://docs.example.com/getting-started</div>
     <div class="code-block"><span class="key">analytics:</span>
   <span class="key">enabled:</span> <span class="value">false</span>               <span class="comment"># Enable analytics (default: false)</span>
   <span class="key">log_queries:</span> <span class="value">true</span>            <span class="comment"># Log all search queries (default: true)</span>
-  <span class="key">token:</span> <span class="value">${ANALYTICS_TOKEN}</span>    <span class="comment"># Bearer token for /api/analytics endpoints</span>
+  <span class="comment"># Bearer token for /api/analytics endpoints.</span>
+  <span class="comment"># Preferred: omit `token:` and set the ANALYTICS_TOKEN env var instead.</span>
+  <span class="comment"># Inline literal also works (no ${VAR} interpolation — YAML is loaded as-is):</span>
+  <span class="comment">#   token: "your-secret-here"</span>
   <span class="key">retention_days:</span> <span class="value">90</span>           <span class="comment"># Days to retain data (default: 90)</span></div>
 
     <ul>
         <li><strong>enabled</strong> — When <code>true</code>, Pathfinder logs queries and serves the analytics dashboard at <code>/analytics</code>. Default <code>false</code>.</li>
         <li><strong>log_queries</strong> — When <code>true</code>, all search queries are logged with latency and result counts. Default <code>true</code> (when analytics is enabled).</li>
-        <li><strong>token</strong> — Bearer token for authenticating requests to <code>/api/analytics/*</code> endpoints. Use the <code>ANALYTICS_TOKEN</code> environment variable. Required when analytics is enabled.</li>
+        <li><strong>token</strong> — Bearer token for authenticating requests to <code>/api/analytics/*</code> endpoints. Prefer the <code>ANALYTICS_TOKEN</code> environment variable; set <code>analytics.token</code> only if you need the value inline (YAML is loaded as-is — no <code>${VAR}</code> interpolation). One of <code>analytics.token</code> or the <code>ANALYTICS_TOKEN</code> env var is required when analytics is enabled.</li>
         <li><strong>retention_days</strong> — How long to keep analytics data before automatic cleanup. Default 90 days.</li>
     </ul>
 
