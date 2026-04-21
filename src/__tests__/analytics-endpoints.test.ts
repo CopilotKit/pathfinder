@@ -47,6 +47,7 @@ import {
   analyticsAuth,
   parseAnalyticsFilter,
   __resetAnalyticsTokenForTesting,
+  MAX_DAYS,
 } from "../server.js";
 
 const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
@@ -730,17 +731,19 @@ describe("parseAnalyticsFilter from/to validation", () => {
     }
 
     it("accepts a range that spans exactly MAX_DAYS calendar days", () => {
-      // MAX_DAYS is 100000 in server.ts — a range of from..from+99999 days
-      // spans 100000 calendar days at UTC-start..UTC-end-of-day resolution.
+      // A range of from..from+(MAX_DAYS-1) days spans MAX_DAYS calendar
+      // days at UTC-start..UTC-end-of-day resolution. Import MAX_DAYS from
+      // server.ts instead of hardcoding the numeric so tests don't drift
+      // if the cap is ever retuned.
       const from = "1970-01-01";
-      const to = addDaysUTC(from, 99999); // MAX_DAYS - 1 offset => MAX_DAYS span
+      const to = addDaysUTC(from, MAX_DAYS - 1);
       const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
       expect(result.ok).toBe(true);
     });
 
     it("rejects a range that spans MAX_DAYS + 1 calendar days with 400", () => {
       const from = "1970-01-01";
-      const to = addDaysUTC(from, 100000); // 100001-day span
+      const to = addDaysUTC(from, MAX_DAYS); // (MAX_DAYS+1)-day span
       const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
       expect(result.ok).toBe(false);
       if (!result.ok) {
