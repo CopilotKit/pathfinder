@@ -113,6 +113,10 @@ async function loadDashboard(
   });
 
   const win = dom.window as unknown as Window & typeof globalThis;
+  // jsdom creates its own Date constructor on window; vitest's fake timers
+  // only patch the test-context global. Forward our (possibly faked) Date into
+  // the jsdom window so `new Date()` inside dashboard code is deterministic.
+  Object.assign(win, { Date: globalThis.Date });
   const { instances } = installChartStub(win);
   const { fetchFn, calls } = buildFetchStub(handlers);
   Object.assign(win, { fetch: fetchFn });
