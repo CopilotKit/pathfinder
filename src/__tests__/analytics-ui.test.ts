@@ -1123,6 +1123,120 @@ describe("analytics dashboard UI — loadGeneration race guard", () => {
     expect(statsHtml).toContain("7,777");
     expect(statsHtml).not.toContain("3,000");
   });
+
+  // Dedicated race test: the prior test races within a single preset
+  // bank. This test exercises the stricter pattern — gen=2 FULLY
+  // completes (all four fetches settle, UI renders) BEFORE the older
+  // gen=1 response arrives. The guard's contract is that gen=1's late
+  // data cannot clobber gen=2's rendered UI state, so this test forces
+  // that exact ordering with a deferred promise for EVERY gen=1 fetch
+  // (not just the summary).
+  it("gen=1 resolving after gen=2 has fully completed does not clobber gen=2's rendered UI", async () => {
+    // Separate deferred promises for each of the four gen=1 fetches so
+    // we can hold them all in flight until gen=2 has finished rendering.
+    type Deferred = {
+      promise: Promise<unknown>;
+      resolve: (v: unknown) => void;
+    };
+    function defer(): Deferred {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let resolve!: any;
+      const promise = new Promise((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+    const gen1Summary = defer();
+    const gen1Queries = defer();
+    const gen1Empty = defer();
+    const gen1ToolCounts = defer();
+
+    // Route selection: when `days=30` return the deferred (gen=1
+    // sentinel). When `days=7` return canned gen=2 data synchronously.
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": (qs: string) => {
+        const p = parseQS(qs);
+        if (p.days === "30") return gen1Summary.promise;
+        if (p.days === "7") return canned(7, 1234).summary;
+        return canned(7, 0).summary;
+      },
+      "/api/analytics/queries": (qs: string) => {
+        const p = parseQS(qs);
+        if (p.days === "30") return gen1Queries.promise;
+        return [];
+      },
+      "/api/analytics/empty-queries": (qs: string) => {
+        const p = parseQS(qs);
+        if (p.days === "30") return gen1Empty.promise;
+        return [];
+      },
+      "/api/analytics/tool-counts": (qs: string) => {
+        const p = parseQS(qs);
+        if (p.days === "30") return gen1ToolCounts.promise;
+        return canned(1, 0).toolCounts;
+      },
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+
+    // Click 30 → gen=1 fires; all four fetches hang on deferred promises.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    (
+      Array.from(
+        dom.window.document.querySelectorAll(".preset[data-days]"),
+      ).find((el) => el.getAttribute("data-days") === "30") as HTMLElement
+    ).dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    // Click 7 → gen=2 fires synchronously and completes before gen=1
+    // promises resolve. Flush enough microtask rounds for gen=2 to fully
+    // render.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    (
+      Array.from(
+        dom.window.document.querySelectorAll(".preset[data-days]"),
+      ).find((el) => el.getAttribute("data-days") === "7") as HTMLElement
+    ).dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+    await flushAsync();
+
+    // Verify gen=2 rendered — stats contain 1,234 (the 7-day canned
+    // total_queries). If this fails, the test setup is wrong, not the
+    // race guard.
+    const statsAfterGen2 = dom.window.document.getElementById("stats")!
+      .innerHTML;
+    expect(statsAfterGen2).toContain("1,234");
+
+    // NOW resolve every gen=1 deferred with distinct payloads that would
+    // visibly differ in the DOM if the stale-generation guard let them
+    // through.
+    gen1Summary.resolve(canned(30, 9999).summary);
+    gen1Queries.resolve([]);
+    gen1Empty.resolve([]);
+    gen1ToolCounts.resolve(canned(1, 0).toolCounts);
+    await flushAsync();
+    await flushAsync();
+
+    // The guard (`if (gen !== loadGeneration) return;`) must have fired
+    // — gen=1's 9,999 must NOT appear in stats, and gen=2's 1,234 must
+    // still be there. Without the guard, the stale gen=1 render would
+    // have clobbered the UI and 9,999 would be visible.
+    const statsFinal = dom.window.document.getElementById("stats")!.innerHTML;
+    expect(statsFinal).toContain("1,234");
+    expect(statsFinal).not.toContain("9,999");
+  });
 });
 
 // ---------------------------------------------------------------------------
