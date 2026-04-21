@@ -487,6 +487,16 @@ describe("cleanupOldQueryLogs input validation", () => {
     );
     expect(mockQuery.mock.calls).toHaveLength(0);
   });
+
+  it("retentionDays=Infinity throws and does not query the DB", async () => {
+    // Number.isFinite(Infinity) is false, so the guard rejects it just like
+    // NaN. Locking it in explicitly because `Infinity` is the other
+    // non-finite value that can slip through a naive `value > 0` check.
+    await expect(cleanupOldQueryLogs(Infinity)).rejects.toThrow(
+      /invalid retentionDays=Infinity/,
+    );
+    expect(mockQuery.mock.calls).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
