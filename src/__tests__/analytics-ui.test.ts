@@ -1446,6 +1446,110 @@ describe("analytics dashboard UI — custom-range invalid input", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Preview mode (?preview=1): the inline `setupPreviewMode` IIFE installs
+// its OWN window.fetch stub that returns canned JSON for /api/analytics/*
+// paths. This test loads the page WITHOUT stubbing window.fetch ourselves
+// and asserts that (a) the canned totals render to the stats card and (b)
+// the MOCK DATA banner is injected. If the preview interceptor regresses,
+// real fetch would be invoked against /api/analytics/summary and jsdom
+// would reject (no network), blanking the dashboard — this test catches
+// that regression end-to-end.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — preview mode (?preview=1)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders canned totals and MOCK DATA banner without hitting real fetch", async () => {
+    const html = fs.readFileSync(
+      path.join(process.cwd(), "docs", "analytics.html"),
+      "utf8",
+    );
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", () => {});
+    const dom = new JSDOM(html, {
+      runScripts: "outside-only",
+      // Critical: preview=1 is what flips the IIFE on.
+      url: "http://localhost/analytics?preview=1",
+      pretendToBeVisual: true,
+      virtualConsole,
+    });
+
+    const win = dom.window as unknown as Window & typeof globalThis;
+    Object.assign(win, { Date: globalThis.Date });
+    // jsdom 21+ provides Response on the window, but older versions
+    // don't. The preview IIFE calls `new Response(...)` directly, so
+    // forward the node Response constructor if the window lacks it.
+    if (typeof (win as { Response?: unknown }).Response === "undefined") {
+      Object.assign(win, { Response: globalThis.Response });
+    }
+    installChartStub(win);
+
+    // Do NOT replace window.fetch with a stub. Instead, wrap the real
+    // jsdom fetch with a spy so we can assert it was NEVER invoked with
+    // a /api/analytics/* URL — the preview-mode interceptor should
+    // short-circuit all such calls from inside the dashboard script.
+    // jsdom's built-in fetch attempts a real network call and throws
+    // "TypeError: Failed to fetch" on localhost, which would blank the
+    // dashboard if the interceptor missed a path.
+    const fetchSpy = vi.fn(win.fetch?.bind(win) ?? (() => Promise.reject()));
+    Object.assign(win, { fetch: fetchSpy });
+
+    const scriptEl = dom.window.document.querySelector("script:not([src])");
+    if (!scriptEl) throw new Error("inline script not found in analytics.html");
+    const code = scriptEl.textContent ?? "";
+    dom.window.eval(code);
+
+    // Flush microtasks several times so the preview IIFE's fetch
+    // overwrite + init() + all awaited loads (summary, tool-counts,
+    // queries, empty-queries) resolve. The init() chain is at least 3
+    // async hops deep (auth-mode skip → load() → Promise.all fetches).
+    for (let i = 0; i < 10; i++) await flushAsync();
+
+    // Preview flag must have been set by the IIFE.
+    expect((win as unknown as { __pathfinderPreview?: boolean })
+      .__pathfinderPreview).toBe(true);
+    // Also verify window.fetch was overridden by the preview IIFE (it
+    // replaces win.fetch with its own interceptor). If this fails, the
+    // URL search-params check in setupPreviewMode didn't flip.
+    expect(win.fetch).not.toBe(fetchSpy);
+
+    // Stats card renders the canned total — 6128 is the literal in
+    // CANNED[/api/analytics/summary].total_queries (see analytics.html).
+    // Locale-formatted as "6,128" when rendered.
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("6,128");
+
+    // "MOCK DATA" watermark banner must be visible so screenshots can't
+    // be confused for live dashboards.
+    expect(dom.window.document.body.textContent).toContain("MOCK DATA");
+
+    // Sanity check: the dashboard code path never invoked the SPY's
+    // unwrapped fetch with a real /api/analytics/* URL — the preview
+    // IIFE's own window.fetch override intercepts those paths and
+    // returns canned Responses directly without delegating to the
+    // wrapped original. (The IIFE captures originalFetch = window.fetch
+    // at IIFE-invocation time; after that point, every call inside
+    // setupPreviewMode's override bypasses our spy.)
+    //
+    // However, since the IIFE's override runs BEFORE init(), and our
+    // spy was installed BEFORE the script was evaluated, the spy is
+    // also the `originalFetch` captured by the IIFE. Calls for
+    // /api/analytics/* are short-circuited inside the override (not
+    // delegated). So the spy is only invoked for non-analytics URLs
+    // (i.e. nothing). Assert no /api/analytics/ call reached the spy:
+    const analyticsCalls = fetchSpy.mock.calls.filter((args) => {
+      const url = args[0];
+      return (
+        typeof url === "string" && url.indexOf("/api/analytics/") === 0
+      );
+    });
+    expect(analyticsCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // p95 sampled-ness rendering
 // ---------------------------------------------------------------------------
 
