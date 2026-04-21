@@ -38,6 +38,12 @@ import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
 import { insertCollectedData } from "./db/queries.js";
 import { IpSessionLimiter } from "./ip-limiter.js";
 import {
+  jsonRpcRateLimitError,
+  clampRetryAfterSeconds,
+} from "./rate-limit-response.js";
+import { clientIp } from "./ip-util.js";
+import ipaddr from "ipaddr.js";
+import {
   protectedResourceHandler,
   authorizationServerHandler,
   registerHandler,
@@ -236,10 +242,10 @@ app.use(express.urlencoded({ extended: false }));
 // auth-flow bug and should not fire in general deployments.
 if (process.env.PATHFINDER_TRACE_CLAUDE_AI === "1") {
   app.use((req, _res, next) => {
-    const ip =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket?.remoteAddress ||
-      "unknown";
+    // Route through the shared helper so tracing, rate limiting, and
+    // analytics dev-bypass all agree on the resolved IP (and all share
+    // the same X-Forwarded-For spoof protection when trust_proxy=false).
+    const ip = clientIp(req, trustProxy);
     if (
       ip.startsWith("160.79.106") ||
       ip.startsWith("104.192.205") ||
@@ -279,92 +285,672 @@ let SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes default, overridden by config
 let ipLimiter: IpSessionLimiter | undefined;
 let workspaceManager: WorkspaceManager | undefined;
 
-// Session reaper tick — started from startServer() so importing this module
-// (including from tests) doesn't leak a 5-minute setInterval into the loop.
-function reapIdleSessionsTick(): void {
-  const now = Date.now();
-  let reaped = 0;
-  for (const sid of Object.keys(sessionLastActivity)) {
-    // Skip SSE-owned sessions — they're reaped by reapIdleSseSessions below.
-    if (sseTransports[sid]) continue;
-    if (now - sessionLastActivity[sid] > SESSION_TTL_MS) {
+/**
+ * Single source of truth for the pre-clamp Retry-After hint derived from
+ * SESSION_TTL_MS. Each /mcp rate-limit rejection path (pre-check, sync-race
+ * tryAdd fail, race-fallback inside onsessioninitialized) used to duplicate
+ * `Math.max(1, Math.round(SESSION_TTL_MS / 1000))` inline — four copies
+ * diverging silently whenever one got refactored. Centralising it here keeps
+ * header + body in lockstep; final clamping still happens inside
+ * `clampRetryAfterSeconds` so the documented ceiling (300s) is enforced
+ * regardless of how large SESSION_TTL_MS grows.
+ */
+export function retryAfterSecondsFromTtl(): number {
+  return Math.max(1, Math.round(SESSION_TTL_MS / 1000));
+}
+
+/**
+ * Short-lived set of session IDs that were rejected mid-init (race fallback
+ * from handleSessionInitRaceFallback, or ensureSession-throw rollback from
+ * handleSessionInitAccept). Both rejection paths already ran the full cleanup
+ * chain inline AND called transport.close(). The SDK then fires
+ * transport.onclose asynchronously for the now-dead transport — without this
+ * marker, onclose would re-run sessionStateManager.cleanup/ipLimiter.remove/
+ * workspaceManager.cleanup for a sid that never became a real session AND
+ * emit a misleading "Session X closed (N active)" log.
+ *
+ * We add on rejection, consult in onclose to branch, and drain in onclose so
+ * the Set never grows unbounded. A sid never re-appears here because
+ * onsessioninitialized fires exactly once per transport.
+ */
+const rejectedSids = new Set<string>();
+
+/**
+ * Test-only: mark a sid as rejected (so onclose suppresses its cleanup
+ * chain). Production code calls this internally from the race-fallback /
+ * accept-rollback paths; exported so tests can verify both the marker
+ * machinery and the suppression behavior independently.
+ */
+export function markSessionRejectedForTesting(sid: string): void {
+  rejectedSids.add(sid);
+}
+
+/**
+ * Test-only: query whether a sid was marked rejected (for assertions in
+ * server-round2.test.ts). Does not mutate.
+ */
+export function wasSessionRejectedForTesting(sid: string): boolean {
+  return rejectedSids.has(sid);
+}
+
+/**
+ * Test-only: clear the rejected-sids set. Tests that want isolation across
+ * cases can reset this in beforeEach so stale state from one test can't
+ * influence another.
+ */
+export function __resetRejectedSidsForTesting(): void {
+  rejectedSids.clear();
+}
+
+/**
+ * Drain the rejected-sid marker for paths that tore the session down inline
+ * and early-return from the /mcp init handler WITHOUT ever wiring
+ * `transport.onclose`. Those paths (sync-race tryAdd-fail +
+ * handleSessionInitAccept ensureSession-throw rollback) still call
+ * `rejectedSids.add(sid)` inside the helper so that if onclose WERE wired, it
+ * would suppress double-cleanup. But when no onclose handler is attached, the
+ * marker would otherwise accumulate forever under rate-limit hammering /
+ * workspace-init failures.
+ *
+ * Calling this immediately before the early-return guarantees the Set stays
+ * bounded without racing the SDK's async onclose. Exported so tests can
+ * assert the drain happens deterministically instead of dragging in the full
+ * Express handler.
+ */
+export function drainRejectedSidForInlineRollback(sid: string): void {
+  rejectedSids.delete(sid);
+}
+
+/**
+ * Pure reaper for the Streamable-HTTP transport map. Exported so tests can
+ * drive it without spinning up the full server. Mirrors
+ * `reapIdleSseSessions` in sse-handlers.ts.
+ *
+ * Behavior contract:
+ * - Closes the transport via `transport.close()` so listeners/timers inside
+ *   the transport don't leak. The promise is attached via Promise.resolve +
+ *   `.catch` so async rejections land in `console.error` instead of the
+ *   process's unhandled-rejection stream.
+ * - Coalesces `sessionLastActivity[sid] ?? 0` before the age check. Without
+ *   this, a session with no recorded activity ({@link SESSION_TTL_MS}
+ *   arithmetic on `undefined`) evaluates to `NaN > ttlMs`, which is always
+ *   false — the session would never be reaped.
+ * - Deletes map entries itself. The caller is responsible for cross-map
+ *   cleanup (ipLimiter, workspace, session state) because those dependencies
+ *   don't belong in a pure reaper.
+ */
+export function reapIdleStreamableSessions(opts: {
+  transports: Record<string, { close: () => Promise<void> | void }>;
+  sessionLastActivity: Record<string, number>;
+  ttlMs: number;
+  now?: number;
+}): string[] {
+  const { transports, sessionLastActivity, ttlMs } = opts;
+  const now = opts.now ?? Date.now();
+  const reaped: string[] = [];
+  for (const sid of Object.keys(transports)) {
+    const last = sessionLastActivity[sid] ?? 0;
+    if (now - last > ttlMs) {
+      const transport = transports[sid];
+      // Async rejections must land in console.error, not the unhandled-
+      // rejection stream. `void transport.close()` only catches synchronous
+      // throws.
+      Promise.resolve()
+        .then(() => transport.close())
+        .catch((e) =>
+          console.error(
+            `[mcp] Streamable close failed for ${sid.slice(0, 8)}:`,
+            e,
+          ),
+        );
       delete transports[sid];
       delete sessionLastActivity[sid];
-      try {
-        sessionStateManager.cleanup(sid);
-      } catch (e) {
-        console.error(
-          `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
-          e,
-        );
-      }
-      try {
-        ipLimiter?.remove(sid);
-      } catch (e) {
-        console.error(`[mcp] IP limiter cleanup failed:`, e);
-      }
-      try {
-        workspaceManager?.cleanup(sid);
-      } catch (e) {
-        console.error(
-          `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
-          e,
-        );
-      }
-      reaped++;
+      reaped.push(sid);
     }
   }
-  if (reaped > 0) {
-    console.log(
-      `[mcp] Reaped ${reaped} idle sessions (${Object.keys(transports).length} active)`,
-    );
-  }
+  return reaped;
+}
 
-  // Reap idle SSE sessions. reapIdleSseSessions closes the transport (which
-  // triggers our onclose → removes from sseTransports, ipLimiter, workspace)
-  // and also defensively clears the maps itself.
-  const reapedSse = reapIdleSseSessions({
-    sseTransports,
-    sessionLastActivity,
-    ttlMs: SESSION_TTL_MS,
+/**
+ * Parametric reaper tick — all dependencies injected so tests can drive this
+ * without module-scope state. The production tick below closes over module
+ * state and delegates here.
+ *
+ * SSE ownership (R3 #1): reapIdleSseSessions now owns the full cleanup chain
+ * inline — ipLimiter.remove, workspaceManager.cleanup, AND
+ * sessionStateManager.cleanup. This supersedes the earlier "onclose-driven
+ * cleanup" model: the reaper schedules transport.close() on a microtask, so
+ * by the time SDK-side onclose fires, the map entry has already been deleted
+ * and the handler's onclose closure no-ops. Calling cleanup only from the
+ * handler onclose would leave ipLimiter counters, workspace state, AND
+ * per-session shell state leaking for every reaped SSE session. See
+ * sse-handlers.ts reapIdleSseSessions JSDoc for the full contract; this
+ * function is purely the plumbing that hands our module-scope deps to that
+ * reaper.
+ */
+export function reapIdleSessionsTickForTesting(opts: {
+  transports: Record<string, { close: () => Promise<void> | void }>;
+  sseTransports: Record<string, { close: () => Promise<void> | void }>;
+  sessionLastActivity: Record<string, number>;
+  ttlMs: number;
+  now?: number;
+  ipLimiter?: { remove: (sid: string) => void };
+  workspaceManager?: { cleanup: (sid: string) => void };
+  sessionStateManager?: { cleanup: (sid: string) => void };
+}): void {
+  const now = opts.now ?? Date.now();
+  // Filter out SSE-owned sessions — they're reaped by reapIdleSseSessions
+  // below and share the sessionLastActivity map. Build a shallow snapshot
+  // view so the pure reaper sees only streamable-HTTP entries.
+  const streamableOnly: Record<string, { close: () => Promise<void> | void }> =
+    {};
+  for (const sid of Object.keys(opts.transports)) {
+    if (!opts.sseTransports[sid]) streamableOnly[sid] = opts.transports[sid];
+  }
+  const reapedStreamable = reapIdleStreamableSessions({
+    transports: streamableOnly,
+    sessionLastActivity: opts.sessionLastActivity,
+    ttlMs: opts.ttlMs,
     now,
   });
-  for (const sid of reapedSse) {
+  for (const sid of reapedStreamable) {
+    // Propagate the delete back to the canonical map. The reaper already
+    // deleted from the snapshot.
+    delete opts.transports[sid];
     try {
-      ipLimiter?.remove(sid);
-    } catch (e) {
-      console.error(`[mcp] SSE IP limiter cleanup failed:`, e);
-    }
-    try {
-      workspaceManager?.cleanup(sid);
+      opts.sessionStateManager?.cleanup(sid);
     } catch (e) {
       console.error(
-        `[mcp] SSE workspace cleanup failed for ${sid.slice(0, 8)}:`,
+        `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
+        e,
+      );
+    }
+    try {
+      opts.ipLimiter?.remove(sid);
+    } catch (e) {
+      console.error(`[mcp] IP limiter cleanup failed:`, e);
+    }
+    try {
+      opts.workspaceManager?.cleanup(sid);
+    } catch (e) {
+      console.error(
+        `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
         e,
       );
     }
   }
+  if (reapedStreamable.length > 0) {
+    console.log(
+      `[mcp] Reaped ${reapedStreamable.length} idle sessions (${Object.keys(opts.transports).length} active)`,
+    );
+  }
+
+  // Reap idle SSE sessions. Ownership (see sse-handlers.ts
+  // reapIdleSseSessions JSDoc): the reaper deletes map entries synchronously
+  // AND runs the full cleanup chain (ipLimiter.remove, workspaceManager.
+  // cleanup, sessionStateManager.cleanup) inline before scheduling
+  // transport.close() on a microtask. We intentionally do NOT duplicate any
+  // of those cleanup calls here — a single inline owner keeps state
+  // transitions auditable and avoids double-free when onclose later fires
+  // against an already-deleted map entry. This reverses the previous
+  // "onclose-driven" model that was silently leaking per-session state for
+  // every reaped SSE session (the close() microtask raced ahead of the
+  // handler's `if (sseTransports[sid])` guard, so onclose saw a deleted
+  // entry and no-opped — leaving limiter counters, workspace state, and
+  // shell state stranded).
+  const reapedSse = reapIdleSseSessions({
+    sseTransports: opts.sseTransports,
+    sessionLastActivity: opts.sessionLastActivity,
+    ttlMs: opts.ttlMs,
+    now,
+    ipLimiter: opts.ipLimiter,
+    workspaceManager: opts.workspaceManager,
+    sessionStateManager: opts.sessionStateManager,
+  });
   if (reapedSse.length > 0) {
     console.log(
-      `[mcp] Reaped ${reapedSse.length} idle SSE sessions (${Object.keys(sseTransports).length} SSE active)`,
+      `[mcp] Reaped ${reapedSse.length} idle SSE sessions (${Object.keys(opts.sseTransports).length} SSE active)`,
+    );
+  }
+}
+
+// Session reaper tick — started from startServer() so importing this module
+// (including from tests) doesn't leak a 5-minute setInterval into the loop.
+// Thin closure over module state that delegates to the parametric form.
+function reapIdleSessionsTick(): void {
+  reapIdleSessionsTickForTesting({
+    transports,
+    sseTransports,
+    sessionLastActivity,
+    ttlMs: SESSION_TTL_MS,
+    ipLimiter,
+    workspaceManager,
+    sessionStateManager,
+  });
+}
+
+/**
+ * Race-fallback handler for the /mcp `onsessioninitialized` callback. When
+ * the IP limiter rejects inside onsessioninitialized (rare: the pre-check
+ * above should have caught it, but two concurrent inits from the same IP
+ * can still race between pre-check and counter increment), we must:
+ *
+ * 1. Best-effort emit a JSON-RPC error frame on the transport so the client
+ *    sees a descriptive rejection reason instead of a silent disconnect.
+ * 2. Close the transport.
+ * 3. Delete transports[sid] / sessionLastActivity[sid] INLINE — we cannot
+ *    rely on onclose firing for this sid since the transport is torn down
+ *    mid-stream-setup.
+ *
+ * Asymmetry note (vs /sse race fallback in src/sse-handlers.ts):
+ *   /sse race-fallback returns a 429 JSON body to the client — the SSE
+ *   handler still has a response object in hand at that point. /mcp
+ *   race-fallback, by contrast, fires inside the SDK's
+ *   `onsessioninitialized` callback AFTER the transport has taken ownership
+ *   of the response stream and BEFORE the stream controller is wired
+ *   (`transport.send()` throws "Not connected"). We cannot write a JSON
+ *   body here, so the losing client sees a silent TCP close. The loud
+ *   `console.warn` below is the operator-side compensation.
+ *
+ *   TODO: revisit this asymmetry if/when the MCP SDK exposes a way to
+ *   emit a protocol-level error frame during onsessioninitialized — at
+ *   that point both transports can converge on the same "descriptive
+ *   rejection" shape and this helper can stop being the quiet one.
+ *
+ * Note on step 1: the MCP SDK's `StreamableHTTPServerTransport.send()`
+ * requires a live SSE stream (see node_modules/.../webStandardStreamableHttp
+ * where send throws "Not connected" without one). Inside
+ * `onsessioninitialized`, the enclosing `handleRequest` call has not yet
+ * wired the stream controller — `send()` would throw "Not connected" and
+ * the rejected promise would surface as an unhandled rejection. Rather
+ * than emit a JSON-RPC error the client can't possibly see, we accept the
+ * silent-disconnect footgun as documented SDK behavior and compensate
+ * with:
+ *   - A loud `console.warn` that includes the sid prefix, IP, counter, AND
+ *     the clamped retry-after hint so operators can correlate client
+ *     disconnects with rate-limit trips and know how long clients were
+ *     told to back off.
+ *   - The outer pre-check catches the common case (non-race) with a proper
+ *     429 + `Retry-After` + structured body, so this fallback path only
+ *     fires for genuine concurrent-init races.
+ *
+ * Exported so tests can exercise this directly without driving the full
+ * Express app + SDK lifecycle.
+ */
+export function handleSessionInitRaceFallback(opts: {
+  transport: { close: () => Promise<void> | void };
+  sid: string;
+  ip: string;
+  transports: Record<string, unknown>;
+  sessionLastActivity: Record<string, number>;
+  limit: number;
+  currentCount: number;
+  retryAfterSeconds: number;
+}): void {
+  const {
+    transport,
+    sid,
+    ip,
+    transports: tMap,
+    sessionLastActivity: lastActivityMap,
+    limit,
+    currentCount,
+  } = opts;
+  // Clamp to the same ceiling the JSON body uses so the log hint matches
+  // what clients would have received on the happy (pre-check) path.
+  const retryAfterSeconds = clampRetryAfterSeconds(opts.retryAfterSeconds);
+  // Loud log — this path is the "silent disconnect" case; the log is the
+  // only signal operators get that a client was rejected. Shape mirrors
+  // the pre-check log so both surfaces are greppable together, and carries
+  // the retry-after hint so ops can correlate disconnects with the backoff
+  // window.
+  console.warn(
+    `[mcp] IP rate limit exceeded for ${ip} (${currentCount}/${limit}), closing session ${sid.slice(0, 8)} (race fallback, retry-after: ${retryAfterSeconds}s)`,
+  );
+  // Close the transport. Async rejections land in console.error instead of
+  // the unhandled-rejection stream.
+  Promise.resolve()
+    .then(() => transport.close())
+    .catch((err) => {
+      console.error(
+        `[mcp] race-fallback close failed for ${sid.slice(0, 8)}:`,
+        err,
+      );
+    });
+  // Inline map deletion — do NOT wait for onclose. The onclose handler
+  // tolerates already-deleted entries (see transport.onclose in the POST
+  // /mcp route).
+  delete tMap[sid];
+  delete lastActivityMap[sid];
+  // Mark sid as rejected so the SDK-scheduled transport.onclose (fires once
+  // transport.close() resolves) suppresses its cleanup chain + misleading
+  // "Session closed (N active)" log — the session was never opened, so the
+  // counters should reflect the pre-increment rollback and nothing more.
+  rejectedSids.add(sid);
+}
+
+/**
+ * Write a 429 rate-limited response (JSON-RPC error frame + `Retry-After`
+ * header) back to a caller whose /mcp init was rejected by the IP limiter
+ * pre-check. Exported so tests can drive the header/body parity directly
+ * without a full Express + SDK round-trip.
+ *
+ * Both the header and the JSON-body `retryAfterSeconds` flow through
+ * `clampRetryAfterSeconds`, so a raw SESSION_TTL-derived seed (e.g. 1800s
+ * from a 30-minute TTL) gets clamped to the documented ceiling (300s) on
+ * BOTH surfaces. Prior to this refactor the header was set from the raw
+ * input and the body was clamped in `buildRateLimitPayload`, producing a
+ * mismatch (header: 1800, body: 300) that confused clients.
+ */
+export function write429RateLimited(
+  res: Response,
+  inputs: {
+    id: string | number | null;
+    limit: number;
+    currentCount: number;
+    retryAfterSeconds: number;
+  },
+): void {
+  // Defensive guard: if a future refactor moves the pre-check after any write
+  // has happened, res.setHeader() would throw "Cannot set headers after they
+  // are sent" and escape as an unhandled error. Bail with a diagnostic log so
+  // operators can correlate, rather than crashing the request handler.
+  if (res.headersSent) {
+    console.error(
+      "[mcp] 429 after headers sent — cannot write rate-limit response body/header",
+    );
+    return;
+  }
+  const clamped = clampRetryAfterSeconds(inputs.retryAfterSeconds);
+  const frame = jsonRpcRateLimitError(inputs.id, {
+    limit: inputs.limit,
+    currentCount: inputs.currentCount,
+    retryAfterSeconds: clamped,
+  });
+  res.setHeader("Retry-After", String(clamped));
+  res.status(429).json(frame);
+}
+
+/**
+ * Post-accept handler for the /mcp `onsessioninitialized` callback. Extracted
+ * from the callback so we can (a) wrap the workspaceManager.ensureSession
+ * call in a try/catch that ROLLS BACK the ipLimiter counter and tears down
+ * transport state if ensureSession throws, and (b) test that rollback in
+ * isolation without driving a full SDK lifecycle.
+ *
+ * On ensureSession failure (ENOSPC, EACCES, corrupted workspace, DB error):
+ *   - Log the failure with sid-prefix + ip so operators can diagnose.
+ *   - Call ipLimiter.remove(sid) so the pre-increment doesn't leak and
+ *     permanently count against this IP until TTL reap.
+ *   - Delete transports[sid] / sessionLastActivity[sid] inline (same
+ *     mid-init teardown reasoning as handleSessionInitRaceFallback).
+ *   - Fire-and-forget transport.close() with Promise-wrapped error handling
+ *     so async rejections land in console.error rather than
+ *     unhandledRejection.
+ *   - Do NOT emit a JSON-RPC error frame — the MCP SDK lifecycle constraint
+ *     documented on handleSessionInitRaceFallback applies identically here
+ *     (`transport.send()` would throw "Not connected").
+ *
+ * Exported for tests; production callers wire this up via the POST /mcp
+ * onsessioninitialized callback.
+ */
+export function handleSessionInitAccept(opts: {
+  transport: { close: () => Promise<void> | void; sessionId?: string };
+  sid: string;
+  ip: string;
+  transports: Record<string, unknown>;
+  sessionLastActivity: Record<string, number>;
+  ipLimiter?: { remove: (sid: string) => void };
+  workspaceManager?: { ensureSession: (sid: string) => void };
+  /**
+   * Session state manager (bash tool per-session shell state). Optional so
+   * existing test fixtures keep working; the production caller always passes
+   * the module-scope instance. Rollback clears it alongside the ipLimiter
+   * counter so a subsequent ensureSession throw-path doesn't leak shell
+   * state if the accept handler ever starts registering state before the
+   * ensureSession call.
+   */
+  sessionStateManager?: { cleanup: (sid: string) => void };
+  /**
+   * Express response for the original /mcp init request. When provided AND
+   * headers haven't been sent yet, rollback writes a structured 503 body so
+   * the client sees a diagnostic error instead of a silent transport
+   * teardown. When res.headersSent is already true we can't write (the SDK
+   * may have begun streaming before the ensureSession throw — unlikely given
+   * the order — so we fall back to just closing the transport). Optional to
+   * preserve existing unit test call sites that don't care about the
+   * response shape.
+   */
+  res?: {
+    headersSent: boolean;
+    status: (code: number) => { json: (body: unknown) => unknown };
+  };
+}): boolean {
+  const {
+    transport,
+    sid,
+    ip,
+    transports: tMap,
+    sessionLastActivity: lastActivityMap,
+    ipLimiter: limiter,
+    workspaceManager: workspace,
+    sessionStateManager: sessionState,
+    res,
+  } = opts;
+  try {
+    workspace?.ensureSession(sid);
+  } catch (err) {
+    console.error(
+      `[mcp] workspaceManager.ensureSession failed for ${sid.slice(0, 8)} [${ip}]; rolling back session:`,
+      err,
+    );
+    // Roll back the ipLimiter counter — tryAdd incremented it immediately
+    // before this function ran, and without this rollback the counter
+    // would leak until SESSION_TTL reap. Guard the remove() call so a
+    // rollback throw doesn't mask the original ensureSession error.
+    try {
+      limiter?.remove(sid);
+    } catch (rollbackErr) {
+      console.error(
+        `[mcp] ipLimiter rollback failed for ${sid.slice(0, 8)}:`,
+        rollbackErr,
+      );
+    }
+    // sessionStateManager cleanup: currently a no-op because ensureSession
+    // runs before any session state registration, but add it to the rollback
+    // chain so a future reordering (e.g. registering shell state inside
+    // accept-handler) can't leak per-session state. Per-step try/catch
+    // matches the onclose / reaper pattern.
+    try {
+      sessionState?.cleanup(sid);
+    } catch (rollbackErr) {
+      console.error(
+        `[mcp] sessionStateManager rollback failed for ${sid.slice(0, 8)}:`,
+        rollbackErr,
+      );
+    }
+    // Inline map deletion — do NOT wait for onclose (the transport may
+    // never reach the wired-stream state after the mid-init failure).
+    delete tMap[sid];
+    delete lastActivityMap[sid];
+    // Mark the sid as rejected so the transport.onclose handler (which the
+    // SDK fires asynchronously once transport.close() completes) skips the
+    // cleanup chain + the misleading "Session closed (N active)" log — all
+    // of that work already ran inline above.
+    rejectedSids.add(sid);
+    // Fire-and-forget close; async rejections land in console.error.
+    // Direct .close() (no optional chaining): callers always provide a
+    // transport with .close(), and the optional chain obscured typing.
+    Promise.resolve()
+      .then(() => transport.close())
+      .catch((closeErr) => {
+        console.error(
+          `[mcp] transport.close after ensureSession failure threw for ${sid.slice(0, 8)}:`,
+          closeErr,
+        );
+      });
+    // Client-visible rejection: write a 503 JSON body when we still own the
+    // response stream. If headers were already sent (extremely unlikely at
+    // this point — ensureSession runs before the SDK wires the stream — but
+    // a paranoid guard prevents a throw from crashing the outer handler) we
+    // can't write a body, so the caller gets whatever Express does by
+    // default (empty response, eventual connection close).
+    if (res && !res.headersSent) {
+      res.status(503).json({
+        jsonrpc: "2.0",
+        error: {
+          code: -32003,
+          message:
+            "Server unavailable: failed to initialize session workspace",
+        },
+        id: null,
+      });
+    }
+    return false;
+  }
+  console.log(
+    `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(tMap).length} active) [${ip}]`,
+  );
+  return true;
+}
+
+/**
+ * Drive `transport.handleRequest(req, res, body)` with defensive handling
+ * for the onsessioninitialized-race case. `onsessioninitialized` fires
+ * INSIDE `handleRequest`, so when the defensive race-fallback inside that
+ * callback closes the transport mid-flight the SDK's subsequent write
+ * attempts can throw ("Not connected", "Cannot set headers after sent",
+ * etc.). Before this helper existed the throw escaped to the outer `try`
+ * in the /mcp handler and produced a 500 write on top of the 429 the
+ * race-fallback had already streamed — a double response to the client.
+ *
+ * Contract:
+ *   - Always awaits handleRequest.
+ *   - If `initOutcome.rejected` is true when handleRequest throws, the throw
+ *     is swallowed (the race-fallback already handled the response
+ *     lifecycle) and a diagnostic `[mcp]` log records the suppression so
+ *     operators can still correlate. Resolves to undefined.
+ *   - If `initOutcome.rejected` is false, the throw is re-thrown so the
+ *     outer handler's catch-all produces its standard 500 JSON-RPC error.
+ *
+ * Exported for tests so the try/catch branching can be covered without a
+ * full Express+SDK round trip.
+ */
+export async function completeInitRequestSafely<
+  TReq,
+  TRes,
+  TBody,
+>(
+  transport: {
+    handleRequest: (req: TReq, res: TRes, body: TBody) => Promise<void>;
+  },
+  req: TReq,
+  res: TRes,
+  body: TBody,
+  initOutcome: { rejected: boolean },
+): Promise<void> {
+  try {
+    await transport.handleRequest(req, res, body);
+  } catch (err) {
+    if (initOutcome.rejected) {
+      // Race-fallback already closed the transport and wrote its own
+      // teardown path; the SDK's residual write attempt naturally throws
+      // on a closed socket. Suppress the throw so the outer catch-all
+      // doesn't pile a 500 on top of the 429.
+      console.warn(
+        "[mcp] handleRequest threw after race-fallback rejected session; suppressed:",
+        err,
+      );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Shutdown helper: closes every open transport (both Streamable-HTTP and
+ * legacy SSE), clears the backing maps, and logs per-transport failures.
+ * Extracted from the graceful-shutdown handler so tests can verify the
+ * close-and-clear semantics without starting the full server.
+ *
+ * Uses Promise.allSettled on each map so one slow/rejecting close doesn't
+ * stall subsequent closes — keeping shutdown within the orchestrator's
+ * kill-deadline even if a single transport misbehaves. Failures are logged
+ * with the sid prefix so operators can correlate.
+ */
+export async function closeAllSessions(opts: {
+  transports: Record<string, { close: () => Promise<void> | void }>;
+  sseTransports: Record<string, { close: () => Promise<void> | void }>;
+}): Promise<void> {
+  const { transports: tMap, sseTransports: sseMap } = opts;
+
+  const streamableSids = Object.keys(tMap);
+  const streamableResults = await Promise.allSettled(
+    streamableSids.map((sid) => Promise.resolve().then(() => tMap[sid].close())),
+  );
+  streamableResults.forEach((result, i) => {
+    const sid = streamableSids[i];
+    if (result.status === "rejected") {
+      console.error(
+        `[shutdown] Streamable-HTTP transport close failed for ${sid.slice(0, 8)}:`,
+        result.reason,
+      );
+    }
+    delete tMap[sid];
+  });
+  if (streamableSids.length > 0) {
+    console.log(
+      `[shutdown] Closed ${streamableSids.length} Streamable-HTTP transport${streamableSids.length === 1 ? "" : "s"}`,
+    );
+  }
+
+  const sseSids = Object.keys(sseMap);
+  const sseResults = await Promise.allSettled(
+    sseSids.map((sid) => Promise.resolve().then(() => sseMap[sid].close())),
+  );
+  sseResults.forEach((result, i) => {
+    const sid = sseSids[i];
+    if (result.status === "rejected") {
+      console.error(
+        `[shutdown] SSE transport close failed for ${sid.slice(0, 8)}:`,
+        result.reason,
+      );
+    }
+    delete sseMap[sid];
+  });
+  if (sseSids.length > 0) {
+    console.log(
+      `[shutdown] Closed ${sseSids.length} SSE transport${sseSids.length === 1 ? "" : "s"}`,
     );
   }
 }
 
 let sessionReaperInterval: ReturnType<typeof setInterval> | undefined;
 
-function clientIp(req: Request): string {
-  return (
-    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-    req.socket.remoteAddress ||
-    "unknown"
-  );
+// Resolved during startServer() from server.trust_proxy in the loaded config.
+// Read by every IP-extraction site (trace middleware, /mcp, SSE handlers)
+// via `clientIp(req, trustProxy)`. Defaults to false: if startServer() hasn't
+// run yet, or the config omits the flag, we IGNORE X-Forwarded-For and fall
+// back to the socket address — matching the hardened, spoof-resistant
+// default documented in types.ts.
+let trustProxy = false;
+
+/**
+ * Test-only accessor for the module-level trustProxy flag. The flag is set
+ * by startServer() in production; tests that exercise isLocalhostReq and
+ * analyticsAuth behavior under `trust_proxy=true` without booting the full
+ * server use this setter to drive the exact code path. Always pair with a
+ * reset to `false` in an afterEach / finally so other tests don't inherit
+ * the stale value.
+ */
+export function __setTrustProxyForTesting(value: boolean): void {
+  trustProxy = value;
 }
 
 app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    const ip = clientIp(req);
+    const ip = clientIp(req, trustProxy);
 
     // Existing session — route to its transport
     if (sessionId && transports[sessionId]) {
@@ -404,74 +990,230 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
 
     // New session — must be an initialize request
     if (!sessionId && isInitializeRequest(req.body)) {
+      // Pre-check the IP limiter BEFORE creating the transport. The previous
+      // flow created the transport, let onsessioninitialized run, then
+      // transport.close()'d — which produced a silent disconnect on the
+      // client side with no indication of why. Checking up front lets us
+      // write a structured JSON-RPC error + 429 response so the client
+      // can surface the rate-limit reason, the cap, the current count,
+      // and a retry-after hint. Allowlisted IPs skip the check entirely.
+      if (
+        ipLimiter &&
+        !ipLimiter.isAllowlisted(ip) &&
+        ipLimiter.getSessionCount(ip) >= ipLimiter.getMax()
+      ) {
+        const currentCount = ipLimiter.getSessionCount(ip);
+        const limit = ipLimiter.getMax();
+        const retryAfterSeconds = retryAfterSecondsFromTtl();
+        console.warn(
+          `[mcp] IP rate limit exceeded for ${ip} (${currentCount}/${limit}), rejecting /mcp init with JSON-RPC error`,
+        );
+        const reqId =
+          (req.body as { id?: string | number | null } | undefined)?.id ?? null;
+        // Header and JSON body flow through the same clampRetryAfterSeconds
+        // call via write429RateLimited so the two values stay in lockstep.
+        // Previously the header took the raw SESSION_TTL-derived seed while
+        // the body was clamped, producing a 1800/300 mismatch.
+        write429RateLimited(res, {
+          id: reqId,
+          limit,
+          currentCount,
+          retryAfterSeconds,
+        });
+        return;
+      }
+
+      // Pre-generate the session ID so we can run the ipLimiter.tryAdd +
+      // workspaceManager.ensureSession work SYNCHRONOUSLY BEFORE
+      // createMcpServer / server.connect / transport.handleRequest. The
+      // previous design ran that work inside the SDK's
+      // `onsessioninitialized` callback — which fires DURING handleRequest
+      // — so an ensureSession throw rolled back inline but the outer
+      // handler had no way to know, kept driving the now-torn-down
+      // transport, and (a) spun up an MCP server instance that immediately
+      // orphaned (finding H4) and (b) let the SDK attempt to write an init
+      // response on a closed transport. With the sid pre-generated here,
+      // `handleSessionInitAccept` returns a boolean and the outer handler
+      // can SKIP createMcpServer + server.connect + handleRequest on
+      // rollback.
+      const preSid = randomUUID();
+      // Flag captured by the onsessioninitialized closure so a race-fallback
+      // triggered ASYNC from inside the SDK (pre-check beat this sid but a
+      // concurrent request from the same IP won the atomic tryAdd — extremely
+      // rare after the pre-check refactor) can still signal the outer
+      // handler. The ensureSession rollback path now runs synchronously
+      // BEFORE handleRequest and sets this directly.
+      const initOutcome: { rejected: boolean } = { rejected: false };
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
+        sessionIdGenerator: () => preSid,
         onsessioninitialized: (sid) => {
+          // Registration moved here intentionally — we can't populate
+          // transports[sid] before the transport object exists, and the SDK
+          // expects the sid-to-transport mapping to be live by the time it
+          // dispatches subsequent messages for this session. tryAdd/
+          // ensureSession already ran synchronously below, so by the time
+          // this callback fires we've either (a) committed to the session
+          // (happy path; just register the maps) or (b) already rolled back
+          // (initOutcome.rejected=true; no-op here — the outer handler
+          // will skip handleRequest).
+          if (initOutcome.rejected) return;
           transports[sid] = transport;
           sessionLastActivity[sid] = Date.now();
-          if (ipLimiter && !ipLimiter.tryAdd(ip, sid)) {
-            // Rate limit exceeded — tear down immediately. Do NOT delete
-            // transports[sid] / sessionLastActivity[sid] inline here:
-            // transport.close() will fire onclose below, and onclose
-            // guards on `if (sid && transports[sid])` — a premature
-            // delete would make that guard false and skip
-            // sessionStateManager.cleanup / workspaceManager?.cleanup
-            // for this sid. Leave state intact so onclose handles it.
-            console.warn(
-              `[mcp] IP rate limit exceeded for ${ip}, closing session ${sid.slice(0, 8)}`,
-            );
-            // transport.close() is async on some transports; log rather
-            // than ignore so a close failure doesn't silently leak.
-            Promise.resolve(transport.close?.()).catch((err) => {
-              console.error(
-                `[mcp] transport close failed for ${sid.slice(0, 8)}:`,
-                err,
-              );
+          // Defensive: this branch is unreachable under Node's
+          // single-threaded execution — the synchronous tryAdd below has
+          // already counted this sid, so `getSessionCount(ip)` can be AT
+          // MOST `getMax()`, never strictly greater. tryAdd itself rejects
+          // at `>= getMax()`, meaning a successful tryAdd guarantees
+          // post-increment <= max. The branch stays as defense-in-depth
+          // against a future refactor that (a) introduces an async boundary
+          // between tryAdd and this callback, or (b) admits a second
+          // concurrent init from the same IP before this fires. `>` (not
+          // `>=`) is required: `>=` would incorrectly fire on the NORMAL
+          // last-allowed session (count exactly at cap after tryAdd) and
+          // reject legitimate traffic.
+          if (
+            ipLimiter &&
+            !ipLimiter.isAllowlisted(ip) &&
+            ipLimiter.getSessionCount(ip) > ipLimiter.getMax()
+          ) {
+            handleSessionInitRaceFallback({
+              transport,
+              sid,
+              ip,
+              transports,
+              sessionLastActivity,
+              limit: ipLimiter.getMax(),
+              currentCount: ipLimiter.getSessionCount(ip),
+              retryAfterSeconds: retryAfterSecondsFromTtl(),
             });
-            return;
+            initOutcome.rejected = true;
           }
-          workspaceManager?.ensureSession(sid);
-          console.log(
-            `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length} active) [${ip}]`,
-          );
         },
       });
+
+      // Synchronous pre-flight: tryAdd the sid to the ipLimiter and
+      // ensureSession on the workspaceManager BEFORE spinning up the MCP
+      // server. Either can reject this init.
+      if (ipLimiter && !ipLimiter.tryAdd(ip, preSid)) {
+        // Atomic tryAdd failed — another concurrent init from the same IP
+        // beat us between the read-only pre-check and this increment.
+        // Delegate to the shared race-fallback helper (inline map delete,
+        // rejected-sid mark, loud log). Because the transport was just
+        // constructed and hasn't been connected, transport.close() is the
+        // only teardown needed.
+        transports[preSid] = transport;
+        sessionLastActivity[preSid] = Date.now();
+        handleSessionInitRaceFallback({
+          transport,
+          sid: preSid,
+          ip,
+          transports,
+          sessionLastActivity,
+          limit: ipLimiter.getMax(),
+          currentCount: ipLimiter.getSessionCount(ip),
+          retryAfterSeconds: retryAfterSecondsFromTtl(),
+        });
+        // Write the structured 429 inline here — the race-fallback helper
+        // can't write a body mid-SDK-lifecycle, but pre-connect we still
+        // own the response.
+        if (!res.headersSent) {
+          write429RateLimited(res, {
+            id:
+              (req.body as { id?: string | number | null } | undefined)?.id ??
+              null,
+            limit: ipLimiter.getMax(),
+            currentCount: ipLimiter.getSessionCount(ip),
+            retryAfterSeconds: retryAfterSecondsFromTtl(),
+          });
+        }
+        // The race-fallback + accept-rollback helpers intentionally seed
+        // rejectedSids so that IF `transport.onclose` were wired, it would
+        // suppress double-cleanup. But we early-return BEFORE wiring onclose
+        // on this path, so nothing will ever consume the marker. Drain it
+        // here to keep the Set bounded under rate-limit hammering.
+        drainRejectedSidForInlineRollback(preSid);
+        return;
+      }
+      // Register maps now so handleSessionInitAccept's rollback has
+      // something to delete + sessionStateManager cleanup runs against a
+      // live entry.
+      transports[preSid] = transport;
+      sessionLastActivity[preSid] = Date.now();
+      const accepted = handleSessionInitAccept({
+        transport,
+        sid: preSid,
+        ip,
+        transports,
+        sessionLastActivity,
+        ipLimiter,
+        workspaceManager,
+        sessionStateManager,
+        res,
+      });
+      if (!accepted) {
+        // Rollback already tore down the transport + wrote the 503 body (if
+        // headers weren't sent yet). Skip createMcpServer / server.connect /
+        // transport.handleRequest entirely — the transport is closed and
+        // creating an MCP server for it would immediately orphan. Drain the
+        // rejected-sid marker here for the same reason documented in the
+        // tryAdd-fail early return above: onclose never gets wired on this
+        // path, so the Set would otherwise leak forever.
+        drainRejectedSidForInlineRollback(preSid);
+        return;
+      }
       transport.onclose = () => {
         const sid = transport.sessionId;
-        if (sid && transports[sid]) {
-          delete transports[sid];
-          delete sessionLastActivity[sid];
-          // Per-operation try/catch so a throw from one cleanup step
-          // doesn't skip the others — this mirrors the reaper tick above
-          // and prevents ipLimiter / workspace state from drifting when
-          // sessionStateManager.cleanup throws (the original failure mode
-          // leaked IP-limiter counters, eventually rejecting new sessions
-          // from that IP).
-          try {
-            sessionStateManager.cleanup(sid);
-          } catch (e) {
-            console.error(
-              `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
-              e,
-            );
-          }
-          try {
-            ipLimiter?.remove(sid);
-          } catch (e) {
-            console.error(`[mcp] IP limiter cleanup failed:`, e);
-          }
-          try {
-            workspaceManager?.cleanup(sid);
-          } catch (e) {
-            console.error(
-              `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
-              e,
-            );
-          }
+        if (!sid) return;
+        // Rejected-sid suppression (R3 #3 / H1): if the race-fallback or the
+        // ensureSession rollback already tore this session down inline, the
+        // cleanup chain + counters are already consistent. Running the chain
+        // again here would (a) emit a misleading "Session closed" log for a
+        // session that was never opened, and (b) risk double-cleanup on
+        // sessionStateManager/workspaceManager. Drain the marker here so the
+        // Set doesn't grow unbounded.
+        if (rejectedSids.has(sid)) {
+          rejectedSids.delete(sid);
           console.log(
-            `[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`,
+            `[mcp] Session ${sid.slice(0, 8)} rejected, cleanup skipped (already torn down inline)`,
+          );
+          return;
+        }
+        // Tolerate already-deleted entries: a benign race between a client
+        // disconnect and the reaper can leave an entry missing from the
+        // map. Run the cleanup chain regardless so ipLimiter/workspace
+        // state for this sid is released.
+        delete transports[sid];
+        delete sessionLastActivity[sid];
+        // Per-operation try/catch so a throw from one cleanup step
+        // doesn't skip the others — this mirrors the reaper tick above
+        // and prevents ipLimiter / workspace state from drifting when
+        // sessionStateManager.cleanup throws (the original failure mode
+        // leaked IP-limiter counters, eventually rejecting new sessions
+        // from that IP).
+        try {
+          sessionStateManager.cleanup(sid);
+        } catch (e) {
+          console.error(
+            `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
+            e,
           );
         }
+        try {
+          ipLimiter?.remove(sid);
+        } catch (e) {
+          console.error(`[mcp] IP limiter cleanup failed:`, e);
+        }
+        try {
+          workspaceManager?.cleanup(sid);
+        } catch (e) {
+          console.error(
+            `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
+            e,
+          );
+        }
+        console.log(
+          `[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`,
+        );
       };
       const server = createMcpServer(
         bashInstances,
@@ -481,7 +1223,19 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         workspaceManager,
       );
       await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
+      // completeInitRequestSafely swallows throws from handleRequest when
+      // onsessioninitialized's defensive race-fallback closed the transport
+      // mid-flight (initOutcome.rejected=true). The fallback already handled
+      // the response lifecycle; a naked await here would bubble the closed-
+      // transport throw into the outer catch-all and produce a 500 write on
+      // top of the 429 the fallback already streamed.
+      await completeInitRequestSafely(
+        transport,
+        req,
+        res,
+        req.body,
+        initOutcome,
+      );
       return;
     }
 
@@ -511,30 +1265,66 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
 // Returns 405 when no valid session — the SDK interprets this as
 // "server doesn't offer SSE at GET" which is the expected no-auth path.
 // Returning 400 instead would cause the SDK to throw and trigger auth flow.
+//
+// Intentionally NOT wrapped in `bearerMiddleware`. An unauthenticated
+// client that probes GET /mcp without a Mcp-Session-Id expects a
+// protocol-level 405 (Method Not Allowed); a 401 from bearer-auth would
+// cause the MCP SDK to kick off its auth dance against the wrong endpoint.
+// Authenticated GETs are gated by the Mcp-Session-Id — a session-scoped
+// secret already established through the bearer-gated POST /mcp path, so
+// there's no auth regression from skipping the middleware here.
 app.get("/mcp", async (req: Request, res: Response) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  if (sessionId && transports[sessionId]) {
-    await transports[sessionId].handleRequest(req, res);
-  } else {
-    res.status(405).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Method Not Allowed" },
-      id: null,
-    });
+  // Mirror POST /mcp's outer try/catch so a throw from handleRequest (stream
+  // teardown mid-flight, transport bug) lands in a structured 500 rather
+  // than escaping to Express's default error handler.
+  try {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (sessionId && transports[sessionId]) {
+      await transports[sessionId].handleRequest(req, res);
+    } else {
+      res.status(405).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Method Not Allowed" },
+        id: null,
+      });
+    }
+  } catch (error) {
+    console.error("[MCP] Error handling GET request:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal server error" },
+        id: null,
+      });
+    }
   }
 });
 
 // Session termination
 app.delete("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  if (sessionId && transports[sessionId]) {
-    await transports[sessionId].handleRequest(req, res);
-  } else {
-    res.status(400).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Invalid or missing session ID" },
-      id: null,
-    });
+  // Mirror POST /mcp's outer try/catch — transport.handleRequest can throw
+  // during teardown (closed stream, partial write) and we'd rather surface a
+  // structured 500 than leak the throw.
+  try {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (sessionId && transports[sessionId]) {
+      await transports[sessionId].handleRequest(req, res);
+    } else {
+      res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Invalid or missing session ID" },
+        id: null,
+      });
+    }
+  } catch (error) {
+    console.error("[MCP] Error handling DELETE request:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal server error" },
+        id: null,
+      });
+    }
   }
 });
 
@@ -551,6 +1341,11 @@ const sseHandlers = createSseHandlers({
   sessionLastActivity,
   ipLimiter: () => ipLimiter,
   workspaceManager: () => workspaceManager,
+  // Late-bound via getter: trustProxy is resolved inside startServer() from
+  // the loaded config, after this handler factory has already been invoked
+  // at module-load time.
+  trustProxy: () => trustProxy,
+  rateLimitRetryAfterSeconds: () => retryAfterSecondsFromTtl(),
   createMcpServer: () => {
     let transportRef: SSEServerTransport | undefined;
     // The handler creates the transport first, then calls createMcpServer()
@@ -763,16 +1558,57 @@ export function __resetAnalyticsTokenForTesting(): void {
   autoGeneratedAnalyticsToken = null;
 }
 
-const LOCALHOST_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-
 /**
  * Return true if the request originated from a loopback interface. Trusts
  * ONLY `req.socket.remoteAddress` (not `X-Forwarded-For` — that's client-
  * controlled and would let anyone forge "I'm localhost").
+ *
+ * Node's dual-stack sockets can report loopback in several forms:
+ * - `127.0.0.1` (IPv4)
+ * - `::1` (IPv6 loopback)
+ * - `::ffff:127.0.0.1` (IPv4-mapped IPv6, common)
+ * - `0:0:0:0:0:ffff:127.0.0.1` (same, unnormalized expanded form — seen in
+ *   some test harnesses and older runtimes)
+ *
+ * Rather than hardcode every textual form, we parse the address via
+ * ipaddr.js and compare against the canonical loopback ranges. Unparseable
+ * addresses (empty string, "unknown", etc.) return false so a malformed
+ * remote never accidentally counts as localhost.
  */
+// 127.0.0.0/8 base address used by isLocalhostReq's IPv4 loopback match.
+// Hoisted to a module-level constant so the per-request path doesn't re-parse
+// the same literal on every call (cheap individually, but /mcp can receive
+// it thousands of times/sec under load).
+const LOOPBACK_IPV4_BASE = ipaddr.IPv4.parse("127.0.0.0");
+
 function isLocalhostReq(req: Request): boolean {
+  // Fail-closed when the server trusts forwarded headers. With
+  // `trust_proxy=true` AND NODE_ENV=development AND a local reverse proxy
+  // (Docker sidecar, ngrok, localhost tunnel, k8s sidecar), every request's
+  // socket peer is 127.0.0.1 — so the dev bypass would effectively
+  // unauthenticate analytics for the entire public internet. We refuse the
+  // dev bypass entirely in that combo; operators who need it should drop
+  // trust_proxy or bind the dev server directly without a fronting proxy.
+  // A startup WARN is emitted from startServer() when both flags are set so
+  // this behavior isn't silent.
+  if (trustProxy) return false;
   const addr = req.socket?.remoteAddress ?? "";
-  return LOCALHOST_IPS.has(addr);
+  if (!addr) return false;
+  try {
+    let parsed = ipaddr.parse(addr);
+    if (parsed.kind() === "ipv6") {
+      const v6 = parsed as ipaddr.IPv6;
+      if (v6.isIPv4MappedAddress()) parsed = v6.toIPv4Address();
+    }
+    if (parsed.kind() === "ipv4") {
+      // 127.0.0.0/8 is the IPv4 loopback range.
+      return (parsed as ipaddr.IPv4).match([LOOPBACK_IPV4_BASE, 8]);
+    }
+    // IPv6 loopback is exactly ::1.
+    return (parsed as ipaddr.IPv6).toNormalizedString() === "0:0:0:0:0:0:0:1";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -872,6 +1708,17 @@ export function analyticsAuth(
     return;
   }
 
+  // Message is conditional on nodeEnv so non-prod operators don't get a
+  // misleading "requires ANALYTICS_TOKEN in production" hint when the root
+  // cause is something else (e.g. a downstream config-read failure). The
+  // production copy still surfaces the concrete remediation step.
+  const prodTokenMsg =
+    "Analytics requires ANALYTICS_TOKEN in production (env var or analytics.token in config).";
+  const nonProdTokenMsg =
+    "Analytics token unavailable — check analytics config / logs.";
+  const tokenDescription =
+    config.nodeEnv === "production" ? prodTokenMsg : nonProdTokenMsg;
+
   let token: string | undefined;
   try {
     token = getAnalyticsToken();
@@ -881,8 +1728,7 @@ export function analyticsAuth(
     );
     res.status(503).json({
       error: "misconfigured",
-      error_description:
-        "Analytics requires ANALYTICS_TOKEN in production (env var or analytics.token in config).",
+      error_description: tokenDescription,
     });
     return;
   }
@@ -893,8 +1739,7 @@ export function analyticsAuth(
     console.error("[analytics] auth misconfigured: no token available");
     res.status(503).json({
       error: "misconfigured",
-      error_description:
-        "Analytics requires ANALYTICS_TOKEN in production (env var or analytics.token in config).",
+      error_description: tokenDescription,
     });
     return;
   }
@@ -1421,10 +2266,55 @@ export async function startServer(options?: ServerOptions): Promise<void> {
 
   const port = options?.port ?? cfg.port;
 
+  // Configure proxy trust BEFORE anything reads req.ip. When enabled,
+  // Express walks X-Forwarded-For and populates req.ip; when disabled,
+  // XFF is ignored entirely (see src/ip-util.ts for the security rationale
+  // — a blindly-trusted XFF lets any client claim an allowlisted IP and
+  // bypass the per-IP session limiter).
+  //
+  // Security semantics of `app.set("trust proxy", true)`:
+  //   Express's `trust proxy = true` does NOT set a hop count. It means
+  //   Express trusts EVERY address in the X-Forwarded-For chain and uses
+  //   the leftmost (client-supplied, potentially spoofable) entry as
+  //   `req.ip`. This is ONLY safe when the fronting reverse proxy
+  //   discards any client-supplied XFF header and sets its own trusted
+  //   value before the request reaches us. See the cautionary warning in
+  //   pathfinder.example.yaml next to `server.trust_proxy` and the Express
+  //   "trust proxy" docs (https://expressjs.com/en/guide/behind-proxies.html).
+  //   For tighter single-hop deployments, set a numeric hop count
+  //   (e.g. `app.set('trust proxy', 1)`) instead.
+  //
+  // We ALWAYS call app.set here (both branches) so a re-entry with a
+  // flipped config value doesn't leave Express's internal state stuck on
+  // the previous value — the module-level `trustProxy` var and Express
+  // must agree, always.
+  trustProxy = serverCfg.server.trust_proxy ?? false;
+  app.set("trust proxy", trustProxy);
+  if (trustProxy) {
+    console.log(
+      "[startup] trust_proxy=true — honoring X-Forwarded-For (reverse proxy must strip/rewrite this header)",
+    );
+    if (cfg.nodeEnv === "development") {
+      // Dev bypass and trust_proxy=true is an unsupported combination:
+      // isLocalhostReq fails closed so the dev bypass is effectively
+      // disabled, but operators should know the combo doesn't behave like
+      // either flag would alone.
+      console.warn(
+        "[startup] trust_proxy=true + NODE_ENV=development is unsupported — analytics dev bypass is DISABLED to prevent exposing the dashboard via a fronting proxy",
+      );
+    }
+  }
+
   // Configure session TTL and IP rate limiter from config
   const maxSessionsPerIp = serverCfg.server.max_sessions_per_ip ?? 20;
   SESSION_TTL_MS = (serverCfg.server.session_ttl_minutes ?? 30) * 60 * 1000;
-  ipLimiter = new IpSessionLimiter(maxSessionsPerIp);
+  const allowlist = serverCfg.server.allowlist ?? [];
+  ipLimiter = new IpSessionLimiter(maxSessionsPerIp, { allowlist });
+  if (allowlist.length > 0) {
+    console.log(
+      `[startup] IP allowlist: ${allowlist.length} entr${allowlist.length === 1 ? "y" : "ies"} (bypasses session cap)`,
+    );
+  }
 
   // Start the idle-session reaper. Running it from here (rather than at
   // module import) keeps test imports free of leaked timers.
@@ -1562,6 +2452,12 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     console.log(`[health] http://localhost:${port}/health`);
   });
   server.on("error", (err: NodeJS.ErrnoException) => {
+    // Bypassing the graceful shutdown path on a server-level error (previously
+    // `process.exit(1)` inline) left telemetry unflushed, open transports
+    // abandoned, and the DB pool not closed. Route through the existing
+    // `shutdown` helper so the teardown sequence is consistent with
+    // SIGINT/SIGTERM. `shutdown` is hoisted below (function declaration, not
+    // a const) so the forward reference resolves.
     if (err.code === "EADDRINUSE") {
       console.error(
         `[startup] Port ${port} is already in use. Set PORT env var to use a different port.`,
@@ -1569,7 +2465,12 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     } else {
       console.error(`[startup] Server error:`, err);
     }
-    process.exit(1);
+    // shutdown() calls process.exit(0) on completion; wrap in catch so a
+    // shutdown failure still terminates the process instead of hanging.
+    shutdown(`server-error:${err.code ?? "unknown"}`).catch((shutdownErr) => {
+      console.error("[startup] shutdown-on-error failed:", shutdownErr);
+      process.exit(1);
+    });
   });
 
   // -------------------------------------------------------------------
@@ -1597,24 +2498,17 @@ export async function startServer(options?: ServerOptions): Promise<void> {
     } catch (e) {
       console.error("[shutdown] Telemetry flush failed:", e);
     }
-    // Close all open SSE transports so hanging streams don't block exit.
-    // Run closes in parallel via Promise.allSettled: with serial `await`,
-    // one slow stream stalls every subsequent close and can push shutdown
-    // past the orchestrator's kill-deadline. allSettled also guarantees
-    // every transport is attempted even if earlier ones reject.
-    const sids = Object.keys(sseTransports);
-    const closeResults = await Promise.allSettled(
-      sids.map((sid) => sseTransports[sid].close()),
-    );
-    closeResults.forEach((result, i) => {
-      if (result.status === "rejected") {
-        console.error(
-          `[shutdown] SSE transport close failed for ${sids[i].slice(0, 8)}:`,
-          result.reason,
-        );
-      }
-      delete sseTransports[sids[i]];
-    });
+    // Close all open transports (both Streamable-HTTP and legacy SSE) so
+    // hanging streams don't block exit. Pre-R2 this loop only iterated
+    // `sseTransports`, leaving Streamable-HTTP sessions open past shutdown.
+    // closeAllSessions runs each map's closes in parallel via
+    // Promise.allSettled so one slow/rejecting stream doesn't stall the
+    // rest past the orchestrator's kill-deadline.
+    try {
+      await closeAllSessions({ transports, sseTransports });
+    } catch (e) {
+      console.error("[shutdown] closeAllSessions threw:", e);
+    }
     try {
       workspaceManager?.cleanupAll();
     } catch (e) {
