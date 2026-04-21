@@ -612,11 +612,15 @@ export async function cleanupOldQueryLogs(
   // against `cleanupOldQueryLogs(0)` which would otherwise translate to
   // `created_at <= NOW() - 0 days` and delete the entire table. NaN and
   // negatives are rejected for the same reason.
+  //
+  // Throws rather than returning 0 so a misconfigured retention surfaces
+  // loudly in the scheduler's .catch() handler instead of being silently
+  // no-op'd on every nightly run. The caller (orchestrator.ts) already
+  // has a .catch that logs — this just makes sure the log happens.
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
-    console.warn(
-      `[analytics] cleanupOldQueryLogs: invalid retentionDays=${retentionDays}, skipping`,
+    throw new Error(
+      `[analytics] cleanupOldQueryLogs: invalid retentionDays=${retentionDays} (must be a positive finite number)`,
     );
-    return 0;
   }
   const pool = getPool();
   // Use `<=` here so the partition is complete vs. the rolling-window reads
