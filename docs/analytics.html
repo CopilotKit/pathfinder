@@ -1414,12 +1414,15 @@
           topBody.innerHTML =
             asArray(topQueries)
               .map(function (q) {
-                var avgRes =
-                  q.avg_result_count != null
-                    ? q.avg_result_count.toFixed(1)
-                    : "-";
-                var avgScore =
-                  q.avg_top_score != null ? q.avg_top_score.toFixed(2) : "-";
+                // Guard with Number.isFinite so a stray NaN / non-finite
+                // value from the backend doesn't render a literal "NaN" in
+                // the table. Matches the backend guard in getTopQueries.
+                var avgRes = Number.isFinite(q.avg_result_count)
+                  ? q.avg_result_count.toFixed(1)
+                  : "\u2014";
+                var avgScore = Number.isFinite(q.avg_top_score)
+                  ? q.avg_top_score.toFixed(2)
+                  : "\u2014";
                 return (
                   "<tr><td>" +
                   esc(q.query_text) +

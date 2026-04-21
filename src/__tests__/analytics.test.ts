@@ -82,19 +82,31 @@ describe("logQuery", () => {
 // ---------------------------------------------------------------------------
 
 describe("logQuery error handling", () => {
-  it("propagates DB connection error to caller", async () => {
+  it("swallows DB errors so telemetry failures never break tool callers", async () => {
+    // Telemetry is best-effort. A failing pool.query must not propagate to
+    // the caller — otherwise an analytics outage would take down every
+    // tool call. We log with [analytics] prefix and resolve normally.
+    const consoleSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
     mockQuery.mockRejectedValueOnce(new Error("connection refused"));
     await expect(
       logQuery({
-        tool_name: "search",
+        tool_name: "search-docs",
         query_text: "test",
         result_count: 0,
         top_score: null,
         latency_ms: 10,
-        source_name: null,
+        source_name: "docs",
         session_id: null,
       }),
-    ).rejects.toThrow("connection refused");
+    ).resolves.toBeUndefined();
+    // Must include the [analytics] prefix and context (tool_name, source_name).
+    const logged = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logged).toContain("[analytics]");
+    expect(logged).toContain("search-docs");
+    expect(logged).toContain("docs");
+    consoleSpy.mockRestore();
   });
 });
 
@@ -397,9 +409,52 @@ describe("cleanupOldQueryLogs", () => {
 // ---------------------------------------------------------------------------
 
 describe("cleanupOldQueryLogs error handling", () => {
-  it("propagates DB error to caller", async () => {
+  it("propagates DB error to caller (after logging)", async () => {
+    // Scheduler catches the throw; we just verify it still propagates
+    // rather than being swallowed like logQuery. Suppress the error log
+    // so test output stays clean.
+    const consoleSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
     mockQuery.mockRejectedValueOnce(new Error("disk full"));
     await expect(cleanupOldQueryLogs(90)).rejects.toThrow("disk full");
+    const logged = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(logged).toContain("[analytics]");
+    consoleSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cleanupOldQueryLogs input validation
+//
+// Regression guard: cleanupOldQueryLogs(0) would translate to
+// `created_at <= NOW() - 0 days` and wipe the entire table. Same risk with
+// negative values. Both must short-circuit without issuing any DB query.
+// ---------------------------------------------------------------------------
+
+describe("cleanupOldQueryLogs input validation", () => {
+  it("retentionDays=0 returns 0 and does not query the DB", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deleted = await cleanupOldQueryLogs(0);
+    expect(deleted).toBe(0);
+    expect(mockQuery.mock.calls).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+
+  it("retentionDays=-1 returns 0 and does not query the DB", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deleted = await cleanupOldQueryLogs(-1);
+    expect(deleted).toBe(0);
+    expect(mockQuery.mock.calls).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+
+  it("retentionDays=NaN returns 0 and does not query the DB", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deleted = await cleanupOldQueryLogs(NaN);
+    expect(deleted).toBe(0);
+    expect(mockQuery.mock.calls).toHaveLength(0);
+    consoleSpy.mockRestore();
   });
 });
 

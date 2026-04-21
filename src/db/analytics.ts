@@ -75,19 +75,29 @@ export async function logQuery(
 ): Promise<void> {
   const pool = getPool();
   const text = logQueryText ? entry.query_text : "<redacted>";
-  await pool.query(
-    `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id)
+  try {
+    await pool.query(
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [
-      entry.tool_name,
-      text,
-      entry.result_count,
-      entry.top_score,
-      entry.latency_ms,
-      entry.source_name,
-      entry.session_id,
-    ],
-  );
+      [
+        entry.tool_name,
+        text,
+        entry.result_count,
+        entry.top_score,
+        entry.latency_ms,
+        entry.source_name,
+        entry.session_id,
+      ],
+    );
+  } catch (err) {
+    // Telemetry failures must never break tool callers. Swallow the error
+    // after logging with enough context (tool_name + source_name) to
+    // diagnose. The tool result path is the source of truth for the
+    // caller; a missing analytics row is preferable to a failed tool call.
+    console.error(
+      `[analytics] logQuery failed (tool_name=${entry.tool_name} source_name=${entry.source_name ?? "null"}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -346,17 +356,25 @@ export async function getTopQueries(
     [...fp, ...dw.params, limit],
   );
 
-  return rows.map((r: Record<string, unknown>) => ({
-    query_text: r.query_text as string,
-    tool_name: r.tool_name as string,
-    count: r.count as number,
-    avg_result_count:
+  return rows.map((r: Record<string, unknown>) => {
+    // parseFloat can produce NaN for unexpected values. Guard with
+    // Number.isFinite so stat rendering downstream doesn't produce a
+    // literal "NaN" in the Top Queries table.
+    const avgRc =
       r.avg_result_count != null
         ? parseFloat(r.avg_result_count as string)
-        : null,
-    avg_top_score:
-      r.avg_top_score != null ? parseFloat(r.avg_top_score as string) : null,
-  }));
+        : null;
+    const avgTs =
+      r.avg_top_score != null ? parseFloat(r.avg_top_score as string) : null;
+    return {
+      query_text: r.query_text as string,
+      tool_name: r.tool_name as string,
+      count: r.count as number,
+      avg_result_count:
+        avgRc != null && Number.isFinite(avgRc) ? avgRc : null,
+      avg_top_score: avgTs != null && Number.isFinite(avgTs) ? avgTs : null,
+    };
+  });
 }
 
 /**
@@ -465,15 +483,38 @@ export async function getToolCounts(
 export async function cleanupOldQueryLogs(
   retentionDays: number,
 ): Promise<number> {
+  // Hard-reject non-positive or non-finite retention. Crucially guards
+  // against `cleanupOldQueryLogs(0)` which would otherwise translate to
+  // `created_at <= NOW() - 0 days` and delete the entire table. NaN and
+  // negatives are rejected for the same reason.
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    console.warn(
+      `[analytics] cleanupOldQueryLogs: invalid retentionDays=${retentionDays}, skipping`,
+    );
+    return 0;
+  }
   const pool = getPool();
   // Use `<=` here so the partition is complete vs. the rolling-window reads
   // (which use `created_at > NOW() - INTERVAL`). With strict `<`, rows sitting
   // exactly at the retention edge would be visible to reads but not cleaned
   // up by retention. `<=` is the safer choice — we'd rather delete an extra
   // row at the boundary than leak rows past the retention window.
-  const result = await pool.query(
-    `DELETE FROM query_log WHERE created_at <= NOW() - INTERVAL '1 day' * $1`,
-    [retentionDays],
-  );
-  return result.rowCount ?? 0;
+  try {
+    const result = await pool.query(
+      `DELETE FROM query_log WHERE created_at <= NOW() - INTERVAL '1 day' * $1`,
+      [retentionDays],
+    );
+    const rowCount = result.rowCount ?? 0;
+    console.log(
+      `[analytics] cleanupOldQueryLogs: deleted ${rowCount} rows older than ${retentionDays} days`,
+    );
+    return rowCount;
+  } catch (err) {
+    // Log with [analytics] prefix before rethrowing — callers (the
+    // scheduler) handle the error but should always have a log line.
+    console.error(
+      `[analytics] cleanupOldQueryLogs failed (retentionDays=${retentionDays}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    throw err;
+  }
 }
