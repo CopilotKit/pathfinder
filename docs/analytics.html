@@ -862,7 +862,11 @@
           var raw = await res
             .clone()
             .text()
-            .catch(function () {
+            .catch(function (textErr) {
+              console.error(
+                "[analytics] error body text() read failed",
+                textErr,
+              );
               return "";
             });
           var body = {};
