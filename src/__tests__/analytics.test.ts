@@ -600,17 +600,23 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
       .mockResolvedValueOnce({ rows: [] });
   }
 
-  it("emits LIMIT on the latency ORDER BY and binds P95_LATENCY_ROW_CAP", async () => {
+  it("emits ORDER BY random() LIMIT on the latency subquery and binds P95_LATENCY_ROW_CAP", async () => {
     // PGlite can't percentile_cont; we sort in JS. "All time" (days=99999)
     // on a busy install would otherwise load every latency row into memory.
     // The LIMIT caps the sample so memory stays bounded; the cap value is
     // bound rather than inlined so there's one source of truth.
+    //
+    // Random sampling matters: ORDER BY latency_ms LIMIT N would take the
+    // smallest N latencies, systematically under-reporting p95. ORDER BY
+    // random() gives an unbiased sample so the p95 estimate stays accurate
+    // even when the cap is hit.
     mockSummaryQueries();
     await getAnalyticsSummary({});
 
     // Index 2 is the latency query (0=total, 1=summary, 2=latency, 3=by-source, 4=per-day).
     const [sql, params] = mockQuery.mock.calls[2];
-    expect(sql).toMatch(/ORDER BY latency_ms LIMIT \$\d+/);
+    expect(sql).toMatch(/ORDER BY random\(\)/);
+    expect(sql).toMatch(/LIMIT \$\d+/);
     expect(params).toContain(P95_LATENCY_ROW_CAP);
   });
 

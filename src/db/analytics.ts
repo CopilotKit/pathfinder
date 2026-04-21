@@ -17,8 +17,14 @@ export const REDACTED_QUERY_TEXT = "<redacted>";
  * doesn't support `percentile_cont`, so we pull latencies to JS and sort
  * them; on "All time" (days=99999) with a busy install this would be
  * unbounded. 100k rows is a safe ceiling (~0.8 MB for int latencies) and
- * preserves correctness for any realistic dataset. When the LIMIT is hit
- * we log a warning so the operator knows the reading is sampled.
+ * preserves correctness for any realistic dataset.
+ *
+ * Sampling strategy: when the number of matching rows exceeds the cap, we
+ * take a RANDOM sample (ORDER BY random()) rather than the smallest N
+ * latencies. An ordered-by-latency LIMIT would systematically chop off the
+ * tail and under-report p95; random sampling gives an unbiased estimate.
+ * When the LIMIT is hit we log a warning so the operator knows the reading
+ * is sampled.
  */
 export const P95_LATENCY_ROW_CAP = 100000;
 
@@ -292,15 +298,18 @@ export async function getAnalyticsSummary(
 
   // Latencies for p95 (exclude backfilled rows where latency_ms < 0).
   // Capped at P95_LATENCY_ROW_CAP so "All time" on a busy install doesn't
-  // load an unbounded result into JS. When the cap is hit we log a warn so
-  // the reading is known to be sampled rather than exact.
+  // load an unbounded result into JS. We use ORDER BY random() so the cap
+  // takes an unbiased random sample instead of the smallest N latencies
+  // (ORDER BY latency_ms LIMIT N would systematically chop off the tail
+  // and under-report p95). When the cap is hit we log a warn so the
+  // reading is known to be sampled rather than exact.
   const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
   const dw3 = buildDateWindow(filter, days, n3);
   const latencyBase = [...dw3.clauses, "latency_ms >= 0"];
   const latencyWhere = whereAnd(latencyBase, fc3);
   const latencyLimitIdx = dw3.nextIdx;
   const latencyRes = await pool.query(
-    `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY latency_ms LIMIT $${latencyLimitIdx}`,
+    `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY random() LIMIT $${latencyLimitIdx}`,
     [...fp3, ...dw3.params, P95_LATENCY_ROW_CAP],
   );
   if (latencyRes.rows.length >= P95_LATENCY_ROW_CAP) {
