@@ -960,13 +960,24 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
     }
     // Parse as UTC start-of-day / end-of-day so the inclusive range
     // covers both endpoints regardless of client time zone.
-    //
-    // No explicit isNaN check here: the YYYY-MM-DD regex above already
-    // ensures fromRaw/toRaw are well-formed, and the roundtrip check below
-    // catches any calendar-invalid date (Feb 30 etc.) that `new Date()`
-    // silently rolls forward.
     const from = new Date(fromRaw + "T00:00:00.000Z");
     const to = new Date(toRaw + "T23:59:59.999Z");
+    // The regex only checks shape — it accepts calendar-nonsense like
+    // 2025-13-01 or 2025-04-00 which `new Date()` turns into Invalid Date.
+    // Calling `.toISOString()` on an Invalid Date throws RangeError and
+    // escapes this parser as a 500. Guard before the roundtrip check so
+    // both "invalid month/day" and "silent rollover" (Feb 30 -> Mar 2)
+    // return a clean 400.
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: "from/to must be a valid calendar date",
+        },
+      };
+    }
     // Reject calendar-invalid dates (e.g. 2026-02-30 which `new Date()`
     // silently rolls forward to March 2). Re-serialize the parsed Date back
     // to YYYY-MM-DD in UTC and require it to match the original input.
