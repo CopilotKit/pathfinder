@@ -76,8 +76,11 @@ export interface AnalyticsFilter {
    * underlying queries filter on `created_at >= from AND created_at <= to`
    * instead of the default `NOW() - INTERVAL '<days> days'` window.
    *
-   * Callers should ensure both are provided together; endpoints reject
-   * half-specified ranges before they reach the DB layer.
+   * Callers should ensure both are provided together. Endpoints reject
+   * half-specified ranges, calendar-invalid dates (e.g. Feb 30),
+   * array-shape parameters (Express multi-value), and ranges wider than
+   * MAX_DAYS before they reach the DB layer; direct callers (tests,
+   * future internal consumers) must replicate those guards.
    */
   from?: Date;
   to?: Date;
@@ -214,6 +217,10 @@ function buildDateWindow(
  * Compute p95 latency in application code instead of SQL.
  * PGlite does NOT support percentile_cont(), so we fetch all latencies
  * and compute the percentile in JS.
+ *
+ * Uses nearest-rank (index = floor(n * 0.95)), not linear interpolation —
+ * results may differ by one sample from Postgres' `percentile_cont(0.95)`
+ * query.
  */
 function computeP95(latencies: number[]): number {
   if (latencies.length === 0) return 0;

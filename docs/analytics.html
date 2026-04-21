@@ -668,7 +668,7 @@
       // --- State ---
       var activeToolType = null; // null = "All"
       var activeSource = null; // null = "All Sources"
-      var activeDaysBack = 7; // number of days for preset window (null when using custom range)
+      var activeDaysBack = 7; // rolling-window size in days; null whenever explicit from/to is active (Today preset or Custom range)
       var activeFrom = null; // YYYY-MM-DD string or null
       var activeTo = null; // YYYY-MM-DD string or null
       var dailyChartInstance = null;
