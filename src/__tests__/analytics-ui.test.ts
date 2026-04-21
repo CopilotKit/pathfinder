@@ -1418,3 +1418,67 @@ describe("analytics dashboard UI — custom-range invalid input", () => {
     // not part of the Apply-handler contract.)
   });
 });
+
+// ---------------------------------------------------------------------------
+// p95 sampled-ness rendering
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — p95 sampled badge", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders a '(sampled)' suffix and '~' prefix when summary.p95_latency_sampled is true", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        total_queries: 1000,
+        total_queries_window: 500,
+        empty_result_rate_window: 0,
+        empty_result_count_window: 0,
+        avg_latency_ms_window: 100,
+        p95_latency_ms_window: 250,
+        p95_latency_sampled: true,
+        queries_per_day_window: [],
+        queries_by_source: [],
+      }),
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    // Approximate prefix on the numeric value
+    expect(statsHtml).toContain("~250ms");
+    // "(sampled)" badge on the P95 card label
+    expect(statsHtml).toMatch(/P95 Latency[^<]*\(sampled\)/);
+  });
+
+  it("omits sampled indicators when the flag is absent", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        total_queries: 1000,
+        total_queries_window: 500,
+        empty_result_rate_window: 0,
+        empty_result_count_window: 0,
+        avg_latency_ms_window: 100,
+        p95_latency_ms_window: 250,
+        queries_per_day_window: [],
+        queries_by_source: [],
+      }),
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+
+    const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
+    expect(statsHtml).toContain("250ms");
+    expect(statsHtml).not.toContain("~250ms");
+    expect(statsHtml).not.toContain("(sampled)");
+  });
+});

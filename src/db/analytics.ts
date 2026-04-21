@@ -49,6 +49,14 @@ export interface AnalyticsSummary {
   empty_result_rate_window: number;
   avg_latency_ms_window: number;
   p95_latency_ms_window: number;
+  /**
+   * True when the p95 latency was computed over a random sample capped at
+   * {@link P95_LATENCY_ROW_CAP} rows rather than the full population. The
+   * UI surfaces this as a "(sampled)" badge so operators know the reading
+   * is approximate. Only set when the cap was actually hit; otherwise
+   * omitted so existing consumers can treat absence as "exact".
+   */
+  p95_latency_sampled?: boolean;
   queries_by_source: Array<{ source_name: string; count: number }>;
   queries_per_day_window: Array<{ day: string; count: number }>;
 }
@@ -329,7 +337,8 @@ export async function getAnalyticsSummary(
     `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY random() LIMIT $${latencyLimitIdx}`,
     [...fp3, ...dw3.params, REDACTED_QUERY_TEXT, P95_LATENCY_ROW_CAP],
   );
-  if (latencyRes.rows.length >= P95_LATENCY_ROW_CAP) {
+  const p95Sampled = latencyRes.rows.length >= P95_LATENCY_ROW_CAP;
+  if (p95Sampled) {
     console.warn(
       `[analytics] getAnalyticsSummary: p95 latency sample capped at ${P95_LATENCY_ROW_CAP} rows; result may be approximate`,
     );
@@ -394,6 +403,9 @@ export async function getAnalyticsSummary(
     empty_result_rate_window: totalWindow > 0 ? emptyWindow / totalWindow : 0,
     avg_latency_ms_window: s.avg_latency ?? 0,
     p95_latency_ms_window: p95Latency,
+    // Only set when the cap was actually hit so existing consumers (tests,
+    // older UI builds) can treat the absence of the flag as "exact".
+    ...(p95Sampled ? { p95_latency_sampled: true } : {}),
     queries_by_source: bySourceRes.rows.map((r: Record<string, unknown>) => ({
       source_name: r.source_name as string,
       count: r.count as number,

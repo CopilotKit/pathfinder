@@ -635,11 +635,33 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
-    await getAnalyticsSummary({});
+    const result = await getAnalyticsSummary({});
     const logged = warnSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(logged).toContain("[analytics]");
     expect(logged).toContain("capped");
+    // The cap-hit branch must also surface `p95_latency_sampled: true` on
+    // the response so the UI can render a "(sampled)" badge instead of
+    // implying the value is exact.
+    expect(result.p95_latency_sampled).toBe(true);
     warnSpy.mockRestore();
+  });
+
+  it("omits p95_latency_sampled when the cap is not hit", async () => {
+    // Only a handful of latency rows — well below the cap — so the flag
+    // must be absent (treat absence as "exact" to stay backwards-compatible
+    // with older UI builds).
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, avg_latency: 50 }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ latency_ms: 10 }, { latency_ms: 20 }, { latency_ms: 30 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const result = await getAnalyticsSummary({});
+    expect(result.p95_latency_sampled).toBeUndefined();
   });
 });
 
