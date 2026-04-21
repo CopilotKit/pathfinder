@@ -67,9 +67,17 @@ export async function buildBashFilesMap(
       rootDir = path.resolve(source.path);
     }
     if (!fs.existsSync(rootDir)) {
-      console.warn(
-        `[bash-fs] Source "${source.name}" path does not exist: ${rootDir}`,
-      );
+      // Sources with a `repo` configured are populated asynchronously by the
+      // orchestrator's clone step. On startup the first bash build races ahead
+      // of `checkAndIndex()`, so the rootDir legitimately doesn't exist yet —
+      // suppress the warning to avoid noise. A later refreshBashInstances()
+      // call rebuilds once clones complete. Keep the warning for truly local
+      // sources (no `repo`) where a missing path is a real misconfiguration.
+      if (!source.repo) {
+        console.warn(
+          `[bash-fs] Source "${source.name}" path does not exist: ${rootDir}`,
+        );
+      }
       continue;
     }
 
