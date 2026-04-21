@@ -279,6 +279,56 @@ let SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes default, overridden by config
 let ipLimiter: IpSessionLimiter | undefined;
 let workspaceManager: WorkspaceManager | undefined;
 
+/**
+ * Tear down partial MCP session state when a setup step (most commonly
+ * `workspaceManager.ensureSession`) throws after `onsessioninitialized`
+ * has already registered the transport in `transports[sid]` + bumped the
+ * IP limiter. Without a dedicated cleanup path the session leaks:
+ * `transports[sid]` survives as a ghost that routes to a half-initialized
+ * workspace, and the IP limiter keeps counting it toward the caller's
+ * quota so retries from the same IP eventually hit the per-IP cap on a
+ * session that never actually came up.
+ *
+ * Exported so the test suite can dispatch it with injected state maps and
+ * ipLimiter stubs — the mutating side effects on transports /
+ * sessionLastActivity are the contract, and the test asserts them
+ * directly.
+ */
+export function cleanupPartialMcpSession(
+  sid: string,
+  deps: {
+    transports: Record<string, { close?: () => unknown }>;
+    sessionLastActivity: Record<string, number>;
+    ipLimiter?: { remove(sid: string): void };
+    transport?: { close?: () => unknown };
+    logPrefix?: string;
+  },
+): void {
+  const prefix = deps.logPrefix ?? "mcp";
+  delete deps.transports[sid];
+  delete deps.sessionLastActivity[sid];
+  try {
+    deps.ipLimiter?.remove(sid);
+  } catch (cleanupErr) {
+    console.error(
+      `[${prefix}] ipLimiter cleanup failed for ${sid.slice(0, 8)}:`,
+      cleanupErr,
+    );
+  }
+  // transport.close() is async on some transports — surface failures
+  // rather than swallowing them so a close regression doesn't silently
+  // leak resources.
+  const t = deps.transport;
+  if (t && typeof t.close === "function") {
+    Promise.resolve(t.close()).catch((closeErr) => {
+      console.error(
+        `[${prefix}] transport close failed for ${sid.slice(0, 8)} during partial-session cleanup:`,
+        closeErr,
+      );
+    });
+  }
+}
+
 // Session reaper tick — started from startServer() so importing this module
 // (including from tests) doesn't leak a 5-minute setInterval into the loop.
 function reapIdleSessionsTick(): void {
@@ -430,7 +480,32 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
             });
             return;
           }
-          workspaceManager?.ensureSession(sid);
+          // Wrap ensureSession so a throw (workspace manager failure, disk
+          // error, etc.) doesn't leak a half-initialized session. Without
+          // this, `transports[sid]` and `sessionLastActivity[sid]` have
+          // already been populated above, and the IP-limiter has already
+          // counted this session toward the caller's quota — so a retry
+          // would hit a ghost entry (or be rejected by the IP limiter for
+          // a session that never actually came up).
+          try {
+            workspaceManager?.ensureSession(sid);
+          } catch (err) {
+            console.error(
+              `[mcp] ensureSession failed for ${sid.slice(0, 8)} — tearing down partial session:`,
+              err,
+            );
+            // Delegate to the shared cleanup helper. The onclose handler
+            // below guards on `transports[sid]` being present, so
+            // removing it in cleanupPartialMcpSession also prevents
+            // double-cleanup if transport.close() fires.
+            cleanupPartialMcpSession(sid, {
+              transports,
+              sessionLastActivity,
+              ipLimiter,
+              transport,
+            });
+            return;
+          }
           console.log(
             `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(transports).length} active) [${ip}]`,
           );
