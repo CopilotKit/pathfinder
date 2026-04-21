@@ -1330,8 +1330,19 @@
               value: safeNumber(summary.avg_latency_ms_window) + "ms",
             },
             {
-              label: "P95 Latency (" + winLabel + ")",
-              value: safeNumber(summary.p95_latency_ms_window) + "ms",
+              // When the server had to randomly sample latencies to compute
+              // p95 (row count exceeded P95_LATENCY_ROW_CAP), prepend a '~'
+              // and append a "(sampled)" suffix so operators know the value
+              // is approximate rather than exact.
+              label:
+                "P95 Latency (" +
+                winLabel +
+                ")" +
+                (summary.p95_latency_sampled ? " (sampled)" : ""),
+              value:
+                (summary.p95_latency_sampled ? "~" : "") +
+                safeNumber(summary.p95_latency_ms_window) +
+                "ms",
             },
             {
               label: "Empty Queries (" + winLabel + ")",
