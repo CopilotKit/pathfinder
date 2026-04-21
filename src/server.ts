@@ -410,12 +410,16 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
           transports[sid] = transport;
           sessionLastActivity[sid] = Date.now();
           if (ipLimiter && !ipLimiter.tryAdd(ip, sid)) {
-            // Rate limit exceeded — tear down immediately
+            // Rate limit exceeded — tear down immediately. Do NOT delete
+            // transports[sid] / sessionLastActivity[sid] inline here:
+            // transport.close() will fire onclose below, and onclose
+            // guards on `if (sid && transports[sid])` — a premature
+            // delete would make that guard false and skip
+            // sessionStateManager.cleanup / workspaceManager?.cleanup
+            // for this sid. Leave state intact so onclose handles it.
             console.warn(
               `[mcp] IP rate limit exceeded for ${ip}, closing session ${sid.slice(0, 8)}`,
             );
-            delete transports[sid];
-            delete sessionLastActivity[sid];
             // transport.close() is async on some transports; log rather
             // than ignore so a close failure doesn't silently leak.
             Promise.resolve(transport.close?.()).catch((err) => {
