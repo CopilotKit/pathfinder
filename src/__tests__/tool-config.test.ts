@@ -66,9 +66,9 @@ describe("CollectToolConfigSchema", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       const messages = result.error.issues.map((i) => i.message);
-      expect(
-        messages.some((m) => m.includes("non-empty values array")),
-      ).toBe(true);
+      expect(messages.some((m) => m.includes("non-empty values array"))).toBe(
+        true,
+      );
     }
   });
 

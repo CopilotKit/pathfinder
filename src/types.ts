@@ -35,8 +35,7 @@ import ipaddr from "ipaddr.js";
  * entry matching neither regex is rejected up front.
  */
 // IPv4 / IPv4-CIDR: decimal octet characters and optional /0–/32.
-const ALLOWLIST_IPV4_REGEX =
-  /^[0-9.]+(\/([0-9]|[1-2][0-9]|3[0-2]))?$/;
+const ALLOWLIST_IPV4_REGEX = /^[0-9.]+(\/([0-9]|[1-2][0-9]|3[0-2]))?$/;
 // IPv6 / IPv6-CIDR: hex + colons, optional embedded IPv4 dotted-quad
 // (e.g. ::ffff:127.0.0.1), and optional /0–/128. The alphabet allows `.`
 // specifically for the embedded-v4 suffix form; ipaddr.js then does the real

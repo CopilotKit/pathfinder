@@ -194,12 +194,8 @@ describe("IpSessionLimiter", () => {
     });
 
     it("emits a single loud error when ALL allowlist entries are invalid", () => {
-      const errorSpy = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => {});
-      const warnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         // Two entries, both invalid — per-entry warnings plus one summary error.
         const allow = new IpSessionLimiter(2, {
@@ -218,12 +214,8 @@ describe("IpSessionLimiter", () => {
     });
 
     it("does NOT emit the 'all invalid' error when at least one entry parses", () => {
-      const errorSpy = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => {});
-      const warnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         new IpSessionLimiter(2, {
           allowlist: ["not-an-ip", "10.0.0.0/8"],
@@ -239,9 +231,7 @@ describe("IpSessionLimiter", () => {
     });
 
     it("does NOT emit the 'all invalid' error for an empty allowlist", () => {
-      const errorSpy = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
         new IpSessionLimiter(2, { allowlist: [] });
         const summaryCalls = errorSpy.mock.calls.filter((c: unknown[]) =>
@@ -309,9 +299,7 @@ describe("IpSessionLimiter", () => {
     });
 
     it("tryAdd with a re-used sid from a DIFFERENT IP does not cause counter drift", () => {
-      const warnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         const drift = new IpSessionLimiter(5);
         expect(drift.tryAdd("1.2.3.4", "sid-x")).toBe(true);
@@ -346,12 +334,8 @@ describe("IpSessionLimiter", () => {
     });
 
     it("ESCALATES to console.error when ALL allowlist entries are invalid", () => {
-      const errorSpy = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => {});
-      const warnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         new IpSessionLimiter(2, {
           allowlist: ["not-an-ip", "also-bogus/33", "still-wrong"],
@@ -476,10 +460,7 @@ describe("IpSessionLimiter", () => {
           // Advance time by more than the cooldown per cold IP so each one
           // actually logs and inserts into the LRU map.
           vi.setSystemTime(start + (i + 1) * (cooldownMs + 1));
-          allow.tryAdd(
-            `10.1.${(i >> 8) & 0xff}.${i & 0xff}`,
-            `cold-${i}`,
-          );
+          allow.tryAdd(`10.1.${(i >> 8) & 0xff}.${i & 0xff}`, `cold-${i}`);
 
           // Every N iterations, re-touch the hot IP so true-LRU moves it
           // back to the tail.
@@ -502,9 +483,7 @@ describe("IpSessionLimiter", () => {
 
   describe("CIDR with non-zero host bits", () => {
     it("warns and normalizes 10.0.0.1/24 to the network address 10.0.0.0/24", () => {
-      const warnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         const allow = new IpSessionLimiter(2, {
           // Operator typo / confusion: "10.0.0.1/24" means the whole /24,
@@ -517,10 +496,7 @@ describe("IpSessionLimiter", () => {
         // A warning with identifying detail was emitted.
         const warns = warnSpy.mock.calls.filter((c: unknown[]) => {
           const msg = String(c[0]);
-          return (
-            msg.includes("10.0.0.1/24") &&
-            msg.includes("host bits")
-          );
+          return msg.includes("10.0.0.1/24") && msg.includes("host bits");
         });
         expect(warns.length).toBe(1);
       } finally {
@@ -529,9 +505,7 @@ describe("IpSessionLimiter", () => {
     });
 
     it("accepts properly-formed CIDR without warning", () => {
-      const warnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         new IpSessionLimiter(2, { allowlist: ["10.0.0.0/24"] });
         const hostBitWarns = warnSpy.mock.calls.filter((c: unknown[]) =>

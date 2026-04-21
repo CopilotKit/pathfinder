@@ -17,7 +17,9 @@ function makeReq(opts: {
   if (opts.xff !== undefined) headers["x-forwarded-for"] = opts.xff;
   return {
     ip: opts.ip,
-    socket: { remoteAddress: opts.remoteAddress } as unknown as Request["socket"],
+    socket: {
+      remoteAddress: opts.remoteAddress,
+    } as unknown as Request["socket"],
     headers,
   } as unknown as Request;
 }

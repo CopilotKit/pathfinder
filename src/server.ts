@@ -800,8 +800,7 @@ export function handleSessionInitAccept(opts: {
         jsonrpc: "2.0",
         error: {
           code: -32003,
-          message:
-            "Server unavailable: failed to initialize session workspace",
+          message: "Server unavailable: failed to initialize session workspace",
         },
         id: null,
       });
@@ -836,11 +835,7 @@ export function handleSessionInitAccept(opts: {
  * Exported for tests so the try/catch branching can be covered without a
  * full Express+SDK round trip.
  */
-export async function completeInitRequestSafely<
-  TReq,
-  TRes,
-  TBody,
->(
+export async function completeInitRequestSafely<TReq, TRes, TBody>(
   transport: {
     handleRequest: (req: TReq, res: TRes, body: TBody) => Promise<void>;
   },
@@ -886,7 +881,9 @@ export async function closeAllSessions(opts: {
 
   const streamableSids = Object.keys(tMap);
   const streamableResults = await Promise.allSettled(
-    streamableSids.map((sid) => Promise.resolve().then(() => tMap[sid].close())),
+    streamableSids.map((sid) =>
+      Promise.resolve().then(() => tMap[sid].close()),
+    ),
   );
   streamableResults.forEach((result, i) => {
     const sid = streamableSids[i];

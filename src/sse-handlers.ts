@@ -29,8 +29,9 @@ export interface WorkspaceManagerLike {
 // structural shape. Using a function signature guarantees structural
 // compatibility without needing a cast. If the real class renames or
 // drops one of these methods, this line fails at compile time.
-type _WorkspaceManagerIsLike =
-  WorkspaceManager extends WorkspaceManagerLike ? true : never;
+type _WorkspaceManagerIsLike = WorkspaceManager extends WorkspaceManagerLike
+  ? true
+  : never;
 const _workspaceManagerIsLike: _WorkspaceManagerIsLike = true;
 void _workspaceManagerIsLike;
 
@@ -348,8 +349,7 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         if (!res.headersSent) {
           res.status(503).json({
             error: "workspace_unavailable",
-            reason:
-              "Failed to initialize session workspace. Please try again.",
+            reason: "Failed to initialize session workspace. Please try again.",
           });
         }
         return;
@@ -381,9 +381,7 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       // useful even without a session id to scope to.
       const trustProxy = resolve(deps.trustProxy ?? false) ?? false;
       const ip = clientIp(req, trustProxy);
-      console.warn(
-        `[mcp] /messages 404 reason=missing-session-id ip=${ip}`,
-      );
+      console.warn(`[mcp] /messages 404 reason=missing-session-id ip=${ip}`);
       res.status(404).json({
         error: "Session not found",
         reason: "missing-session-id",

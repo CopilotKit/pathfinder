@@ -97,8 +97,7 @@ function parseAllowlist(entries: AllowlistEntry[]): ParsedAllowlist {
       if (entry.includes("/")) {
         const [addr, rawPrefix] = ipaddr.parseCIDR(entry);
         const wasMapped =
-          addr.kind() === "ipv6" &&
-          (addr as ipaddr.IPv6).isIPv4MappedAddress();
+          addr.kind() === "ipv6" && (addr as ipaddr.IPv6).isIPv4MappedAddress();
         const normalized = normalizeMapped(addr);
         let effectivePrefix = rawPrefix;
         // If we collapsed an IPv4-mapped IPv6 CIDR into IPv4 space, the
@@ -125,8 +124,12 @@ function parseAllowlist(entries: AllowlistEntry[]): ParsedAllowlist {
         let effective: ipaddr.IPv4 | ipaddr.IPv6 = normalized;
         const networkBase =
           normalized.kind() === "ipv4"
-            ? ipaddr.IPv4.networkAddressFromCIDR(`${normalized.toNormalizedString()}/${effectivePrefix}`)
-            : ipaddr.IPv6.networkAddressFromCIDR(`${normalized.toNormalizedString()}/${effectivePrefix}`);
+            ? ipaddr.IPv4.networkAddressFromCIDR(
+                `${normalized.toNormalizedString()}/${effectivePrefix}`,
+              )
+            : ipaddr.IPv6.networkAddressFromCIDR(
+                `${normalized.toNormalizedString()}/${effectivePrefix}`,
+              );
         if (
           normalized.toNormalizedString() !== networkBase.toNormalizedString()
         ) {

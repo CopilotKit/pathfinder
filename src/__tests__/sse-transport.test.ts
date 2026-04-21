@@ -692,10 +692,9 @@ describe("SSE transport hardening (Round 2)", () => {
       sessionLastActivity,
       ttlMs: 5 * 60 * 1000,
       ipLimiter: limiter,
-      workspaceManager:
-        workspaceManager as unknown as Parameters<
-          typeof reapIdleSseSessions
-        >[0]["workspaceManager"],
+      workspaceManager: workspaceManager as unknown as Parameters<
+        typeof reapIdleSseSessions
+      >[0]["workspaceManager"],
     });
 
     expect(reaped).toEqual(["stale-sid"]);
@@ -1304,9 +1303,8 @@ describe("SSE transport hardening (Round 4)", () => {
 
     // Spy on SSEServerTransport.close via prototype — every transport
     // constructed in-handler will share this prototype method.
-    const { SSEServerTransport } = await import(
-      "@modelcontextprotocol/sdk/server/sse.js"
-    );
+    const { SSEServerTransport } =
+      await import("@modelcontextprotocol/sdk/server/sse.js");
     const closeSpy = vi
       .spyOn(SSEServerTransport.prototype, "close")
       .mockImplementation(async function () {
@@ -1356,9 +1354,8 @@ describe("SSE transport hardening (Round 4)", () => {
       remove: vi.fn(),
     } as unknown as IpSessionLimiter;
 
-    const { SSEServerTransport } = await import(
-      "@modelcontextprotocol/sdk/server/sse.js"
-    );
+    const { SSEServerTransport } =
+      await import("@modelcontextprotocol/sdk/server/sse.js");
     const closeSpy = vi
       .spyOn(SSEServerTransport.prototype, "close")
       .mockImplementation(async function () {
@@ -1406,9 +1403,8 @@ describe("SSE transport hardening (Round 4)", () => {
     };
     const sessionStateCleanup = vi.fn();
 
-    const { SSEServerTransport } = await import(
-      "@modelcontextprotocol/sdk/server/sse.js"
-    );
+    const { SSEServerTransport } =
+      await import("@modelcontextprotocol/sdk/server/sse.js");
     const closeSpy = vi
       .spyOn(SSEServerTransport.prototype, "close")
       .mockImplementation(async function () {});

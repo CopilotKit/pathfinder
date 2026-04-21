@@ -336,8 +336,7 @@ describe("handleSessionInitRaceFallback", () => {
 
     const warnCalls = warnSpy.mock.calls.map((c) => String(c[0] ?? ""));
     const logged = warnCalls.find(
-      (m) =>
-        m.includes("race fallback") && m.includes(sid.slice(0, 8)),
+      (m) => m.includes("race fallback") && m.includes(sid.slice(0, 8)),
     );
     expect(logged).toBeDefined();
     // Must carry the CLAMPED value (300), not the pre-clamp 1800. Include
@@ -509,18 +508,14 @@ describe("reapIdleSessionsTick (R3 #1: SSE reaper dep plumbing)", () => {
   it("passes ipLimiter.remove, workspaceManager.cleanup, and sessionStateManager.cleanup into the SSE reaper for each reaped sid", async () => {
     const { reapIdleSessionsTickForTesting } = await import("../server.js");
 
-    const sseTransports: Record<
-      string,
-      { close: () => Promise<void> | void }
-    > = {
-      "sse-stale": {
-        close: async () => {},
-      },
-    };
-    const transports: Record<
-      string,
-      { close: () => Promise<void> | void }
-    > = {};
+    const sseTransports: Record<string, { close: () => Promise<void> | void }> =
+      {
+        "sse-stale": {
+          close: async () => {},
+        },
+      };
+    const transports: Record<string, { close: () => Promise<void> | void }> =
+      {};
     const sessionLastActivity: Record<string, number> = {
       "sse-stale": Date.now() - 10 * 60 * 1000,
     };
@@ -711,8 +706,7 @@ describe("handleSessionInitAccept (R3 #2 rollback signaling + H2 sessionStateMan
         c.some(
           (arg) =>
             (typeof arg === "string" && arg.includes("sstate-cleanup-boom")) ||
-            (arg instanceof Error &&
-              arg.message === "sstate-cleanup-boom"),
+            (arg instanceof Error && arg.message === "sstate-cleanup-boom"),
         ),
       );
       expect(sawSstateBoom).toBe(true);
@@ -844,7 +838,9 @@ describe("rejected-sid suppression (R3 #3 / H1)", () => {
   it("markSessionRejected(sid) + onclose path skips cleanup chain", async () => {
     const serverMod = await import("../server.js");
     const markSessionRejected = (
-      serverMod as unknown as { markSessionRejectedForTesting?: (sid: string) => void }
+      serverMod as unknown as {
+        markSessionRejectedForTesting?: (sid: string) => void;
+      }
     ).markSessionRejectedForTesting;
     const wasRejected = (
       serverMod as unknown as {
@@ -1279,21 +1275,19 @@ describe("closeAllSessions (shutdown helper)", () => {
       .mockImplementation(() => {});
     try {
       const closedOk: string[] = [];
-      const transports: Record<
-        string,
-        { close: () => Promise<void> | void }
-      > = {
-        "bad-1": {
-          close: async () => {
-            throw new Error("streamable-shutdown-boom");
+      const transports: Record<string, { close: () => Promise<void> | void }> =
+        {
+          "bad-1": {
+            close: async () => {
+              throw new Error("streamable-shutdown-boom");
+            },
           },
-        },
-        "good-1": {
-          close: async () => {
-            closedOk.push("good-1");
+          "good-1": {
+            close: async () => {
+              closedOk.push("good-1");
+            },
           },
-        },
-      };
+        };
       const sseTransports: Record<
         string,
         { close: () => Promise<void> | void }
