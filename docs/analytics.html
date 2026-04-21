@@ -832,6 +832,11 @@
           ) {
             sessionStorage.removeItem("pathfinder_analytics_token");
             TOKEN = "";
+            // Reset the module-level `headers` object alongside TOKEN so
+            // in-flight and subsequent requests don't carry the now-stale
+            // Authorization: Bearer <invalid> header. Matches the elsewhere
+            // pattern where TOKEN and headers are paired (login handler).
+            headers = {};
           }
           showLogin();
           var loginErr = document.getElementById("loginError");
