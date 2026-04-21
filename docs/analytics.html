@@ -486,13 +486,20 @@
       (function setupPreviewMode() {
         if (new URLSearchParams(window.location.search).get("preview") !== "1")
           return;
-        // Flag preview mode on a window-local property so fetchJson and
-        // getToken can short-circuit auth without touching the shared token
-        // slot in sessionStorage. sessionStorage is scoped per-origin and
-        // shared across tabs, so any sentinel written there (e.g. a
-        // "preview" placeholder) would be picked up by a real /analytics
-        // session on the same origin. Keeping the flag on `window` isolates
-        // the effect to this single page load.
+        // Flag preview mode on a window-local property. The flag is checked
+        // only in `init()` before fetchJson ever fires — init() sees the
+        // flag and calls load() directly with an empty Authorization header,
+        // skipping both the auth-mode probe and the token prompt. fetchJson
+        // itself has no preview branch; the window.fetch stub installed
+        // below intercepts /api/analytics/* calls and returns canned JSON
+        // so the real fetchJson code path runs unchanged (generation-guard,
+        // 401/403 handling, JSON parse, error envelope shaping).
+        //
+        // We keep the flag on `window` rather than sessionStorage because
+        // sessionStorage is scoped per-origin and shared across tabs — any
+        // "preview" sentinel written there (e.g. as a placeholder token)
+        // would be picked up by a real /analytics session on the same
+        // origin. `window` isolates the effect to this single page load.
         window.__pathfinderPreview = true;
 
         var today = new Date();
@@ -816,6 +823,30 @@
           if (e.key === "Enter") document.getElementById("tokenSubmit").click();
         });
 
+      // Fetch JSON from an analytics endpoint with three behaviors the
+      // callers rely on:
+      //   1. Stale-generation guard: when `fetchGen` is passed AND the
+      //      module-level `loadGeneration` has since advanced, a 401/403
+      //      from this now-stale request throws an `AnalyticsAuthError`
+      //      WITHOUT wiping TOKEN / headers / sessionStorage. This prevents
+      //      a superseded request (e.g. from a rapid preset click) from
+      //      forcing a spurious re-login of a still-valid fresh token.
+      //   2. Auth-failure handling: on a current-generation 401/403 with
+      //      an `unauthorized` / `forbidden` error envelope from the
+      //      server, clear TOKEN and sessionStorage, show the login
+      //      modal, and throw an `AnalyticsAuthError`. Non-structured
+      //      401/403s (e.g. from an SSO proxy) leave TOKEN intact.
+      //   3. Error envelope shaping: non-OK non-auth responses parse the
+      //      server's `{ error, error_description }` envelope when
+      //      present, falling back to a truncated raw body; the resulting
+      //      `Error.message` is what the dashboard surfaces in #error
+      //      or per-card badges.
+      //
+      // NOTE: there is no preview-mode branch here — the preview short-
+      // circuit lives in `init()` (it calls load() directly and never
+      // hits the auth-mode probe that would otherwise lead here). The
+      // preview window.fetch stub intercepts /api/analytics/* URLs so
+      // fetchJson sees what looks like a normal JSON response.
       async function fetchJson(url, fetchGen) {
         var res = await fetch(url, { headers: headers });
         if (res.status === 401 || res.status === 403) {
@@ -1309,20 +1340,120 @@
           var toolCountsUrl =
             "/api/analytics/tool-counts" +
             (fp ? "?" + fp.replace(/^&/, "") : "");
-          var results = await Promise.all([
-            fetchJson(summaryUrl, gen),
-            fetchJson(queriesUrl, gen),
-            fetchJson(emptyUrl, gen),
-            fetchJson(toolCountsUrl, gen),
+          // allSettled (not all): if one endpoint flakes we still want to
+          // render the three that succeeded, with a per-card error badge
+          // on the one that failed. Promise.all would have thrown on first
+          // rejection and blanked the whole dashboard.
+          //
+          // One exception: an AnalyticsAuthError from fetchJson's 401/403
+          // branch means the token was wiped and showLogin() already ran.
+          // In that case every subsequent fetch is going to auth-fail the
+          // same way, so propagate the auth error up to the catch block
+          // which suppresses the banner for this error type.
+          var settled = await Promise.all([
+            fetchJson(summaryUrl, gen).then(
+              function (v) {
+                return { ok: true, value: v };
+              },
+              function (e) {
+                return { ok: false, error: e };
+              },
+            ),
+            fetchJson(queriesUrl, gen).then(
+              function (v) {
+                return { ok: true, value: v };
+              },
+              function (e) {
+                return { ok: false, error: e };
+              },
+            ),
+            fetchJson(emptyUrl, gen).then(
+              function (v) {
+                return { ok: true, value: v };
+              },
+              function (e) {
+                return { ok: false, error: e };
+              },
+            ),
+            fetchJson(toolCountsUrl, gen).then(
+              function (v) {
+                return { ok: true, value: v };
+              },
+              function (e) {
+                return { ok: false, error: e };
+              },
+            ),
           ]);
           if (gen !== loadGeneration) return; // stale response — abort
-          var summary = results[0];
-          var topQueries = results[1];
-          var emptyQueries = results[2];
-          var toolCounts = results[3];
+          // AnalyticsAuthError short-circuit: if any sibling fetch hit a
+          // 401/403, fetchJson already reset TOKEN and called showLogin()
+          // — honour that by throwing the auth error so the catch block's
+          // existing auth-error handling fires.
+          for (var si = 0; si < settled.length; si++) {
+            var r = settled[si];
+            if (
+              !r.ok &&
+              r.error &&
+              r.error.name === "AnalyticsAuthError"
+            ) {
+              throw r.error;
+            }
+          }
+          var summaryRes = settled[0];
+          var topQueriesRes = settled[1];
+          var emptyQueriesRes = settled[2];
+          var toolCountsRes = settled[3];
+          var summary = summaryRes.ok ? summaryRes.value : null;
+          var topQueries = topQueriesRes.ok ? topQueriesRes.value : [];
+          var emptyQueries = emptyQueriesRes.ok ? emptyQueriesRes.value : [];
+          var toolCounts = toolCountsRes.ok ? toolCountsRes.value : [];
+          // Log each failed endpoint with enough context to diagnose
+          // without blocking render of the siblings that succeeded.
+          if (!summaryRes.ok)
+            console.error("[analytics] summary fetch failed:", summaryRes.error);
+          if (!topQueriesRes.ok)
+            console.error(
+              "[analytics] top queries fetch failed:",
+              topQueriesRes.error,
+            );
+          if (!emptyQueriesRes.ok)
+            console.error(
+              "[analytics] empty queries fetch failed:",
+              emptyQueriesRes.error,
+            );
+          if (!toolCountsRes.ok)
+            console.error(
+              "[analytics] tool counts fetch failed:",
+              toolCountsRes.error,
+            );
 
-          // Clear any previous error
-          document.getElementById("error").style.display = "none";
+          // Clear the page-level error banner only when at least one fetch
+          // succeeded. If every fetch failed, leave the banner alone — the
+          // catch block below would otherwise never see those errors (we
+          // don't re-throw non-auth errors from allSettled above), so we
+          // surface them here as a single banner when there's nothing
+          // partial to render.
+          var anyOk =
+            summaryRes.ok ||
+            topQueriesRes.ok ||
+            emptyQueriesRes.ok ||
+            toolCountsRes.ok;
+          if (anyOk) {
+            document.getElementById("error").style.display = "none";
+          } else {
+            var pageErr = document.getElementById("error");
+            pageErr.style.display = "block";
+            var firstErr =
+              (!summaryRes.ok && summaryRes.error) ||
+              (!topQueriesRes.ok && topQueriesRes.error) ||
+              (!emptyQueriesRes.ok && emptyQueriesRes.error) ||
+              (!toolCountsRes.ok && toolCountsRes.error);
+            var pageMsg =
+              firstErr && firstErr.message
+                ? firstErr.message
+                : String(firstErr);
+            pageErr.textContent = "Failed to load analytics: " + pageMsg;
+          }
           document.getElementById("filters").style.display = "block";
 
           // Cache for non-fetching re-renders (e.g. toggling the date popover)
@@ -1342,6 +1473,7 @@
           // cache (both branches would render zero pills, losing pills
           // that existed pre-filter) — we want a populated snapshot.
           if (
+            summary &&
             activeToolType === null &&
             activeSource === null &&
             Array.isArray(summary.queries_by_source) &&
@@ -1351,11 +1483,12 @@
           }
           // Explicit null-check (not `||`) so an intentionally empty
           // cached array doesn't silently fall through to the current
-          // summary's sources.
+          // summary's sources. When summary itself failed, fall back to
+          // the cache (or empty) so filter pills still render.
           currentSources =
             unfilteredSourcesCache !== null
               ? unfilteredSourcesCache
-              : Array.isArray(summary.queries_by_source)
+              : summary && Array.isArray(summary.queries_by_source)
                 ? summary.queries_by_source
                 : [];
 
@@ -1370,68 +1503,86 @@
           // so omit it for clarity.
           var isAllTime =
             activeDaysBack !== null && activeDaysBack >= ALL_TIME_DAYS;
-          var statCards = [
-            {
-              label: "Total Queries",
-              value: safeNumber(summary.total_queries).toLocaleString(),
-            },
-          ];
-          if (!isAllTime) {
-            statCards.push({
-              label: "Queries (" + winLabel + ")",
-              value: safeNumber(summary.total_queries_window).toLocaleString(),
-            });
+          if (summaryRes.ok && summary) {
+            var statCards = [
+              {
+                label: "Total Queries",
+                value: safeNumber(summary.total_queries).toLocaleString(),
+              },
+            ];
+            if (!isAllTime) {
+              statCards.push({
+                label: "Queries (" + winLabel + ")",
+                value: safeNumber(
+                  summary.total_queries_window,
+                ).toLocaleString(),
+              });
+            }
+            // Guard the percentage: NaN * 100 = NaN, and (NaN).toFixed(1) is
+            // "NaN", so an undefined or non-finite rate from the server would
+            // render as "NaN%". Fall back to "-" instead.
+            var rate = summary.empty_result_rate_window;
+            var rateLabel =
+              typeof rate === "number" && Number.isFinite(rate)
+                ? (rate * 100).toFixed(1) + "%"
+                : "-";
+            statCards.push(
+              {
+                label: "Empty Result Rate (" + winLabel + ")",
+                value: rateLabel,
+              },
+              {
+                label: "Avg Latency (" + winLabel + ")",
+                value: safeNumber(summary.avg_latency_ms_window) + "ms",
+              },
+              {
+                // When the server had to randomly sample latencies to compute
+                // p95 (row count exceeded P95_LATENCY_ROW_CAP), prepend a '~'
+                // and append a "(sampled)" suffix so operators know the value
+                // is approximate rather than exact.
+                label:
+                  "P95 Latency (" +
+                  winLabel +
+                  ")" +
+                  (summary.p95_latency_sampled ? " (sampled)" : ""),
+                value:
+                  (summary.p95_latency_sampled ? "~" : "") +
+                  safeNumber(summary.p95_latency_ms_window) +
+                  "ms",
+              },
+              {
+                label: "Empty Queries (" + winLabel + ")",
+                value: safeNumber(
+                  summary.empty_result_count_window,
+                ).toLocaleString(),
+              },
+            );
+            document.getElementById("stats").innerHTML = statCards
+              .map(function (s) {
+                return (
+                  '<div class="stat-card"><div class="label">' +
+                  esc(s.label) +
+                  '</div><div class="value">' +
+                  s.value +
+                  "</div></div>"
+                );
+              })
+              .join("");
+          } else {
+            // Summary failed but sibling endpoints may have succeeded —
+            // render an inline per-section error badge instead of the
+            // stat cards so the operator can see which slice failed
+            // without losing the Top/Empty tables from their own fetches.
+            document.getElementById("stats").innerHTML =
+              '<div class="stat-card" data-testid="summary-error">' +
+              '<div class="label">Summary</div>' +
+              '<div class="value" style="font-size:14px;color:#b91c1c">Failed to load: ' +
+              esc(
+                (summaryRes.error && summaryRes.error.message) ||
+                  String(summaryRes.error),
+              ) +
+              "</div></div>";
           }
-          // Guard the percentage: NaN * 100 = NaN, and (NaN).toFixed(1) is
-          // "NaN", so an undefined or non-finite rate from the server would
-          // render as "NaN%". Fall back to "-" instead.
-          var rate = summary.empty_result_rate_window;
-          var rateLabel =
-            typeof rate === "number" && Number.isFinite(rate)
-              ? (rate * 100).toFixed(1) + "%"
-              : "-";
-          statCards.push(
-            {
-              label: "Empty Result Rate (" + winLabel + ")",
-              value: rateLabel,
-            },
-            {
-              label: "Avg Latency (" + winLabel + ")",
-              value: safeNumber(summary.avg_latency_ms_window) + "ms",
-            },
-            {
-              // When the server had to randomly sample latencies to compute
-              // p95 (row count exceeded P95_LATENCY_ROW_CAP), prepend a '~'
-              // and append a "(sampled)" suffix so operators know the value
-              // is approximate rather than exact.
-              label:
-                "P95 Latency (" +
-                winLabel +
-                ")" +
-                (summary.p95_latency_sampled ? " (sampled)" : ""),
-              value:
-                (summary.p95_latency_sampled ? "~" : "") +
-                safeNumber(summary.p95_latency_ms_window) +
-                "ms",
-            },
-            {
-              label: "Empty Queries (" + winLabel + ")",
-              value: safeNumber(
-                summary.empty_result_count_window,
-              ).toLocaleString(),
-            },
-          );
-          document.getElementById("stats").innerHTML = statCards
-            .map(function (s) {
-              return (
-                '<div class="stat-card"><div class="label">' +
-                esc(s.label) +
-                '</div><div class="value">' +
-                s.value +
-                "</div></div>"
-              );
-            })
-            .join("");
 
           // Table title h2s — also carry the window label.
           var topTitle = document.getElementById("topQueriesTitle");
@@ -1462,7 +1613,7 @@
           document.getElementById("dailyChartTitle").textContent =
             "Queries per Day (" + winLabel + ")" + titleSuffix;
 
-          var perDayArr = asArray(summary.queries_per_day_window);
+          var perDayArr = asArray(summary ? summary.queries_per_day_window : []);
           var dayLabels = perDayArr.map(function (d) {
             return d.day;
           });
@@ -1541,7 +1692,7 @@
             sourceChartInstance.destroy();
             sourceChartInstance = null;
           }
-          var sourcesArr = asArray(summary.queries_by_source);
+          var sourcesArr = asArray(summary ? summary.queries_by_source : []);
           if (sourcesArr.length > 0) {
             sourceChartInstance = new Chart(
               document.getElementById("sourceChart"),
@@ -1574,6 +1725,15 @@
 
           // Top queries table (now with Tool column)
           var topBody = document.querySelector("#topQueriesTable tbody");
+          if (!topQueriesRes.ok) {
+            topBody.innerHTML =
+              '<tr data-testid="top-queries-error"><td colspan="5" style="color:#b91c1c">Failed to load: ' +
+              esc(
+                (topQueriesRes.error && topQueriesRes.error.message) ||
+                  String(topQueriesRes.error),
+              ) +
+              "</td></tr>";
+          } else {
           topBody.innerHTML =
             asArray(topQueries)
               .map(function (q) {
@@ -1602,38 +1762,49 @@
               })
               .join("") ||
             '<tr><td colspan="5">No queries logged yet.</td></tr>';
+          }
 
           // Empty queries table
           var emptyBody = document.querySelector("#emptyQueriesTable tbody");
-          emptyBody.innerHTML =
-            asArray(emptyQueries)
-              .map(function (q) {
-                // Guard against missing / non-parseable last_seen values.
-                // `new Date(undefined).toLocaleString()` yields the literal
-                // string "Invalid Date", which would be rendered raw and
-                // looks like a bug. Fall back to an em dash instead, and
-                // route the result through esc() on interpolation.
-                var lastSeenRaw = q.last_seen ? new Date(q.last_seen) : null;
-                var lastSeenStr =
-                  lastSeenRaw && Number.isFinite(lastSeenRaw.getTime())
-                    ? lastSeenRaw.toLocaleString()
-                    : "\u2014";
-                return (
-                  '<tr class="empty"><td>' +
-                  esc(q.query_text) +
-                  '</td><td><span class="tool-badge">' +
-                  esc(q.tool_name) +
-                  "</span></td><td>" +
-                  esc(q.source_name || "-") +
-                  "</td><td>" +
-                  esc(String(q.count)) +
-                  "</td><td>" +
-                  esc(lastSeenStr) +
-                  "</td></tr>"
-                );
-              })
-              .join("") ||
-            '<tr><td colspan="5">No empty-result queries.</td></tr>';
+          if (!emptyQueriesRes.ok) {
+            emptyBody.innerHTML =
+              '<tr data-testid="empty-queries-error"><td colspan="5" style="color:#b91c1c">Failed to load: ' +
+              esc(
+                (emptyQueriesRes.error && emptyQueriesRes.error.message) ||
+                  String(emptyQueriesRes.error),
+              ) +
+              "</td></tr>";
+          } else {
+            emptyBody.innerHTML =
+              asArray(emptyQueries)
+                .map(function (q) {
+                  // Guard against missing / non-parseable last_seen values.
+                  // `new Date(undefined).toLocaleString()` yields the literal
+                  // string "Invalid Date", which would be rendered raw and
+                  // looks like a bug. Fall back to an em dash instead, and
+                  // route the result through esc() on interpolation.
+                  var lastSeenRaw = q.last_seen ? new Date(q.last_seen) : null;
+                  var lastSeenStr =
+                    lastSeenRaw && Number.isFinite(lastSeenRaw.getTime())
+                      ? lastSeenRaw.toLocaleString()
+                      : "\u2014";
+                  return (
+                    '<tr class="empty"><td>' +
+                    esc(q.query_text) +
+                    '</td><td><span class="tool-badge">' +
+                    esc(q.tool_name) +
+                    "</span></td><td>" +
+                    esc(q.source_name || "-") +
+                    "</td><td>" +
+                    esc(String(q.count)) +
+                    "</td><td>" +
+                    esc(lastSeenStr) +
+                    "</td></tr>"
+                  );
+                })
+                .join("") ||
+              '<tr><td colspan="5">No empty-result queries.</td></tr>';
+          }
         } catch (err) {
           // Stale-response guard also applies to failures: a slow old
           // request that rejects after a newer load() has already

@@ -1135,7 +1135,11 @@ describe("analytics dashboard UI — error banner", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows #error with 'Failed to load analytics' when the summary endpoint returns HTTP 500", async () => {
+  it("shows a per-card error in #stats when the summary endpoint returns HTTP 500 while siblings succeed", async () => {
+    // With Promise.allSettled in load(), a summary failure no longer
+    // blanks the whole dashboard — the three sibling endpoints still
+    // render, and the summary slot gets an inline error card. This test
+    // locks that contract down.
     const endpoints = {
       "/api/analytics/auth-mode": () => ({ dev: true }),
       "/api/analytics/summary": () => ({
@@ -1146,12 +1150,48 @@ describe("analytics dashboard UI — error banner", () => {
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
     };
-    // Swallow the [analytics] load() console.error — it's intentional and
-    // the test assertion lives on the banner, not on the log.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { dom } = await loadDashboard(endpoints);
-    // One extra flush in case the catch block's rendering lands after
-    // the default loadDashboard flush.
+    await flushAsync();
+
+    // Per-card error rendered in the stats section.
+    const statsEl = dom.window.document.getElementById("stats")!;
+    const errCard = statsEl.querySelector(
+      '[data-testid="summary-error"]',
+    ) as HTMLElement | null;
+    expect(errCard).not.toBeNull();
+    expect(errCard!.textContent).toContain("db exploded");
+    // The page-level banner stays hidden since siblings succeeded.
+    const errorEl = dom.window.document.getElementById("error")!;
+    expect(errorEl.style.display).toBe("none");
+    errSpy.mockRestore();
+  });
+
+  it("shows the page-level #error banner when EVERY endpoint fails (no partial render)", async () => {
+    // If nothing succeeded there's no partial UI to show — fall back to
+    // the whole-page banner so the operator isn't staring at a blank
+    // dashboard with no explanation.
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        status: 500,
+        body: { error: "internal", error_description: "db exploded" },
+      }),
+      "/api/analytics/tool-counts": () => ({
+        status: 500,
+        body: { error: "internal", error_description: "db exploded" },
+      }),
+      "/api/analytics/queries": () => ({
+        status: 500,
+        body: { error: "internal", error_description: "db exploded" },
+      }),
+      "/api/analytics/empty-queries": () => ({
+        status: 500,
+        body: { error: "internal", error_description: "db exploded" },
+      }),
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dom } = await loadDashboard(endpoints);
     await flushAsync();
 
     const errorEl = dom.window.document.getElementById("error")!;
@@ -1160,7 +1200,7 @@ describe("analytics dashboard UI — error banner", () => {
     errSpy.mockRestore();
   });
 
-  it("hides #error on a subsequent successful load", async () => {
+  it("clears per-card summary error on a subsequent successful load", async () => {
     let failNext = true;
     const endpoints = {
       "/api/analytics/auth-mode": () => ({ dev: true }),
@@ -1182,20 +1222,24 @@ describe("analytics dashboard UI — error banner", () => {
     const { dom } = await loadDashboard(endpoints);
     await flushAsync();
 
-    // First load failed — banner is visible.
-    const errorEl = dom.window.document.getElementById("error")!;
-    expect(errorEl.style.display).toBe("block");
+    // First load: only summary failed — per-card error visible, page
+    // banner hidden (siblings succeeded).
+    const statsEl = dom.window.document.getElementById("stats")!;
+    expect(
+      statsEl.querySelector('[data-testid="summary-error"]'),
+    ).not.toBeNull();
 
-    // Trigger a fresh load. On the failure path #filters stays hidden so
-    // there's no datePill to click — invoke the dashboard's global load()
-    // directly instead, which is what any user-initiated retry funnels
-    // through in the happy path.
+    // Trigger a fresh load.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (dom.window as any).load();
     await flushAsync();
 
-    // Second load succeeded — banner hidden, stats rendered.
-    expect(errorEl.style.display).toBe("none");
+    // Second load succeeded — per-card error gone, stats rendered.
+    expect(
+      dom.window.document
+        .getElementById("stats")!
+        .querySelector('[data-testid="summary-error"]'),
+    ).toBeNull();
     const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
     expect(statsHtml).toContain("8,888");
     errSpy.mockRestore();
@@ -1207,7 +1251,7 @@ describe("analytics dashboard UI — error banner", () => {
   // at 200 chars) rather than a bare "HTTP <status>". Verify the raw
   // body surfaces through to the error banner so operators get a real
   // clue about what the upstream returned.
-  it("shows #error with raw body text when the summary endpoint returns non-JSON 500", async () => {
+  it("shows per-card error with raw body text when summary returns non-JSON 500", async () => {
     const endpoints = {
       "/api/analytics/auth-mode": () => ({ dev: true }),
       "/api/analytics/summary": () => ({
@@ -1219,24 +1263,24 @@ describe("analytics dashboard UI — error banner", () => {
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
     };
-    // Swallow the intentional console.error from load()'s catch + the
-    // fetchJson parse-fail log, since the test assertion lives on the
-    // banner, not the logs.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { dom } = await loadDashboard(endpoints);
     await flushAsync();
 
-    const errorEl = dom.window.document.getElementById("error")!;
-    expect(errorEl.style.display).toBe("block");
-    // Raw body surfaces through — "Internal Server Error" is the useful
+    // Raw body surfaces through to the per-card error card rather than
+    // the page-level banner — "Internal Server Error" is the useful
     // signal, not the generic "HTTP 500".
-    expect(errorEl.textContent).toContain("Internal Server Error");
+    const errCard = dom.window.document
+      .getElementById("stats")!
+      .querySelector('[data-testid="summary-error"]') as HTMLElement | null;
+    expect(errCard).not.toBeNull();
+    expect(errCard!.textContent).toContain("Internal Server Error");
     errSpy.mockRestore();
   });
 
   // Empty body with non-2xx status falls all the way through to the
   // "HTTP <status>" marker since there's nothing else to surface.
-  it("shows #error with 'HTTP 500' marker when the body is empty", async () => {
+  it("shows per-card 'HTTP 500' marker when summary body is empty", async () => {
     const endpoints = {
       "/api/analytics/auth-mode": () => ({ dev: true }),
       "/api/analytics/summary": () => ({
@@ -1252,24 +1296,25 @@ describe("analytics dashboard UI — error banner", () => {
     const { dom } = await loadDashboard(endpoints);
     await flushAsync();
 
-    const errorEl = dom.window.document.getElementById("error")!;
-    expect(errorEl.style.display).toBe("block");
-    expect(errorEl.textContent).toContain("HTTP 500");
+    const errCard = dom.window.document
+      .getElementById("stats")!
+      .querySelector('[data-testid="summary-error"]') as HTMLElement | null;
+    expect(errCard).not.toBeNull();
+    expect(errCard!.textContent).toContain("HTTP 500");
     errSpy.mockRestore();
   });
 
-  it("shows #error with String(err) fallback when the summary handler rejects with a non-Error", async () => {
-    // load()'s catch uses `err && err.message ? err.message : String(err)`
-    // so a non-Error throw (a plain string, undefined, etc.) degrades
-    // gracefully to String(err) instead of rendering "undefined". This
-    // locks down that fallback — pre-fix, interpolating `err.message`
-    // directly would surface "Failed to load analytics: undefined" for
-    // any non-Error reject.
+  it("renders String(err) fallback in per-card error when summary rejects with a non-Error", async () => {
+    // fetchJson's catch path still uses `err && err.message ? err.message
+    // : String(err)`; locks down that fallback so a non-Error throw
+    // degrades gracefully rather than rendering "undefined" in the error
+    // card.
     const endpoints = {
       "/api/analytics/auth-mode": () => ({ dev: true }),
-      // Reject with a plain string. The handler returns a pre-rejected
-      // Promise so buildFetchStub's `await handler(qs)` propagates it out
-      // through fetchFn, tripping load()'s catch rather than fetchJson's.
+      // Reject with a plain string. buildFetchStub's `await handler(qs)`
+      // propagates this out through fetchFn; fetchJson sees the rejection
+      // as a thrown non-Error and load()'s allSettled normalizer stores
+      // it on summaryRes.error.
       "/api/analytics/summary": () => Promise.reject("network down"),
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
@@ -1279,10 +1324,11 @@ describe("analytics dashboard UI — error banner", () => {
     const { dom } = await loadDashboard(endpoints);
     await flushAsync();
 
-    const errorEl = dom.window.document.getElementById("error")!;
-    expect(errorEl.style.display).toBe("block");
-    expect(errorEl.textContent).toContain("Failed to load analytics");
-    expect(errorEl.textContent).toContain("network down");
+    const errCard = dom.window.document
+      .getElementById("stats")!
+      .querySelector('[data-testid="summary-error"]') as HTMLElement | null;
+    expect(errCard).not.toBeNull();
+    expect(errCard!.textContent).toContain("network down");
     errSpy.mockRestore();
   });
 });
