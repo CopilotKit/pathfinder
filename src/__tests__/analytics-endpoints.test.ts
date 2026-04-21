@@ -75,24 +75,24 @@ function mockRes() {
   return { status, json };
 }
 
+// File-level reset so env state (ANALYTICS_TOKEN) and the server.ts
+// auto-generated token cache can't leak between describes — later
+// parseAnalyticsFilter / parsePositiveIntParam suites would otherwise
+// inherit whatever the middleware tests left behind.
+beforeEach(() => {
+  mockGetAnalyticsConfigFn.mockReset();
+  mockGetConfigFn.mockReset();
+  mockGetConfigFn.mockReturnValue(DEFAULT_TEST_CONFIG);
+  __resetAnalyticsTokenForTesting();
+  delete process.env.ANALYTICS_TOKEN;
+});
+
+afterEach(() => {
+  delete process.env.ANALYTICS_TOKEN;
+  __resetAnalyticsTokenForTesting();
+});
+
 describe("analyticsAuth middleware", () => {
-  beforeEach(() => {
-    // Reset every test-visible piece of global state: mock state on the
-    // config hooks AND the module-level auto-generated token cached in
-    // server.ts. Without the token reset, order-sensitive tests (like the
-    // "not regenerated" test) would depend on prior tests leaving the
-    // right cached state behind.
-    mockGetAnalyticsConfigFn.mockReset();
-    mockGetConfigFn.mockReset();
-    mockGetConfigFn.mockReturnValue(DEFAULT_TEST_CONFIG);
-    __resetAnalyticsTokenForTesting();
-    delete process.env.ANALYTICS_TOKEN;
-  });
-
-  afterEach(() => {
-    delete process.env.ANALYTICS_TOKEN;
-  });
-
   it("returns 404 when analytics not enabled", () => {
     mockGetAnalyticsConfigFn.mockReturnValue(undefined);
     const res = mockRes();
@@ -581,6 +581,21 @@ describe("parseAnalyticsFilter from/to validation", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.filter.source).toBeUndefined();
+    }
+  });
+
+  it("keeps a non-empty filter when a sibling filter is empty (no cross-field bleed)", () => {
+    // Regression guard: if empty-string handling for one field ever
+    // bleeds into another (e.g. early-return on any empty value), the
+    // populated sibling would silently drop off the filter. Mix
+    // tool_type="" with source="docs" to lock down per-field semantics.
+    const result = parseAnalyticsFilter(
+      mkReq({ tool_type: "", source: "docs" }) as Request,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.filter.tool_type).toBeUndefined();
+      expect(result.filter.source).toBe("docs");
     }
   });
 
