@@ -919,9 +919,10 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /**
  * Result of parsing analytics filter query params.
  *
- * When `error` is set, the caller should respond with HTTP 400 using the
- * supplied `{error, error_description}` body. Otherwise `filter` is safe to
- * pass through to the DB layer.
+ * When `ok` is `false`, the caller should respond with
+ * `res.status(status).json(body)` — `body` carries
+ * `{ error, error_description }`. When `ok` is `true`, `filter` is safe to
+ * pass to the DB layer.
  */
 export type AnalyticsFilterParseResult =
   | { ok: true; filter: AnalyticsFilter }
