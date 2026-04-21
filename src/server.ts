@@ -441,9 +441,33 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         if (sid && transports[sid]) {
           delete transports[sid];
           delete sessionLastActivity[sid];
-          sessionStateManager.cleanup(sid);
-          ipLimiter?.remove(sid);
-          workspaceManager?.cleanup(sid);
+          // Per-operation try/catch so a throw from one cleanup step
+          // doesn't skip the others — this mirrors the reaper tick above
+          // and prevents ipLimiter / workspace state from drifting when
+          // sessionStateManager.cleanup throws (the original failure mode
+          // leaked IP-limiter counters, eventually rejecting new sessions
+          // from that IP).
+          try {
+            sessionStateManager.cleanup(sid);
+          } catch (e) {
+            console.error(
+              `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
+              e,
+            );
+          }
+          try {
+            ipLimiter?.remove(sid);
+          } catch (e) {
+            console.error(`[mcp] IP limiter cleanup failed:`, e);
+          }
+          try {
+            workspaceManager?.cleanup(sid);
+          } catch (e) {
+            console.error(
+              `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
+              e,
+            );
+          }
           console.log(
             `[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`,
           );
