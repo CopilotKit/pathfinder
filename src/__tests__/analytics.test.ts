@@ -668,6 +668,22 @@ describe("getAnalyticsSummary per-day excludes redacted rows", () => {
     expect(sql).toMatch(/query_text != \$\d+/);
     expect(params).toContain(REDACTED_QUERY_TEXT);
   });
+
+  it("latency subquery filters query_text != REDACTED_QUERY_TEXT (p95/avg population alignment)", async () => {
+    // Pre-fix: avg_latency (summary subquery) excluded redacted rows but
+    // p95 (latency subquery) did not. That meant the two latency cards were
+    // computed over different populations, so p95 could be lower than avg
+    // whenever redacted traffic carried unusually high latency (or vice
+    // versa). Aligning both on the same population makes the cards
+    // directly comparable.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Index 2 is the latency subquery (0=total, 1=summary, 2=latency).
+    const [sql, params] = mockQuery.mock.calls[2];
+    expect(sql).toMatch(/query_text != \$\d+/);
+    expect(params).toContain(REDACTED_QUERY_TEXT);
+  });
 });
 
 describe("getAnalyticsSummary with filters", () => {

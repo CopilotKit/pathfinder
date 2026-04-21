@@ -268,15 +268,23 @@ export async function getAnalyticsSummary(
   // `total_queries` count in this function (see the totals query below).
   //
   // Redacted rows (query_text = REDACTED_QUERY_TEXT) are also excluded from
-  // the summary `total`/`empty` counts AND the per-day bars so
-  // `empty_result_rate_window` and the daily-chart totals match the
-  // population surfaced by getEmptyQueries() / getTopQueries() — which also
-  // filter redacted out. Without this, the rate denominator (summary) would
-  // include redacted rows while the visible empty-queries list omits them,
-  // so clicking through to the list would show fewer entries than the rate
-  // suggests. Latency + by-source intentionally stay inclusive of redacted
-  // rows (the per-day subquery was aligned in CR Round 8 for consistency
-  // with the tables; latency/by-source semantics are unchanged).
+  // the summary `total`/`empty` counts, the latency aggregates (avg AND p95),
+  // AND the per-day bars so `empty_result_rate_window`, the latency cards,
+  // and the daily-chart totals all match the population surfaced by
+  // getEmptyQueries() / getTopQueries() — which also filter redacted out.
+  // Without this, the rate denominator (summary) would include redacted
+  // rows while the visible empty-queries list omits them, so clicking
+  // through to the list would show fewer entries than the rate suggests.
+  // avg_latency and p95_latency are kept on the SAME population so the two
+  // cards are comparable (pre-fix: avg excluded redacted but p95 did not,
+  // so p95/avg ratios were computed over different row sets). by-source
+  // intentionally stays inclusive of redacted rows (the doughnut shows
+  // source mix and redacted traffic still originates from a real source).
+  //
+  // NOTE: getToolCounts intentionally does NOT exclude redacted rows — see
+  // its JSDoc for rationale (tool-usage signal survives redaction because
+  // the tool_name is never redacted). Do not "fix this for consistency" —
+  // the divergence is deliberate.
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
   const redactedIdx2 = dw2.nextIdx;
@@ -296,7 +304,10 @@ export async function getAnalyticsSummary(
     [...fp2, ...dw2.params, REDACTED_QUERY_TEXT],
   );
 
-  // Latencies for p95 (exclude backfilled rows where latency_ms < 0).
+  // Latencies for p95 (exclude backfilled rows where latency_ms < 0, AND
+  // redacted rows so the p95 is computed over the SAME population as
+  // avg_latency above — otherwise avg and p95 diverge whenever redacted
+  // traffic exists).
   // Capped at P95_LATENCY_ROW_CAP so "All time" on a busy install doesn't
   // load an unbounded result into JS. We use ORDER BY random() so the cap
   // takes an unbiased random sample instead of the smallest N latencies
@@ -305,12 +316,17 @@ export async function getAnalyticsSummary(
   // reading is known to be sampled rather than exact.
   const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
   const dw3 = buildDateWindow(filter, days, n3);
-  const latencyBase = [...dw3.clauses, "latency_ms >= 0"];
+  const redactedIdxLatency = dw3.nextIdx;
+  const latencyBase = [
+    ...dw3.clauses,
+    "latency_ms >= 0",
+    `query_text != $${redactedIdxLatency}`,
+  ];
   const latencyWhere = whereAnd(latencyBase, fc3);
-  const latencyLimitIdx = dw3.nextIdx;
+  const latencyLimitIdx = redactedIdxLatency + 1;
   const latencyRes = await pool.query(
     `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY random() LIMIT $${latencyLimitIdx}`,
-    [...fp3, ...dw3.params, P95_LATENCY_ROW_CAP],
+    [...fp3, ...dw3.params, REDACTED_QUERY_TEXT, P95_LATENCY_ROW_CAP],
   );
   if (latencyRes.rows.length >= P95_LATENCY_ROW_CAP) {
     console.warn(
