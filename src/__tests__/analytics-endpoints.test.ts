@@ -225,6 +225,30 @@ describe("analyticsAuth middleware", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  it("returns 403 when same-length token differs by one char (exercises timing-safe path)", () => {
+    // With different-length tokens the short-circuit path in analyticsAuth
+    // rejects before timingSafeEqual runs. Using a same-length 'secrit'
+    // ensures timingSafeEqual is actually invoked — exercising the real
+    // constant-time comparison rather than only the length guard.
+    mockGetAnalyticsConfigFn.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: "secret",
+    });
+    const res = mockRes();
+    const next = vi.fn();
+
+    analyticsAuth(
+      { headers: { authorization: "Bearer secrit" } } as never,
+      res as never,
+      next,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it("calls next when token matches", () => {
     mockGetAnalyticsConfigFn.mockReturnValue({
       enabled: true,
@@ -537,6 +561,26 @@ describe("parseAnalyticsFilter from/to validation", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(400);
+    }
+  });
+
+  it("drops empty tool_type so it doesn't become an unbounded LIKE wildcard", () => {
+    // Locking in current behavior: `?tool_type=` from a blank select must
+    // not land on the filter. If it did, buildFilterClauses would build
+    // `tool_name LIKE '' || '-%'` — matching every tool_name — which is
+    // almost certainly a client bug, not a "show everything" intent.
+    const result = parseAnalyticsFilter(mkReq({ tool_type: "" }) as Request);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.filter.tool_type).toBeUndefined();
+    }
+  });
+
+  it("drops empty source so it doesn't mask the no-filter case", () => {
+    const result = parseAnalyticsFilter(mkReq({ source: "" }) as Request);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.filter.source).toBeUndefined();
     }
   });
 

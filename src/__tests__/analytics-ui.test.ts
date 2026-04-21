@@ -612,3 +612,156 @@ describe("analytics dashboard UI — dynamic window labels", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Daily bar chart: clicking a bar should drill down to from=to=that-day.
+// This exercises the onClick handler wired on the daily chart instance so
+// the chart is interactive, not just informational.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — daily bar click drills down", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("invoking the daily-bar onClick with elements[0].index triggers a reload with from=to=<day>", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+    try {
+      const endpoints = {
+        "/api/analytics/auth-mode": () => ({ dev: true }),
+        "/api/analytics/summary": () => canned(3, 500).summary,
+        "/api/analytics/tool-counts": () => canned(3, 500).toolCounts,
+        "/api/analytics/queries": () => [],
+        "/api/analytics/empty-queries": () => [],
+      };
+
+      const { dom, calls, chartInstances } = await loadDashboard(endpoints);
+      const initialCount = calls.length;
+
+      // Grab the most recent bar chart instance — that's the daily chart.
+      const barChart = [...chartInstances]
+        .reverse()
+        .find((c) => c.type === "bar") as
+        | (typeof chartInstances)[number]
+        | undefined;
+      expect(barChart).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const labels = (barChart as any).data.labels as string[];
+      expect(labels.length).toBeGreaterThan(0);
+      const targetDay = labels[0];
+      expect(/^\d{4}-\d{2}-\d{2}$/.test(targetDay)).toBe(true);
+
+      // Invoke the chart's onClick directly — jsdom can't synthesize the
+      // Chart.js-style click event, so we call the handler the same way
+      // Chart.js does internally.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const onClick = (barChart as any).options.onClick as (
+        evt: unknown,
+        elements: Array<{ index: number }>,
+      ) => void;
+      expect(typeof onClick).toBe("function");
+      onClick({}, [{ index: 0 }]);
+
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      const after = calls.slice(initialCount);
+      const summaryCall = after.find((u) =>
+        u.startsWith("/api/analytics/summary"),
+      );
+      expect(summaryCall).toBeDefined();
+      const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+      expect(qs.from).toBe(targetDay);
+      expect(qs.to).toBe(targetDay);
+      expect(qs.days).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom-range popover: typing dates + clicking Apply should send those
+// explicit dates on all four endpoints.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — custom-range apply", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("typing from/to + clicking Apply sends those explicit dates to every endpoint", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(3, 100).summary,
+      "/api/analytics/tool-counts": () => canned(3, 100).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, calls } = await loadDashboard(endpoints);
+    const initialCount = calls.length;
+
+    // Open popover, then click the Custom preset to reveal the inputs.
+    const datePill = dom.window.document.getElementById("datePill")!;
+    datePill.dispatchEvent(
+      new dom.window.MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    const customPreset = dom.window.document.querySelector(
+      ".preset[data-custom]",
+    ) as HTMLElement | null;
+    expect(customPreset).not.toBeNull();
+    customPreset!.dispatchEvent(
+      new dom.window.MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    // Fill both inputs. Use dispatchEvent('input') so draft state updates
+    // the way real user typing would.
+    const fromEl = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    const toEl = dom.window.document.getElementById(
+      "dateToInput",
+    ) as HTMLInputElement;
+    expect(fromEl).not.toBeNull();
+    expect(toEl).not.toBeNull();
+    fromEl.value = "2026-04-05";
+    fromEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    toEl.value = "2026-04-15";
+    toEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    // Click Apply.
+    const applyBtn = dom.window.document.getElementById("dateApplyBtn")!;
+    applyBtn.dispatchEvent(
+      new dom.window.MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const after = calls.slice(initialCount);
+    for (const p of [
+      "/api/analytics/summary",
+      "/api/analytics/tool-counts",
+      "/api/analytics/queries",
+      "/api/analytics/empty-queries",
+    ]) {
+      const call = after.find((u) => u.startsWith(p));
+      expect(call, p + " should be refetched on Apply").toBeDefined();
+      const qs = parseQS(call!.split("?")[1] ?? "");
+      expect(qs.from, p + " from").toBe("2026-04-05");
+      expect(qs.to, p + " to").toBe("2026-04-15");
+      expect(qs.days, p + " should not send days").toBeUndefined();
+    }
+  });
+});
