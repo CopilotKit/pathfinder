@@ -52,9 +52,11 @@ const mockGetAnalyticsConfigFn = vi.mocked(getAnalyticsConfig);
 const mockGetConfigFn = vi.mocked(getConfig);
 
 // ---------------------------------------------------------------------------
-// Build an Express app using the production registerAnalyticsRoutes() so
-// tests exercise the real handler implementations end-to-end. DB-layer calls
-// are routed through our mocks via the deps hook.
+// Build an Express app using production `registerAnalyticsRoutes()` so tests
+// exercise the real Express handler implementations (auth middleware, param
+// parsing, response shaping). DB-layer calls are routed through mocks via
+// the deps hook, so this is NOT end-to-end — it's a handler-level test with
+// the DB boundary stubbed.
 // ---------------------------------------------------------------------------
 
 function buildTestApp() {
