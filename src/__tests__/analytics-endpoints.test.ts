@@ -616,18 +616,14 @@ describe("parseAnalyticsFilter from/to validation", () => {
       // spans 100000 calendar days at UTC-start..UTC-end-of-day resolution.
       const from = "1970-01-01";
       const to = addDaysUTC(from, 99999); // MAX_DAYS - 1 offset => MAX_DAYS span
-      const result = parseAnalyticsFilter(
-        mkReq({ from, to }) as Request,
-      );
+      const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
       expect(result.ok).toBe(true);
     });
 
     it("rejects a range that spans MAX_DAYS + 1 calendar days with 400", () => {
       const from = "1970-01-01";
       const to = addDaysUTC(from, 100000); // 100001-day span
-      const result = parseAnalyticsFilter(
-        mkReq({ from, to }) as Request,
-      );
+      const result = parseAnalyticsFilter(mkReq({ from, to }) as Request);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.status).toBe(400);
