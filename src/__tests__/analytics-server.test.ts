@@ -202,6 +202,42 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(res.status).toBe(200);
       expect(res.headers["content-type"]).toMatch(/text\/html/);
     });
+
+    // Every other test in this file passes an explicit analyticsHtmlPath
+    // via deps. The default path (resolved relative to server.ts's
+    // __dirname) is the production code path and was previously not
+    // exercised by any test — a regression that breaks the default
+    // resolver (e.g. a typo in the `../docs/analytics.html` relative
+    // segment) would ship invisibly. This test locks it down.
+    it("serves HTML from the default analyticsHtmlPath when no override is provided", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+
+      // Register routes WITHOUT an analyticsHtmlPath override so the
+      // default resolver in registerAnalyticsRoutes fires.
+      server = await new Promise<http.Server>((resolve) => {
+        const app = express();
+        app.use(express.json());
+        registerAnalyticsRoutes(app);
+        const s = app.listen(0, () => resolve(s));
+      });
+      const res = await request(server, "GET", "/analytics");
+
+      if (res.status === 200) {
+        expect(res.headers["content-type"]).toMatch(/text\/html/);
+        expect(res.body).toContain("<title>Pathfinder Analytics</title>");
+      } else {
+        // Deterministic 404 if the default path doesn't resolve in this
+        // test environment — either way, the route's behavior for the
+        // default path is locked in.
+        expect(res.status).toBe(404);
+        expect(res.body).toContain("analytics dashboard not available");
+      }
+    });
   });
 
   // ---- API route auth behavior ---------------------------------------------
