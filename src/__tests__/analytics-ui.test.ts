@@ -3110,4 +3110,3 @@ describe("analytics dashboard UI — data availability label", () => {
     expect(label!.textContent!.trim()).toBe("showing 1 day of data");
   });
 });
->>>>>>> 81e89c7 (Add failing tests for data-availability label on analytics UI)
