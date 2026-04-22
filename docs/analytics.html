@@ -184,6 +184,11 @@
       .filter-row .filter-group.source-group {
         margin-left: auto;
       }
+      .filter-row .data-availability {
+        color: #64748b;
+        font-size: 0.74rem;
+        margin-left: 6px;
+      }
 
       /* Date range selector */
       .date-pill .date-value {
@@ -1023,6 +1028,72 @@
         }
         var customVisibleStyle = dateCustomMode ? "" : "display:none;";
 
+        // "Showing N days of data" subtext next to the date pill.
+        // Renders only when earliest_query_day is known AND the requested
+        // window strictly exceeds the actual data depth. Strict `>` means
+        // a same-size window (user picks 9-day range on a 9-day install)
+        // stays quiet — the plateau signal is specifically for the case
+        // where bumping 7d → 14d → 30d produces identical numbers.
+        var dataAvailabilityHtml = "";
+        if (currentEarliestQueryDay) {
+          var earliestDate = parseISODate(currentEarliestQueryDay);
+          if (earliestDate) {
+            // Compare as UTC-midnight dates so timezone offsets don't shift
+            // the day count. parseISODate returns a local-noon Date; using
+            // the numeric year/month/day back out via Date.UTC keeps the
+            // arithmetic timezone-neutral.
+            var earliestUTC = Date.UTC(
+              earliestDate.getFullYear(),
+              earliestDate.getMonth(),
+              earliestDate.getDate(),
+            );
+            var now = new Date();
+            var todayUTC = Date.UTC(
+              now.getUTCFullYear(),
+              now.getUTCMonth(),
+              now.getUTCDate(),
+            );
+            var MS_PER_DAY = 86400000;
+            var availableDays =
+              Math.floor((todayUTC - earliestUTC) / MS_PER_DAY) + 1;
+            var requestedDays = null;
+            if (activeFrom && activeTo) {
+              var fromDate = parseISODate(activeFrom);
+              var toDate = parseISODate(activeTo);
+              if (fromDate && toDate) {
+                var fromUTC = Date.UTC(
+                  fromDate.getFullYear(),
+                  fromDate.getMonth(),
+                  fromDate.getDate(),
+                );
+                var toUTC = Date.UTC(
+                  toDate.getFullYear(),
+                  toDate.getMonth(),
+                  toDate.getDate(),
+                );
+                requestedDays = Math.floor((toUTC - fromUTC) / MS_PER_DAY) + 1;
+              }
+            } else if (activeDaysBack !== null) {
+              requestedDays = activeDaysBack;
+            }
+            if (
+              typeof requestedDays === "number" &&
+              availableDays >= 1 &&
+              requestedDays > availableDays
+            ) {
+              var unit = availableDays === 1 ? "day" : "days";
+              dataAvailabilityHtml =
+                '<span class="data-availability" id="dataAvailability">' +
+                "showing " +
+                esc(String(availableDays)) +
+                " " +
+                unit +
+                " of data" +
+                "</span>";
+            }
+          }
+        }
+
         var dateHtml =
           "" +
           '<div class="filter-group date-group" id="dateGroup">' +
@@ -1066,6 +1137,7 @@
               "</div>" +
               "</div>"
             : "") +
+          dataAvailabilityHtml +
           "</div>";
 
         // Source group (right)
@@ -1288,6 +1360,12 @@
       // Cached so date-popover interactions can re-render without another fetch.
       var currentToolCounts = [];
       var currentSources = [];
+      // Earliest query_log day (YYYY-MM-DD) or null. Set from
+      // summary.earliest_query_day on each successful load(). Renders the
+      // "showing N days of data" subtext in the filter row when the
+      // requested window exceeds the actual data depth. Null = no data or
+      // server hasn't responded yet — skip the label entirely.
+      var currentEarliestQueryDay = null;
 
       // --- Main load ---
       async function load() {
@@ -1327,6 +1405,16 @@
 
           // Cache for non-fetching re-renders (e.g. toggling the date popover)
           currentToolCounts = toolCounts;
+          // Track earliest query day so renderFilters can decide whether the
+          // "showing N days of data" subtext belongs next to the date pill.
+          // Coerce anything other than a YYYY-MM-DD string to null so a
+          // malformed server response doesn't turn into "showing NaN days
+          // of data".
+          currentEarliestQueryDay =
+            typeof summary.earliest_query_day === "string" &&
+            /^\d{4}-\d{2}-\d{2}$/.test(summary.earliest_query_day)
+              ? summary.earliest_query_day
+              : null;
           // When NO filters are active, the summary.queries_by_source
           // reflects the full set. Snapshot it so that later, when a
           // tool-type or source filter shrinks the response, the source
