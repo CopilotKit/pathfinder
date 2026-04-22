@@ -199,13 +199,37 @@ function whereAnd(baseClauses: string[], filterClauses: string[]): string {
 }
 
 /**
+ * Rolling-window cap, applied to every days-based windowed aggregate
+ * (summary totals, latency, by-source, per-day, top/empty-queries, tool
+ * counts). The per-day chart renders one bar per day so a year of bars is
+ * already beyond any useful granularity; bigger windows are payload bloat
+ * with no UI benefit. Other aggregates share the cap so `days=1000` on a
+ * rolling window produces consistent results across every card on the
+ * dashboard. Explicit from/to ranges are user-chosen bounds and pass
+ * through uncapped.
+ */
+const ROLLING_WINDOW_CAP_DAYS = 366;
+
+/**
  * Build a date-window clause + params for the given filter, falling back to
- * a rolling "last N days" window when `from`/`to` are not provided.
+ * a rolling UTC-calendar-day window when `from`/`to` are not provided.
  *
  * - When `filter.from` and `filter.to` are both set, returns
  *   `created_at >= $N AND created_at <= $N+1` with the two Date params.
- * - Otherwise, returns `created_at > NOW() - INTERVAL '1 day' * $N` with the
- *   `days` number param.
+ * - Otherwise, returns a UTC-calendar-day-bounded rolling window:
+ *   `created_at >= (NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, 366) - 1)`
+ *   with the `days` number param. Rolling mode semantics: "last N days"
+ *   means "today + the previous N-1 UTC calendar days" = N UTC calendar
+ *   days inclusive of today. Capped at {@link ROLLING_WINDOW_CAP_DAYS}.
+ *
+ *   The UTC-calendar alignment is load-bearing: the per-day chart emits a
+ *   UTC-midnight `generate_series`, so the summary/latency/by-source WHERE
+ *   must also be UTC-calendar-bounded or `sum(queries_per_day_window)`
+ *   drifts below `total_queries_window` by up to
+ *   `traffic_rate * hours_into_UTC_day` on every read. Previously the
+ *   rolling WHERE was `created_at > NOW() - INTERVAL '1 day' * $N` — a
+ *   NOW()-relative slide that admitted partial-UTC-day rows the outer
+ *   series never emitted, dropping them silently in the LEFT JOIN.
  *
  * `startIdx` is the next available `$` placeholder index. The returned
  * `nextIdx` is the next index to use after this clause.
@@ -222,44 +246,39 @@ function buildDateWindow(
       nextIdx: startIdx + 2,
     };
   }
+  // Rolling: UTC-calendar-day-aligned. LEAST caps the span at
+  // ROLLING_WINDOW_CAP_DAYS so `days=huge` can't produce an unbounded
+  // subtraction. `-1` gives an inclusive N-day window ending today
+  // (today-(N-1) .. today). Reused verbatim by buildPerDayWindow so the
+  // per-day bars can never drift from the summary window.
   return {
-    clauses: [`created_at > NOW() - INTERVAL '1 day' * $${startIdx}`],
+    clauses: [
+      `created_at >= (NOW() AT TIME ZONE 'UTC')::date - (LEAST($${startIdx}, ${ROLLING_WINDOW_CAP_DAYS}) - 1)`,
+    ],
     params: [days],
     nextIdx: startIdx + 1,
   };
 }
 
 /**
- * Per-day-chart cap, capped at 366 days to bound response payload; other
- * aggregates still respect the full window. The analytics bar chart renders
- * one bar per day so a year of bars is already well beyond any useful
- * granularity — anything larger is just payload bloat and wasted layout
- * work for the UI. Only applied on rolling (days-based) windows; explicit
- * from/to ranges are user-chosen bounds and pass through uncapped.
- */
-const PER_DAY_WINDOW_CAP_DAYS = 366;
-
-/**
  * Build a series expression + narrowed WHERE clause for the per-day chart.
  *
  * The inner WHERE is delegated to {@link buildDateWindow} so the per-day
- * aggregate counts the EXACT same rows as the summary window — guaranteeing
- * sum(queries_per_day_window[].count) matches total_queries_window whenever
- * the rolling window fits inside the 366-day cap (see cap-regime note below).
- * Any drift between the two WHERE forms showed up in production as "my bars
- * add up to less than my summary card"; reusing buildDateWindow removes the
- * whole class of bug.
+ * aggregate counts the EXACT same rows as the summary window. With both
+ * sides now UTC-calendar-day aligned in rolling mode (since buildDateWindow
+ * switched off NOW()-relative intervals), `sum(queries_per_day_window)` ==
+ * `total_queries_window` exactly — no drift regardless of what time of UTC
+ * day the read happens to land. Any future divergence between the two
+ * WHERE forms would show up in production as "my bars add up to less than
+ * my summary card"; reusing buildDateWindow removes the whole class of bug.
  *
  * The SERIES is emitted separately as UTC-midnight calendar days so that the
  * LEFT JOIN renders one bar per day even when no rows were logged. Rolling
- * mode caps the series at PER_DAY_WINDOW_CAP_DAYS to bound payload size;
- * range mode passes through uncapped (user explicitly chose bounds).
- *
- * Cap regime: when `$days > PER_DAY_WINDOW_CAP_DAYS`, the series is truncated
- * but the inner WHERE still counts every row back to NOW()-$days. In that
- * regime sum-of-bars ≤ total_queries_window — by design. The 366-day cap
- * exists to bound UI payload; total_queries_window is expected to reflect
- * the full caller-requested window.
+ * mode caps the series at ROLLING_WINDOW_CAP_DAYS (shared with
+ * buildDateWindow) so a huge `days` value can't bloat the payload. Range
+ * mode passes through uncapped (user explicitly chose bounds) and forces
+ * UTC on the series ::date cast so a non-UTC session TimeZone GUC can't
+ * shift the series one day earlier than intended.
  *
  * `startIdx` is the next available `$` placeholder index; `nextIdx` is the
  * next index to use after this helper's params.
@@ -283,22 +302,30 @@ function buildPerDayWindow(
 
   if (filter.from && filter.to) {
     return {
-      // Range: `$from::date .. $to::date`. Date coercion uses UTC semantics
-      // in Postgres when the TimeZone GUC is UTC; combined with the UTC-
-      // normalized date_trunc in the inner aggregate (see getAnalyticsSummary)
-      // this keeps bars aligned regardless of session TZ.
-      seriesExpr: `generate_series($${startIdx}::date, $${startIdx + 1}::date, '1 day'::interval)`,
+      // Range: `($from AT TIME ZONE 'UTC')::date .. ($to AT TIME ZONE
+      // 'UTC')::date`. The `AT TIME ZONE 'UTC'` forces the timestamptz to
+      // be interpreted in UTC before the ::date cast; without it, a
+      // non-UTC session TimeZone GUC (common on managed Postgres that
+      // inherit a regional default) coerces `'2026-04-15T00:00:00Z'::date`
+      // to the session-local day `2026-04-14`, shifting the series one
+      // day earlier than the caller intended. Combined with the UTC-
+      // normalized date_trunc in the inner aggregate (see
+      // getAnalyticsSummary), this keeps bars aligned regardless of TZ.
+      seriesExpr: `generate_series(($${startIdx}::timestamptz AT TIME ZONE 'UTC')::date, ($${startIdx + 1}::timestamptz AT TIME ZONE 'UTC')::date, '1 day'::interval)`,
       whereClause,
       params: dw.params,
       nextIdx: dw.nextIdx,
     };
   }
 
-  // Rolling. Emit today-(N-1) .. today in UTC, capped at PER_DAY_WINDOW_CAP_DAYS
-  // so a huge $days value can't bloat the payload. The cap lives in SQL
-  // (LEAST in the series expression) and reuses the same $days placeholder
-  // that buildDateWindow binds — no extra param needed.
-  const cappedExpr = `LEAST($${startIdx}, ${PER_DAY_WINDOW_CAP_DAYS})`;
+  // Rolling. Emit today-(N-1) .. today in UTC, capped at
+  // ROLLING_WINDOW_CAP_DAYS so a huge $days value can't bloat the payload.
+  // The cap lives in SQL (LEAST in the series expression) and reuses the
+  // same $days placeholder that buildDateWindow binds — no extra param
+  // needed. Both the series lower bound and the buildDateWindow WHERE now
+  // apply the same `(NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, cap) - 1)`
+  // expression, so sum-of-bars == total_queries_window exactly.
+  const cappedExpr = `LEAST($${startIdx}, ${ROLLING_WINDOW_CAP_DAYS})`;
   return {
     seriesExpr: `generate_series((NOW() AT TIME ZONE 'UTC')::date - (${cappedExpr} - 1), (NOW() AT TIME ZONE 'UTC')::date, '1 day'::interval)`,
     whereClause,
@@ -729,10 +756,11 @@ export async function cleanupOldQueryLogs(
     );
   }
   const pool = getPool();
-  // Reads use strict `>`, so the edge row `created_at == NOW() - INTERVAL '1 day' * N`
-  // is invisible to reads. If cleanup also used strict `<`, that edge row would never
-  // be visible OR purged — effectively immortal. Using `<=` here closes the partition
-  // so every row past the retention cutoff is reachable by cleanup.
+  // Cleanup is a retention purge anchored to wall-clock NOW(), independent
+  // of the UTC-calendar-day-aligned read window buildDateWindow emits. The
+  // `<=` (non-strict) boundary means any row at or past the retention
+  // cutoff is reachable by cleanup; we never want a row to be invisible to
+  // reads AND immune to purge at the same time.
   try {
     const result = await pool.query(
       `DELETE FROM query_log WHERE created_at <= NOW() - INTERVAL '1 day' * $1`,
