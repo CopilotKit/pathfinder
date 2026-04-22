@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
-import {
-  __setPoolForTesting,
-  __resetPoolForTesting,
-} from "../db/client.js";
+import { __setPoolForTesting, __resetPoolForTesting } from "../db/client.js";
 import { getAnalyticsSummary } from "../db/analytics.js";
 import { generatePostSchemaMigration } from "../db/schema.js";
 
@@ -23,7 +20,8 @@ import { generatePostSchemaMigration } from "../db/schema.js";
 // the pgvector extension setup that initializePGlite performs.
 // -----------------------------------------------------------------------------
 
-const QUERY_LOG_DDL_MARKER = "-- Analytics: query_log table for tracking tool usage";
+const QUERY_LOG_DDL_MARKER =
+  "-- Analytics: query_log table for tracking tool usage";
 
 function extractQueryLogDdl(): string {
   const full = generatePostSchemaMigration();

@@ -927,15 +927,27 @@ describe("getAnalyticsSummary honors days window", () => {
     await getAnalyticsSummary({}, 30);
 
     // Skip mock.calls[0] — the totals query has no date window.
+    // Skip mock.calls[4] — the per-day query uses the gap-fill helper
+    // (buildPerDayWindow), which emits a generate_series + LEFT JOIN with
+    // `(NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, 366) - 1)` rather
+    // than the shared `NOW() - INTERVAL '1 day' * $N` window. The `days`
+    // param is still bound correctly (asserted below); only the SQL text
+    // differs.
     // With no filter params, days is the first (and only) param on each
     // windowed subquery. Assert directly on params[0] rather than using
     // `.not.toContain(7)`, which could accidentally pass for any other
     // reason a `7` is absent.
-    for (let i = 1; i < 5; i++) {
+    for (let i = 1; i < 4; i++) {
       const [sql, params] = mockQuery.mock.calls[i];
       expect(sql).toContain("NOW() - INTERVAL");
       expect(params[0]).toBe(30);
     }
+    // Per-day subquery: still receives `days=30` but in the generate_series
+    // + LEAST expression rather than NOW() - INTERVAL.
+    const [perDaySql, perDayParams] = mockQuery.mock.calls[4];
+    expect(perDaySql).toContain("generate_series");
+    expect(perDaySql).toContain("LEAST");
+    expect(perDayParams[0]).toBe(30);
   });
 
   it("defaults `days` to 7 when not provided (backward compatible)", async () => {
@@ -1003,11 +1015,20 @@ describe("getAnalyticsSummary with from/to range", () => {
     mockSummaryQueries();
     await getAnalyticsSummary({});
 
-    for (let i = 1; i < 5; i++) {
+    // Indexes 1..3 (summary, latency, by-source) share buildDateWindow's
+    // `NOW() - INTERVAL` rolling window.
+    for (let i = 1; i < 4; i++) {
       const [sql] = mockQuery.mock.calls[i];
       expect(sql).toContain("NOW() - INTERVAL");
       expect(sql).not.toContain("created_at >=");
     }
+    // Index 4 (per-day) uses the gap-fill helper: generate_series
+    // + `(NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, 366) - 1)` in
+    // rolling mode. It does contain `created_at >=` (on the inner
+    // narrowing WHERE) but does not use `NOW() - INTERVAL`.
+    const [perDaySql] = mockQuery.mock.calls[4];
+    expect(perDaySql).toContain("generate_series");
+    expect(perDaySql).not.toContain("NOW() - INTERVAL");
   });
 });
 

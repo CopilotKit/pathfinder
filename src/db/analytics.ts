@@ -229,6 +229,71 @@ function buildDateWindow(
   };
 }
 
+/**
+ * Per-day-chart cap, capped at 366 days to bound response payload; other
+ * aggregates still respect the full window. The analytics bar chart renders
+ * one bar per day so a year of bars is already well beyond any useful
+ * granularity — anything larger is just payload bloat and wasted layout
+ * work for the UI. Only applied on rolling (days-based) windows; explicit
+ * from/to ranges are user-chosen bounds and pass through uncapped.
+ */
+const PER_DAY_WINDOW_CAP_DAYS = 366;
+
+/**
+ * Build a series expression + narrowed WHERE clause for the per-day chart.
+ *
+ * Unlike {@link buildDateWindow}, this helper returns a `generate_series`
+ * expression plus an aligned inner WHERE so the gap-fill LEFT JOIN emits
+ * one row per day in the window even when zero rows were logged that day.
+ *
+ * Kept separate from buildDateWindow because other aggregates (summary,
+ * latency, by-source, getToolCounts, getTopQueries, getEmptyQueries) pin
+ * buildDateWindow's exact semantics and must not be affected by the
+ * gap-fill cap or series alignment.
+ *
+ * - Rolling mode: `generate_series((NOW() AT TIME ZONE 'UTC')::date -
+ *   (LEAST($days, 366) - 1), (NOW() AT TIME ZONE 'UTC')::date,
+ *   '1 day'::interval)` — UTC-normalized so the output matches
+ *   `date_trunc('day', created_at)::date` regardless of server TZ GUC.
+ *   The matching inner WHERE narrows to `created_at >= (NOW() AT TIME
+ *   ZONE 'UTC')::date - (LEAST($days, 366) - 1)` so rows outside the
+ *   gap-fill series can't leak into the inner aggregate.
+ * - Range mode: `generate_series($from::date, $to::date,
+ *   '1 day'::interval)` — uncapped; user explicitly chose bounds.
+ *
+ * `startIdx` is the next available `$` placeholder index; `nextIdx` is the
+ * next index to use after this helper's params.
+ */
+function buildPerDayWindow(
+  filter: AnalyticsFilter,
+  days: number,
+  startIdx: number,
+): {
+  seriesExpr: string;
+  whereClause: string;
+  params: unknown[];
+  nextIdx: number;
+} {
+  if (filter.from && filter.to) {
+    return {
+      seriesExpr: `generate_series($${startIdx}::date, $${startIdx + 1}::date, '1 day'::interval)`,
+      whereClause: `created_at >= $${startIdx} AND created_at <= $${startIdx + 1}`,
+      params: [filter.from, filter.to],
+      nextIdx: startIdx + 2,
+    };
+  }
+  // Rolling. Cap at PER_DAY_WINDOW_CAP_DAYS to bound payload size. LEAST()
+  // runs inside SQL (same parameter used for series + WHERE) so the two
+  // bounds can never drift.
+  const cappedExpr = `LEAST($${startIdx}, ${PER_DAY_WINDOW_CAP_DAYS})`;
+  return {
+    seriesExpr: `generate_series((NOW() AT TIME ZONE 'UTC')::date - (${cappedExpr} - 1), (NOW() AT TIME ZONE 'UTC')::date, '1 day'::interval)`,
+    whereClause: `created_at >= (NOW() AT TIME ZONE 'UTC')::date - (${cappedExpr} - 1)`,
+    params: [days],
+    nextIdx: startIdx + 1,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Read
 // ---------------------------------------------------------------------------
@@ -373,26 +438,42 @@ export async function getAnalyticsSummary(
     [...fp4, ...dw4.params],
   );
 
-  // Per day (filtered). Excludes backfilled rows (latency_ms < 0) AND
-  // redacted rows (query_text = REDACTED_QUERY_TEXT) so the per-day bars
+  // Per day (filtered). LEFT JOIN against generate_series so every day in
+  // the window emits a row — even when zero queries were logged that day.
+  // Pre-fix, a plain GROUP BY silently dropped zero-count days, so sparse
+  // data rendered fewer bars than the window length ("Last 14 days" → 10
+  // bars on sparse data). See buildPerDayWindow for the series bounds.
+  //
+  // Inner subquery preserves the same filters as the pre-fix path:
+  // backfilled rows (latency_ms < 0) AND redacted rows
+  // (query_text = REDACTED_QUERY_TEXT) are excluded so the per-day bars
   // match the summary/latency aggregates above AND the top-queries /
   // empty-queries tables below — all of which filter redacted out.
+  //
+  // dayWhere filters live ONLY on the inner subquery. Applying them on the
+  // outer LEFT JOIN would turn it back into an inner join and re-drop the
+  // zero-count days the gap-fill exists to surface.
   const { clauses: fc5, params: fp5, nextIdx: n5 } = buildFilterClauses(filter);
-  const dw5 = buildDateWindow(filter, days, n5);
-  const redactedIdx5 = dw5.nextIdx;
+  const pdw = buildPerDayWindow(filter, days, n5);
+  const redactedIdx5 = pdw.nextIdx;
   const dayBase = [
-    ...dw5.clauses,
+    pdw.whereClause,
     "latency_ms >= 0",
     `query_text != $${redactedIdx5}`,
   ];
   const dayWhere = whereAnd(dayBase, fc5);
   const perDayRes = await pool.query(
-    `SELECT date_trunc('day', created_at)::date::text AS day, count(*)::int AS count
-    FROM query_log
-    ${dayWhere}
-    GROUP BY day
-    ORDER BY day`,
-    [...fp5, ...dw5.params, REDACTED_QUERY_TEXT],
+    `SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
+            COALESCE(q.count, 0)::int AS count
+     FROM ${pdw.seriesExpr} AS d(day)
+     LEFT JOIN (
+       SELECT date_trunc('day', created_at)::date AS day, count(*)::int AS count
+       FROM query_log
+       ${dayWhere}
+       GROUP BY day
+     ) q ON q.day = d.day::date
+     ORDER BY d.day`,
+    [...fp5, ...pdw.params, REDACTED_QUERY_TEXT],
   );
 
   const totalQueries = totalRes.rows[0]?.count ?? 0;
