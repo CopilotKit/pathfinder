@@ -59,6 +59,16 @@ export interface AnalyticsSummary {
   p95_latency_sampled?: boolean;
   queries_by_source: Array<{ source_name: string; count: number }>;
   queries_per_day_window: Array<{ day: string; count: number }>;
+  /**
+   * ISO UTC date (YYYY-MM-DD) of the oldest query_log row, or null if
+   * query_log is empty. Sourced from an UNFILTERED MIN(created_at) — no
+   * tool_type/source/days/from/to filters apply — because the UI uses
+   * this to label windows that exceed actual data depth (e.g. "showing
+   * 9 days of data" when the user picks a 30-day window on a 9-day
+   * install). Filter-dependent values would conflate "no data for this
+   * filter" with "no data at all".
+   */
+  earliest_query_day: string | null;
 }
 
 export interface TopQuery {
@@ -525,10 +535,32 @@ export async function getAnalyticsSummary(
     [...fp5, ...pdw.params, REDACTED_QUERY_TEXT],
   );
 
+  // Earliest query day (UNFILTERED — the UI uses this to label windows
+  // that have plateaued against actual data depth, which is an absolute
+  // property of the table, not relative to the current filter. Keeping
+  // this subquery sequential with the others preserves the existing
+  // ordering (tests assert on mock.calls[5] as the earliest-day query);
+  // parallelizing would need the rest of getAnalyticsSummary to move to
+  // Promise.all at the same time, which is out of scope here.
+  //
+  // date_trunc → cast to date → cast to text produces a bare YYYY-MM-DD
+  // string regardless of the session timezone. Cast at `created_at AT
+  // TIME ZONE 'UTC'` so the "day" boundary is always UTC and matches
+  // the per-day bars + client-side Date comparisons the UI already
+  // does in UTC.
+  const earliestRes = await pool.query(
+    `SELECT min(created_at AT TIME ZONE 'UTC')::date::text AS earliest_day FROM query_log`,
+  );
+
   const totalQueries = totalRes.rows[0]?.count ?? 0;
   const s = summaryRes.rows[0] ?? {};
   const totalWindow = s.total ?? 0;
   const emptyWindow = s.empty ?? 0;
+  // Normalize undefined (truly missing) to null so consumers get a
+  // consistent shape regardless of whether the DB returned an empty
+  // row, a row with NULL, or no row at all.
+  const earliestDay =
+    (earliestRes.rows[0]?.earliest_day as string | null | undefined) ?? null;
 
   // Compute p95 in application code. Slice back to the cap so the extra
   // "overflow probe" row fetched above doesn't skew the sample size.
@@ -557,6 +589,7 @@ export async function getAnalyticsSummary(
         count: r.count as number,
       }),
     ),
+    earliest_query_day: earliestDay,
   };
 }
 

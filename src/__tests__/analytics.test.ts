@@ -154,7 +154,8 @@ describe("getAnalyticsSummary", () => {
           { day: "2026-04-10", count: 30 },
           { day: "2026-04-11", count: 25 },
         ],
-      }); // per day
+      }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: "2026-04-10" }] }); // earliest day
 
     const result = await getAnalyticsSummary();
 
@@ -179,7 +180,8 @@ describe("getAnalyticsSummary", () => {
       })
       .mockResolvedValueOnce({ rows: [] }) // empty latency rows
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     const result = await getAnalyticsSummary();
 
@@ -318,7 +320,8 @@ describe("p95 computation edge cases", () => {
       })
       .mockResolvedValueOnce({ rows: [{ latency_ms: 42 }] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     const result = await getAnalyticsSummary();
     expect(result.p95_latency_ms_window).toBe(42);
@@ -334,7 +337,8 @@ describe("p95 computation edge cases", () => {
         rows: Array.from({ length: 100 }, () => ({ latency_ms: 50 })),
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     const result = await getAnalyticsSummary();
     expect(result.p95_latency_ms_window).toBe(50);
@@ -350,7 +354,8 @@ describe("p95 computation edge cases", () => {
         rows: [{ latency_ms: 50 }, { latency_ms: 100 }],
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     const result = await getAnalyticsSummary();
     // floor(2 * 0.95) = 1, sorted[1] = 100
@@ -669,7 +674,8 @@ describe("windowed aggregates exclude backfilled rows (latency_ms >= 0)", () => 
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("getAnalyticsSummary: all four windowed subqueries filter latency_ms >= 0", async () => {
@@ -729,7 +735,8 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("emits ORDER BY random() LIMIT on the latency subquery and binds P95_LATENCY_ROW_CAP", async () => {
@@ -771,7 +778,8 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
         })),
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
     const result = await getAnalyticsSummary({});
     const logged = warnSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(logged).toContain("[analytics]");
@@ -796,7 +804,8 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
         rows: [{ latency_ms: 10 }, { latency_ms: 20 }, { latency_ms: 30 }],
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
     const result = await getAnalyticsSummary({});
     expect(result.p95_latency_sampled).toBeUndefined();
   });
@@ -811,7 +820,8 @@ describe("getAnalyticsSummary per-day excludes redacted rows", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("per-day subquery filters query_text != REDACTED_QUERY_TEXT (consistency with top/empty)", async () => {
@@ -854,7 +864,8 @@ describe("getAnalyticsSummary with filters", () => {
       }) // windowed summary
       .mockResolvedValueOnce({ rows: [] }) // latency rows
       .mockResolvedValueOnce({ rows: [] }) // by source
-      .mockResolvedValueOnce({ rows: [] }); // per day
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("passes tool_type filter as LIKE clause to all queries", async () => {
@@ -1002,7 +1013,8 @@ describe("getAnalyticsSummary honors days window", () => {
       }) // windowed summary
       .mockResolvedValueOnce({ rows: [] }) // latency rows
       .mockResolvedValueOnce({ rows: [] }) // by source
-      .mockResolvedValueOnce({ rows: [] }); // per day
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("passes the requested `days` value to every windowed subquery", async () => {
@@ -1071,7 +1083,8 @@ describe("getAnalyticsSummary with from/to range", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("generates created_at >= / <= range clause and passes Date params", async () => {
