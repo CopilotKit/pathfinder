@@ -828,4 +828,38 @@ describe("parsePositiveIntParam", () => {
   it("returns parsed number at max boundary", () => {
     expect(parsePositiveIntParam("100", 7, 100)).toBe(100);
   });
+
+  // R4-10: strict `/^\d+$/` guard before Number.parseInt so these inputs
+  // cannot be silently coerced by parseInt's permissive grammar.
+  it("rejects decimal strings (would parseInt-truncate to a positive int)", () => {
+    const res = parsePositiveIntParam("1.5", 7, 100);
+    expect(typeof res).toBe("object");
+    if (typeof res === "object") {
+      expect(res.error).toMatch(/positive integer/);
+    }
+  });
+
+  it("rejects scientific notation (would parseInt to 1)", () => {
+    const res = parsePositiveIntParam("1e3", 7, 100);
+    expect(typeof res).toBe("object");
+    if (typeof res === "object") {
+      expect(res.error).toMatch(/positive integer/);
+    }
+  });
+
+  it("rejects leading whitespace (would parseInt after implicit trim)", () => {
+    const res = parsePositiveIntParam(" 123", 7, 100);
+    expect(typeof res).toBe("object");
+    if (typeof res === "object") {
+      expect(res.error).toMatch(/positive integer/);
+    }
+  });
+
+  it("rejects mixed alphanumeric (would parseInt to leading digit run)", () => {
+    const res = parsePositiveIntParam("123abc", 7, 100);
+    expect(typeof res).toBe("object");
+    if (typeof res === "object") {
+      expect(res.error).toMatch(/positive integer/);
+    }
+  });
 });

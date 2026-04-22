@@ -360,7 +360,7 @@ if (process.env.PATHFINDER_TRACE_CLAUDE_AI === "1") {
     // Route through the shared helper so tracing, rate limiting, and
     // analytics dev-bypass all agree on the resolved IP (and all share
     // the same X-Forwarded-For spoof protection when trust_proxy=false).
-    const ip = clientIp(req, trustProxy);
+    const ip = clientIp(req, isTrustingProxy());
     if (
       ip.startsWith("160.79.106") ||
       ip.startsWith("104.192.205") ||
@@ -683,10 +683,11 @@ function reapIdleSessionsTick(): void {
  *   body here, so the losing client sees a silent TCP close. The loud
  *   `console.warn` below is the operator-side compensation.
  *
- *   TODO: revisit this asymmetry if/when the MCP SDK exposes a way to
- *   emit a protocol-level error frame during onsessioninitialized — at
- *   that point both transports can converge on the same "descriptive
- *   rejection" shape and this helper can stop being the quiet one.
+ *   If a future MCP SDK version exposes a way to emit a protocol-level
+ *   error frame during onsessioninitialized, both transports can
+ *   converge on the same "descriptive rejection" shape and this helper
+ *   can stop being the quiet one. Until then the silent-disconnect is
+ *   the documented SDK-imposed behavior — not a TODO, a constraint.
  *
  * Note on step 1: the MCP SDK's `StreamableHTTPServerTransport.send()`
  * requires a live SSE stream (see node_modules/.../webStandardStreamableHttp
@@ -1184,7 +1185,27 @@ let sessionReaperInterval: ReturnType<typeof setInterval> | undefined;
 // run yet, or the config omits the flag, we IGNORE X-Forwarded-For and fall
 // back to the socket address — matching the hardened, spoof-resistant
 // default documented in types.ts.
-let trustProxy = false;
+// R4-14: widened to match the types.ts schema. Express's `app.set("trust
+// proxy", …)` accepts boolean | number | string[] (list of CIDRs) so the
+// config surface exposes all three. `clientIp` still takes a boolean — we
+// derive it via `isTrustingProxy(trustProxy)` below.
+let trustProxy: boolean | number | string[] = false;
+
+/**
+ * Reduce the widened `trust_proxy` config value to a boolean for `clientIp`
+ * and the analytics-dev-bypass guard. Anything other than the literal `false`
+ * (including `true`, a positive hop count, or any non-empty CIDR list) means
+ * "we're honoring X-Forwarded-For in some form" — the spoof risk surface
+ * is identical from `clientIp`'s perspective, so we collapse to a boolean.
+ */
+function isTrustingProxy(
+  value: boolean | number | string[] = trustProxy,
+): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return false;
+}
 
 /**
  * Test-only accessor for the module-level trustProxy flag. The flag is set
@@ -1194,14 +1215,16 @@ let trustProxy = false;
  * reset to `false` in an afterEach / finally so other tests don't inherit
  * the stale value.
  */
-export function __setTrustProxyForTesting(value: boolean): void {
+export function __setTrustProxyForTesting(
+  value: boolean | number | string[],
+): void {
   trustProxy = value;
 }
 
 app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    const ip = clientIp(req, trustProxy);
+    const ip = clientIp(req, isTrustingProxy());
 
     // Existing session — route to its transport
     if (sessionId && transports[sessionId]) {
@@ -1616,8 +1639,10 @@ const sseHandlers = createSseHandlers({
   workspaceManager: () => workspaceManager,
   // Late-bound via getter: trustProxy is resolved inside startServer() from
   // the loaded config, after this handler factory has already been invoked
-  // at module-load time.
-  trustProxy: () => trustProxy,
+  // at module-load time. Collapse to boolean for the SSE handlers' clientIp
+  // contract — the spoof-risk surface is identical whether we're trusting by
+  // hop count, CIDR list, or a blanket `true`.
+  trustProxy: () => isTrustingProxy(),
   rateLimitRetryAfterSeconds: () => retryAfterSecondsFromTtl(),
   createMcpServer: () => {
     let transportRef: SSEServerTransport | undefined;
@@ -1907,6 +1932,48 @@ export function __resetAnalyticsTokenForTesting(): void {
 }
 
 /**
+ * R4-8 — startup-time guard for the production-analytics token.
+ *
+ * Previously `getAnalyticsToken()` would auto-generate a process-ephemeral
+ * UUID when analytics was enabled without an explicit token. That token was
+ * unique per replica, so in multi-replica deployments the dashboard could
+ * authenticate against replica A and then hit replica B on the next request
+ * and be rejected with 401 (replica B minted its own different UUID).
+ *
+ * The fix: at startup, when `analytics.enabled && nodeEnv === "production"`
+ * and neither `analytics.token` nor the ANALYTICS_TOKEN env var is set, we
+ * throw a clear error so operators discover the missing config BEFORE the
+ * server starts serving. The existing runtime throw inside
+ * `getAnalyticsToken()` remains as a defense-in-depth second check; this
+ * assert just moves the discovery to process boot.
+ *
+ * Pure function so tests can drive every combination of
+ * (nodeEnv × enabled × configuredToken × envToken) without booting the full
+ * server.
+ */
+export function assertAnalyticsTokenConfigured(opts: {
+  nodeEnv: string;
+  analyticsEnabled: boolean;
+  configuredToken: string | undefined;
+  envToken: string | undefined;
+}): void {
+  if (!opts.analyticsEnabled) return;
+  if (opts.nodeEnv !== "production") return;
+  // Treat empty string same as undefined — `analytics.token: ""` in YAML
+  // otherwise silently skips the guard.
+  const hasConfigured =
+    !!opts.configuredToken && opts.configuredToken.length > 0;
+  const hasEnv = !!opts.envToken && opts.envToken.length > 0;
+  if (hasConfigured || hasEnv) return;
+  throw new Error(
+    "ANALYTICS_TOKEN required in production (set analytics.token in config " +
+      "or the ANALYTICS_TOKEN env var). Auto-generated tokens are " +
+      "process-ephemeral and break multi-replica deployments — a dashboard " +
+      "authenticated against one replica will 401 on another.",
+  );
+}
+
+/**
  * Return true if the request originated from a loopback interface. Trusts
  * ONLY `req.socket.remoteAddress` (not `X-Forwarded-For` — that's client-
  * controlled and would let anyone forge "I'm localhost").
@@ -1939,7 +2006,7 @@ function isLocalhostReq(req: Request): boolean {
   // trust_proxy or bind the dev server directly without a fronting proxy.
   // A startup WARN is emitted from startServer() when both flags are set so
   // this behavior isn't silent.
-  if (trustProxy) return false;
+  if (isTrustingProxy()) return false;
   const addr = req.socket?.remoteAddress ?? "";
   if (!addr) return false;
   try {
@@ -2321,8 +2388,13 @@ export function parsePositiveIntParam(
 ): number | { error: string } {
   if (raw === undefined || raw === null || raw === "") return defaultValue;
   if (typeof raw !== "string") return { error: "must be a string" };
+  // R4-10: STRICT /^\d+$/ guard BEFORE Number.parseInt. Without this, inputs
+  // like "1.5", "1e3", " 123", and "123abc" would be silently coerced by
+  // parseInt's permissive grammar (truncating at the first non-digit / after
+  // implicit trim) and the function would return a plausible-looking
+  // positive integer for gibberish input. See the dedicated test cases.
   if (!/^\d+$/.test(raw)) return { error: "must be a positive integer" };
-  const n = parseInt(raw, 10);
+  const n = Number.parseInt(raw, 10);
   if (n <= 0) return { error: "must be > 0" };
   if (n > max) return { error: `must be <= ${max}` };
   return n;
@@ -2658,9 +2730,14 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
   // must agree, always.
   trustProxy = serverCfg.server.trust_proxy ?? false;
   app.set("trust proxy", trustProxy);
-  if (trustProxy) {
+  if (isTrustingProxy()) {
+    // R4-14: print the configured value so operators can confirm the shape
+    // (blanket boolean, hop count, or CIDR list) actually took effect.
+    const rendered = Array.isArray(trustProxy)
+      ? `[${trustProxy.join(", ")}]`
+      : String(trustProxy);
     console.log(
-      "[startup] trust_proxy=true — honoring X-Forwarded-For (reverse proxy must strip/rewrite this header)",
+      `[startup] trust_proxy=${rendered} — honoring X-Forwarded-For (reverse proxy must strip/rewrite this header)`,
     );
     if (cfg.nodeEnv === "development") {
       // Dev bypass and trust_proxy=true is an unsupported combination:
@@ -2680,6 +2757,22 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
       "[startup] trust_proxy=false — X-Forwarded-For ignored; client IP derived from socket (hardened default)",
     );
   }
+
+  // R4-8 — refuse to start in production when analytics is enabled but no
+  // stable token is configured. The runtime `getAnalyticsToken()` throw is
+  // too late: the error only surfaces on the first /api/analytics request
+  // AND — worse — a pre-R4-8 replica would auto-generate its own token and
+  // silently start answering with an unshared secret. Fail loudly here so
+  // the missing ANALYTICS_TOKEN is discovered at deploy time, not hours
+  // later when the dashboard starts randomly 401-ing against the other
+  // replicas.
+  const analyticsCfg = getAnalyticsConfig();
+  assertAnalyticsTokenConfigured({
+    nodeEnv: cfg.nodeEnv,
+    analyticsEnabled: !!analyticsCfg?.enabled,
+    configuredToken: analyticsCfg?.token,
+    envToken: process.env.ANALYTICS_TOKEN,
+  });
 
   // Configure session TTL and IP rate limiter from config
   const maxSessionsPerIp = serverCfg.server.max_sessions_per_ip ?? 20;

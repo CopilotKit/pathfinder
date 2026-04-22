@@ -883,6 +883,73 @@ describe("handleSessionInitAccept (R3 #2 rollback signaling + H2 sessionStateMan
       consoleErrSpy.mockRestore();
     }
   });
+
+  it("R4-17: still runs rollback side effects (map delete, ipLimiter.remove, close) when headersSent is true", async () => {
+    const { handleSessionInitAccept } = await import("../server.js");
+
+    const consoleErrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    try {
+      const sid = "r4-17-sid";
+      const transports: Record<string, unknown> = {
+        [sid]: { fake: true },
+        other: { fake: true },
+      };
+      const sessionLastActivity: Record<string, number> = {
+        [sid]: Date.now(),
+        other: Date.now(),
+      };
+
+      let ipLimiterRemovedSid: string | undefined;
+      let closeCalled = false;
+
+      const res = {
+        headersSent: true,
+        status: () => res,
+        json: () => res,
+      };
+
+      handleSessionInitAccept({
+        transport: {
+          close: async () => {
+            closeCalled = true;
+          },
+        },
+        sid,
+        ip: "9.9.9.9",
+        transports,
+        sessionLastActivity,
+        ipLimiter: {
+          remove: (s: string) => {
+            ipLimiterRemovedSid = s;
+          },
+        },
+        workspaceManager: {
+          ensureSession: () => {
+            throw new Error("ensure-hs-boom");
+          },
+        },
+        res: res as unknown as Parameters<
+          typeof handleSessionInitAccept
+        >[0]["res"],
+      });
+
+      // Allow the microtask-scheduled transport.close() to run.
+      await new Promise((r) => setImmediate(r));
+
+      // Side effects that MUST run even when the body couldn't be written:
+      expect(transports[sid]).toBeUndefined();
+      expect(sessionLastActivity[sid]).toBeUndefined();
+      expect(ipLimiterRemovedSid).toBe(sid);
+      expect(closeCalled).toBe(true);
+      // And unrelated entries untouched.
+      expect(transports.other).toBeDefined();
+      expect(sessionLastActivity.other).toBeDefined();
+    } finally {
+      consoleErrSpy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
