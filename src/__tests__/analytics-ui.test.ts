@@ -1983,3 +1983,379 @@ describe("analytics dashboard UI — fetchJson stale-401 generation guard", () =
     errSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// URL-persisted time window: the selected window (days preset or from/to
+// custom range) should be mirrored into the page URL via
+// history.replaceState so refresh / deep-link preserves the selection.
+// These tests load analytics.html with a variety of ?days= / ?from=&to=
+// query strings and assert:
+//   - on mount, the active window matches the URL
+//   - clicks on presets / custom-apply update the URL via replaceState
+//   - invalid URL inputs fall back to the 7-day default
+//   - other query params (e.g. preview=1) are preserved across writes
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — URL-persisted time window", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Variant of loadDashboard that lets a test supply a custom page URL so we
+  // can mount with ?days=N / ?from=&to= query strings. Mirrors the regular
+  // helper's wiring (Chart stub, fetch stub, inline-script eval, microtask
+  // flush) but exposes the jsdom window so tests can spy on
+  // history.replaceState before the click-driven branch runs.
+  async function loadDashboardAtUrl(
+    pageUrl: string,
+    handlers: Record<string, (qs: string) => HandlerResult>,
+  ): Promise<{
+    dom: JSDOM;
+    win: Window & typeof globalThis;
+    calls: string[];
+    chartInstances: Array<{ type: string; data: unknown; options: unknown }>;
+  }> {
+    const html = fs.readFileSync(
+      path.join(process.cwd(), "docs", "analytics.html"),
+      "utf8",
+    );
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", () => {});
+    const dom = new JSDOM(html, {
+      runScripts: "outside-only",
+      url: pageUrl,
+      pretendToBeVisual: true,
+      virtualConsole,
+    });
+
+    const win = dom.window as unknown as Window & typeof globalThis;
+    Object.assign(win, { Date: globalThis.Date });
+    const { instances } = installChartStub(win);
+    const { fetchFn, calls } = buildFetchStub(handlers);
+    Object.assign(win, { fetch: fetchFn });
+
+    const scriptEl = dom.window.document.querySelector("script:not([src])");
+    if (!scriptEl) throw new Error("inline script not found in analytics.html");
+    const code = scriptEl.textContent ?? "";
+    dom.window.eval(code);
+
+    await flushAsync();
+
+    return { dom, win, calls, chartInstances: instances };
+  }
+
+  it("mount with ?days=30 sends days=30 on outbound summary fetch and labels the pill 'Last 30 days'", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": (qs: string) => {
+        const p = parseQS(qs);
+        const days = p.days ? parseInt(p.days, 10) : 7;
+        return canned(days, 4242).summary;
+      },
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, calls } = await loadDashboardAtUrl(
+      "http://localhost/analytics?days=30",
+      endpoints,
+    );
+
+    const summaryCall = calls.find((u) =>
+      u.startsWith("/api/analytics/summary"),
+    );
+    expect(summaryCall).toBeDefined();
+    const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+    expect(qs.days).toBe("30");
+    expect(qs.from).toBeUndefined();
+    expect(qs.to).toBeUndefined();
+
+    // Pill label reflects the parsed 30-day window.
+    const pillLabel = dom.window.document
+      .querySelector("#datePill .date-value")
+      ?.textContent?.trim();
+    expect(pillLabel).toBe("Last 30 days");
+  });
+
+  it("mount with ?from=&to= sends that range on outbound fetch and uses range-format pill label", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(10, 100).summary,
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, calls } = await loadDashboardAtUrl(
+      "http://localhost/analytics?from=2026-04-01&to=2026-04-10",
+      endpoints,
+    );
+
+    const summaryCall = calls.find((u) =>
+      u.startsWith("/api/analytics/summary"),
+    );
+    expect(summaryCall).toBeDefined();
+    const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+    expect(qs.from).toBe("2026-04-01");
+    expect(qs.to).toBe("2026-04-10");
+    expect(qs.days).toBeUndefined();
+
+    // Range pill uses short-date format: "Apr 1 – Apr 10" (locale-dependent,
+    // so match by the en-dash separator rather than the exact label).
+    const pillLabel = dom.window.document
+      .querySelector("#datePill .date-value")
+      ?.textContent?.trim();
+    expect(pillLabel).toContain("–"); // en-dash between from and to
+    // Must NOT contain any "Last N days" wording.
+    expect(pillLabel).not.toMatch(/Last \d+ days/);
+  });
+
+  it("clicking the '14 days' preset updates the URL via replaceState with days=14 and drops from/to", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 100).summary,
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, win } = await loadDashboardAtUrl(
+      // Seed from/to in the URL so we can assert the preset click CLEARS them.
+      "http://localhost/analytics?from=2026-04-01&to=2026-04-05",
+      endpoints,
+    );
+
+    // Spy on history.replaceState AFTER mount so we only capture the click-
+    // driven calls. Preserve the real implementation so jsdom's URL updates.
+    const realReplace = win.history.replaceState.bind(win.history);
+    const replaceSpy = vi.fn(
+      (data: unknown, unused: string, url?: string | null) => {
+        realReplace(data, unused, url ?? undefined);
+      },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (win.history as any).replaceState = replaceSpy;
+
+    // Open popover + click "14 days" preset.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const fourteen = Array.from(
+      dom.window.document.querySelectorAll(".preset[data-days]"),
+    ).find((el) => el.getAttribute("data-days") === "14") as HTMLElement;
+    fourteen.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    expect(replaceSpy).toHaveBeenCalled();
+    // jsdom's location reflects the replaceState url. Inspect the last
+    // written URL so we confirm both: days=14 is added AND from/to are
+    // dropped in the same write.
+    const finalSearch = win.location.search;
+    const finalQS = parseQS(finalSearch.startsWith("?")
+      ? finalSearch.slice(1)
+      : finalSearch);
+    expect(finalQS.days).toBe("14");
+    expect(finalQS.from).toBeUndefined();
+    expect(finalQS.to).toBeUndefined();
+  });
+
+  it("clicking Apply on a valid custom range updates the URL with from/to (no days)", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(3, 100).summary,
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, win } = await loadDashboardAtUrl(
+      // Seed days= in the URL so we can assert Apply CLEARS it.
+      "http://localhost/analytics?days=30",
+      endpoints,
+    );
+
+    // Open popover, reveal custom, fill inputs, click Apply.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const customPreset = dom.window.document.querySelector(
+      ".preset[data-custom]",
+    ) as HTMLElement;
+    customPreset.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    const fromEl = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    const toEl = dom.window.document.getElementById(
+      "dateToInput",
+    ) as HTMLInputElement;
+    fromEl.value = "2024-02-10";
+    fromEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    toEl.value = "2024-02-20";
+    toEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    dom.window.document
+      .getElementById("dateApplyBtn")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    await flushAsync();
+
+    const finalSearch = win.location.search;
+    const finalQS = parseQS(finalSearch.startsWith("?")
+      ? finalSearch.slice(1)
+      : finalSearch);
+    expect(finalQS.from).toBe("2024-02-10");
+    expect(finalQS.to).toBe("2024-02-20");
+    expect(finalQS.days).toBeUndefined();
+  });
+
+  it("mount with ?days=garbage falls back to 7-day default (outbound days=7)", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 100).summary,
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { calls } = await loadDashboardAtUrl(
+      "http://localhost/analytics?days=garbage",
+      endpoints,
+    );
+
+    const summaryCall = calls.find((u) =>
+      u.startsWith("/api/analytics/summary"),
+    );
+    expect(summaryCall).toBeDefined();
+    const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+    expect(qs.days).toBe("7");
+    expect(qs.from).toBeUndefined();
+    expect(qs.to).toBeUndefined();
+  });
+
+  it.each([
+    ["?days=0", "zero"],
+    ["?days=-1", "negative"],
+    ["?days=3.5", "non-integer"],
+  ])(
+    "mount with %s falls back to 7-day default (rejects %s)",
+    async (query) => {
+      const endpoints = {
+        "/api/analytics/auth-mode": () => ({ dev: true }),
+        "/api/analytics/summary": () => canned(7, 100).summary,
+        "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+        "/api/analytics/queries": () => [],
+        "/api/analytics/empty-queries": () => [],
+      };
+
+      const { calls } = await loadDashboardAtUrl(
+        "http://localhost/analytics" + query,
+        endpoints,
+      );
+
+      const summaryCall = calls.find((u) =>
+        u.startsWith("/api/analytics/summary"),
+      );
+      expect(summaryCall).toBeDefined();
+      const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+      expect(qs.days).toBe("7");
+    },
+  );
+
+  it("mount with a future from/to falls back to 7-day default (rejects future dates)", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 100).summary,
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { calls } = await loadDashboardAtUrl(
+      "http://localhost/analytics?from=2099-01-01&to=2099-01-10",
+      endpoints,
+    );
+
+    const summaryCall = calls.find((u) =>
+      u.startsWith("/api/analytics/summary"),
+    );
+    expect(summaryCall).toBeDefined();
+    const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+    expect(qs.days).toBe("7");
+    expect(qs.from).toBeUndefined();
+    expect(qs.to).toBeUndefined();
+  });
+
+  it("preserves ?preview=1 alongside ?days when a preset is clicked", async () => {
+    // Preview mode installs its own canned-response fetch, so we don't need
+    // to supply handlers — mount with ?preview=1&days=30, then click "14
+    // days" and assert the URL retains preview=1 AND updates days=14.
+    const html = fs.readFileSync(
+      path.join(process.cwd(), "docs", "analytics.html"),
+      "utf8",
+    );
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", () => {});
+    const dom = new JSDOM(html, {
+      runScripts: "outside-only",
+      url: "http://localhost/analytics?preview=1&days=30",
+      pretendToBeVisual: true,
+      virtualConsole,
+    });
+
+    const win = dom.window as unknown as Window & typeof globalThis;
+    Object.assign(win, { Date: globalThis.Date });
+    if (typeof (win as { Response?: unknown }).Response === "undefined") {
+      Object.assign(win, { Response: globalThis.Response });
+    }
+    installChartStub(win);
+    // Preview IIFE captures originalFetch via window.fetch.bind(window); if
+    // the jsdom window doesn't expose fetch (depending on version), bind
+    // throws. Install a noop fetch spy so the IIFE can capture and then
+    // override it. Preview's own handler short-circuits every analytics URL
+    // so the stub's noop impl is never invoked for app paths.
+    const noopFetch = vi.fn(() => Promise.reject(new Error("noop fetch")));
+    Object.assign(win, { fetch: noopFetch });
+
+    const scriptEl = dom.window.document.querySelector("script:not([src])");
+    if (!scriptEl) throw new Error("inline script not found in analytics.html");
+    const code = scriptEl.textContent ?? "";
+    dom.window.eval(code);
+
+    // Flush many rounds since preview init is several async hops deep.
+    for (let i = 0; i < 10; i++) await flushAsync();
+
+    // Click "14 days" preset.
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const fourteen = Array.from(
+      dom.window.document.querySelectorAll(".preset[data-days]"),
+    ).find((el) => el.getAttribute("data-days") === "14") as HTMLElement;
+    fourteen.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    for (let i = 0; i < 5; i++) await flushAsync();
+
+    const finalSearch = win.location.search;
+    const finalQS = parseQS(finalSearch.startsWith("?")
+      ? finalSearch.slice(1)
+      : finalSearch);
+    expect(finalQS.preview).toBe("1");
+    expect(finalQS.days).toBe("14");
+    expect(finalQS.from).toBeUndefined();
+    expect(finalQS.to).toBeUndefined();
+  });
+});
