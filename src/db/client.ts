@@ -236,3 +236,38 @@ export async function closePool(): Promise<void> {
     await p.end();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Test-only hooks (NOT part of the public API)
+// ---------------------------------------------------------------------------
+//
+// These exports let tests swap the module-level pool with a pg.Pool-shaped
+// stand-in (for example a PGlite-backed wrapper like the one in
+// initializePGlite above) without touching DATABASE_URL or spinning up a
+// real Postgres. Production code MUST NOT import these.
+//
+// The double-underscore prefix signals "test-only" — it is the only contract
+// we have short of splitting the module; any production use is a bug.
+
+/**
+ * Test-only: replace the module-level singleton with an override so the next
+ * and all subsequent getPool() calls return it. Does not close the existing
+ * pool — tests own lifecycle management and should tear down their override
+ * via __resetPoolForTesting() in afterAll/afterEach.
+ *
+ * Accepts anything pg.Pool-shaped; in practice tests pass a minimal
+ * { query, connect, end } wrapper around PGlite. The cast is intentional so
+ * tests don't have to fabricate unused pg.Pool methods (on(), totalCount,
+ * etc.) just to satisfy the type.
+ */
+export function __setPoolForTesting(override: unknown): void {
+  pool = override as pg.Pool;
+}
+
+/**
+ * Test-only: drop the override so the next getPool() call falls back to
+ * constructing a real pool from DATABASE_URL (or throws if unset).
+ */
+export function __resetPoolForTesting(): void {
+  pool = null;
+}

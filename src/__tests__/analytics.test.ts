@@ -19,7 +19,11 @@ import {
 import type { QueryLogEntry } from "../db/analytics.js";
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // resetAllMocks (not clearAllMocks) so any queued `.mockResolvedValueOnce`
+  // implementations also clear between tests. A test that queues N mocks for
+  // one pool.query() call chain but the code only consumes M (<N) would
+  // otherwise leak the remaining N-M implementations into the next test.
+  vi.resetAllMocks();
 });
 
 // ---------------------------------------------------------------------------
@@ -150,7 +154,8 @@ describe("getAnalyticsSummary", () => {
           { day: "2026-04-10", count: 30 },
           { day: "2026-04-11", count: 25 },
         ],
-      }); // per day
+      }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: "2026-04-10" }] }); // earliest day
 
     const result = await getAnalyticsSummary();
 
@@ -175,7 +180,8 @@ describe("getAnalyticsSummary", () => {
       })
       .mockResolvedValueOnce({ rows: [] }) // empty latency rows
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     const result = await getAnalyticsSummary();
 
@@ -184,6 +190,118 @@ describe("getAnalyticsSummary", () => {
     expect(result.p95_latency_ms_window).toBe(0);
     expect(result.queries_by_source).toEqual([]);
     expect(result.queries_per_day_window).toEqual([]);
+  });
+
+  it("per-day SQL uses generate_series + LEFT JOIN so zero-count days stay in the result", async () => {
+    // Regression: pre-fix, the per-day subquery was a plain GROUP BY over
+    // date_trunc('day', created_at), so days with zero matching rows were
+    // silently dropped. That caused the "Last 14 days" chart to render
+    // fewer bars than the window length on sparse data. The gap-fill
+    // rewrite LEFT JOINs against generate_series so every day in the
+    // window gets a row (with count=0 when empty).
+    //
+    // We identify the per-day call by SQL content ("GROUP BY day" on the
+    // inner aggregate) rather than by hard-coded call index so that
+    // reordering other subqueries in getAnalyticsSummary can't silently
+    // invalidate this assertion.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 0, empty: 0, avg_latency: 0 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
+
+    await getAnalyticsSummary({}, 14);
+
+    const perDayCall = mockQuery.mock.calls.find(
+      (call) =>
+        typeof call[0] === "string" &&
+        /GROUP BY day/i.test(call[0]) &&
+        !/tool_name/i.test(call[0]), // not getTopQueries-style grouping
+    );
+    expect(perDayCall, "per-day query not found").toBeDefined();
+    const perDaySql = perDayCall![0] as string;
+    expect(perDaySql).toMatch(/generate_series/i);
+    expect(perDaySql).toMatch(/LEFT JOIN/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// earliest_query_day — data-availability probe for the UI
+//
+// The dashboard surfaces a "showing N days of data" subtext whenever the
+// requested window exceeds the actual query_log depth. To compute N the UI
+// needs the earliest row's date regardless of the current filter — picking a
+// 90-day window shouldn't hide the fact that data only stretches back 9 days.
+// The field is therefore sourced from an UNFILTERED MIN(created_at) query and
+// lives alongside the windowed aggregates on the same summary response.
+// ---------------------------------------------------------------------------
+
+describe("getAnalyticsSummary earliest_query_day", () => {
+  it("returns the earliest day from query_log as a YYYY-MM-DD string", async () => {
+    // 5 existing subqueries + 1 new earliest-day subquery (6th call).
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 1000 }] }) // total
+      .mockResolvedValueOnce({
+        rows: [{ total: 200, empty: 10, avg_latency: 45 }],
+      }) // windowed summary
+      .mockResolvedValueOnce({ rows: [] }) // latency rows
+      .mockResolvedValueOnce({ rows: [] }) // by source
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: "2026-04-12" }] }); // earliest day
+
+    const result = await getAnalyticsSummary();
+
+    expect(result.earliest_query_day).toBe("2026-04-12");
+  });
+
+  it("returns null when query_log is empty", async () => {
+    // An empty query_log makes MIN(created_at) return NULL — surface that as
+    // `null` on the response so the UI can skip the label entirely rather
+    // than rendering "showing NaN days of data".
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 0, empty: 0, avg_latency: 0 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
+
+    const result = await getAnalyticsSummary();
+
+    expect(result.earliest_query_day).toBeNull();
+  });
+
+  it("queries the unfiltered earliest created_at (no filter/window applied)", async () => {
+    // The label describes data availability in absolute terms — picking a
+    // tool_type, source, or narrow from/to window must NOT change the reported
+    // earliest day. Verify the SQL for the earliest-day subquery has no WHERE
+    // clause and no filter params are bound to it.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 0, empty: 0, avg_latency: 0 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: "2026-03-01" }] });
+
+    await getAnalyticsSummary({ tool_type: "search", source: "docs" }, 30);
+
+    // Index 5 is the new earliest-day subquery (0=total, 1=summary, 2=latency,
+    // 3=by-source, 4=per-day, 5=earliest-day).
+    const [sql, params] = mockQuery.mock.calls[5];
+    expect(sql).toMatch(/min\(created_at/i);
+    expect(sql).toMatch(/FROM query_log/i);
+    expect(sql).not.toMatch(/WHERE/i);
+    // No filter or window params bound to the earliest-day query.
+    expect(params ?? []).toEqual([]);
   });
 });
 
@@ -200,7 +318,8 @@ describe("p95 computation edge cases", () => {
       })
       .mockResolvedValueOnce({ rows: [{ latency_ms: 42 }] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     const result = await getAnalyticsSummary();
     expect(result.p95_latency_ms_window).toBe(42);
@@ -216,7 +335,8 @@ describe("p95 computation edge cases", () => {
         rows: Array.from({ length: 100 }, () => ({ latency_ms: 50 })),
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     const result = await getAnalyticsSummary();
     expect(result.p95_latency_ms_window).toBe(50);
@@ -232,7 +352,8 @@ describe("p95 computation edge cases", () => {
         rows: [{ latency_ms: 50 }, { latency_ms: 100 }],
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     const result = await getAnalyticsSummary();
     // floor(2 * 0.95) = 1, sorted[1] = 100
@@ -551,7 +672,8 @@ describe("windowed aggregates exclude backfilled rows (latency_ms >= 0)", () => 
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("getAnalyticsSummary: all four windowed subqueries filter latency_ms >= 0", async () => {
@@ -611,7 +733,8 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("emits ORDER BY random() LIMIT on the latency subquery and binds P95_LATENCY_ROW_CAP", async () => {
@@ -653,7 +776,8 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
         })),
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
     const result = await getAnalyticsSummary({});
     const logged = warnSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(logged).toContain("[analytics]");
@@ -678,7 +802,8 @@ describe("getAnalyticsSummary p95 latency row cap", () => {
         rows: [{ latency_ms: 10 }, { latency_ms: 20 }, { latency_ms: 30 }],
       })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
     const result = await getAnalyticsSummary({});
     expect(result.p95_latency_sampled).toBeUndefined();
   });
@@ -693,7 +818,8 @@ describe("getAnalyticsSummary per-day excludes redacted rows", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("per-day subquery filters query_text != REDACTED_QUERY_TEXT (consistency with top/empty)", async () => {
@@ -736,7 +862,8 @@ describe("getAnalyticsSummary with filters", () => {
       }) // windowed summary
       .mockResolvedValueOnce({ rows: [] }) // latency rows
       .mockResolvedValueOnce({ rows: [] }) // by source
-      .mockResolvedValueOnce({ rows: [] }); // per day
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("passes tool_type filter as LIKE clause to all queries", async () => {
@@ -884,7 +1011,8 @@ describe("getAnalyticsSummary honors days window", () => {
       }) // windowed summary
       .mockResolvedValueOnce({ rows: [] }) // latency rows
       .mockResolvedValueOnce({ rows: [] }) // by source
-      .mockResolvedValueOnce({ rows: [] }); // per day
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("passes the requested `days` value to every windowed subquery", async () => {
@@ -892,15 +1020,28 @@ describe("getAnalyticsSummary honors days window", () => {
     await getAnalyticsSummary({}, 30);
 
     // Skip mock.calls[0] — the totals query has no date window.
+    // All windowed subqueries (summary, latency, by-source, per-day) now
+    // share the same UTC-calendar-day rolling shape:
+    //   created_at >= (NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, 366) - 1)
+    // The per-day query additionally wraps its inner WHERE in a
+    // generate_series + LEFT JOIN.
     // With no filter params, days is the first (and only) param on each
     // windowed subquery. Assert directly on params[0] rather than using
     // `.not.toContain(7)`, which could accidentally pass for any other
     // reason a `7` is absent.
-    for (let i = 1; i < 5; i++) {
+    for (let i = 1; i < 4; i++) {
       const [sql, params] = mockQuery.mock.calls[i];
-      expect(sql).toContain("NOW() - INTERVAL");
+      expect(sql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
+      expect(sql).toContain("LEAST");
+      expect(sql).not.toContain("NOW() - INTERVAL");
       expect(params[0]).toBe(30);
     }
+    // Per-day subquery: still receives `days=30`, now in BOTH the outer
+    // series AND the inner WHERE (same UTC-midnight LEAST expression).
+    const [perDaySql, perDayParams] = mockQuery.mock.calls[4];
+    expect(perDaySql).toContain("generate_series");
+    expect(perDaySql).toContain("LEAST");
+    expect(perDayParams[0]).toBe(30);
   });
 
   it("defaults `days` to 7 when not provided (backward compatible)", async () => {
@@ -940,7 +1081,8 @@ describe("getAnalyticsSummary with from/to range", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
   }
 
   it("generates created_at >= / <= range clause and passes Date params", async () => {
@@ -964,15 +1106,35 @@ describe("getAnalyticsSummary with from/to range", () => {
     }
   });
 
-  it("falls back to NOW() - INTERVAL window when from/to are not set", async () => {
+  it("falls back to UTC-calendar-day rolling window when from/to are not set", async () => {
     mockSummaryQueries();
     await getAnalyticsSummary({});
 
-    for (let i = 1; i < 5; i++) {
+    // Indexes 1..3 (summary, latency, by-source) share buildDateWindow's
+    // UTC-calendar-day rolling window. Old shape (`NOW() - INTERVAL`) is
+    // gone: it drifted from the per-day series bounds whenever NOW() wasn't
+    // exactly UTC midnight, causing sum(queries_per_day_window) to under-
+    // count total_queries_window by up to traffic_rate * hours_into_UTC_day.
+    for (let i = 1; i < 4; i++) {
       const [sql] = mockQuery.mock.calls[i];
-      expect(sql).toContain("NOW() - INTERVAL");
-      expect(sql).not.toContain("created_at >=");
+      expect(sql).toContain("created_at >=");
+      expect(sql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
+      expect(sql).toContain("LEAST");
+      expect(sql).not.toContain("NOW() - INTERVAL");
     }
+    // Index 4 (per-day) uses the gap-fill helper: generate_series over
+    // UTC-midnight calendar days for the outer series, plus the exact
+    // buildDateWindow WHERE (now also UTC-calendar-day bounded) reused
+    // verbatim on the inner aggregate. The inner reuse is what keeps
+    // sum-of-bars EXACTLY aligned with total_queries_window.
+    const [perDaySql] = mockQuery.mock.calls[4];
+    expect(perDaySql).toContain("generate_series");
+    expect(perDaySql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
+    expect(perDaySql).toContain("LEAST");
+    expect(perDaySql).not.toContain("NOW() - INTERVAL");
+    // Inner grouping must be UTC-normalized so bars align with the UTC
+    // series regardless of server TimeZone GUC.
+    expect(perDaySql).toContain("AT TIME ZONE 'UTC'");
   });
 });
 
@@ -1038,12 +1200,18 @@ describe("getToolCounts with from/to range", () => {
     expect(params).toEqual([from, to]);
   });
 
-  it("falls back to days window when no range filter provided", async () => {
+  it("falls back to UTC-calendar-day rolling window when no range filter provided", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await getToolCounts(14);
 
     const [sql, params] = mockQuery.mock.calls[0];
-    expect(sql).toContain("NOW() - INTERVAL");
+    // Rolling mode is now UTC-calendar-day bounded so all windowed
+    // aggregates (getToolCounts included) align with the per-day gap-fill
+    // series. Old `NOW() - INTERVAL` shape is gone.
+    expect(sql).toContain("created_at >=");
+    expect(sql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
+    expect(sql).toContain("LEAST");
+    expect(sql).not.toContain("NOW() - INTERVAL");
     expect(params).toEqual([14]);
   });
 });
