@@ -27,6 +27,7 @@ import {
   hasKnowledgeTools,
   hasCollectTools,
   hasBashSemanticSearch,
+  assertDocumentPeerDepsForSources,
 } from "./config.js";
 import {
   isSlackSourceConfig,
@@ -256,6 +257,43 @@ export function runStartupIndexAndBashRefresh(
     });
 }
 
+/**
+ * R3 #2 — classify why a webhook endpoint has no handler attached.
+ *
+ * Before this helper, all three webhook endpoints returned 503 "Server still
+ * initializing" regardless of whether (a) no sources of that type were
+ * configured (operator error / wrong endpoint) or (b) startup was still
+ * running and the handler hadn't been wired yet. 503 "not configured" is
+ * misleading — the operator would keep retrying against an endpoint that
+ * cannot ever come up. Route the two cases to 404 vs 503 so monitoring /
+ * smoke tests can distinguish them.
+ *
+ * Exported for tests.
+ */
+export function classifyWebhookUnavailable(opts: {
+  sourceType: "github" | "slack" | "discord";
+}): { status: 404 | 503; body: { error: string; sourceType: string } } {
+  const configured = getServerConfig().sources.some(
+    (s) => s.type === opts.sourceType,
+  );
+  if (!configured) {
+    return {
+      status: 404,
+      body: {
+        error: `${opts.sourceType} webhook not configured — no sources of type '${opts.sourceType}' in config`,
+        sourceType: opts.sourceType,
+      },
+    };
+  }
+  return {
+    status: 503,
+    body: {
+      error: "Server still initializing — webhook handler not yet attached",
+      sourceType: opts.sourceType,
+    },
+  };
+}
+
 
 app.post(
   "/webhooks/github",
@@ -267,7 +305,8 @@ app.post(
   async (req: Request, res: Response) => {
     const handler = webhookHandler;
     if (!handler) {
-      res.status(503).json({ error: "Server still initializing" });
+      const classified = classifyWebhookUnavailable({ sourceType: "github" });
+      res.status(classified.status).json(classified.body);
       return;
     }
     try {
@@ -310,7 +349,8 @@ app.post(
   async (req: Request, res: Response) => {
     const handler = slackWebhookHandler;
     if (!handler) {
-      res.status(503).json({ error: "Server still initializing" });
+      const classified = classifyWebhookUnavailable({ sourceType: "slack" });
+      res.status(classified.status).json(classified.body);
       return;
     }
     try {
@@ -332,7 +372,8 @@ app.post(
   async (req: Request, res: Response) => {
     const handler = discordWebhookHandler;
     if (!handler) {
-      res.status(503).json({ error: "Server still initializing" });
+      const classified = classifyWebhookUnavailable({ sourceType: "discord" });
+      res.status(classified.status).json(classified.body);
       return;
     }
     try {
@@ -927,12 +968,19 @@ export function handleSessionInitAccept(opts: {
     // a paranoid guard prevents a throw from crashing the outer handler) we
     // can't write a body, so the caller gets whatever Express does by
     // default (empty response, eventual connection close).
+    // R4-5 — surface a machine-readable `reason` discriminant on the 503
+    // body so operators and clients can tell this failure mode
+    // (workspace_init_failed) apart from the other rollback paths
+    // (state_init_failed, ip_limit_rollback) without parsing the human
+    // message. The discriminant lives on `error.data` per JSON-RPC 2.0 —
+    // clients that already read `error.code`/`error.message` keep working.
     if (res && !res.headersSent) {
       res.status(503).json({
         jsonrpc: "2.0",
         error: {
           code: -32003,
           message: "Server unavailable: failed to initialize session workspace",
+          data: { reason: "workspace_init_failed" },
         },
         id: null,
       });
@@ -1144,9 +1192,14 @@ export async function closeAllSessions(opts: {
     ),
   ]);
 
+  // R3 #12 — track which sids rejected so the summary log can name them.
+  // Per-sid error logs stay for full-stack diagnosis; the summary is what
+  // operators grep for when they just want the count + labels.
+  const streamableRejectedSids: string[] = [];
   streamableResults.forEach((result, i) => {
     const sid = streamableSids[i];
     if (result.status === "rejected") {
+      streamableRejectedSids.push(sid);
       console.error(
         `[shutdown] Streamable-HTTP transport close failed for ${sid.slice(0, 8)}:`,
         result.reason,
@@ -1155,14 +1208,24 @@ export async function closeAllSessions(opts: {
     delete tMap[sid];
   });
   if (streamableSids.length > 0) {
+    if (streamableRejectedSids.length > 0) {
+      // Summary first so a log scanner gate-filtering for "rejected" still
+      // sees the aggregate count. Label list is full-sids truncated to 8
+      // chars to stay parseable.
+      console.error(
+        `[shutdown] Streamable-HTTP close: ${streamableRejectedSids.length} of ${streamableSids.length} rejected — sids: ${streamableRejectedSids.map((s) => s.slice(0, 8)).join(", ")}`,
+      );
+    }
     console.log(
       `[shutdown] Closed ${streamableSids.length} Streamable-HTTP transport${streamableSids.length === 1 ? "" : "s"}`,
     );
   }
 
+  const sseRejectedSids: string[] = [];
   sseResults.forEach((result, i) => {
     const sid = sseSids[i];
     if (result.status === "rejected") {
+      sseRejectedSids.push(sid);
       console.error(
         `[shutdown] SSE transport close failed for ${sid.slice(0, 8)}:`,
         result.reason,
@@ -1171,6 +1234,11 @@ export async function closeAllSessions(opts: {
     delete sseMap[sid];
   });
   if (sseSids.length > 0) {
+    if (sseRejectedSids.length > 0) {
+      console.error(
+        `[shutdown] SSE close: ${sseRejectedSids.length} of ${sseSids.length} rejected — sids: ${sseRejectedSids.map((s) => s.slice(0, 8)).join(", ")}`,
+      );
+    }
     console.log(
       `[shutdown] Closed ${sseSids.length} SSE transport${sseSids.length === 1 ? "" : "s"}`,
     );
@@ -1221,6 +1289,39 @@ export function __setTrustProxyForTesting(
   trustProxy = value;
 }
 
+/**
+ * R4-3 — dispatch an existing-session /mcp request and update its activity
+ * stamp AFTER the transport handler returns successfully. A throw from
+ * handleRequest propagates to the outer catch-all in the /mcp route
+ * WITHOUT bumping sessionLastActivity — so a consistently-failing transport
+ * eventually crosses the TTL threshold and the idle reaper sweeps it
+ * instead of infinitely re-refreshing the stamp on every failed call.
+ *
+ * Exported so tests can assert the success/throw branch of the ordering
+ * contract without standing up Express + a live SDK transport.
+ */
+export async function handleExistingSessionRequest<TReq, TRes>(opts: {
+  sid: string;
+  transport: {
+    handleRequest: (req: TReq, res: TRes, body?: unknown) => Promise<void>;
+  };
+  req: TReq;
+  res: TRes;
+  sessionLastActivity: Record<string, number>;
+  /** Optional clock injection for deterministic tests. */
+  now?: () => number;
+}): Promise<void> {
+  const now = opts.now ?? Date.now;
+  await opts.transport.handleRequest(
+    opts.req,
+    opts.res,
+    (opts.req as unknown as { body?: unknown })?.body,
+  );
+  // Stamp update runs AFTER await returns without throwing — a throw
+  // propagates out before this line executes.
+  opts.sessionLastActivity[opts.sid] = now();
+}
+
 app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
@@ -1228,7 +1329,6 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
 
     // Existing session — route to its transport
     if (sessionId && transports[sessionId]) {
-      sessionLastActivity[sessionId] = Date.now();
       const method = req.body?.method as string | undefined;
       if (method === "tools/call") {
         const params = req.body?.params as Record<string, unknown> | undefined;
@@ -1258,7 +1358,18 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       } else if (method === "tools/list") {
         console.log(`[mcp] tools/list [${ip}]`);
       }
-      await transports[sessionId].handleRequest(req, res, req.body);
+      // R4-3 — update sessionLastActivity AFTER handleRequest returns
+      // successfully, not before. Pre-refresh let a consistently-throwing
+      // transport keep bumping its stamp on every failed request and evade
+      // the idle reaper. Routing through the helper below also makes the
+      // success-vs-throw contract unit-testable without spinning up Express.
+      await handleExistingSessionRequest({
+        sid: sessionId,
+        transport: transports[sessionId],
+        req,
+        res,
+        sessionLastActivity,
+      });
       return;
     }
 
@@ -2757,6 +2868,19 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
       "[startup] trust_proxy=false — X-Forwarded-For ignored; client IP derived from socket (hardened default)",
     );
   }
+
+  // R4-13 — assert document-extraction peer deps (pdf-parse / mammoth) are
+  // present when the config wires document sources with PDF/DOCX file
+  // patterns. Surfacing the missing peer now (instead of at first-file
+  // indexing time hours later) gives operators the install command
+  // alongside the rest of their startup errors.
+  await assertDocumentPeerDepsForSources(
+    serverCfg.sources as ReadonlyArray<{
+      type: string;
+      file_patterns?: string[];
+      [key: string]: unknown;
+    }>,
+  );
 
   // R4-8 — refuse to start in production when analytics is enabled but no
   // stable token is configured. The runtime `getAnalyticsToken()` throw is

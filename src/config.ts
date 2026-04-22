@@ -361,3 +361,68 @@ export function getAnalyticsConfig(): AnalyticsConfig | undefined {
     | AnalyticsConfig
     | undefined;
 }
+
+/**
+ * R4-13 — validate that required document-extraction peer deps
+ * (`pdf-parse`, `mammoth`) are installed when a `document` source is
+ * configured with file patterns that need them.
+ *
+ * The per-file extraction path in indexing/content-extractors.ts throws a
+ * clear error when the dynamic import fails — but that throw only fires
+ * when a specific file is being indexed, which could be hours into a first
+ * run. Running the check at config-load time surfaces the missing peer
+ * BEFORE the server starts accepting traffic, so operators see the install
+ * hint alongside the rest of their startup errors.
+ *
+ * `tryImport` is injected so tests can drive every present/absent
+ * combination without manipulating node_modules.
+ */
+export async function assertDocumentPeerDepsForSources(
+  sources: ReadonlyArray<{
+    type: string;
+    file_patterns?: string[];
+    [key: string]: unknown;
+  }>,
+  opts?: { tryImport?: (module: string) => Promise<unknown> },
+): Promise<void> {
+  const tryImport =
+    opts?.tryImport ??
+    (async (m: string) => {
+      // Dynamic require via Function to dodge TS's static resolution of the
+      // optional peer — same pattern content-extractors.ts uses.
+      return await import(m);
+    });
+  const documentSources = sources.filter((s) => s.type === "document");
+  if (documentSources.length === 0) return;
+  const needsPdf = documentSources.some((s) =>
+    (s.file_patterns ?? []).some((p) => p.includes(".pdf")),
+  );
+  const needsDocx = documentSources.some((s) =>
+    (s.file_patterns ?? []).some((p) => p.includes(".docx")),
+  );
+  const missing: Array<{ pkg: string; forType: string }> = [];
+  if (needsPdf) {
+    try {
+      await tryImport("pdf-parse");
+    } catch {
+      missing.push({ pkg: "pdf-parse", forType: "PDF" });
+    }
+  }
+  if (needsDocx) {
+    try {
+      await tryImport("mammoth");
+    } catch {
+      missing.push({ pkg: "mammoth", forType: "DOCX" });
+    }
+  }
+  if (missing.length === 0) return;
+  const lines = missing.map(
+    (m) =>
+      `  - ${m.pkg} (required for ${m.forType} document sources). Install: npm install ${m.pkg}`,
+  );
+  throw new Error(
+    `Configured document sources require optional peer dependencies that are not installed:\n${lines.join(
+      "\n",
+    )}\n\nAdd these to your install or remove the corresponding source.`,
+  );
+}

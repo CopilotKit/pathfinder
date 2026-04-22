@@ -347,9 +347,17 @@ export function createSseHandlers(deps: SseHandlerDeps): {
             ),
           );
         if (!res.headersSent) {
+          // R4-5 — `reason` is now a machine-readable discriminant
+          // (workspace_init_failed) rather than a human sentence, so
+          // monitoring + client code can tell this rollback apart from
+          // state_init_failed / ip_limit_rollback. The human-facing hint
+          // moves to `message`. The full error object is already logged
+          // above via console.error(..., ensureErr).
           res.status(503).json({
             error: "workspace_unavailable",
-            reason: "Failed to initialize session workspace. Please try again.",
+            reason: "workspace_init_failed",
+            message:
+              "Failed to initialize session workspace. Please try again.",
           });
         }
         return;
@@ -401,9 +409,14 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       });
       return;
     }
-    sessionLastActivity[sessionId] = Date.now();
+    // R4-3 — do NOT bump sessionLastActivity BEFORE handlePostMessage. A
+    // consistently-throwing transport would otherwise keep refreshing its
+    // idle-reaper stamp on every failed call and never time out. The stamp
+    // is updated inside the try block AFTER a successful await, so a throw
+    // propagates to the catch below without updating it.
     try {
       await transport.handlePostMessage(req, res, req.body);
+      sessionLastActivity[sessionId] = Date.now();
     } catch (err) {
       console.error(
         `[mcp] SSE handlePostMessage failed for session ${sessionId.slice(0, 8)}:`,

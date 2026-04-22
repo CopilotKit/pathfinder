@@ -69,10 +69,18 @@
         "zod": "^3.23.8"
     },
     "peerDependencies": {
-        "@xenova/transformers": "^2.17.0"
+        "@xenova/transformers": "^2.17.0",
+        "pdf-parse": "^1.1.0",
+        "mammoth": "^1.7.0"
     },
     "peerDependenciesMeta": {
         "@xenova/transformers": {
+            "optional": true
+        },
+        "pdf-parse": {
+            "optional": true
+        },
+        "mammoth": {
             "optional": true
         }
     },
