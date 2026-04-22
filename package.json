@@ -24,6 +24,9 @@
         "filesystem"
     ],
     "license": "Elastic-2.0",
+    "engines": {
+        "node": ">=20"
+    },
     "main": "dist/index.js",
     "bin": {
         "pathfinder": "dist/cli.js"

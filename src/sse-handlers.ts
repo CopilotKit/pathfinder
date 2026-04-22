@@ -1,4 +1,5 @@
 import type { Request, Response, RequestHandler } from "express";
+import { randomUUID } from "node:crypto";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bearerMiddleware } from "./oauth/handlers.js";
@@ -373,9 +374,17 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         `[mcp] New SSE session ${sessionId.slice(0, 8)} (${Object.keys(sseTransports).length} active) [${ip}]`,
       );
     } catch (err) {
-      console.error("[mcp] SSE connection error:", err);
+      // R3 #9 — emit a correlation ID in BOTH the log line and the
+      // response body so operators who get a user report ("SSE session
+      // failed") can grep the ID from the user and land on the exact
+      // failing stack. Short-form ID keeps it operator-readable.
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
+      console.error(`[mcp] SSE connection error cid=${correlationId}:`, err);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Failed to establish SSE session" });
+        res.status(500).json({
+          error: "Failed to establish SSE session",
+          correlationId,
+        });
       }
     }
   };
@@ -418,8 +427,15 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       await transport.handlePostMessage(req, res, req.body);
       sessionLastActivity[sessionId] = Date.now();
     } catch (err) {
+      // R3 #10 — include client IP so this log line matches the
+      // info-density of the sibling 404 branches (missing-session-id /
+      // unknown-session-id). Operators debugging a broken client now
+      // have `ip` + `sid` on every failure path, not just the
+      // not-found paths.
+      const trustProxy = resolve(deps.trustProxy ?? false) ?? false;
+      const ip = clientIp(req, trustProxy);
       console.error(
-        `[mcp] SSE handlePostMessage failed for session ${sessionId.slice(0, 8)}:`,
+        `[mcp] SSE handlePostMessage failed for session ${sessionId.slice(0, 8)} ip=${ip}:`,
         err,
       );
       if (!res.headersSent) {

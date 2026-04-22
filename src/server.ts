@@ -189,6 +189,29 @@ async function refreshBashInstances(
 }
 
 /**
+ * Render an unknown thrown value as a single log-friendly string.
+ *
+ * R3 #3 — multiple catch sites previously emitted only `err.message`. That
+ * strips the stack, so during incident triage operators can't correlate the
+ * failure to a code line without reproducing locally. This helper returns
+ * `err.stack` when present (which always includes `err.message`) and falls
+ * back to `String(err)` for non-Error throws. Centralized so every call site
+ * speaks one format and future additions of redaction / correlation IDs
+ * happen in one place.
+ */
+export function formatErrorForLog(err: unknown): string {
+  if (err instanceof Error) return err.stack ?? err.message;
+  // Error-like objects (thrown object literals, DOMExceptions, etc.) may
+  // carry a `.stack` or `.message` without being Error instances.
+  if (err && typeof err === "object") {
+    const maybe = err as { stack?: unknown; message?: unknown };
+    if (typeof maybe.stack === "string") return maybe.stack;
+    if (typeof maybe.message === "string") return maybe.message;
+  }
+  return String(err);
+}
+
+/**
  * Test-only accessor to the live bash registry. Production code should
  * continue to use the module-local `bashInstances` closure reference.
  */
@@ -2132,9 +2155,27 @@ function isLocalhostReq(req: Request): boolean {
     }
     // IPv6 loopback is exactly ::1.
     return (parsed as ipaddr.IPv6).toNormalizedString() === "0:0:0:0:0:0:0:1";
-  } catch {
+  } catch (err) {
+    // R3 #14 — emit a debug-level log so an operator bisecting why
+    // the analytics dev-bypass stopped working can see that the parse
+    // itself failed. Debug-level so we don't spam normal logs, but
+    // operators with debug enabled get the address + error message.
+    // Return contract is unchanged — unparseable addresses still
+    // resolve to "not localhost" (fail-closed).
+    console.debug(
+      `[isLocalhostReq] ipaddr.parse failed for addr=${addr}: ${formatErrorForLog(err)}`,
+    );
     return false;
   }
+}
+
+/**
+ * Test-only export — isLocalhostReq is module-scoped because the live
+ * path needs access to the module-level `trustProxy` mutable flag. Tests
+ * drive it via this helper so they don't have to spoof TCP sockets.
+ */
+export function __isLocalhostReqForTesting(req: Request): boolean {
+  return isLocalhostReq(req);
 }
 
 /**
@@ -2211,7 +2252,7 @@ export function analyticsAuth(
     analyticsCfg = getAnalyticsConfig();
   } catch (err) {
     console.error(
-      `[analytics] auth misconfigured: config read failed: ${err instanceof Error ? err.message : String(err)}`,
+      `[analytics] auth misconfigured: config read failed: ${formatErrorForLog(err)}`,
     );
     res.status(503).json({
       error: "misconfigured",
@@ -2249,9 +2290,7 @@ export function analyticsAuth(
   try {
     token = getAnalyticsToken();
   } catch (err) {
-    console.error(
-      `[analytics] auth misconfigured: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    console.error(`[analytics] auth misconfigured: ${formatErrorForLog(err)}`);
     res.status(503).json({
       error: "misconfigured",
       error_description: tokenDescription,
@@ -2283,15 +2322,30 @@ export function analyticsAuth(
   }
 
   const provided = authHeader.slice(7);
-  // Constant-time comparison so an attacker can't infer the token from
-  // response-time differences. Buffers must be the same length; mismatched
-  // lengths fail fast.
   const providedBuf = Buffer.from(provided, "utf8");
   const tokenBuf = Buffer.from(token, "utf8");
-  if (
-    providedBuf.length !== tokenBuf.length ||
-    !timingSafeEqual(providedBuf, tokenBuf)
-  ) {
+  // R4-18 — dedicated early return on length mismatch BEFORE calling
+  // timingSafeEqual. crypto.timingSafeEqual REQUIRES same-length buffers;
+  // passing different lengths throws ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH
+  // which would escape as an unhandled 500. The previous shape fused the
+  // check into `len !== len || !timingSafeEqual(...)` — correct today
+  // because || short-circuits, but a future refactor swapping operator
+  // precedence or reordering the operands would crash at the call. The
+  // early return is both self-documenting and robust to refactor errors.
+  //
+  // Separating the checks does NOT leak a timing oracle on token length:
+  // the correct token length is already observable via the error body
+  // shape and the call latency to any non-constant-time string op in
+  // JavaScript. The value of timingSafeEqual is protecting the BYTES of
+  // the secret once the lengths match, which this structure preserves.
+  if (providedBuf.length !== tokenBuf.length) {
+    res.status(403).json({
+      error: "forbidden",
+      error_description: "Invalid analytics token",
+    });
+    return;
+  }
+  if (!timingSafeEqual(providedBuf, tokenBuf)) {
     res.status(403).json({
       error: "forbidden",
       error_description: "Invalid analytics token",
@@ -2620,7 +2674,7 @@ export function registerAnalyticsRoutes(
         res.json(summary);
       } catch (err) {
         console.error(
-          `[analytics] Summary query failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value}):`,
+          `[analytics] Summary query failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} ip=${clientIp(req, trustProxy)}):`,
           err,
         );
         res.status(500).json({ error: "Failed to fetch analytics summary" });
@@ -2656,7 +2710,7 @@ export function registerAnalyticsRoutes(
         res.json(queries);
       } catch (err) {
         console.error(
-          `[analytics] Top queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value}):`,
+          `[analytics] Top queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value} ip=${clientIp(req, trustProxy)}):`,
           err,
         );
         res.status(500).json({ error: "Failed to fetch top queries" });
@@ -2692,7 +2746,7 @@ export function registerAnalyticsRoutes(
         res.json(queries);
       } catch (err) {
         console.error(
-          `[analytics] Empty queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value}):`,
+          `[analytics] Empty queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value} ip=${clientIp(req, trustProxy)}):`,
           err,
         );
         res.status(500).json({ error: "Failed to fetch empty queries" });
@@ -2719,7 +2773,7 @@ export function registerAnalyticsRoutes(
         res.json(counts);
       } catch (err) {
         console.error(
-          `[analytics] Tool counts failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value}):`,
+          `[analytics] Tool counts failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} ip=${clientIp(req, trustProxy)}):`,
           err,
         );
         res.status(500).json({ error: "Failed to fetch tool counts" });
@@ -2769,11 +2823,21 @@ export function registerAnalyticsRoutes(
         res.status(404).json({ error: "analytics dashboard not available" });
         return;
       }
+      // R3 #8 — emit a correlation ID in BOTH the server log and the
+      // response body. Operators who get a user report can grep logs for
+      // the ID the user saw and jump straight to the failing stack
+      // without cross-referencing timestamps. Using short randomUUID
+      // slices keeps the ID operator-readable while still collision-safe
+      // at our failure-log volumes.
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
       console.error(
-        `[analytics] sendFile failed path=${_analyticsHtmlPath}:`,
+        `[analytics] sendFile failed path=${_analyticsHtmlPath} cid=${correlationId}:`,
         err,
       );
-      res.status(500).json({ error: "analytics dashboard unavailable" });
+      res.status(500).json({
+        error: "analytics dashboard unavailable",
+        correlationId,
+      });
     });
   });
 }
@@ -2953,7 +3017,7 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
           .catch((err) =>
             console.error(
               "[telemetry] Periodic flush failed:",
-              err instanceof Error ? err.message : String(err),
+              formatErrorForLog(err),
             ),
           );
       }, 60_000);
