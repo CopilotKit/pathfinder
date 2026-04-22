@@ -185,6 +185,41 @@ describe("getAnalyticsSummary", () => {
     expect(result.queries_by_source).toEqual([]);
     expect(result.queries_per_day_window).toEqual([]);
   });
+
+  it("per-day SQL uses generate_series + LEFT JOIN so zero-count days stay in the result", async () => {
+    // Regression: pre-fix, the per-day subquery was a plain GROUP BY over
+    // date_trunc('day', created_at), so days with zero matching rows were
+    // silently dropped. That caused the "Last 14 days" chart to render
+    // fewer bars than the window length on sparse data. The gap-fill
+    // rewrite LEFT JOINs against generate_series so every day in the
+    // window gets a row (with count=0 when empty).
+    //
+    // We identify the per-day call by SQL content ("GROUP BY day" on the
+    // inner aggregate) rather than by hard-coded call index so that
+    // reordering other subqueries in getAnalyticsSummary can't silently
+    // invalidate this assertion.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 0, empty: 0, avg_latency: 0 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await getAnalyticsSummary({}, 14);
+
+    const perDayCall = mockQuery.mock.calls.find(
+      (call) =>
+        typeof call[0] === "string" &&
+        /GROUP BY day/i.test(call[0]) &&
+        !/tool_name/i.test(call[0]), // not getTopQueries-style grouping
+    );
+    expect(perDayCall, "per-day query not found").toBeDefined();
+    const perDaySql = perDayCall![0] as string;
+    expect(perDaySql).toMatch(/generate_series/i);
+    expect(perDaySql).toMatch(/LEFT JOIN/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
