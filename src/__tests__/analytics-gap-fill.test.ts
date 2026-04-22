@@ -198,11 +198,14 @@ describe("analytics per-day gap-fill (PGlite integration)", () => {
     expect(sumOfBars).toBe(4);
   });
 
-  it("cap: days=1000 clamps queries_per_day_window to 366 rows while total_queries_window reflects the full window", async () => {
-    // Seed two rows: one ~200 days back, one ~900 days back. The 900-day
-    // row is inside the caller-requested 1000-day window (so it should
-    // count toward total_queries_window) but outside the 366-day per-day
-    // cap (so it should NOT appear as a bar).
+  it("cap: days=1000 clamps both queries_per_day_window AND total_queries_window to the shared 366-day rolling cap", async () => {
+    // Seed two rows: one ~200 days back, one ~900 days back. Rolling-window
+    // cap is symmetric across every windowed aggregate (summary totals,
+    // latency, by-source, per-day, top/empty, tool counts) — they all share
+    // buildDateWindow's ROLLING_WINDOW_CAP_DAYS. Previously only the
+    // per-day series was capped, so total_queries_window saw both rows
+    // while bars only showed one — a confusing inconsistency. Now both
+    // sides clamp at 366 and the sum-invariant holds across the cap too.
     await seedQueryLog(db, [
       { created_at: utcNoonOfDay(-200) },
       { created_at: utcNoonOfDay(-900) },
@@ -211,9 +214,9 @@ describe("analytics per-day gap-fill (PGlite integration)", () => {
     const result = await getAnalyticsSummary({}, 1000);
 
     expect(result.queries_per_day_window).toHaveLength(366);
-    // total_queries_window is not gap-fill-capped — it reflects the full
-    // 1000-day window and so should see both seeded rows.
-    expect(result.total_queries_window).toBe(2);
+    // total_queries_window is now also capped — the 900-day row is outside
+    // the 366-day rolling window and should not count toward it.
+    expect(result.total_queries_window).toBe(1);
 
     // The most-recent day in the bar series is today; the oldest is today-365.
     const days = result.queries_per_day_window.map((r) => r.day);
@@ -227,6 +230,8 @@ describe("analytics per-day gap-fill (PGlite integration)", () => {
       0,
     );
     expect(sumOfBars).toBe(1);
+    // Sum-invariant holds in the cap regime too now that the cap is shared.
+    expect(sumOfBars).toBe(result.total_queries_window);
   });
 
   // Regression guard for the range-mode sum-invariant. The rolling test
@@ -278,6 +283,81 @@ describe("analytics per-day gap-fill (PGlite integration)", () => {
     );
     expect(result.total_queries_window).toBe(2);
     expect(sumOfBars).toBe(result.total_queries_window);
+  });
+
+  // Regression guard for the rolling sum-invariant drift that existed when
+  // buildDateWindow used a NOW()-relative INTERVAL window but the per-day
+  // series used UTC-midnight calendar days. At any NOW() != UTC midnight,
+  // the inner WHERE would admit rows on partial UTC day `today-N` that the
+  // outer UTC-midnight series did not emit, so the LEFT JOIN silently
+  // dropped them; total_queries_window still counted them. After the fix,
+  // buildDateWindow rolling mode also uses UTC-calendar-day bounds, so
+  // sum-of-bars == total_queries_window EXACTLY for any seed-row timestamp.
+  it("rolling UTC-day alignment: late-UTC-day row on today-N is excluded from both summary and bars", async () => {
+    // Pre-fix drift scenario: with the old `created_at > NOW() - INTERVAL
+    // '1 day' * 14` rolling window, a row at 14:00 UTC on today-14 passed
+    // the inner WHERE for any NOW() earlier than 14:00 UTC (which is most
+    // of the day), so `total_queries_window` counted it. But the per-day
+    // series emitted UTC-midnight days today-13..today; the inner aggregate
+    // bucketed the row on today-14, and the LEFT JOIN silently dropped it.
+    // Result: `sum(queries_per_day_window) < total_queries_window` — the
+    // sum-invariant violation this fix closes.
+    //
+    // Post-fix, buildDateWindow rolling mode also uses UTC-calendar-day
+    // bounds (`created_at >= (NOW() AT TIME ZONE 'UTC')::date - 13`), so
+    // the row is OUTSIDE both the summary WHERE AND the series; sum and
+    // total both land at 0 and the invariant holds exactly.
+    const driftingRow = new Date(`${utcDayString(-14)}T14:00:00.000Z`);
+    await seedQueryLog(db, [{ created_at: driftingRow }]);
+
+    const result = await getAnalyticsSummary({}, 14);
+
+    expect(result.queries_per_day_window).toHaveLength(14);
+    expect(result.total_queries_window).toBe(0);
+    const sumOfBars = result.queries_per_day_window.reduce(
+      (acc, r) => acc + r.count,
+      0,
+    );
+    expect(sumOfBars).toBe(0);
+    expect(sumOfBars).toBe(result.total_queries_window);
+  });
+
+  // Regression guard for range-mode series TZ coercion. When a session's
+  // TimeZone GUC is non-UTC, `$from::date` coerces a timestamptz to the
+  // session-local day, which can drop the series one day earlier than the
+  // caller intended. The fix wraps the cast in `AT TIME ZONE 'UTC'` so the
+  // series stays aligned with the UTC-normalized inner aggregate.
+  it("range mode non-UTC session TZ: series stays on UTC calendar days", async () => {
+    // Fixed range at UTC midnight so the regression is easy to see:
+    // from = 2026-04-15 00:00 UTC → LA (UTC-7) sees 2026-04-14 17:00 → the
+    // pre-fix `$from::date` would coerce this to 2026-04-14, shifting the
+    // series one day earlier than intended.
+    const from = new Date("2026-04-15T00:00:00.000Z");
+    const to = new Date("2026-04-17T00:00:00.000Z");
+    await seedQueryLog(db, [
+      { created_at: new Date("2026-04-15T00:00:00.000Z") },
+    ]);
+
+    const prev = await db.query<{ TimeZone: string }>("SHOW TimeZone");
+    const prevTz = prev.rows[0]?.TimeZone ?? "UTC";
+    await db.query("SET TIME ZONE 'America/Los_Angeles'");
+    try {
+      const result = await getAnalyticsSummary({ from, to });
+
+      // Inclusive day span: 2026-04-15, 2026-04-16, 2026-04-17 → 3 days.
+      const days = result.queries_per_day_window.map((r) => r.day);
+      expect(days).toEqual(["2026-04-15", "2026-04-16", "2026-04-17"]);
+      expect(days).not.toContain("2026-04-14");
+
+      const sumOfBars = result.queries_per_day_window.reduce(
+        (acc, r) => acc + r.count,
+        0,
+      );
+      expect(sumOfBars).toBe(result.total_queries_window);
+      expect(sumOfBars).toBe(1);
+    } finally {
+      await db.query(`SET TIME ZONE '${prevTz}'`);
+    }
   });
 
   // Production Postgres sessions often have `TimeZone` set to a non-UTC

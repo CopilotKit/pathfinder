@@ -927,23 +927,24 @@ describe("getAnalyticsSummary honors days window", () => {
     await getAnalyticsSummary({}, 30);
 
     // Skip mock.calls[0] — the totals query has no date window.
-    // Skip mock.calls[4] — the per-day query uses the gap-fill helper
-    // (buildPerDayWindow), which emits a generate_series + LEFT JOIN with
-    // `(NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, 366) - 1)` rather
-    // than the shared `NOW() - INTERVAL '1 day' * $N` window. The `days`
-    // param is still bound correctly (asserted below); only the SQL text
-    // differs.
+    // All windowed subqueries (summary, latency, by-source, per-day) now
+    // share the same UTC-calendar-day rolling shape:
+    //   created_at >= (NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, 366) - 1)
+    // The per-day query additionally wraps its inner WHERE in a
+    // generate_series + LEFT JOIN.
     // With no filter params, days is the first (and only) param on each
     // windowed subquery. Assert directly on params[0] rather than using
     // `.not.toContain(7)`, which could accidentally pass for any other
     // reason a `7` is absent.
     for (let i = 1; i < 4; i++) {
       const [sql, params] = mockQuery.mock.calls[i];
-      expect(sql).toContain("NOW() - INTERVAL");
+      expect(sql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
+      expect(sql).toContain("LEAST");
+      expect(sql).not.toContain("NOW() - INTERVAL");
       expect(params[0]).toBe(30);
     }
-    // Per-day subquery: still receives `days=30` but in the generate_series
-    // + LEAST expression rather than NOW() - INTERVAL.
+    // Per-day subquery: still receives `days=30`, now in BOTH the outer
+    // series AND the inner WHERE (same UTC-midnight LEAST expression).
     const [perDaySql, perDayParams] = mockQuery.mock.calls[4];
     expect(perDaySql).toContain("generate_series");
     expect(perDaySql).toContain("LEAST");
@@ -1011,27 +1012,32 @@ describe("getAnalyticsSummary with from/to range", () => {
     }
   });
 
-  it("falls back to NOW() - INTERVAL window when from/to are not set", async () => {
+  it("falls back to UTC-calendar-day rolling window when from/to are not set", async () => {
     mockSummaryQueries();
     await getAnalyticsSummary({});
 
     // Indexes 1..3 (summary, latency, by-source) share buildDateWindow's
-    // `NOW() - INTERVAL` rolling window.
+    // UTC-calendar-day rolling window. Old shape (`NOW() - INTERVAL`) is
+    // gone: it drifted from the per-day series bounds whenever NOW() wasn't
+    // exactly UTC midnight, causing sum(queries_per_day_window) to under-
+    // count total_queries_window by up to traffic_rate * hours_into_UTC_day.
     for (let i = 1; i < 4; i++) {
       const [sql] = mockQuery.mock.calls[i];
-      expect(sql).toContain("NOW() - INTERVAL");
-      expect(sql).not.toContain("created_at >=");
+      expect(sql).toContain("created_at >=");
+      expect(sql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
+      expect(sql).toContain("LEAST");
+      expect(sql).not.toContain("NOW() - INTERVAL");
     }
     // Index 4 (per-day) uses the gap-fill helper: generate_series over
     // UTC-midnight calendar days for the outer series, plus the exact
-    // buildDateWindow WHERE (rolling `NOW() - INTERVAL`) reused verbatim on
-    // the inner aggregate. The inner reuse is what keeps sum-of-bars
-    // aligned with total_queries_window — previously the per-day helper
-    // had its own date-based WHERE and drifted from the summary window.
+    // buildDateWindow WHERE (now also UTC-calendar-day bounded) reused
+    // verbatim on the inner aggregate. The inner reuse is what keeps
+    // sum-of-bars EXACTLY aligned with total_queries_window.
     const [perDaySql] = mockQuery.mock.calls[4];
     expect(perDaySql).toContain("generate_series");
     expect(perDaySql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
-    expect(perDaySql).toContain("NOW() - INTERVAL");
+    expect(perDaySql).toContain("LEAST");
+    expect(perDaySql).not.toContain("NOW() - INTERVAL");
     // Inner grouping must be UTC-normalized so bars align with the UTC
     // series regardless of server TimeZone GUC.
     expect(perDaySql).toContain("AT TIME ZONE 'UTC'");
@@ -1100,12 +1106,18 @@ describe("getToolCounts with from/to range", () => {
     expect(params).toEqual([from, to]);
   });
 
-  it("falls back to days window when no range filter provided", async () => {
+  it("falls back to UTC-calendar-day rolling window when no range filter provided", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await getToolCounts(14);
 
     const [sql, params] = mockQuery.mock.calls[0];
-    expect(sql).toContain("NOW() - INTERVAL");
+    // Rolling mode is now UTC-calendar-day bounded so all windowed
+    // aggregates (getToolCounts included) align with the per-day gap-fill
+    // series. Old `NOW() - INTERVAL` shape is gone.
+    expect(sql).toContain("created_at >=");
+    expect(sql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
+    expect(sql).toContain("LEAST");
+    expect(sql).not.toContain("NOW() - INTERVAL");
     expect(params).toEqual([14]);
   });
 });
