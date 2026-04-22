@@ -187,6 +187,76 @@ async function refreshBashInstances(
   }
 }
 
+/**
+ * Test-only accessor to the live bash registry. Production code should
+ * continue to use the module-local `bashInstances` closure reference.
+ */
+export function __getBashInstancesForTesting(): Map<string, Bash> {
+  return bashInstances;
+}
+
+/**
+ * Test-only reset of the bash registry. Lets tests preload known instances
+ * and assert atomic swap / rollback semantics without spinning up a full
+ * server.
+ */
+export function __setBashInstanceForTesting(name: string, bash: Bash): void {
+  bashInstances.set(name, bash);
+}
+
+export function __clearBashInstancesForTesting(): void {
+  bashInstances.clear();
+}
+
+/**
+ * Startup helper (R3 #5): drive `orchestrator.checkAndIndex()` and, on
+ * success, refresh the bash instances against every configured source. Each
+ * phase has its own `.catch(...)` so failures surface under distinguishable
+ * log prefixes — before this helper existed, both phases logged under
+ * `[startup] Initial index check failed:`, so a bash-refresh failure was
+ * indistinguishable from an indexing failure in the logs.
+ *
+ * Contract:
+ *   - checkAndIndex rejection → log "[startup] Initial index check failed:"
+ *     and skip the refresh (we don't want to drive a refresh against a
+ *     half-indexed DB).
+ *   - checkAndIndex resolves but refreshBashInstances rejects → log
+ *     "[startup] Bash refresh after index check failed:" and keep running.
+ *   - Returns a Promise so tests can await the chain; production callers
+ *     use it fire-and-forget.
+ *
+ * Exported for tests.
+ */
+export function runStartupIndexAndBashRefresh(
+  orchestrator: { checkAndIndex: () => Promise<unknown> },
+  sources: Array<{ name: string }>,
+): Promise<void> {
+  return orchestrator
+    .checkAndIndex()
+    .then(() => {
+      // Always refresh bash instances after startup index check.
+      // The initial bash build runs before repos are cloned, so the
+      // filesystem may be empty. If checkAndIndex skipped reindexing (DB
+      // already current), onReindexComplete won't fire and the bash
+      // filesystem would stay empty without this.
+      const allSourceNames = sources.map((s) => s.name);
+      return refreshBashInstances(allSourceNames, "startup-refresh").catch(
+        (err) => {
+          // Swallow the refresh error so it does NOT propagate to the outer
+          // `.catch` (which would mis-label it as an index-check failure).
+          console.error(
+            "[startup] Bash refresh after index check failed:",
+            err,
+          );
+        },
+      );
+    })
+    .catch((err) => {
+      console.error("[startup] Initial index check failed:", err);
+    });
+}
+
+
 app.post(
   "/webhooks/github",
   express.raw({ type: "application/json" }),
@@ -502,9 +572,20 @@ export function reapIdleSessionsTickForTesting(opts: {
     // Propagate the delete back to the canonical map. The reaper already
     // deleted from the snapshot.
     delete opts.transports[sid];
+
+    // R4-6: per-step cleanup with a per-sid summary log so operators can
+    // distinguish "all three steps ran cleanly" from "some threw" from
+    // "dep wasn't injected". The aggregate log below still fires; this
+    // replaces the earlier silent-success behavior.
+    type StepResult = "ok" | "throw" | "skipped";
+    let stateResult: StepResult = opts.sessionStateManager ? "ok" : "skipped";
+    let ipLimiterResult: StepResult = opts.ipLimiter ? "ok" : "skipped";
+    let workspaceResult: StepResult = opts.workspaceManager ? "ok" : "skipped";
+
     try {
       opts.sessionStateManager?.cleanup(sid);
     } catch (e) {
+      stateResult = "throw";
       console.error(
         `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
         e,
@@ -513,16 +594,21 @@ export function reapIdleSessionsTickForTesting(opts: {
     try {
       opts.ipLimiter?.remove(sid);
     } catch (e) {
+      ipLimiterResult = "throw";
       console.error(`[mcp] IP limiter cleanup failed:`, e);
     }
     try {
       opts.workspaceManager?.cleanup(sid);
     } catch (e) {
+      workspaceResult = "throw";
       console.error(
         `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
         e,
       );
     }
+    console.log(
+      `[mcp] Reap cleanup sid=${sid.slice(0, 8)} state=${stateResult} ipLimiter=${ipLimiterResult} workspace=${workspaceResult}`,
+    );
   }
   if (reapedStreamable.length > 0) {
     console.log(
@@ -859,6 +945,120 @@ export function handleSessionInitAccept(opts: {
 }
 
 /**
+ * Rollback helper for the `server.connect(transport)` /
+ * `completeInitRequestSafely` path in the /mcp POST initialize handler.
+ *
+ * Motivation (Z-1): after handleSessionInitAccept succeeds the handler has
+ * already:
+ *   - registered transports[preSid] + sessionLastActivity[preSid]
+ *   - incremented the ipLimiter counter (tryAdd succeeded pre-accept)
+ *   - ensureSession'd the workspace
+ *   - wired transport.onclose to cleanup
+ * It then calls `server.connect(transport)` followed by handleRequest via
+ * completeInitRequestSafely. If EITHER throws (createMcpServer wiring bug,
+ * bash-instance lookup failure, OOM during construction, closed-stream mid-
+ * handleRequest without an onsessioninitialized race), NOTHING calls
+ * transport.close() — so onclose never fires — and the session is stranded
+ * against max_sessions_per_ip until the 30-minute TTL reaper cleans it.
+ *
+ * Design invariant: cleanup runs EXACTLY ONCE for this sid.
+ *
+ * The obvious "seed rejectedSids then close()" approach is unsound when the
+ * onclose handler IS wired (our case): close() fires onclose, onclose reads
+ * rejectedSids.has(sid), drains the marker, then runs the suppression branch
+ * — but only if the marker is still present when onclose runs. If we drain
+ * inline to keep the Set bounded regardless of whether onclose fires, the
+ * later-firing onclose sees an empty Set and runs the cleanup chain a second
+ * time. We avoid both horns by DETACHING transport.onclose before calling
+ * close(). The inline rollback below is the sole owner of the cleanup chain;
+ * any onclose invocation from the SDK lands on our neutralized handler and
+ * is a no-op.
+ *
+ * Per-step try/catch on each cleanup mirrors the onclose + reaper +
+ * handleSessionInitAccept rollback pattern: a throw from one step must not
+ * skip the others. ipLimiter.remove in particular is load-bearing — a
+ * rollback that bails before ipLimiter.remove leaks the counter against
+ * this IP until TTL reap, which is the exact failure mode this helper
+ * exists to prevent.
+ *
+ * Caller (the /mcp POST handler) wraps server.connect + handleRequest in a
+ * try/catch, invokes this helper, then rethrows so the outer catch-all
+ * writes the 500 body (preserving the pre-existing response behavior).
+ *
+ * Exported for tests.
+ */
+export function rollbackSessionAfterConnectFailure(opts: {
+  transport: {
+    close: () => Promise<void> | void;
+    onclose?: (() => void) | null;
+  };
+  sid: string;
+  transports: Record<string, unknown>;
+  sessionLastActivity: Record<string, number>;
+  ipLimiter?: { remove: (sid: string) => void };
+  sessionStateManager?: { cleanup: (sid: string) => void };
+  workspaceManager?: { cleanup: (sid: string) => void };
+}): void {
+  const {
+    transport,
+    sid,
+    transports: tMap,
+    sessionLastActivity: lastActivityMap,
+    ipLimiter: limiter,
+    sessionStateManager: sessionState,
+    workspaceManager: workspace,
+  } = opts;
+
+  // Detach the wired onclose handler BEFORE we fire close(). The MCP SDK may
+  // invoke onclose as part of stream teardown; replacing it with a no-op
+  // (rather than deleting) keeps the property shape predictable for any
+  // other SDK introspection and ensures a single cleanup run — ours, inline,
+  // below — regardless of whether the SDK fires the listener.
+  transport.onclose = () => {
+    /* neutralized by rollbackSessionAfterConnectFailure */
+  };
+
+  delete tMap[sid];
+  delete lastActivityMap[sid];
+
+  try {
+    limiter?.remove(sid);
+  } catch (e) {
+    console.error(
+      `[mcp] ipLimiter rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      e,
+    );
+  }
+  try {
+    sessionState?.cleanup(sid);
+  } catch (e) {
+    console.error(
+      `[mcp] sessionStateManager rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      e,
+    );
+  }
+  try {
+    workspace?.cleanup(sid);
+  } catch (e) {
+    console.error(
+      `[mcp] workspaceManager rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      e,
+    );
+  }
+
+  // Fire-and-forget close so async rejections land in console.error rather
+  // than unhandledRejection. Matches handleSessionInitAccept's pattern.
+  Promise.resolve()
+    .then(() => transport.close())
+    .catch((closeErr) => {
+      console.error(
+        `[mcp] transport.close after server.connect/handleRequest throw failed for ${sid.slice(0, 8)}:`,
+        closeErr,
+      );
+    });
+}
+
+/**
  * Drive `transport.handleRequest(req, res, body)` with defensive handling
  * for the onsessioninitialized-race case. `onsessioninitialized` fires
  * INSIDE `handleRequest`, so when the defensive race-fallback inside that
@@ -925,11 +1125,24 @@ export async function closeAllSessions(opts: {
   const { transports: tMap, sseTransports: sseMap } = opts;
 
   const streamableSids = Object.keys(tMap);
-  const streamableResults = await Promise.allSettled(
-    streamableSids.map((sid) =>
-      Promise.resolve().then(() => tMap[sid].close()),
+  const sseSids = Object.keys(sseMap);
+
+  // R3 #11: run the two close batches in parallel rather than sequentially.
+  // Shutdown latency upper bound becomes max(streamableClose, sseClose)
+  // instead of their sum, which matters when the orchestrator's kill-
+  // deadline is tight and both maps are non-trivial. allSettled semantics
+  // still isolate a single slow/rejecting close from the rest.
+  const [streamableResults, sseResults] = await Promise.all([
+    Promise.allSettled(
+      streamableSids.map((sid) =>
+        Promise.resolve().then(() => tMap[sid].close()),
+      ),
     ),
-  );
+    Promise.allSettled(
+      sseSids.map((sid) => Promise.resolve().then(() => sseMap[sid].close())),
+    ),
+  ]);
+
   streamableResults.forEach((result, i) => {
     const sid = streamableSids[i];
     if (result.status === "rejected") {
@@ -946,10 +1159,6 @@ export async function closeAllSessions(opts: {
     );
   }
 
-  const sseSids = Object.keys(sseMap);
-  const sseResults = await Promise.allSettled(
-    sseSids.map((sid) => Promise.resolve().then(() => sseMap[sid].close())),
-  );
   sseResults.forEach((result, i) => {
     const sid = sseSids[i];
     if (result.status === "rejected") {
@@ -1264,20 +1473,42 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         bashTelemetry,
         workspaceManager,
       );
-      await server.connect(transport);
-      // completeInitRequestSafely swallows throws from handleRequest when
-      // onsessioninitialized's defensive race-fallback closed the transport
-      // mid-flight (initOutcome.rejected=true). The fallback already handled
-      // the response lifecycle; a naked await here would bubble the closed-
-      // transport throw into the outer catch-all and produce a 500 write on
-      // top of the 429 the fallback already streamed.
-      await completeInitRequestSafely(
-        transport,
-        req,
-        res,
-        req.body,
-        initOutcome,
-      );
+      // Z-1: server.connect(transport) can throw AFTER handleSessionInitAccept
+      // committed maps + ipLimiter counter + ensureSession + onclose wiring.
+      // Without an explicit rollback, the session is stranded against
+      // max_sessions_per_ip until TTL reap because nothing calls
+      // transport.close(), so onclose never fires. Wrap BOTH server.connect
+      // and completeInitRequestSafely so the rollback chain runs regardless
+      // of where the throw originates (connect wiring bug OR handleRequest
+      // mid-flight throw that completeInitRequestSafely rethrows). Rethrow
+      // into the outer catch-all so the 500 response behavior is preserved.
+      try {
+        await server.connect(transport);
+        // completeInitRequestSafely swallows throws from handleRequest when
+        // onsessioninitialized's defensive race-fallback closed the transport
+        // mid-flight (initOutcome.rejected=true). The fallback already handled
+        // the response lifecycle; a naked await here would bubble the closed-
+        // transport throw into the outer catch-all and produce a 500 write on
+        // top of the 429 the fallback already streamed.
+        await completeInitRequestSafely(
+          transport,
+          req,
+          res,
+          req.body,
+          initOutcome,
+        );
+      } catch (connectErr) {
+        rollbackSessionAfterConnectFailure({
+          transport,
+          sid: preSid,
+          transports,
+          sessionLastActivity,
+          ipLimiter,
+          sessionStateManager,
+          workspaceManager,
+        });
+        throw connectErr;
+      }
       return;
     }
 
@@ -2364,10 +2595,13 @@ export function registerAnalyticsRoutes(
   });
 }
 
-// Wire the analytics routes onto the top-level app at import time so the
-// production server exposes them on listen(). Tests that want to mount the
-// real handlers can call registerAnalyticsRoutes() on their own app.
-registerAnalyticsRoutes(app);
+// R4-19: single surface — `registerAnalyticsRoutes` is the canonical way to
+// mount the analytics routes. Production wires it up inside startServer()
+// before app.listen(); tests that want the real handlers call it on their
+// own app. Do NOT add a module-load-time side-effect call here: that created
+// a second surface that (a) confused readers about which was canonical and
+// (b) coupled mere module import (e.g. an unrelated re-export in a test
+// fixture) to mutating the module-level app.
 
 // ---------------------------------------------------------------------------
 // Startup
@@ -2437,6 +2671,14 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
         "[startup] trust_proxy=true + NODE_ENV=development is unsupported — analytics dev bypass is DISABLED to prevent exposing the dashboard via a fronting proxy",
       );
     }
+  } else {
+    // R3 #18: give operators a positive confirmation that the hardened
+    // default is in effect. Without this, an operator who enabled
+    // trust_proxy expecting it to take effect had to grep for the absence
+    // of the truthy log above to infer the state — fragile.
+    console.log(
+      "[startup] trust_proxy=false — X-Forwarded-For ignored; client IP derived from socket (hardened default)",
+    );
   }
 
   // Configure session TTL and IP rate limiter from config
@@ -2560,25 +2802,21 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
       });
     };
 
-    orchestrator
-      .checkAndIndex()
-      .then(() => {
-        // Always refresh bash instances after startup index check.
-        // The initial bash build (above) runs before repos are cloned,
-        // so the filesystem may be empty. If checkAndIndex skipped
-        // reindexing (DB already current), onReindexComplete won't fire
-        // and the bash filesystem would stay empty without this.
-        const allSourceNames = serverCfg.sources.map((s) => s.name);
-        return refreshBashInstances(allSourceNames, "startup-refresh");
-      })
-      .catch((err) => {
-        console.error("[startup] Initial index check failed:", err);
-      });
+    // R3 #5: use two distinct catches so an index-check failure and a
+    // bash-refresh failure surface under distinguishable log prefixes.
+    // Previously the combined `.then(refresh).catch(...)` mis-labeled
+    // refresh failures as "[startup] Initial index check failed:" — an
+    // operator reading logs couldn't tell which operation actually broke.
+    runStartupIndexAndBashRefresh(orchestrator, serverCfg.sources);
 
     orchestrator.startNightlyReindex();
   } else {
     console.log("[startup] No search tools configured — skipping indexing");
   }
+
+  // R4-19: explicit mount — the module-load side-effect was removed so this
+  // is now the single call site for the production app.
+  registerAnalyticsRoutes(app);
 
   const serverName = serverCfg.server.name;
   const server = app.listen(port, () => {

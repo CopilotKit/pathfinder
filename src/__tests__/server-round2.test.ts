@@ -559,6 +559,63 @@ describe("reapIdleSessionsTick (R3 #1: SSE reaper dep plumbing)", () => {
     // Map entry gone (reaper deletes inline).
     expect(sseTransports["sse-stale"]).toBeUndefined();
   });
+
+  it("emits a per-sid cleanup summary log for each reaped streamable session (R4-6)", async () => {
+    const { reapIdleSessionsTickForTesting } = await import("../server.js");
+
+    const transports: Record<string, { close: () => Promise<void> | void }> = {
+      "stale-a": { close: async () => {} },
+      "stale-b": { close: async () => {} },
+    };
+    const sseTransports: Record<string, { close: () => Promise<void> | void }> =
+      {};
+    const sessionLastActivity: Record<string, number> = {
+      "stale-a": Date.now() - 10 * 60 * 1000,
+      "stale-b": Date.now() - 10 * 60 * 1000,
+    };
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      reapIdleSessionsTickForTesting({
+        transports,
+        sseTransports,
+        sessionLastActivity,
+        ttlMs: 5 * 60 * 1000,
+        now: Date.now(),
+        ipLimiter: { remove: () => {} },
+        workspaceManager: {
+          cleanup: (sid: string) => {
+            if (sid === "stale-b") throw new Error("workspace-boom");
+          },
+        },
+        sessionStateManager: { cleanup: () => {} },
+      });
+
+      const summaryLines = logSpy.mock.calls
+        .map((c) => c.join(" "))
+        .filter((line) => line.includes("Reap cleanup"));
+      // One summary line per reaped streamable sid.
+      expect(summaryLines.length).toBe(2);
+      const summaryForA = summaryLines.find((l) => l.includes("stale-a"));
+      const summaryForB = summaryLines.find((l) => l.includes("stale-b"));
+      expect(summaryForA).toBeDefined();
+      expect(summaryForB).toBeDefined();
+      // The stale-a row reports ok for every step; stale-b reports workspace=throw.
+      expect(summaryForA).toMatch(/state=ok/);
+      expect(summaryForA).toMatch(/ipLimiter=ok/);
+      expect(summaryForA).toMatch(/workspace=ok/);
+      expect(summaryForB).toMatch(/workspace=(throw|failed|err)/);
+      // The aggregate log still fires.
+      const aggregate = logSpy.mock.calls
+        .map((c) => c.join(" "))
+        .find((line) => line.includes("Reaped 2 idle sessions"));
+      expect(aggregate).toBeDefined();
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1227,6 +1284,40 @@ describe("write429RateLimited (R3 #5: headersSent guard)", () => {
 // ---------------------------------------------------------------------------
 
 describe("closeAllSessions (shutdown helper)", () => {
+  it("runs streamable + sse close batches in parallel, not sequentially (R3 #11)", async () => {
+    const { closeAllSessions } = await import("../server.js");
+
+    const SLOW_MS = 80;
+    const transports: Record<string, { close: () => Promise<void> | void }> = {
+      "s-slow": {
+        close: () => new Promise((r) => setTimeout(r, SLOW_MS)),
+      },
+    };
+    const sseTransports: Record<string, { close: () => Promise<void> | void }> =
+      {
+        "e-slow": {
+          close: () => new Promise((r) => setTimeout(r, SLOW_MS)),
+        },
+      };
+
+    const start = Date.now();
+    await closeAllSessions({
+      transports: transports as unknown as Parameters<
+        typeof closeAllSessions
+      >[0]["transports"],
+      sseTransports: sseTransports as unknown as Parameters<
+        typeof closeAllSessions
+      >[0]["sseTransports"],
+    });
+    const elapsed = Date.now() - start;
+
+    // Sequential would be ~2*SLOW_MS, parallel ~SLOW_MS. Leave headroom for
+    // Node timer jitter: anything under 1.5*SLOW_MS proves parallelism.
+    expect(elapsed).toBeLessThan(SLOW_MS * 1.5);
+    expect(Object.keys(transports)).toEqual([]);
+    expect(Object.keys(sseTransports)).toEqual([]);
+  });
+
   it("closes every streamable-HTTP transport and every SSE transport and clears the maps", async () => {
     const { closeAllSessions } = await import("../server.js");
 
@@ -1332,6 +1423,243 @@ describe("closeAllSessions (shutdown helper)", () => {
       expect(sawSseBoom).toBe(true);
     } finally {
       consoleErrSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runStartupIndexAndBashRefresh (R3 #5): distinguishable log prefixes for
+// index-check failure vs bash-refresh failure on startup.
+// ---------------------------------------------------------------------------
+
+describe("runStartupIndexAndBashRefresh (R3 #5)", () => {
+  it("logs '[startup] Initial index check failed:' when checkAndIndex rejects", async () => {
+    const { runStartupIndexAndBashRefresh } = await import("../server.js");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runStartupIndexAndBashRefresh(
+        {
+          checkAndIndex: async () => {
+            throw new Error("index-boom");
+          },
+        },
+        [],
+      );
+      const lines = errSpy.mock.calls.map((c) => c.join(" "));
+      const indexLine = lines.find((l) =>
+        l.includes("[startup] Initial index check failed:"),
+      );
+      const refreshLine = lines.find((l) =>
+        l.includes("[startup] Bash refresh after index check failed:"),
+      );
+      expect(indexLine).toBeDefined();
+      expect(refreshLine).toBeUndefined();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("logs '[startup] Bash refresh after index check failed:' when refresh rejects (NOT the index prefix)", async () => {
+    // Stub getServerConfig to return a bash tool so refreshBashInstances
+    // reaches its rebuild path, then force rebuildBashInstance to throw.
+    mockGetServerConfig.mockReturnValue({
+      server: { name: "t", version: "0" },
+      sources: [{ name: "src-a", type: "github", repo: "x/y" }],
+      tools: [
+        {
+          name: "bash",
+          type: "bash",
+          sources: ["src-a"],
+          bash: { virtual_files: false },
+        },
+      ],
+    });
+    const bashFs = await import("../mcp/tools/bash-fs.js");
+    const rebuildSpy = vi
+      .spyOn(bashFs, "rebuildBashInstance")
+      .mockRejectedValueOnce(new Error("refresh-boom"));
+
+    const { runStartupIndexAndBashRefresh } = await import("../server.js");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runStartupIndexAndBashRefresh(
+        {
+          checkAndIndex: async () => {
+            /* resolves */
+          },
+        },
+        [{ name: "src-a" }],
+      );
+      const lines = errSpy.mock.calls.map((c) => c.join(" "));
+      const indexLine = lines.find((l) =>
+        l.includes("[startup] Initial index check failed:"),
+      );
+      const refreshLine = lines.find((l) =>
+        l.includes("[startup] Bash refresh after index check failed:"),
+      );
+      expect(refreshLine).toBeDefined();
+      expect(indexLine).toBeUndefined();
+    } finally {
+      errSpy.mockRestore();
+      rebuildSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rollbackSessionAfterConnectFailure (Z-1): fires when server.connect /
+// completeInitRequestSafely throws AFTER handleSessionInitAccept committed
+// maps + ipLimiter counter + onclose wiring. Must (a) tear down the session
+// exactly once and (b) not double-cleanup via the wired onclose handler.
+// ---------------------------------------------------------------------------
+
+describe("rollbackSessionAfterConnectFailure (Z-1)", () => {
+  /**
+   * Build a fake transport whose `close()` invokes `transport.onclose` to
+   * model the MCP SDK behavior that stream teardown notifies the wired
+   * listener. The fix detaches onclose before close() runs, so onclose
+   * (assigned to the original handler) must NOT be invoked when the rollback
+   * runs — or if it is, it must be a neutralized no-op.
+   */
+  function makeTransport(sid: string) {
+    const transport: {
+      sessionId: string;
+      onclose?: () => void;
+      close: () => Promise<void>;
+      closeCalls: number;
+    } = {
+      sessionId: sid,
+      closeCalls: 0,
+      close: async () => {
+        transport.closeCalls++;
+        if (typeof transport.onclose === "function") transport.onclose();
+      },
+    };
+    return transport;
+  }
+
+  it("runs the cleanup chain exactly once even though transport.close() triggers the wired onclose", async () => {
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-double-cleanup";
+    const transport = makeTransport(sid);
+    const transports: Record<string, unknown> = { [sid]: transport };
+    const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
+
+    const cleanupCalls = { state: 0, ipLimiter: 0, workspace: 0 };
+    const ipLimiter = {
+      remove: (_sid: string) => {
+        cleanupCalls.ipLimiter++;
+      },
+    };
+    const sessionStateManager = {
+      cleanup: (_sid: string) => {
+        cleanupCalls.state++;
+      },
+    };
+    const workspaceManager = {
+      cleanup: (_sid: string) => {
+        cleanupCalls.workspace++;
+      },
+    };
+
+    // Simulate the handler having wired onclose to the REAL cleanup-running
+    // handler before the connect-throw. If the rollback doesn't neutralize
+    // onclose before close(), this fires and runs cleanup a SECOND time.
+    transport.onclose = () => {
+      sessionStateManager.cleanup(sid);
+      ipLimiter.remove(sid);
+      workspaceManager.cleanup(sid);
+    };
+
+    rollbackSessionAfterConnectFailure({
+      transport,
+      sid,
+      transports,
+      sessionLastActivity,
+      ipLimiter,
+      sessionStateManager,
+      workspaceManager,
+    });
+
+    // Allow microtask-scheduled close() to run.
+    await new Promise((r) => setImmediate(r));
+
+    expect(cleanupCalls.state).toBe(1);
+    expect(cleanupCalls.ipLimiter).toBe(1);
+    expect(cleanupCalls.workspace).toBe(1);
+    expect(transport.closeCalls).toBe(1);
+    expect(transports[sid]).toBeUndefined();
+    expect(sessionLastActivity[sid]).toBeUndefined();
+  });
+
+  it("deletes transports[sid] and sessionLastActivity[sid] synchronously", async () => {
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-del";
+    const transport = makeTransport(sid);
+    const transports: Record<string, unknown> = { [sid]: transport, other: {} };
+    const sessionLastActivity: Record<string, number> = {
+      [sid]: 1,
+      other: 2,
+    };
+
+    rollbackSessionAfterConnectFailure({
+      transport,
+      sid,
+      transports,
+      sessionLastActivity,
+    });
+
+    expect(transports[sid]).toBeUndefined();
+    expect(sessionLastActivity[sid]).toBeUndefined();
+    expect(transports.other).toBeDefined();
+    expect(sessionLastActivity.other).toBe(2);
+  });
+
+  it("continues cleanup even if an earlier cleanup step throws", async () => {
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-throwy";
+    const transport = makeTransport(sid);
+    const transports: Record<string, unknown> = { [sid]: transport };
+    const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
+
+    let ipLimiterCalled = false;
+    let workspaceCalled = false;
+    const ipLimiter = {
+      remove: (_sid: string) => {
+        ipLimiterCalled = true;
+      },
+    };
+    const sessionStateManager = {
+      cleanup: (_sid: string) => {
+        throw new Error("state-boom");
+      },
+    };
+    const workspaceManager = {
+      cleanup: (_sid: string) => {
+        workspaceCalled = true;
+      },
+    };
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      rollbackSessionAfterConnectFailure({
+        transport,
+        sid,
+        transports,
+        sessionLastActivity,
+        ipLimiter,
+        sessionStateManager,
+        workspaceManager,
+      });
+      await new Promise((r) => setImmediate(r));
+      expect(ipLimiterCalled).toBe(true);
+      expect(workspaceCalled).toBe(true);
+    } finally {
+      errSpy.mockRestore();
     }
   });
 });
