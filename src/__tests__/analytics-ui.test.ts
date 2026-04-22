@@ -2913,3 +2913,201 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     expect(win.location.search).toBe(urlBefore);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Data-availability label: when the requested window exceeds the actual
+// query_log depth, show "showing N days of data" next to the date pill so
+// users understand why bumping 7d → 14d → 30d produces identical numbers.
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — data availability label", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Build a Date offset from today-UTC by N days and return YYYY-MM-DD.
+   * Positive N = days before today. Used so the canned `earliest_query_day`
+   * payloads line up with the frozen system time.
+   */
+  function daysBeforeTodayUTC(n: number): string {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - n);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  function makeSummaryEndpoint(earliest: string | null) {
+    return (qs: string) => {
+      const p = parseQS(qs);
+      const days = p.days ? parseInt(p.days, 10) : 7;
+      const base = canned(Math.min(days, 9), 1234).summary;
+      return { ...base, earliest_query_day: earliest };
+    };
+  }
+
+  function makeEndpoints(earliest: string | null) {
+    return {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": makeSummaryEndpoint(earliest),
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+  }
+
+  async function clickPresetDays(dom: JSDOM, days: number): Promise<void> {
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const preset = Array.from(
+      dom.window.document.querySelectorAll(".preset[data-days]"),
+    ).find((el) => el.getAttribute("data-days") === String(days)) as
+      | HTMLElement
+      | undefined;
+    preset!.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+  }
+
+  async function clickTodayPreset(dom: JSDOM): Promise<void> {
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const todayPreset = dom.window.document.querySelector(
+      '.preset[data-preset="today"]',
+    ) as HTMLElement;
+    todayPreset.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+  }
+
+  it("shows 'showing 9 days of data' when earliest is 8 days ago and window=14", async () => {
+    // earliest = today - 8 days → 9 days inclusive. Default window is 7,
+    // so switch to 14 before asserting.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+
+    const earliest = daysBeforeTodayUTC(8);
+    const { dom } = await loadDashboard(makeEndpoints(earliest));
+    await clickPresetDays(dom, 14);
+
+    const label = dom.window.document.getElementById("dataAvailability");
+    expect(label).not.toBeNull();
+    expect(label!.textContent!.trim()).toBe("showing 9 days of data");
+  });
+
+  it("hides the label when earliest is older than the requested window", async () => {
+    // earliest = 30 days ago, window = 14. availableDays (31) > requestedDays
+    // (14), so the label must NOT render — the user already sees all the
+    // data their window asked for.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+
+    const earliest = daysBeforeTodayUTC(30);
+    const { dom } = await loadDashboard(makeEndpoints(earliest));
+    await clickPresetDays(dom, 14);
+
+    const label = dom.window.document.getElementById("dataAvailability");
+    // Either absent or empty — both acceptable; assert a stable "no content"
+    // condition rather than pinning on element presence so minor DOM
+    // restructurings (container hide/show vs. removal) still pass.
+    if (label) {
+      expect(label.textContent!.trim()).toBe("");
+    }
+  });
+
+  it("hides the label when earliest_query_day is null (empty table)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+
+    const { dom } = await loadDashboard(makeEndpoints(null));
+
+    const label = dom.window.document.getElementById("dataAvailability");
+    if (label) {
+      expect(label.textContent!.trim()).toBe("");
+    }
+  });
+
+  it("computes availableDays inclusively for explicit from/to range", async () => {
+    // Custom range spanning 10 UTC days, earliest 5 days ago → 6 days of
+    // data. Requested = 10, available = 6, label = "showing 6 days of data".
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+
+    const earliest = daysBeforeTodayUTC(5);
+    const { dom } = await loadDashboard(makeEndpoints(earliest));
+
+    // Open popover → enter custom mode → set from/to.
+    const datePill = dom.window.document.getElementById("datePill")!;
+    datePill.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    const customPreset = dom.window.document.querySelector(
+      '.preset[data-custom="1"]',
+    ) as HTMLElement;
+    customPreset.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    const fromInput = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    const toInput = dom.window.document.getElementById(
+      "dateToInput",
+    ) as HTMLInputElement;
+    fromInput.value = "2026-04-11";
+    toInput.value = "2026-04-20";
+    const applyBtn = dom.window.document.getElementById(
+      "dateApplyBtn",
+    ) as HTMLElement;
+    applyBtn.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    const label = dom.window.document.getElementById("dataAvailability");
+    expect(label).not.toBeNull();
+    expect(label!.textContent!.trim()).toBe("showing 6 days of data");
+  });
+
+  it("hides the label for 'Today' when earliest is today (1 <= 1)", async () => {
+    // requestedDays = 1, availableDays = 1. Strict `>` comparison means
+    // equal windows don't trigger the label — only true plateaus do.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+
+    const earliest = daysBeforeTodayUTC(0); // today
+    const { dom } = await loadDashboard(makeEndpoints(earliest));
+    await clickTodayPreset(dom);
+
+    const label = dom.window.document.getElementById("dataAvailability");
+    if (label) {
+      expect(label.textContent!.trim()).toBe("");
+    }
+  });
+
+  it("pluralizes 'day' when availableDays === 1", async () => {
+    // earliest = today → 1 day of data, requested = 14 → label uses singular
+    // "day" not "days".
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+
+    const earliest = daysBeforeTodayUTC(0);
+    const { dom } = await loadDashboard(makeEndpoints(earliest));
+    await clickPresetDays(dom, 14);
+
+    const label = dom.window.document.getElementById("dataAvailability");
+    expect(label).not.toBeNull();
+    expect(label!.textContent!.trim()).toBe("showing 1 day of data");
+  });
+});
+>>>>>>> 81e89c7 (Add failing tests for data-availability label on analytics UI)
