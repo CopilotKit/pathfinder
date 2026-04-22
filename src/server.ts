@@ -122,16 +122,60 @@ app.use((_req, res, next) => {
  */
 export function assertWebhookRawBodyOrder(routeName: string): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!Buffer.isBuffer(req.body)) {
-      console.error(
-        `[${routeName}] middleware ordering bug: express.json ran before express.raw (req.body is ${typeof req.body}); HMAC verification cannot proceed — refusing request`,
-      );
-      res.status(500).json({
-        error: "Webhook middleware misconfigured",
+    if (Buffer.isBuffer(req.body)) {
+      // Happy path: express.raw parsed the request into a Buffer. HMAC
+      // verification downstream can proceed against the exact wire bytes.
+      next();
+      return;
+    }
+
+    // At this point req.body is NOT a Buffer. Two distinct causes need to be
+    // distinguished, because only ONE of them is a server misconfiguration:
+    //
+    //   (a) express.raw was mounted with `type: "application/json"` but the
+    //       client sent a different Content-Type (e.g. "text/plain"). In that
+    //       case express.raw deliberately SKIPS parsing, and Express leaves
+    //       req.body as the default `{}`. The middleware chain itself is
+    //       wired correctly; the request is simply malformed from the client
+    //       side. Reject with 415 and stay quiet in the log.
+    //
+    //   (b) An earlier body parser (express.json, urlencoded, text) already
+    //       consumed the body, so req.body arrives as a parsed object /
+    //       string BEFORE express.raw got a chance. This is the ordering-bug
+    //       case the guard was built for — fire the loud 500 so the bug
+    //       surfaces in logs and CI.
+    //
+    // Discriminant: when express.raw is configured with a specific type and
+    // the incoming Content-Type doesn't match, express.raw deliberately
+    // does NOT populate req.body at all — it remains `undefined`. A body
+    // parser that DID run (correctly or incorrectly) leaves req.body as
+    // a Buffer / object / string / array — anything but `undefined`.
+    const body = req.body as unknown;
+    const contentType = String(req.headers["content-type"] ?? "");
+    const looksLikeJsonContentType = contentType
+      .toLowerCase()
+      .includes("application/json");
+
+    if (body === undefined && !looksLikeJsonContentType) {
+      // Case (a): client sent a non-JSON Content-Type. express.raw correctly
+      // declined to parse, and no earlier parser intervened. The middleware
+      // chain is healthy; the request is just wrong. Return 415 without
+      // logging — a noisy log here would spam on every misconfigured client.
+      res.status(415).json({
+        error: "Unsupported Content-Type for webhook endpoint",
       });
       return;
     }
-    next();
+
+    // Case (b): req.body is a parsed object/string/array/etc. An earlier
+    // body parser ran before express.raw — the exact ordering bug this
+    // guard exists to catch. Log loudly and refuse.
+    console.error(
+      `[${routeName}] middleware ordering bug: express.json ran before express.raw (req.body is ${typeof req.body}); HMAC verification cannot proceed — refusing request`,
+    );
+    res.status(500).json({
+      error: "Webhook middleware misconfigured",
+    });
   };
 }
 
@@ -158,7 +202,24 @@ let telemetryFlushInterval: ReturnType<typeof setInterval> | undefined;
 // scheduling, remove them on fire, and clear the entire set on shutdown.
 const pendingBashRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
 
-async function refreshBashInstances(
+/**
+ * Rebuild bash instances for tools affected by the given sources.
+ *
+ * All-or-nothing semantics: every affected tool is rebuilt into a temporary
+ * Map. Only after every rebuild succeeds does the temp map get merged into
+ * the live `bashInstances` registry. If any single rebuild throws, the live
+ * registry is left untouched (callers keep serving the previous, consistent
+ * index for every tool) and the first error propagates to the caller.
+ *
+ * Rationale: the previous loop mutated `bashInstances` per-tool, so a mid-
+ * iteration failure (network, git clone, ENOSPC, embedding error) left the
+ * map in a mixed stale/fresh state — `bash_explore` / sibling tools would
+ * return inconsistent file sets depending on which tool name was invoked.
+ * Callers already `.catch(...)` and log; throwing the first error (rather
+ * than returning a per-tool summary) keeps the API tiny while still letting
+ * those callers surface failures in logs.
+ */
+export async function refreshBashInstances(
   sourceNames: string[],
   logPrefix = "webhook",
 ): Promise<void> {
@@ -168,6 +229,8 @@ async function refreshBashInstances(
     .filter((t) => t.type === "search")
     .map((t) => t.name);
 
+  const pending = new Map<string, { bash: Bash; fileCount: number }>();
+
   for (const tool of bashTools) {
     const affected = tool.sources.some((s) => sourceNames.includes(s));
     if (!affected) continue;
@@ -176,14 +239,32 @@ async function refreshBashInstances(
       tool.sources.includes(s.name),
     );
     const virtualFiles = tool.bash?.virtual_files === true;
-    const { bash, fileCount } = await rebuildBashInstance(toolSources, {
-      virtualFiles,
-      searchToolNames: virtualFiles ? searchToolNames : undefined,
-      cloneDir: getConfig().cloneDir,
-    });
-    bashInstances.set(tool.name, bash);
+    try {
+      const { bash, fileCount } = await rebuildBashInstance(toolSources, {
+        virtualFiles,
+        searchToolNames: virtualFiles ? searchToolNames : undefined,
+        cloneDir: getConfig().cloneDir,
+      });
+      pending.set(tool.name, { bash, fileCount });
+    } catch (err) {
+      // Leave `bashInstances` untouched so every tool keeps serving its
+      // previous (consistent) filesystem. Log which tool + trigger failed
+      // so the caller's `.catch(...)` / monitors can identify the source.
+      console.error(
+        `[${logPrefix}] Bash refresh failed for tool "${tool.name}" ` +
+          `(triggered by sources: ${sourceNames.join(", ")}): `,
+        err,
+      );
+      throw err;
+    }
+  }
+
+  // Every rebuild succeeded — atomically publish the new instances.
+  // Unaffected tools keep their existing entries in `bashInstances`.
+  for (const [name, { bash, fileCount }] of pending) {
+    bashInstances.set(name, bash);
     console.log(
-      `[${logPrefix}] Refreshed bash tool "${tool.name}": ${fileCount} files`,
+      `[${logPrefix}] Refreshed bash tool "${name}": ${fileCount} files`,
     );
   }
 }
@@ -230,6 +311,16 @@ export function __setBashInstanceForTesting(name: string, bash: Bash): void {
 
 export function __clearBashInstancesForTesting(): void {
   bashInstances.clear();
+}
+
+/**
+ * Test-only accessor to the rejected-sid marker Set so
+ * `rollbackSessionAfterConnectFailure` regression tests can assert the
+ * prior onclose handler observes `rejectedSids.has(sid) === true` during
+ * its invocation.
+ */
+export function __rejectedSidsForTesting(): Set<string> {
+  return rejectedSids;
 }
 
 /**
@@ -316,7 +407,6 @@ export function classifyWebhookUnavailable(opts: {
     },
   };
 }
-
 
 app.post(
   "/webhooks/github",
@@ -1082,12 +1172,43 @@ export function rollbackSessionAfterConnectFailure(opts: {
   } = opts;
 
   // Detach the wired onclose handler BEFORE we fire close(). The MCP SDK may
-  // invoke onclose as part of stream teardown; replacing it with a no-op
-  // (rather than deleting) keeps the property shape predictable for any
-  // other SDK introspection and ensures a single cleanup run — ours, inline,
-  // below — regardless of whether the SDK fires the listener.
+  // invoke onclose as part of stream teardown; replacing it with a wrapper
+  // (rather than a no-op) preserves any prior onclose the SDK or surrounding
+  // code had attached for its OWN bookkeeping, while suppressing OUR cleanup
+  // branch so the inline rollback below remains the single cleanup run.
+  //
+  // Saving `priorOnclose` matters because the MCP SDK wires internal state
+  // teardown on its StreamableHTTPServerTransport.onclose at construction;
+  // blindly clobbering with `() => {}` would leak SDK-internal listeners
+  // (request-queue drain, in-flight response rejection) and mask those
+  // failures from the runtime. The wrapper invokes it in a try/catch so a
+  // prior-handler throw never reaches this rollback's own per-step errors.
+  const priorOnclose = transport.onclose ?? null;
+  // Seed the rejected-sid marker BEFORE wiring the wrapper so that when the
+  // prior handler (the cleanup-running onclose from handleSessionInitAccept,
+  // or any other application-level listener gated on rejectedSids) executes,
+  // it self-detects the rollback-in-progress case and skips its own cleanup
+  // chain. Its SDK-internal bookkeeping (request-queue drain, in-flight
+  // response rejection) still runs — only the application cleanup short-
+  // circuits. The inline rollback below then drains the marker by running
+  // exactly once.
+  rejectedSids.add(sid);
   transport.onclose = () => {
-    /* neutralized by rollbackSessionAfterConnectFailure */
+    // Our application cleanup branch is guarded by rejectedSids.has(sid) on
+    // the prior handler side; because we seeded the marker, the prior
+    // handler's application cleanup is a no-op. Forward the invocation so
+    // any SDK-internal onclose wiring (stream teardown listeners, request-
+    // queue drain) still fires.
+    if (priorOnclose) {
+      try {
+        priorOnclose();
+      } catch (e) {
+        console.error(
+          `[mcp] prior transport.onclose threw during rollback for ${sid.slice(0, 8)}:`,
+          e,
+        );
+      }
+    }
   };
 
   delete tMap[sid];
@@ -1127,6 +1248,12 @@ export function rollbackSessionAfterConnectFailure(opts: {
         `[mcp] transport.close after server.connect/handleRequest throw failed for ${sid.slice(0, 8)}:`,
         closeErr,
       );
+    })
+    .finally(() => {
+      // Drain the rejected-sid marker once the close() settles, regardless
+      // of whether the prior onclose fired and drained it already
+      // (rejectedSids.delete is idempotent). Keeps the Set bounded.
+      rejectedSids.delete(sid);
     });
 }
 
@@ -2156,13 +2283,14 @@ function isLocalhostReq(req: Request): boolean {
     // IPv6 loopback is exactly ::1.
     return (parsed as ipaddr.IPv6).toNormalizedString() === "0:0:0:0:0:0:0:1";
   } catch (err) {
-    // R3 #14 — emit a debug-level log so an operator bisecting why
-    // the analytics dev-bypass stopped working can see that the parse
-    // itself failed. Debug-level so we don't spam normal logs, but
-    // operators with debug enabled get the address + error message.
-    // Return contract is unchanged — unparseable addresses still
-    // resolve to "not localhost" (fail-closed).
-    console.debug(
+    // R3 #14 — emit a warn-level log so an operator bisecting why the
+    // analytics dev-bypass stopped working can see that the parse itself
+    // failed. This path only fires on malformed TCP peer addresses, which
+    // in practice is very rare — so warn-level isn't spammy, and it's
+    // visible in production log aggregators that filter out debug. Return
+    // contract is unchanged — unparseable addresses still resolve to
+    // "not localhost" (fail-closed).
+    console.warn(
       `[isLocalhostReq] ipaddr.parse failed for addr=${addr}: ${formatErrorForLog(err)}`,
     );
     return false;
@@ -2834,9 +2962,13 @@ export function registerAnalyticsRoutes(
         `[analytics] sendFile failed path=${_analyticsHtmlPath} cid=${correlationId}:`,
         err,
       );
+      // Emit snake_case `correlation_id` in the response body to match the
+      // convention analyticsAuth already uses for OAuth-style
+      // `error_description` (RFC 6749 snake_case). Internal variable stays
+      // camelCase per JS convention; only the wire format standardizes.
       res.status(500).json({
         error: "analytics dashboard unavailable",
-        correlationId,
+        correlation_id: correlationId,
       });
     });
   });
@@ -2928,9 +3060,23 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
     // default is in effect. Without this, an operator who enabled
     // trust_proxy expecting it to take effect had to grep for the absence
     // of the truthy log above to infer the state — fragile.
-    console.log(
-      "[startup] trust_proxy=false — X-Forwarded-For ignored; client IP derived from socket (hardened default)",
-    );
+    //
+    // Non-production warning (test/staging/unset all count): emit the
+    // reminder as a WARN so dev/staging operators running locally or in
+    // preview environments surface the hardening in console output, where
+    // they're most likely to be surprised by XFF being ignored (e.g. when
+    // spoofing a client IP for local testing). In production we stay at
+    // INFO level so the ops log isn't noised up with a steady-state
+    // confirmation on every boot.
+    if (cfg.nodeEnv === "production") {
+      console.log(
+        "[startup] trust_proxy=false — X-Forwarded-For ignored; client IP derived from socket (hardened default)",
+      );
+    } else {
+      console.warn(
+        `[startup] trust_proxy=false (NODE_ENV=${cfg.nodeEnv ?? "<unset>"}) — X-Forwarded-For ignored; client IP derived from socket (hardened default). Set trust_proxy in pathfinder.yaml when running behind a reverse proxy.`,
+      );
+    }
   }
 
   // R4-13 — assert document-extraction peer deps (pdf-parse / mammoth) are

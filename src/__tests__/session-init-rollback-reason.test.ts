@@ -103,12 +103,16 @@ describe("SSE sseGet ensureSession rollback reason (R4-5)", () => {
     } finally {
       errSpy.mockRestore();
     }
-    // Should have captured a 503 body with reason discriminant.
+    // Should have captured a 503 body with reason discriminant nested
+    // under error.data, matching the /mcp JSON-RPC envelope shape so
+    // clients read body.error.data.reason uniformly across transports.
     const gotReason = captured.some(
       (b) =>
         !!b &&
         typeof b === "object" &&
-        (b as { reason?: string }).reason === "workspace_init_failed",
+        typeof (b as { error?: unknown }).error === "object" &&
+        (b as { error: { data?: { reason?: string } } }).error.data?.reason ===
+          "workspace_init_failed",
     );
     expect(gotReason).toBe(true);
   });

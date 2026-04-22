@@ -92,9 +92,9 @@ describe("sseGet 500 catch correlation ID (R3 #9)", () => {
     );
 
     expect(res._status).toBe(500);
-    const body = res._json as { error: string; correlationId?: string };
-    expect(body.correlationId).toBeTruthy();
+    const body = res._json as { error: string; correlation_id?: string };
+    expect(body.correlation_id).toBeTruthy();
     const joined = consoleErrorSpy.mock.calls.flat().map(String).join(" ");
-    expect(joined).toContain(body.correlationId!);
+    expect(joined).toContain(body.correlation_id!);
   });
 });

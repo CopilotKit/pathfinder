@@ -363,6 +363,64 @@ export function getAnalyticsConfig(): AnalyticsConfig | undefined {
 }
 
 /**
+ * Render an unknown thrown value as a single log-friendly string. Local
+ * duplicate of server.ts's `formatErrorForLog` to avoid a config → server
+ * circular import. Keep these two in sync.
+ */
+function formatErrorForConfigLog(err: unknown): string {
+  if (err instanceof Error) return err.stack ?? err.message;
+  if (err && typeof err === "object") {
+    const maybe = err as { stack?: unknown; message?: unknown };
+    if (typeof maybe.stack === "string") return maybe.stack;
+    if (typeof maybe.message === "string") return maybe.message;
+  }
+  return String(err);
+}
+
+/**
+ * Try to import a peer dep module and classify the outcome:
+ *   - success         → no-op
+ *   - MODULE_NOT_FOUND / ERR_MODULE_NOT_FOUND → add to `missing`
+ *   - any other error → log full stack + re-throw a distinct "installed but
+ *     failed to import" error so the caller surfaces the real cause
+ *
+ * Distinguishing these matters: the previous empty catch swallowed every
+ * throw as "peer missing", which produced a confusing install-hint message
+ * even when the peer WAS installed but failed to load (e.g. native-addon
+ * ABI mismatch, ESM/CJS interop throw, file-system permission error on
+ * node_modules/). Operators would follow the hint, reinstall, and see no
+ * change.
+ */
+async function probePeerDepOrThrow(
+  tryImport: (module: string) => Promise<unknown>,
+  pkg: string,
+  forType: string,
+  missing: Array<{ pkg: string; forType: string }>,
+): Promise<void> {
+  try {
+    await tryImport(pkg);
+  } catch (err) {
+    const code = (err as { code?: unknown })?.code;
+    const isNotFound =
+      code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
+    if (isNotFound) {
+      missing.push({ pkg, forType });
+      return;
+    }
+    // Unexpected failure shape — log the full stack so operators can diagnose
+    // the real cause (native-addon failure, ESM interop throw, etc.) and
+    // re-throw a distinct error with the original attached as the cause.
+    console.error(
+      `[startup] ${pkg} is installed but failed to import: ${formatErrorForConfigLog(err)}`,
+    );
+    throw new Error(
+      `${pkg} is installed but failed to import (required for ${forType} document sources). See preceding log for details.`,
+      { cause: err },
+    );
+  }
+}
+
+/**
  * R4-13 — validate that required document-extraction peer deps
  * (`pdf-parse`, `mammoth`) are installed when a `document` source is
  * configured with file patterns that need them.
@@ -402,18 +460,10 @@ export async function assertDocumentPeerDepsForSources(
   );
   const missing: Array<{ pkg: string; forType: string }> = [];
   if (needsPdf) {
-    try {
-      await tryImport("pdf-parse");
-    } catch {
-      missing.push({ pkg: "pdf-parse", forType: "PDF" });
-    }
+    await probePeerDepOrThrow(tryImport, "pdf-parse", "PDF", missing);
   }
   if (needsDocx) {
-    try {
-      await tryImport("mammoth");
-    } catch {
-      missing.push({ pkg: "mammoth", forType: "DOCX" });
-    }
+    await probePeerDepOrThrow(tryImport, "mammoth", "DOCX", missing);
   }
   if (missing.length === 0) return;
   const lines = missing.map(

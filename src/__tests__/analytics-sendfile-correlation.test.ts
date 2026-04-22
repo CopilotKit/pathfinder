@@ -86,16 +86,16 @@ describe("/analytics sendFile 500 correlation ID (R3 #8)", () => {
     expect(res.status).toBe(500);
     const body = JSON.parse(res.body) as {
       error: string;
-      correlationId?: string;
+      correlation_id?: string;
     };
     expect(body.error).toMatch(/unavailable/);
-    expect(body.correlationId).toBeTruthy();
-    expect(typeof body.correlationId).toBe("string");
-    expect(body.correlationId!.length).toBeGreaterThan(4);
+    expect(body.correlation_id).toBeTruthy();
+    expect(typeof body.correlation_id).toBe("string");
+    expect(body.correlation_id!.length).toBeGreaterThan(4);
 
     // The same correlation ID must appear in the log line so an
     // operator can grep from a user-reported ID to the failing stack.
     const joined = consoleErrorSpy.mock.calls.flat().map(String).join(" ");
-    expect(joined).toContain(body.correlationId!);
+    expect(joined).toContain(body.correlation_id!);
   });
 });

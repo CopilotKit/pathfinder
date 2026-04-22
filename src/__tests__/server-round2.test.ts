@@ -1607,7 +1607,8 @@ describe("rollbackSessionAfterConnectFailure (Z-1)", () => {
   }
 
   it("runs the cleanup chain exactly once even though transport.close() triggers the wired onclose", async () => {
-    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+    const { rollbackSessionAfterConnectFailure, __rejectedSidsForTesting } =
+      await import("../server.js");
 
     const sid = "sid-double-cleanup";
     const transport = makeTransport(sid);
@@ -1631,10 +1632,19 @@ describe("rollbackSessionAfterConnectFailure (Z-1)", () => {
       },
     };
 
-    // Simulate the handler having wired onclose to the REAL cleanup-running
-    // handler before the connect-throw. If the rollback doesn't neutralize
-    // onclose before close(), this fires and runs cleanup a SECOND time.
+    // Simulate the production onclose handler: it runs application cleanup
+    // UNLESS rejectedSids contains the sid (the suppression branch). The
+    // rollback helper seeds that marker before invoking close(), so a prod-
+    // faithful onclose short-circuits while still performing any SDK-
+    // internal teardown it wants. This test replaces that SDK teardown with
+    // a trackable side-effect (priorOncloseFired) to assert the wrapper
+    // still forwards the invocation.
+    let priorOncloseFired = 0;
     transport.onclose = () => {
+      priorOncloseFired++;
+      if (__rejectedSidsForTesting?.().has(sid)) return;
+      // Not rejected — fall through to "real" cleanup. Should NOT run here
+      // because the rollback helper seeds rejectedSids before close().
       sessionStateManager.cleanup(sid);
       ipLimiter.remove(sid);
       workspaceManager.cleanup(sid);
@@ -1653,9 +1663,16 @@ describe("rollbackSessionAfterConnectFailure (Z-1)", () => {
     // Allow microtask-scheduled close() to run.
     await new Promise((r) => setImmediate(r));
 
+    // Cleanup ran exactly once (from the inline rollback chain; the prior
+    // onclose short-circuited via the rejectedSids guard).
     expect(cleanupCalls.state).toBe(1);
     expect(cleanupCalls.ipLimiter).toBe(1);
     expect(cleanupCalls.workspace).toBe(1);
+    // The prior onclose was STILL invoked by the wrapper, so any SDK-internal
+    // bookkeeping it was doing still runs. This is the regression fix: the
+    // previous `transport.onclose = () => {}` neutralizer swallowed the
+    // invocation entirely, skipping SDK bookkeeping as well.
+    expect(priorOncloseFired).toBe(1);
     expect(transport.closeCalls).toBe(1);
     expect(transports[sid]).toBeUndefined();
     expect(sessionLastActivity[sid]).toBeUndefined();
@@ -1683,6 +1700,59 @@ describe("rollbackSessionAfterConnectFailure (Z-1)", () => {
     expect(sessionLastActivity[sid]).toBeUndefined();
     expect(transports.other).toBeDefined();
     expect(sessionLastActivity.other).toBe(2);
+  });
+
+  it("invokes a pre-existing transport.onclose (preserves SDK-internal bookkeeping)", async () => {
+    // Regression: earlier fix replaced transport.onclose with a bare `() => {}`
+    // no-op, which silently clobbered any SDK-internal onclose wiring (the
+    // MCP SDK StreamableHTTPServerTransport attaches onclose listeners for
+    // its own bookkeeping). The wrapper must forward the invocation so SDK
+    // state teardown still happens even while our cleanup branch skips.
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-prior-onclose";
+    const transport = makeTransport(sid);
+    const transports: Record<string, unknown> = { [sid]: transport };
+    const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
+
+    // Simulate an SDK-attached onclose (e.g. request-queue drain) that does
+    // NOT know about rejectedSids — it just wants to be told the transport
+    // closed.
+    let sdkOncloseFired = 0;
+    transport.onclose = () => {
+      sdkOncloseFired++;
+    };
+
+    rollbackSessionAfterConnectFailure({
+      transport,
+      sid,
+      transports,
+      sessionLastActivity,
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(sdkOncloseFired).toBe(1);
+  });
+
+  it("tolerates a null transport.onclose (no prior handler attached)", async () => {
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-no-prior";
+    const transport = makeTransport(sid);
+    // Explicitly no onclose.
+    transport.onclose = undefined as unknown as (() => void) | undefined;
+    const transports: Record<string, unknown> = { [sid]: transport };
+    const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
+
+    // Must not throw.
+    rollbackSessionAfterConnectFailure({
+      transport,
+      sid,
+      transports,
+      sessionLastActivity,
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(transport.closeCalls).toBe(1);
   });
 
   it("continues cleanup even if an earlier cleanup step throws", async () => {

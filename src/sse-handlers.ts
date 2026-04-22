@@ -348,17 +348,26 @@ export function createSseHandlers(deps: SseHandlerDeps): {
             ),
           );
         if (!res.headersSent) {
-          // R4-5 — `reason` is now a machine-readable discriminant
-          // (workspace_init_failed) rather than a human sentence, so
-          // monitoring + client code can tell this rollback apart from
-          // state_init_failed / ip_limit_rollback. The human-facing hint
-          // moves to `message`. The full error object is already logged
-          // above via console.error(..., ensureErr).
+          // R4-5 — emit a machine-readable `reason` discriminant
+          // (workspace_init_failed) so monitoring + client code can tell
+          // this rollback apart from state_init_failed / ip_limit_rollback
+          // without parsing the human message. The discriminant is nested
+          // under `error.data` to match the /mcp (JSON-RPC) rollback body
+          // shape — clients read `body.error.data.reason` on BOTH transports.
+          //
+          // The outer envelope stays SSE-flavored (`error`/`message` at top
+          // level rather than the full JSON-RPC wrapper) because a pure
+          // JSON-RPC body on the GET /sse handshake would surprise existing
+          // clients that never expected it there. We only standardize the
+          // INNER discriminant placement; the outer shape remains transport-
+          // appropriate.
           res.status(503).json({
-            error: "workspace_unavailable",
-            reason: "workspace_init_failed",
-            message:
-              "Failed to initialize session workspace. Please try again.",
+            error: {
+              code: "workspace_unavailable",
+              message:
+                "Failed to initialize session workspace. Please try again.",
+              data: { reason: "workspace_init_failed" },
+            },
           });
         }
         return;
@@ -381,9 +390,13 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
       console.error(`[mcp] SSE connection error cid=${correlationId}:`, err);
       if (!res.headersSent) {
+        // Emit snake_case `correlation_id` in the response body to match the
+        // convention analyticsAuth already uses for OAuth-style
+        // `error_description` (RFC 6749 snake_case). Internal variable stays
+        // camelCase per JS convention; only the wire format standardizes.
         res.status(500).json({
           error: "Failed to establish SSE session",
-          correlationId,
+          correlation_id: correlationId,
         });
       }
     }

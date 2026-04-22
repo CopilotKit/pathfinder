@@ -60,6 +60,7 @@ function post(
   server: http.Server,
   path: string,
   body: string,
+  contentType = "application/json",
 ): Promise<{ status: number; body: string }> {
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("no address");
@@ -71,7 +72,7 @@ function post(
         path,
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": contentType,
           "Content-Length": Buffer.byteLength(body).toString(),
         },
       },
@@ -112,6 +113,47 @@ describe("assertWebhookRawBodyOrder runtime guard (R4-7)", () => {
         const resp = await post(server, "/webhooks/github", '{"x":1}');
         expect(resp.status).toBe(200);
         expect(receivedType).toBe("buffer");
+      } finally {
+        await stopServer(server);
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does NOT log 'middleware misconfigured' when content-type mismatch makes express.raw skip", async () => {
+    // Regression: before this guard distinguished cases, a webhook request
+    // arriving with Content-Type: text/plain caused express.raw (configured
+    // with type: "application/json") to skip parsing. req.body stayed as
+    // the Express default {} and the guard fired "middleware misconfigured"
+    // — but NOTHING was misconfigured; the client just used the wrong
+    // content-type. The guard should return 415 quietly instead.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const app = express();
+      app.post(
+        "/webhooks/github",
+        express.raw({ type: "application/json" }),
+        assertWebhookRawBodyOrder("webhook"),
+        (_req: Request, res: Response) => {
+          // Should never reach the handler — request is rejected at the guard.
+          res.status(200).json({ ok: true });
+        },
+      );
+      const server = await startServer(app);
+      try {
+        const resp = await post(
+          server,
+          "/webhooks/github",
+          "hello",
+          "text/plain",
+        );
+        expect(resp.status).toBe(415);
+        // No "middleware misconfigured" / "middleware ordering bug" log.
+        const misconfigCalls = errorSpy.mock.calls.filter((args: unknown[]) =>
+          String(args[0] ?? "").includes("middleware"),
+        );
+        expect(misconfigCalls.length).toBe(0);
       } finally {
         await stopServer(server);
       }

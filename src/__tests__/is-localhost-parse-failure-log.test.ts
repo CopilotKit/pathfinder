@@ -7,21 +7,24 @@
  * signal — an operator would have to bisect through the handler to see
  * that the parse was the root cause.
  *
- * Fix: add a debug-level log on the parse failure so the reason is
+ * Fix: add a warn-level log on the parse failure so the reason is
  * visible without widening the return contract (still returns false).
+ * Warn (not debug) because this path only fires on malformed peer
+ * addresses, which is rare enough that warn isn't spammy and is visible
+ * in production log aggregators that filter out debug.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { __isLocalhostReqForTesting } from "../server.js";
 import type { Request } from "express";
 
-describe("isLocalhostReq parse-failure debug log (R3 #14)", () => {
-  let debugSpy: ReturnType<typeof vi.spyOn>;
+describe("isLocalhostReq parse-failure warn log (R3 #14)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
   afterEach(() => {
-    debugSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   function makeReq(remoteAddress: string): Request {
@@ -31,24 +34,24 @@ describe("isLocalhostReq parse-failure debug log (R3 #14)", () => {
     } as unknown as Request;
   }
 
-  it("returns false and emits a debug log when ipaddr.parse throws", () => {
+  it("returns false and emits a warn log when ipaddr.parse throws", () => {
     // "not-an-ip" is syntactically invalid, so ipaddr.parse will throw.
     const result = __isLocalhostReqForTesting(makeReq("not-an-ip"));
     expect(result).toBe(false);
-    const joined = debugSpy.mock.calls.flat().map(String).join(" ");
+    const joined = warnSpy.mock.calls.flat().map(String).join(" ");
     expect(joined).toMatch(/isLocalhostReq|parse/);
     expect(joined).toContain("not-an-ip");
   });
 
-  it("does NOT emit a debug log on empty remote address (handled by early return)", () => {
+  it("does NOT emit a warn log on empty remote address (handled by early return)", () => {
     const result = __isLocalhostReqForTesting(makeReq(""));
     expect(result).toBe(false);
-    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("returns true for 127.0.0.1 without emitting a parse-failure log", () => {
     const result = __isLocalhostReqForTesting(makeReq("127.0.0.1"));
     expect(result).toBe(true);
-    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
