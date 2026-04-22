@@ -2655,11 +2655,12 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/empty-queries": () => [],
     };
 
-    const { dom, calls } = await loadDashboardAtUrl(
+    const { dom, win, calls } = await loadDashboardAtUrl(
       "http://localhost/analytics",
       endpoints,
     );
     const fetchCountBefore = calls.length;
+    const urlBefore = win.location.search;
 
     // Silence warn the handler emits on rejection.
     vi.spyOn(dom.window.console, "warn").mockImplementation(() => {});
@@ -2703,7 +2704,8 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     expect(dateErr).not.toBeNull();
     expect(dateErr!.style.display).toBe("block");
     expect(dateErr!.textContent).toBe("End date cannot be in the future.");
-    // URL unchanged (no writeWindowToUrl fired).
-    expect(window.location.search).not.toContain("2099");
+    // URL unchanged (no writeWindowToUrl fired for the rejected range).
+    expect(win.location.search).toBe(urlBefore);
+    expect(win.location.search).not.toContain("2099");
   });
 });

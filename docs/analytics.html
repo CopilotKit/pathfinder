@@ -724,23 +724,35 @@
       var draftFromInput = null;
       var draftToInput = null;
 
-      // Intl formatters (cached)
+      // Intl formatters (cached). timeZone: "UTC" keeps the pill label
+      // frame-aligned with parseISODate (UTC-noon) and todayISO (UTC) so
+      // the pill doesn't render a different calendar day for users east
+      // or west of UTC than the URL / server computations see.
       var shortDateFmt = new Intl.DateTimeFormat(undefined, {
         month: "short",
         day: "numeric",
+        timeZone: "UTC",
       });
 
       function parseISODate(s) {
-        // Parse YYYY-MM-DD as a local-noon Date so DST/TZ doesn't shift the day label.
+        // Parse YYYY-MM-DD as a UTC-noon Date. UTC (not local) so the
+        // resulting Date is frame-aligned with todayISO() — both use UTC
+        // accessors downstream. A local-noon construction would misfire
+        // for users east of UTC (e.g. Tokyo early-morning deep links where
+        // UTC still reads yesterday) when the future-date guard compares
+        // parseISODate-derived dates against todayISO(). Noon keeps us
+        // safely away from DST/leap-second boundaries on any frame.
         var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
         if (!m) return null;
         return new Date(
-          parseInt(m[1], 10),
-          parseInt(m[2], 10) - 1,
-          parseInt(m[3], 10),
-          12,
-          0,
-          0,
+          Date.UTC(
+            parseInt(m[1], 10),
+            parseInt(m[2], 10) - 1,
+            parseInt(m[3], 10),
+            12,
+            0,
+            0,
+          ),
         );
       }
 
@@ -770,10 +782,12 @@
       // alongside the persisted ?preview=1 flag; the canned payload just
       // doesn't change in response.
 
-      // Mirrors server.ts MAX_DAYS (see src/server.ts:2703). Kept in sync by
-      // hand — if server raises the cap, raise it here too. days values
-      // beyond this are clamped (not rejected) so deep links remain valid.
-      var URL_MAX_DAYS = 100000;
+      // Upper bound for ?days= in the URL. Shares a single source of truth
+      // with ALL_TIME_DAYS so the "All time" pill label and the URL clamp
+      // always align. The server-side MAX_DAYS (src/server.ts:2703) must
+      // stay >= this value; days beyond this cap are clamped (not rejected)
+      // so shared deep links degrade gracefully to "All time".
+      var URL_MAX_DAYS = ALL_TIME_DAYS;
 
       // Parse the current page URL's time-window query params.
       // Returns one of:
@@ -803,11 +817,12 @@
           if (!fromDate || !toDate) return null;
           // Round-trip check: parseISODate regex-validates shape but accepts
           // e.g. 2026-02-30 (JS Date normalizes to Mar 2). Reconstruct the
-          // YYYY-MM-DD from the parsed Date and compare.
+          // YYYY-MM-DD from the parsed Date and compare. Uses UTC accessors
+          // to stay frame-aligned with parseISODate (UTC-noon construction).
           function roundTrip(d) {
-            var y = d.getFullYear();
-            var mo = String(d.getMonth() + 1).padStart(2, "0");
-            var da = String(d.getDate()).padStart(2, "0");
+            var y = d.getUTCFullYear();
+            var mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+            var da = String(d.getUTCDate()).padStart(2, "0");
             return y + "-" + mo + "-" + da;
           }
           if (roundTrip(fromDate) !== fromRaw) return null;
@@ -863,16 +878,23 @@
       // adjacent to its read/write counterparts for maintainability.
       function applyUrlWindowOnMount() {
         var parsed = readWindowFromUrl();
-        if (!parsed) return;
-        if (parsed.mode === "days") {
-          activeDaysBack = parsed.days;
-          activeFrom = null;
-          activeTo = null;
-        } else if (parsed.mode === "range") {
-          activeFrom = parsed.from;
-          activeTo = parsed.to;
-          activeDaysBack = null;
+        if (parsed) {
+          if (parsed.mode === "days") {
+            activeDaysBack = parsed.days;
+            activeFrom = null;
+            activeTo = null;
+          } else if (parsed.mode === "range") {
+            activeFrom = parsed.from;
+            activeTo = parsed.to;
+            activeDaysBack = null;
+          }
         }
+        // Unconditionally rewrite the URL so it reflects the effective
+        // state (clamped value when ?days= exceeded URL_MAX_DAYS, or the
+        // 7-day default when the input was invalid). Without this, the
+        // address bar keeps displaying the user's original (now-wrong)
+        // query and a copy-paste propagates the bad value.
+        writeWindowToUrl();
       }
 
       function formatPillLabel() {
@@ -1370,6 +1392,21 @@
               f = t;
               t = tmp;
             }
+            // Reject future ranges to match readWindowFromUrl's contract —
+            // without this guard, interactive Apply accepts a future range
+            // that a bookmarked/shared URL of the same selection would
+            // reject, silently snapping back to the 7-day default.
+            if (t > todayISO()) {
+              if (dateErr) {
+                dateErr.textContent = "End date cannot be in the future.";
+                dateErr.style.display = "block";
+              }
+              console.warn(
+                "[analytics] dateApply rejected future range",
+                { from: f, to: t },
+              );
+              return;
+            }
             activeFrom = f;
             activeTo = t;
             activeDaysBack = null;
@@ -1654,6 +1691,10 @@
                   draftToInput = null;
                   // Date window changed — invalidate source cache.
                   unfilteredSourcesCache = null;
+                  // Mirror the drill-down into the URL so refresh /
+                  // deep-link preserves it. Matches every other state-
+                  // mutating path (preset, Today, Apply).
+                  writeWindowToUrl();
                   load();
                 },
               },
