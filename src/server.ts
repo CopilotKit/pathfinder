@@ -1,4 +1,9 @@
-import express, { Request, Response } from "express";
+import express, {
+  NextFunction,
+  Request,
+  RequestHandler,
+  Response,
+} from "express";
 import cors from "cors";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Bash } from "just-bash";
@@ -95,6 +100,40 @@ app.use((_req, res, next) => {
 // requests receive 503 (server still initializing).
 // ---------------------------------------------------------------------------
 
+/**
+ * Webhook middleware-ordering assertion (R4-7).
+ *
+ * Every `/webhooks/*` route below MUST receive a `Buffer` body (parsed by
+ * express.raw) because HMAC signature verification runs against the exact
+ * bytes on the wire — an already-JSON-parsed object cannot be
+ * re-serialized byte-for-byte (key ordering, whitespace, numeric
+ * representation all diverge). If a future refactor ever places
+ * `app.use(express.json())` BEFORE these routes, the JSON parser would
+ * win, req.body would arrive as an object, and every signature check
+ * would fail closed with a silent 401 — or worse, a handler that doesn't
+ * verify signatures would accept forged payloads.
+ *
+ * This factory produces a per-route guard that asserts Buffer-typed body
+ * at REQUEST time. We don't rely on app-setup-time ordering alone because
+ * Express doesn't expose a stable "middleware inserted before route"
+ * predicate, and re-ordering at module scope is the exact class of
+ * refactor most likely to silently undo the invariant.
+ */
+export function assertWebhookRawBodyOrder(routeName: string): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!Buffer.isBuffer(req.body)) {
+      console.error(
+        `[${routeName}] middleware ordering bug: express.json ran before express.raw (req.body is ${typeof req.body}); HMAC verification cannot proceed — refusing request`,
+      );
+      res.status(500).json({
+        error: "Webhook middleware misconfigured",
+      });
+      return;
+    }
+    next();
+  };
+}
+
 let webhookHandler: ((req: Request, res: Response) => Promise<void>) | null =
   null;
 let slackWebhookHandler:
@@ -151,6 +190,10 @@ async function refreshBashInstances(
 app.post(
   "/webhooks/github",
   express.raw({ type: "application/json" }),
+  // Runtime guard: assert req.body is a Buffer. If a future refactor moves
+  // express.json() above this route, the guard fires a loud 500 instead of
+  // silently 401-ing every webhook delivery.
+  assertWebhookRawBodyOrder("webhook"),
   async (req: Request, res: Response) => {
     const handler = webhookHandler;
     if (!handler) {
@@ -193,6 +236,7 @@ app.post(
 app.post(
   "/webhooks/slack",
   express.raw({ type: "application/json" }),
+  assertWebhookRawBodyOrder("slack-webhook"),
   async (req: Request, res: Response) => {
     const handler = slackWebhookHandler;
     if (!handler) {
@@ -214,6 +258,7 @@ app.post(
 app.post(
   "/webhooks/discord",
   express.raw({ type: "application/json" }),
+  assertWebhookRawBodyOrder("discord-webhook"),
   async (req: Request, res: Response) => {
     const handler = discordWebhookHandler;
     if (!handler) {
@@ -2329,6 +2374,23 @@ registerAnalyticsRoutes(app);
 // ---------------------------------------------------------------------------
 
 export async function startServer(options?: ServerOptions): Promise<void> {
+  // Top-level try/catch around the entire startup sequence so synchronous
+  // throws from getConfig/getServerConfig AND async failures from
+  // initializeSchema/checkAndIndex carry a uniform '[startup] fatal:' log
+  // prefix before propagating. Without this wrapper, failures escape as
+  // bare rejections: index.ts' .catch prints them, but ops can't grep for
+  // a single stable token to correlate startup-crash incidents across
+  // deployments. Re-throw so callers (src/index.ts and its process.exit
+  // path) keep their existing exit-code contract.
+  try {
+    return await startServerInner(options);
+  } catch (err) {
+    console.error("[startup] fatal:", err);
+    throw err;
+  }
+}
+
+async function startServerInner(options?: ServerOptions): Promise<void> {
   if (options?.configPath) {
     process.env.PATHFINDER_CONFIG = options.configPath;
   }

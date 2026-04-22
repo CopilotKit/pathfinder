@@ -223,7 +223,7 @@ describe("handleSessionInitRaceFallback", () => {
     await new Promise((r) => setTimeout(r, 10));
   });
 
-  it("emits a JSON-RPC error frame (or documented fallback) before closing the transport", async () => {
+  it("closes the transport and logs a diagnostic warn without calling transport.send (pinned fallback contract)", async () => {
     const { handleSessionInitRaceFallback } = await import("../server.js");
 
     const transports: Record<string, { close: () => Promise<void> }> = {};
@@ -267,31 +267,32 @@ describe("handleSessionInitRaceFallback", () => {
     // Allow send/close microtasks to flush.
     await new Promise((r) => setTimeout(r, 20));
 
-    if (sendCalls.length > 0) {
-      // Happy path: the fallback emitted a JSON-RPC error frame via
-      // transport.send BEFORE closing so the client sees a descriptive
-      // rejection rather than a silent disconnect.
-      const frame = sendCalls[0] as Record<string, unknown>;
-      expect(frame.jsonrpc).toBe("2.0");
-      expect((frame.error as Record<string, unknown>)?.code).toBe(-32005);
-      expect(sentAt).toBeDefined();
-      expect(closedAt).toBeDefined();
-      expect(sentAt!).toBeLessThanOrEqual(closedAt!);
-    } else {
-      // Documented fallback path: if transport.send isn't safe at this point
-      // in the SDK lifecycle, the race-fallback still closes the transport
-      // but MUST log a diagnostic warn — the silent-disconnect footgun
-      // turns into a loud log line instead.
-      expect(closedAt).toBeDefined();
-      const warnCalls = warnSpy.mock.calls.map((c) => c[0]);
-      const rejectedLog = warnCalls.find(
-        (m) =>
-          typeof m === "string" &&
-          m.includes("race fallback") &&
-          m.includes(sid.slice(0, 8)),
-      );
-      expect(rejectedLog).toBeDefined();
-    }
+    // Pinned contract (R3 #24 / R4-15): the fallback MUST take the
+    // "silent-disconnect + loud warn" path because the MCP SDK lifecycle
+    // rejects transport.send() inside onsessioninitialized (send() throws
+    // "Not connected" — the stream controller isn't wired yet). The JSDoc
+    // on handleSessionInitRaceFallback in src/server.ts documents this as
+    // intentional. Prior to this commit the test accepted EITHER branch,
+    // which is a contract-less assertion: the code has always taken the
+    // fallback, so the "happy path" branch was unreachable dead validation.
+    // If a future SDK change unlocks transport.send() here, that's a
+    // separate diff — update the contract AND the test together.
+
+    // (1) transport.send must NOT be called.
+    expect(sendCalls.length).toBe(0);
+    expect(sentAt).toBeUndefined();
+    // (2) transport.close WAS called.
+    expect(closedAt).toBeDefined();
+    // (3) A diagnostic warn fired with the sid prefix so operators can
+    //     correlate the silent disconnect with a rate-limit trip.
+    const warnCalls = warnSpy.mock.calls.map((c) => c[0]);
+    const rejectedLog = warnCalls.find(
+      (m) =>
+        typeof m === "string" &&
+        m.includes("race fallback") &&
+        m.includes(sid.slice(0, 8)),
+    );
+    expect(rejectedLog).toBeDefined();
 
     warnSpy.mockRestore();
     errSpy.mockRestore();
