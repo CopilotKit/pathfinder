@@ -242,24 +242,24 @@ const PER_DAY_WINDOW_CAP_DAYS = 366;
 /**
  * Build a series expression + narrowed WHERE clause for the per-day chart.
  *
- * Unlike {@link buildDateWindow}, this helper returns a `generate_series`
- * expression plus an aligned inner WHERE so the gap-fill LEFT JOIN emits
- * one row per day in the window even when zero rows were logged that day.
+ * The inner WHERE is delegated to {@link buildDateWindow} so the per-day
+ * aggregate counts the EXACT same rows as the summary window — guaranteeing
+ * sum(queries_per_day_window[].count) matches total_queries_window whenever
+ * the rolling window fits inside the 366-day cap (see cap-regime note below).
+ * Any drift between the two WHERE forms showed up in production as "my bars
+ * add up to less than my summary card"; reusing buildDateWindow removes the
+ * whole class of bug.
  *
- * Kept separate from buildDateWindow because other aggregates (summary,
- * latency, by-source, getToolCounts, getTopQueries, getEmptyQueries) pin
- * buildDateWindow's exact semantics and must not be affected by the
- * gap-fill cap or series alignment.
+ * The SERIES is emitted separately as UTC-midnight calendar days so that the
+ * LEFT JOIN renders one bar per day even when no rows were logged. Rolling
+ * mode caps the series at PER_DAY_WINDOW_CAP_DAYS to bound payload size;
+ * range mode passes through uncapped (user explicitly chose bounds).
  *
- * - Rolling mode: `generate_series((NOW() AT TIME ZONE 'UTC')::date -
- *   (LEAST($days, 366) - 1), (NOW() AT TIME ZONE 'UTC')::date,
- *   '1 day'::interval)` — UTC-normalized so the output matches
- *   `date_trunc('day', created_at)::date` regardless of server TZ GUC.
- *   The matching inner WHERE narrows to `created_at >= (NOW() AT TIME
- *   ZONE 'UTC')::date - (LEAST($days, 366) - 1)` so rows outside the
- *   gap-fill series can't leak into the inner aggregate.
- * - Range mode: `generate_series($from::date, $to::date,
- *   '1 day'::interval)` — uncapped; user explicitly chose bounds.
+ * Cap regime: when `$days > PER_DAY_WINDOW_CAP_DAYS`, the series is truncated
+ * but the inner WHERE still counts every row back to NOW()-$days. In that
+ * regime sum-of-bars ≤ total_queries_window — by design. The 366-day cap
+ * exists to bound UI payload; total_queries_window is expected to reflect
+ * the full caller-requested window.
  *
  * `startIdx` is the next available `$` placeholder index; `nextIdx` is the
  * next index to use after this helper's params.
@@ -274,23 +274,36 @@ function buildPerDayWindow(
   params: unknown[];
   nextIdx: number;
 } {
+  // Inner WHERE is byte-identical to the summary window. For rolling mode
+  // buildDateWindow binds $startIdx = days; for range mode it binds
+  // $startIdx = from and $startIdx+1 = to. The series below reuses those
+  // exact placeholders so the two sides can never drift apart.
+  const dw = buildDateWindow(filter, days, startIdx);
+  const whereClause = dw.clauses.join(" AND ");
+
   if (filter.from && filter.to) {
     return {
+      // Range: `$from::date .. $to::date`. Date coercion uses UTC semantics
+      // in Postgres when the TimeZone GUC is UTC; combined with the UTC-
+      // normalized date_trunc in the inner aggregate (see getAnalyticsSummary)
+      // this keeps bars aligned regardless of session TZ.
       seriesExpr: `generate_series($${startIdx}::date, $${startIdx + 1}::date, '1 day'::interval)`,
-      whereClause: `created_at >= $${startIdx} AND created_at <= $${startIdx + 1}`,
-      params: [filter.from, filter.to],
-      nextIdx: startIdx + 2,
+      whereClause,
+      params: dw.params,
+      nextIdx: dw.nextIdx,
     };
   }
-  // Rolling. Cap at PER_DAY_WINDOW_CAP_DAYS to bound payload size. LEAST()
-  // runs inside SQL (same parameter used for series + WHERE) so the two
-  // bounds can never drift.
+
+  // Rolling. Emit today-(N-1) .. today in UTC, capped at PER_DAY_WINDOW_CAP_DAYS
+  // so a huge $days value can't bloat the payload. The cap lives in SQL
+  // (LEAST in the series expression) and reuses the same $days placeholder
+  // that buildDateWindow binds — no extra param needed.
   const cappedExpr = `LEAST($${startIdx}, ${PER_DAY_WINDOW_CAP_DAYS})`;
   return {
     seriesExpr: `generate_series((NOW() AT TIME ZONE 'UTC')::date - (${cappedExpr} - 1), (NOW() AT TIME ZONE 'UTC')::date, '1 day'::interval)`,
-    whereClause: `created_at >= (NOW() AT TIME ZONE 'UTC')::date - (${cappedExpr} - 1)`,
-    params: [days],
-    nextIdx: startIdx + 1,
+    whereClause,
+    params: dw.params,
+    nextIdx: dw.nextIdx,
   };
 }
 
@@ -462,12 +475,21 @@ export async function getAnalyticsSummary(
     `query_text != $${redactedIdx5}`,
   ];
   const dayWhere = whereAnd(dayBase, fc5);
+  // Inner grouping is normalized to UTC via `AT TIME ZONE 'UTC'` so the
+  // aggregated bucket column aligns with the UTC-midnight series regardless
+  // of the session's `TimeZone` GUC. Without the cast, production Postgres
+  // sessions whose TimeZone != UTC (common on managed instances that
+  // inherit a regional default) silently bucket rows by local-day, the
+  // LEFT JOIN misses the corresponding series day, and bars go to zero.
+  // PGlite defaults to UTC so this diverges only in production — the
+  // non-UTC TZ test in analytics-gap-fill.test.ts is the regression guard.
   const perDayRes = await pool.query(
     `SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
             COALESCE(q.count, 0)::int AS count
      FROM ${pdw.seriesExpr} AS d(day)
      LEFT JOIN (
-       SELECT date_trunc('day', created_at)::date AS day, count(*)::int AS count
+       SELECT date_trunc('day', created_at AT TIME ZONE 'UTC')::date AS day,
+              count(*)::int AS count
        FROM query_log
        ${dayWhere}
        GROUP BY day

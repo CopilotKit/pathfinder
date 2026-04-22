@@ -1022,13 +1022,19 @@ describe("getAnalyticsSummary with from/to range", () => {
       expect(sql).toContain("NOW() - INTERVAL");
       expect(sql).not.toContain("created_at >=");
     }
-    // Index 4 (per-day) uses the gap-fill helper: generate_series
-    // + `(NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, 366) - 1)` in
-    // rolling mode. It does contain `created_at >=` (on the inner
-    // narrowing WHERE) but does not use `NOW() - INTERVAL`.
+    // Index 4 (per-day) uses the gap-fill helper: generate_series over
+    // UTC-midnight calendar days for the outer series, plus the exact
+    // buildDateWindow WHERE (rolling `NOW() - INTERVAL`) reused verbatim on
+    // the inner aggregate. The inner reuse is what keeps sum-of-bars
+    // aligned with total_queries_window — previously the per-day helper
+    // had its own date-based WHERE and drifted from the summary window.
     const [perDaySql] = mockQuery.mock.calls[4];
     expect(perDaySql).toContain("generate_series");
-    expect(perDaySql).not.toContain("NOW() - INTERVAL");
+    expect(perDaySql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
+    expect(perDaySql).toContain("NOW() - INTERVAL");
+    // Inner grouping must be UTC-normalized so bars align with the UTC
+    // series regardless of server TimeZone GUC.
+    expect(perDaySql).toContain("AT TIME ZONE 'UTC'");
   });
 });
 
