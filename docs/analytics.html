@@ -756,6 +756,125 @@
         return y + "-" + m + "-" + dd;
       }
 
+      // --- URL persistence for the time-window selector ---
+      // The selected window (preset days, Today, or custom from/to range) is
+      // mirrored into the page URL so that reloading or sharing a deep link
+      // preserves the selection. Other query params (notably ?preview=1) are
+      // always preserved.
+      //
+      // Preview-mode interaction: the preview IIFE at the top of this script
+      // strips query strings from /api/analytics/* fetches and returns canned
+      // 7-day data regardless of ?days / ?from&to. That's by design — preview
+      // exists to render a deterministic mockup. URL persistence still runs
+      // in preview mode so subsequent pill clicks update the visible URL
+      // alongside the persisted ?preview=1 flag; the canned payload just
+      // doesn't change in response.
+
+      // Mirrors server.ts MAX_DAYS (see src/server.ts:2703). Kept in sync by
+      // hand — if server raises the cap, raise it here too. days values
+      // beyond this are clamped (not rejected) so deep links remain valid.
+      var URL_MAX_DAYS = 100000;
+
+      // Parse the current page URL's time-window query params.
+      // Returns one of:
+      //   { mode: "range", from: "YYYY-MM-DD", to: "YYYY-MM-DD" }
+      //   { mode: "days",  days: <positive integer, clamped to URL_MAX_DAYS> }
+      //   null  — caller falls back to the 7-day default
+      //
+      // Precedence: if both days and from/to are present, from/to wins
+      // (matches server buildDateWindow's precedence).
+      //
+      // Validation (returns null on any failure, except days > URL_MAX_DAYS
+      // which clamps rather than rejects so shared deep links degrade
+      // gracefully):
+      //   - from/to: ISO YYYY-MM-DD shape + calendar round-trip; from <= to;
+      //     to <= today UTC; half-specified (only from OR only to) → null
+      //   - days: finite integer >= 1; rejects "garbage", NaN, 0, negative,
+      //     and non-integers like 3.5
+      function readWindowFromUrl() {
+        var params = new URLSearchParams(window.location.search);
+        var fromRaw = params.get("from");
+        var toRaw = params.get("to");
+        // Half-specified range → null (one-sided ranges are ambiguous).
+        if ((fromRaw && !toRaw) || (!fromRaw && toRaw)) return null;
+        if (fromRaw && toRaw) {
+          var fromDate = parseISODate(fromRaw);
+          var toDate = parseISODate(toRaw);
+          if (!fromDate || !toDate) return null;
+          // Round-trip check: parseISODate regex-validates shape but accepts
+          // e.g. 2026-02-30 (JS Date normalizes to Mar 2). Reconstruct the
+          // YYYY-MM-DD from the parsed Date and compare.
+          function roundTrip(d) {
+            var y = d.getFullYear();
+            var mo = String(d.getMonth() + 1).padStart(2, "0");
+            var da = String(d.getDate()).padStart(2, "0");
+            return y + "-" + mo + "-" + da;
+          }
+          if (roundTrip(fromDate) !== fromRaw) return null;
+          if (roundTrip(toDate) !== toRaw) return null;
+          if (fromRaw > toRaw) return null;
+          // Reject future ranges (to > today UTC). Uses string compare; both
+          // sides are YYYY-MM-DD so lexicographic order matches chronological.
+          if (toRaw > todayISO()) return null;
+          return { mode: "range", from: fromRaw, to: toRaw };
+        }
+        var daysRaw = params.get("days");
+        if (daysRaw === null || daysRaw === "") return null;
+        var n = Number(daysRaw);
+        // Reject NaN, non-finite, non-integer, and anything < 1.
+        if (!Number.isFinite(n)) return null;
+        if (!Number.isInteger(n)) return null;
+        if (n < 1) return null;
+        // Clamp days > MAX_DAYS rather than rejecting so shared deep links
+        // with an overlarge but otherwise-valid value degrade gracefully to
+        // the cap instead of snapping back to the 7-day default.
+        if (n > URL_MAX_DAYS) n = URL_MAX_DAYS;
+        return { mode: "days", days: n };
+      }
+
+      // Mirror the current active window state into the page URL via
+      // history.replaceState (no new history entry). Preserves any other
+      // query params already on the URL — e.g. ?preview=1 survives every
+      // preset click. Omits days when from/to is set, and vice versa.
+      function writeWindowToUrl() {
+        var params = new URLSearchParams(window.location.search);
+        if (activeFrom && activeTo) {
+          params.set("from", activeFrom);
+          params.set("to", activeTo);
+          params.delete("days");
+        } else if (activeDaysBack !== null) {
+          params.set("days", String(activeDaysBack));
+          params.delete("from");
+          params.delete("to");
+        } else {
+          // No active window — clear all three params but leave others alone.
+          params.delete("days");
+          params.delete("from");
+          params.delete("to");
+        }
+        var qs = params.toString();
+        var newUrl =
+          window.location.pathname + (qs ? "?" + qs : "") + window.location.hash;
+        window.history.replaceState(null, "", newUrl);
+      }
+
+      // Apply any window selection parsed from the URL BEFORE the first
+      // load() runs. Called from init() further below so this helper stays
+      // adjacent to its read/write counterparts for maintainability.
+      function applyUrlWindowOnMount() {
+        var parsed = readWindowFromUrl();
+        if (!parsed) return;
+        if (parsed.mode === "days") {
+          activeDaysBack = parsed.days;
+          activeFrom = null;
+          activeTo = null;
+        } else if (parsed.mode === "range") {
+          activeFrom = parsed.from;
+          activeTo = parsed.to;
+          activeDaysBack = null;
+        }
+      }
+
       function formatPillLabel() {
         if (activeFrom && activeTo) {
           // Single-day range collapses to a "Today" label when it is in
@@ -1144,6 +1263,9 @@
             // Date window changed — sources cached under the previous
             // window are stale. Let the next unfiltered load refresh it.
             unfilteredSourcesCache = null;
+            // Mirror the new window into the page URL so refresh preserves
+            // it. Preserves any other query params (e.g. ?preview=1).
+            writeWindowToUrl();
             load();
           });
         });
@@ -1164,6 +1286,7 @@
             draftToInput = null;
             // Date window changed — invalidate source cache.
             unfilteredSourcesCache = null;
+            writeWindowToUrl();
             load();
           });
         }
@@ -1256,6 +1379,7 @@
             draftToInput = null;
             // Date window changed — invalidate source cache.
             unfilteredSourcesCache = null;
+            writeWindowToUrl();
             load();
           });
         }
@@ -1683,6 +1807,10 @@
 
       // Check if server is in dev mode (skip auth), otherwise require token
       (async function init() {
+        // Hydrate window state from the URL before any fetch fires so the
+        // initial load() reflects a deep-linked selection. Does nothing when
+        // the URL carries no recognized params.
+        applyUrlWindowOnMount();
         // Preview mode renders from canned data with the fetch stub above;
         // skip both the auth-mode probe and the token prompt entirely.
         if (window.__pathfinderPreview) {
