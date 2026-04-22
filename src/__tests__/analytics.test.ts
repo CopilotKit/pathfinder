@@ -19,7 +19,11 @@ import {
 import type { QueryLogEntry } from "../db/analytics.js";
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // resetAllMocks (not clearAllMocks) so any queued `.mockResolvedValueOnce`
+  // implementations also clear between tests. A test that queues N mocks for
+  // one pool.query() call chain but the code only consumes M (<N) would
+  // otherwise leak the remaining N-M implementations into the next test.
+  vi.resetAllMocks();
 });
 
 // ---------------------------------------------------------------------------
@@ -219,6 +223,85 @@ describe("getAnalyticsSummary", () => {
     const perDaySql = perDayCall![0] as string;
     expect(perDaySql).toMatch(/generate_series/i);
     expect(perDaySql).toMatch(/LEFT JOIN/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// earliest_query_day — data-availability probe for the UI
+//
+// The dashboard surfaces a "showing N days of data" subtext whenever the
+// requested window exceeds the actual query_log depth. To compute N the UI
+// needs the earliest row's date regardless of the current filter — picking a
+// 90-day window shouldn't hide the fact that data only stretches back 9 days.
+// The field is therefore sourced from an UNFILTERED MIN(created_at) query and
+// lives alongside the windowed aggregates on the same summary response.
+// ---------------------------------------------------------------------------
+
+describe("getAnalyticsSummary earliest_query_day", () => {
+  it("returns the earliest day from query_log as a YYYY-MM-DD string", async () => {
+    // 5 existing subqueries + 1 new earliest-day subquery (6th call).
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 1000 }] }) // total
+      .mockResolvedValueOnce({
+        rows: [{ total: 200, empty: 10, avg_latency: 45 }],
+      }) // windowed summary
+      .mockResolvedValueOnce({ rows: [] }) // latency rows
+      .mockResolvedValueOnce({ rows: [] }) // by source
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: "2026-04-12" }] }); // earliest day
+
+    const result = await getAnalyticsSummary();
+
+    expect(result.earliest_query_day).toBe("2026-04-12");
+  });
+
+  it("returns null when query_log is empty", async () => {
+    // An empty query_log makes MIN(created_at) return NULL — surface that as
+    // `null` on the response so the UI can skip the label entirely rather
+    // than rendering "showing NaN days of data".
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 0, empty: 0, avg_latency: 0 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
+
+    const result = await getAnalyticsSummary();
+
+    expect(result.earliest_query_day).toBeNull();
+  });
+
+  it("queries the unfiltered earliest created_at (no filter/window applied)", async () => {
+    // The label describes data availability in absolute terms — picking a
+    // tool_type, source, or narrow from/to window must NOT change the reported
+    // earliest day. Verify the SQL for the earliest-day subquery has no WHERE
+    // clause and no filter params are bound to it.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 0 }] })
+      .mockResolvedValueOnce({
+        rows: [{ total: 0, empty: 0, avg_latency: 0 }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: "2026-03-01" }] });
+
+    await getAnalyticsSummary(
+      { tool_type: "search", source: "docs" },
+      30,
+    );
+
+    // Index 5 is the new earliest-day subquery (0=total, 1=summary, 2=latency,
+    // 3=by-source, 4=per-day, 5=earliest-day).
+    const [sql, params] = mockQuery.mock.calls[5];
+    expect(sql).toMatch(/min\(created_at/i);
+    expect(sql).toMatch(/FROM query_log/i);
+    expect(sql).not.toMatch(/WHERE/i);
+    // No filter or window params bound to the earliest-day query.
+    expect(params ?? []).toEqual([]);
   });
 });
 
