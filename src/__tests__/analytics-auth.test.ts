@@ -230,4 +230,108 @@ describe("analyticsAuth 503 message prod vs non-prod", () => {
     // Non-prod message must NOT mention production — that'd be misleading.
     expect(body.error_description).not.toMatch(/production/i);
   });
+
+  // R4-16: the dev-bypass gate is `nodeEnv === "development" && isLocalhostReq`.
+  // Both halves are load-bearing: "test", "staging", or an unset env must NOT
+  // unlock the bypass, and production must always require a Bearer token even
+  // from loopback. Lock the full NODE_ENV truth table so a future refactor
+  // can't silently widen the gate by substring / prefix / .startsWith match.
+  describe("dev-bypass gate — NODE_ENV truth table (R4-16)", () => {
+    function cfgWithNodeEnv(nodeEnv: string) {
+      return {
+        port: 0,
+        databaseUrl: "",
+        openaiApiKey: "",
+        githubToken: "",
+        githubWebhookSecret: "",
+        nodeEnv,
+        logLevel: "info",
+        cloneDir: "",
+        slackBotToken: "",
+        slackSigningSecret: "",
+        discordBotToken: "",
+        discordPublicKey: "",
+        notionToken: "",
+        mcpJwtSecret: "e".repeat(64),
+      };
+    }
+
+    it("NODE_ENV=development + loopback grants the dev-bypass (no Bearer required)", async () => {
+      mockGetConfig.mockReturnValue(cfgWithNodeEnv("development"));
+      mockGetAnalyticsConfig.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+      });
+
+      server = await buildAndStart();
+      // No Authorization header. The bypass MUST fire, so the response
+      // cannot be 401. It may be 200/404/500 depending on downstream
+      // handler resolution in the test harness — we only assert the gate
+      // did not short-circuit to 401.
+      const res = await request(server, "/api/analytics/summary", {});
+      expect(res.status).not.toBe(401);
+    });
+
+    it("NODE_ENV=production + loopback still requires a Bearer token (no bypass)", async () => {
+      mockGetConfig.mockReturnValue(cfgWithNodeEnv("production"));
+      mockGetAnalyticsConfig.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "production-token-value",
+      });
+
+      server = await buildAndStart();
+      const res = await request(server, "/api/analytics/summary", {});
+      expect(res.status).toBe(401);
+    });
+
+    it("NODE_ENV=test + loopback does NOT grant dev-bypass (only the literal 'development' does)", async () => {
+      mockGetConfig.mockReturnValue(cfgWithNodeEnv("test"));
+      mockGetAnalyticsConfig.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "test-token-value",
+      });
+
+      server = await buildAndStart();
+      const res = await request(server, "/api/analytics/summary", {});
+      // "test" must not unlock the bypass even though it's non-production.
+      expect(res.status).toBe(401);
+    });
+
+    it("NODE_ENV=staging + loopback does NOT grant dev-bypass", async () => {
+      mockGetConfig.mockReturnValue(cfgWithNodeEnv("staging"));
+      mockGetAnalyticsConfig.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "staging-token-value",
+      });
+
+      server = await buildAndStart();
+      const res = await request(server, "/api/analytics/summary", {});
+      expect(res.status).toBe(401);
+    });
+
+    it("NODE_ENV='' (empty string) + loopback does NOT grant dev-bypass — only the literal 'development' does", async () => {
+      // Defense-in-depth: config.ts defaults `process.env.NODE_ENV || 'development'`
+      // so in practice an unset env resolves to 'development' at load. But if
+      // a caller injects a cfg with an explicitly empty string, the gate must
+      // still fail closed.
+      mockGetConfig.mockReturnValue(cfgWithNodeEnv(""));
+      mockGetAnalyticsConfig.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "any-token-value",
+      });
+
+      server = await buildAndStart();
+      const res = await request(server, "/api/analytics/summary", {});
+      expect(res.status).toBe(401);
+    });
+  });
 });

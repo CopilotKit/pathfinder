@@ -273,29 +273,23 @@ describe("IpSessionLimiter", () => {
     });
 
     it("getSessionCount reflects pre-allowlist tracking for an IP later covered by the allowlist", () => {
-      // IP is tracked BEFORE the allowlist covers it (e.g. allowlist loaded
-      // after sessions already opened). Retroactively applying the allowlist
-      // must not silently zero out the tracked count.
-      const allow = new IpSessionLimiter(5, { allowlist: [] });
-      expect(allow.tryAdd("10.1.2.3", "s1")).toBe(true);
-      expect(allow.tryAdd("10.1.2.3", "s2")).toBe(true);
-      expect(allow.getSessionCount("10.1.2.3")).toBe(2);
-
-      // Now a fresh limiter with the SAME IP already "tracked" simulated by
-      // re-adding under an allowlist — but for the existing limiter, the
-      // tracked state must remain visible; the allowlist does not retroactively
-      // remove sessions that were counted.
-      // We can't hot-swap the allowlist, so verify the contract directly:
-      // getSessionCount returns the tracked count regardless of allowlist
-      // status at call time.
-      const allow2 = new IpSessionLimiter(5, { allowlist: ["10.0.0.0/8"] });
-      // Manually simulate pre-existing tracked state by flipping internals:
-      // this models "IP was tracked, then allowlist was applied".
+      // IP was tracked BEFORE the allowlist covered it (e.g. allowlist
+      // loaded after sessions already opened, or allowlist hot-reloaded).
+      // Retroactively applying the allowlist must not silently zero out the
+      // already-counted sessions. We can't hot-swap an allowlist on an
+      // existing limiter, so we model the scenario by flipping internals
+      // on a limiter that was CONSTRUCTED with the allowlist already set:
+      // the internal `ipToSessions` map has pre-existing entries, and
+      // getSessionCount must return them regardless of allowlist coverage
+      // at call time.
+      const allow = new IpSessionLimiter(5, { allowlist: ["10.0.0.0/8"] });
+      // Manually simulate pre-existing tracked state — models "IP was
+      // tracked, then allowlist was applied".
       const internalIpToSessions = (
-        allow2 as unknown as { ipToSessions: Map<string, Set<string>> }
+        allow as unknown as { ipToSessions: Map<string, Set<string>> }
       ).ipToSessions;
       internalIpToSessions.set("10.1.2.3", new Set(["s1", "s2"]));
-      expect(allow2.getSessionCount("10.1.2.3")).toBe(2);
+      expect(allow.getSessionCount("10.1.2.3")).toBe(2);
     });
 
     it("tryAdd with a re-used sid from a DIFFERENT IP does not cause counter drift", () => {
@@ -473,7 +467,24 @@ describe("IpSessionLimiter", () => {
         const internal = (
           allow as unknown as { lastAllowlistLog: Map<string, number> }
         ).lastAllowlistLog;
+        // (1) Hot IP survived — the core true-LRU contract.
         expect(internal.has("10.9.9.9")).toBe(true);
+        // (2) Capacity was enforced. Without this assertion the test
+        //     would pass even if the LRU map grew unbounded (all 5000
+        //     cold IPs retained), which is the exact regression the
+        //     capacity-bound is meant to prevent. The hard cap is 1000
+        //     (see ALLOWLIST_LOG_MAX_ENTRIES in src/ip-limiter.ts); we
+        //     asserted the same bound in the earlier "internal map
+        //     must not grow past a sane cap" test, so pin it here too.
+        expect(internal.size).toBeLessThanOrEqual(1000);
+        // (3) Eviction actually happened. With 5000 distinct cold IPs
+        //     inserted and a 1000-entry cap, the map must have dropped
+        //     at least 4000 entries. Asserting strict `< insertedTotal`
+        //     catches "eviction code path never ran" while the cap
+        //     assertion above catches "eviction ran but didn't keep the
+        //     size bounded". Together they pin the full contract.
+        const insertedColdCount = 5000;
+        expect(internal.size).toBeLessThan(insertedColdCount);
       } finally {
         vi.useRealTimers();
         infoSpy.mockRestore();

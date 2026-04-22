@@ -318,13 +318,34 @@ export const ServerConfigSchema = z
       // the TCP peer address (`req.socket.remoteAddress`) is used for rate
       // limiting, allowlist checks, tracing, and analytics.
       //
-      // SECURITY: Only enable `trust_proxy: true` when this server runs
-      // behind a reverse proxy that strips or rewrites incoming
-      // `X-Forwarded-For` headers. Enabling it on a server directly exposed
-      // to the public internet lets any client spoof their source IP by
-      // sending an `X-Forwarded-For` header — which would let them claim
-      // to be an allowlisted IP and bypass the per-IP session limiter.
-      trust_proxy: z.boolean().optional().default(false),
+      // SECURITY: Only enable `trust_proxy` when this server runs behind a
+      // reverse proxy that strips or rewrites incoming `X-Forwarded-For`
+      // headers. Enabling it on a server directly exposed to the public
+      // internet lets any client spoof their source IP by sending an
+      // `X-Forwarded-For` header — which would let them claim to be an
+      // allowlisted IP and bypass the per-IP session limiter.
+      //
+      // Accepted shapes (all passed through verbatim to
+      // `app.set("trust proxy", …)` — see Express docs for semantics:
+      // https://expressjs.com/en/guide/behind-proxies.html):
+      //   boolean  — `true` trusts EVERY proxy on the XFF chain (only safe
+      //              when the ingress strips/rewrites incoming XFF).
+      //              `false` (default) ignores XFF entirely.
+      //   number   — hop count; Express trusts the last N hops on the chain.
+      //              Use when the ingress topology is a fixed number of
+      //              proxies deep and you want to pin it.
+      //   string[] — list of trusted proxy IPs/CIDRs (e.g.
+      //              ["10.0.0.0/8", "192.168.0.0/16"]); Express walks the
+      //              XFF chain, trusting only hops matching the list.
+      //              Prefer this when your ingress isn't a single point.
+      trust_proxy: z
+        .union([
+          z.boolean(),
+          z.number().int().nonnegative(),
+          z.array(z.string().min(1)).min(1),
+        ])
+        .optional()
+        .default(false),
     }),
     sources: z.array(SourceConfigSchema).min(1),
     tools: z.array(AnyToolConfigSchema).min(1),

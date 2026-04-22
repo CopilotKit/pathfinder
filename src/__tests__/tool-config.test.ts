@@ -530,6 +530,123 @@ describe("ServerConfigSchema", () => {
       expect(result.success).toBe(false);
     });
   });
+
+  // R4-14: trust_proxy accepts boolean | number (hop count) | string[] (CIDRs).
+  describe("trust_proxy widened shape", () => {
+    const baseTools = [
+      {
+        name: "search-docs",
+        type: "search",
+        description: "Search",
+        source: "docs",
+        default_limit: 5,
+        max_limit: 20,
+        result_format: "docs",
+      },
+    ];
+
+    it("accepts trust_proxy: true (backwards compatible)", () => {
+      const config = {
+        ...minimalConfig,
+        server: { ...minimalConfig.server, trust_proxy: true },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.server.trust_proxy).toBe(true);
+    });
+
+    it("accepts trust_proxy: false (backwards compatible)", () => {
+      const config = {
+        ...minimalConfig,
+        server: { ...minimalConfig.server, trust_proxy: false },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.server.trust_proxy).toBe(false);
+    });
+
+    it("applies the default (false) when trust_proxy is omitted", () => {
+      const config = {
+        ...minimalConfig,
+        server: { ...minimalConfig.server },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.server.trust_proxy).toBe(false);
+    });
+
+    it("accepts trust_proxy as a hop-count number", () => {
+      const config = {
+        ...minimalConfig,
+        server: { ...minimalConfig.server, trust_proxy: 2 },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.server.trust_proxy).toBe(2);
+    });
+
+    it("rejects negative hop count", () => {
+      const config = {
+        ...minimalConfig,
+        server: { ...minimalConfig.server, trust_proxy: -1 },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects non-integer hop count", () => {
+      const config = {
+        ...minimalConfig,
+        server: { ...minimalConfig.server, trust_proxy: 1.5 },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts trust_proxy as a CIDR list", () => {
+      const config = {
+        ...minimalConfig,
+        server: {
+          ...minimalConfig.server,
+          trust_proxy: ["10.0.0.0/8", "192.168.0.0/16"],
+        },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(true);
+      if (result.success)
+        expect(result.data.server.trust_proxy).toEqual([
+          "10.0.0.0/8",
+          "192.168.0.0/16",
+        ]);
+    });
+
+    it("rejects an empty CIDR list", () => {
+      const config = {
+        ...minimalConfig,
+        server: { ...minimalConfig.server, trust_proxy: [] },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a list with an empty string entry", () => {
+      const config = {
+        ...minimalConfig,
+        server: { ...minimalConfig.server, trust_proxy: [""] },
+        tools: baseTools,
+      };
+      const result = ServerConfigSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    });
+  });
 });
 
 describe("BashToolConfigSchema with bash options", () => {

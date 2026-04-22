@@ -361,3 +361,118 @@ export function getAnalyticsConfig(): AnalyticsConfig | undefined {
     | AnalyticsConfig
     | undefined;
 }
+
+/**
+ * Render an unknown thrown value as a single log-friendly string. Local
+ * duplicate of server.ts's `formatErrorForLog` to avoid a config → server
+ * circular import. Keep these two in sync.
+ */
+function formatErrorForConfigLog(err: unknown): string {
+  if (err instanceof Error) return err.stack ?? err.message;
+  if (err && typeof err === "object") {
+    const maybe = err as { stack?: unknown; message?: unknown };
+    if (typeof maybe.stack === "string") return maybe.stack;
+    if (typeof maybe.message === "string") return maybe.message;
+  }
+  return String(err);
+}
+
+/**
+ * Try to import a peer dep module and classify the outcome:
+ *   - success         → no-op
+ *   - MODULE_NOT_FOUND / ERR_MODULE_NOT_FOUND → add to `missing`
+ *   - any other error → log full stack + re-throw a distinct "installed but
+ *     failed to import" error so the caller surfaces the real cause
+ *
+ * Distinguishing these matters: the previous empty catch swallowed every
+ * throw as "peer missing", which produced a confusing install-hint message
+ * even when the peer WAS installed but failed to load (e.g. native-addon
+ * ABI mismatch, ESM/CJS interop throw, file-system permission error on
+ * node_modules/). Operators would follow the hint, reinstall, and see no
+ * change.
+ */
+async function probePeerDepOrThrow(
+  tryImport: (module: string) => Promise<unknown>,
+  pkg: string,
+  forType: string,
+  missing: Array<{ pkg: string; forType: string }>,
+): Promise<void> {
+  try {
+    await tryImport(pkg);
+  } catch (err) {
+    const code = (err as { code?: unknown })?.code;
+    const isNotFound =
+      code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
+    if (isNotFound) {
+      missing.push({ pkg, forType });
+      return;
+    }
+    // Unexpected failure shape — log the full stack so operators can diagnose
+    // the real cause (native-addon failure, ESM interop throw, etc.) and
+    // re-throw a distinct error with the original attached as the cause.
+    console.error(
+      `[startup] ${pkg} is installed but failed to import: ${formatErrorForConfigLog(err)}`,
+    );
+    throw new Error(
+      `${pkg} is installed but failed to import (required for ${forType} document sources). See preceding log for details.`,
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * R4-13 — validate that required document-extraction peer deps
+ * (`pdf-parse`, `mammoth`) are installed when a `document` source is
+ * configured with file patterns that need them.
+ *
+ * The per-file extraction path in indexing/content-extractors.ts throws a
+ * clear error when the dynamic import fails — but that throw only fires
+ * when a specific file is being indexed, which could be hours into a first
+ * run. Running the check at config-load time surfaces the missing peer
+ * BEFORE the server starts accepting traffic, so operators see the install
+ * hint alongside the rest of their startup errors.
+ *
+ * `tryImport` is injected so tests can drive every present/absent
+ * combination without manipulating node_modules.
+ */
+export async function assertDocumentPeerDepsForSources(
+  sources: ReadonlyArray<{
+    type: string;
+    file_patterns?: string[];
+    [key: string]: unknown;
+  }>,
+  opts?: { tryImport?: (module: string) => Promise<unknown> },
+): Promise<void> {
+  const tryImport =
+    opts?.tryImport ??
+    (async (m: string) => {
+      // Dynamic require via Function to dodge TS's static resolution of the
+      // optional peer — same pattern content-extractors.ts uses.
+      return await import(m);
+    });
+  const documentSources = sources.filter((s) => s.type === "document");
+  if (documentSources.length === 0) return;
+  const needsPdf = documentSources.some((s) =>
+    (s.file_patterns ?? []).some((p) => p.includes(".pdf")),
+  );
+  const needsDocx = documentSources.some((s) =>
+    (s.file_patterns ?? []).some((p) => p.includes(".docx")),
+  );
+  const missing: Array<{ pkg: string; forType: string }> = [];
+  if (needsPdf) {
+    await probePeerDepOrThrow(tryImport, "pdf-parse", "PDF", missing);
+  }
+  if (needsDocx) {
+    await probePeerDepOrThrow(tryImport, "mammoth", "DOCX", missing);
+  }
+  if (missing.length === 0) return;
+  const lines = missing.map(
+    (m) =>
+      `  - ${m.pkg} (required for ${m.forType} document sources). Install: npm install ${m.pkg}`,
+  );
+  throw new Error(
+    `Configured document sources require optional peer dependencies that are not installed:\n${lines.join(
+      "\n",
+    )}\n\nAdd these to your install or remove the corresponding source.`,
+  );
+}

@@ -1,4 +1,9 @@
-import express, { Request, Response } from "express";
+import express, {
+  NextFunction,
+  Request,
+  RequestHandler,
+  Response,
+} from "express";
 import cors from "cors";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Bash } from "just-bash";
@@ -22,6 +27,7 @@ import {
   hasKnowledgeTools,
   hasCollectTools,
   hasBashSemanticSearch,
+  assertDocumentPeerDepsForSources,
 } from "./config.js";
 import {
   isSlackSourceConfig,
@@ -95,6 +101,84 @@ app.use((_req, res, next) => {
 // requests receive 503 (server still initializing).
 // ---------------------------------------------------------------------------
 
+/**
+ * Webhook middleware-ordering assertion (R4-7).
+ *
+ * Every `/webhooks/*` route below MUST receive a `Buffer` body (parsed by
+ * express.raw) because HMAC signature verification runs against the exact
+ * bytes on the wire — an already-JSON-parsed object cannot be
+ * re-serialized byte-for-byte (key ordering, whitespace, numeric
+ * representation all diverge). If a future refactor ever places
+ * `app.use(express.json())` BEFORE these routes, the JSON parser would
+ * win, req.body would arrive as an object, and every signature check
+ * would fail closed with a silent 401 — or worse, a handler that doesn't
+ * verify signatures would accept forged payloads.
+ *
+ * This factory produces a per-route guard that asserts Buffer-typed body
+ * at REQUEST time. We don't rely on app-setup-time ordering alone because
+ * Express doesn't expose a stable "middleware inserted before route"
+ * predicate, and re-ordering at module scope is the exact class of
+ * refactor most likely to silently undo the invariant.
+ */
+export function assertWebhookRawBodyOrder(routeName: string): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (Buffer.isBuffer(req.body)) {
+      // Happy path: express.raw parsed the request into a Buffer. HMAC
+      // verification downstream can proceed against the exact wire bytes.
+      next();
+      return;
+    }
+
+    // At this point req.body is NOT a Buffer. Two distinct causes need to be
+    // distinguished, because only ONE of them is a server misconfiguration:
+    //
+    //   (a) express.raw was mounted with `type: "application/json"` but the
+    //       client sent a different Content-Type (e.g. "text/plain"). In that
+    //       case express.raw deliberately SKIPS parsing, and Express leaves
+    //       req.body as the default `{}`. The middleware chain itself is
+    //       wired correctly; the request is simply malformed from the client
+    //       side. Reject with 415 and stay quiet in the log.
+    //
+    //   (b) An earlier body parser (express.json, urlencoded, text) already
+    //       consumed the body, so req.body arrives as a parsed object /
+    //       string BEFORE express.raw got a chance. This is the ordering-bug
+    //       case the guard was built for — fire the loud 500 so the bug
+    //       surfaces in logs and CI.
+    //
+    // Discriminant: when express.raw is configured with a specific type and
+    // the incoming Content-Type doesn't match, express.raw deliberately
+    // does NOT populate req.body at all — it remains `undefined`. A body
+    // parser that DID run (correctly or incorrectly) leaves req.body as
+    // a Buffer / object / string / array — anything but `undefined`.
+    const body = req.body as unknown;
+    const contentType = String(req.headers["content-type"] ?? "");
+    const looksLikeJsonContentType = contentType
+      .toLowerCase()
+      .includes("application/json");
+
+    if (body === undefined && !looksLikeJsonContentType) {
+      // Case (a): client sent a non-JSON Content-Type. express.raw correctly
+      // declined to parse, and no earlier parser intervened. The middleware
+      // chain is healthy; the request is just wrong. Return 415 without
+      // logging — a noisy log here would spam on every misconfigured client.
+      res.status(415).json({
+        error: "Unsupported Content-Type for webhook endpoint",
+      });
+      return;
+    }
+
+    // Case (b): req.body is a parsed object/string/array/etc. An earlier
+    // body parser ran before express.raw — the exact ordering bug this
+    // guard exists to catch. Log loudly and refuse.
+    console.error(
+      `[${routeName}] middleware ordering bug: express.json ran before express.raw (req.body is ${typeof req.body}); HMAC verification cannot proceed — refusing request`,
+    );
+    res.status(500).json({
+      error: "Webhook middleware misconfigured",
+    });
+  };
+}
+
 let webhookHandler: ((req: Request, res: Response) => Promise<void>) | null =
   null;
 let slackWebhookHandler:
@@ -118,7 +202,24 @@ let telemetryFlushInterval: ReturnType<typeof setInterval> | undefined;
 // scheduling, remove them on fire, and clear the entire set on shutdown.
 const pendingBashRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
 
-async function refreshBashInstances(
+/**
+ * Rebuild bash instances for tools affected by the given sources.
+ *
+ * All-or-nothing semantics: every affected tool is rebuilt into a temporary
+ * Map. Only after every rebuild succeeds does the temp map get merged into
+ * the live `bashInstances` registry. If any single rebuild throws, the live
+ * registry is left untouched (callers keep serving the previous, consistent
+ * index for every tool) and the first error propagates to the caller.
+ *
+ * Rationale: the previous loop mutated `bashInstances` per-tool, so a mid-
+ * iteration failure (network, git clone, ENOSPC, embedding error) left the
+ * map in a mixed stale/fresh state — `bash_explore` / sibling tools would
+ * return inconsistent file sets depending on which tool name was invoked.
+ * Callers already `.catch(...)` and log; throwing the first error (rather
+ * than returning a per-tool summary) keeps the API tiny while still letting
+ * those callers surface failures in logs.
+ */
+export async function refreshBashInstances(
   sourceNames: string[],
   logPrefix = "webhook",
 ): Promise<void> {
@@ -128,6 +229,8 @@ async function refreshBashInstances(
     .filter((t) => t.type === "search")
     .map((t) => t.name);
 
+  const pending = new Map<string, { bash: Bash; fileCount: number }>();
+
   for (const tool of bashTools) {
     const affected = tool.sources.some((s) => sourceNames.includes(s));
     if (!affected) continue;
@@ -136,25 +239,187 @@ async function refreshBashInstances(
       tool.sources.includes(s.name),
     );
     const virtualFiles = tool.bash?.virtual_files === true;
-    const { bash, fileCount } = await rebuildBashInstance(toolSources, {
-      virtualFiles,
-      searchToolNames: virtualFiles ? searchToolNames : undefined,
-      cloneDir: getConfig().cloneDir,
-    });
-    bashInstances.set(tool.name, bash);
+    try {
+      const { bash, fileCount } = await rebuildBashInstance(toolSources, {
+        virtualFiles,
+        searchToolNames: virtualFiles ? searchToolNames : undefined,
+        cloneDir: getConfig().cloneDir,
+      });
+      pending.set(tool.name, { bash, fileCount });
+    } catch (err) {
+      // Leave `bashInstances` untouched so every tool keeps serving its
+      // previous (consistent) filesystem. Log which tool + trigger failed
+      // so the caller's `.catch(...)` / monitors can identify the source.
+      console.error(
+        `[${logPrefix}] Bash refresh failed for tool "${tool.name}" ` +
+          `(triggered by sources: ${sourceNames.join(", ")}): `,
+        err,
+      );
+      throw err;
+    }
+  }
+
+  // Every rebuild succeeded — atomically publish the new instances.
+  // Unaffected tools keep their existing entries in `bashInstances`.
+  for (const [name, { bash, fileCount }] of pending) {
+    bashInstances.set(name, bash);
     console.log(
-      `[${logPrefix}] Refreshed bash tool "${tool.name}": ${fileCount} files`,
+      `[${logPrefix}] Refreshed bash tool "${name}": ${fileCount} files`,
     );
   }
+}
+
+/**
+ * Render an unknown thrown value as a single log-friendly string.
+ *
+ * R3 #3 — multiple catch sites previously emitted only `err.message`. That
+ * strips the stack, so during incident triage operators can't correlate the
+ * failure to a code line without reproducing locally. This helper returns
+ * `err.stack` when present (which always includes `err.message`) and falls
+ * back to `String(err)` for non-Error throws. Centralized so every call site
+ * speaks one format and future additions of redaction / correlation IDs
+ * happen in one place.
+ */
+export function formatErrorForLog(err: unknown): string {
+  if (err instanceof Error) return err.stack ?? err.message;
+  // Error-like objects (thrown object literals, DOMExceptions, etc.) may
+  // carry a `.stack` or `.message` without being Error instances.
+  if (err && typeof err === "object") {
+    const maybe = err as { stack?: unknown; message?: unknown };
+    if (typeof maybe.stack === "string") return maybe.stack;
+    if (typeof maybe.message === "string") return maybe.message;
+  }
+  return String(err);
+}
+
+/**
+ * Test-only accessor to the live bash registry. Production code should
+ * continue to use the module-local `bashInstances` closure reference.
+ */
+export function __getBashInstancesForTesting(): Map<string, Bash> {
+  return bashInstances;
+}
+
+/**
+ * Test-only reset of the bash registry. Lets tests preload known instances
+ * and assert atomic swap / rollback semantics without spinning up a full
+ * server.
+ */
+export function __setBashInstanceForTesting(name: string, bash: Bash): void {
+  bashInstances.set(name, bash);
+}
+
+export function __clearBashInstancesForTesting(): void {
+  bashInstances.clear();
+}
+
+/**
+ * Test-only accessor to the rejected-sid marker Set so
+ * `rollbackSessionAfterConnectFailure` regression tests can assert the
+ * prior onclose handler observes `rejectedSids.has(sid) === true` during
+ * its invocation.
+ */
+export function __rejectedSidsForTesting(): Set<string> {
+  return rejectedSids;
+}
+
+/**
+ * Startup helper (R3 #5): drive `orchestrator.checkAndIndex()` and, on
+ * success, refresh the bash instances against every configured source. Each
+ * phase has its own `.catch(...)` so failures surface under distinguishable
+ * log prefixes — before this helper existed, both phases logged under
+ * `[startup] Initial index check failed:`, so a bash-refresh failure was
+ * indistinguishable from an indexing failure in the logs.
+ *
+ * Contract:
+ *   - checkAndIndex rejection → log "[startup] Initial index check failed:"
+ *     and skip the refresh (we don't want to drive a refresh against a
+ *     half-indexed DB).
+ *   - checkAndIndex resolves but refreshBashInstances rejects → log
+ *     "[startup] Bash refresh after index check failed:" and keep running.
+ *   - Returns a Promise so tests can await the chain; production callers
+ *     use it fire-and-forget.
+ *
+ * Exported for tests.
+ */
+export function runStartupIndexAndBashRefresh(
+  orchestrator: { checkAndIndex: () => Promise<unknown> },
+  sources: Array<{ name: string }>,
+): Promise<void> {
+  return orchestrator
+    .checkAndIndex()
+    .then(() => {
+      // Always refresh bash instances after startup index check.
+      // The initial bash build runs before repos are cloned, so the
+      // filesystem may be empty. If checkAndIndex skipped reindexing (DB
+      // already current), onReindexComplete won't fire and the bash
+      // filesystem would stay empty without this.
+      const allSourceNames = sources.map((s) => s.name);
+      return refreshBashInstances(allSourceNames, "startup-refresh").catch(
+        (err) => {
+          // Swallow the refresh error so it does NOT propagate to the outer
+          // `.catch` (which would mis-label it as an index-check failure).
+          console.error(
+            "[startup] Bash refresh after index check failed:",
+            err,
+          );
+        },
+      );
+    })
+    .catch((err) => {
+      console.error("[startup] Initial index check failed:", err);
+    });
+}
+
+/**
+ * R3 #2 — classify why a webhook endpoint has no handler attached.
+ *
+ * Before this helper, all three webhook endpoints returned 503 "Server still
+ * initializing" regardless of whether (a) no sources of that type were
+ * configured (operator error / wrong endpoint) or (b) startup was still
+ * running and the handler hadn't been wired yet. 503 "not configured" is
+ * misleading — the operator would keep retrying against an endpoint that
+ * cannot ever come up. Route the two cases to 404 vs 503 so monitoring /
+ * smoke tests can distinguish them.
+ *
+ * Exported for tests.
+ */
+export function classifyWebhookUnavailable(opts: {
+  sourceType: "github" | "slack" | "discord";
+}): { status: 404 | 503; body: { error: string; sourceType: string } } {
+  const configured = getServerConfig().sources.some(
+    (s) => s.type === opts.sourceType,
+  );
+  if (!configured) {
+    return {
+      status: 404,
+      body: {
+        error: `${opts.sourceType} webhook not configured — no sources of type '${opts.sourceType}' in config`,
+        sourceType: opts.sourceType,
+      },
+    };
+  }
+  return {
+    status: 503,
+    body: {
+      error: "Server still initializing — webhook handler not yet attached",
+      sourceType: opts.sourceType,
+    },
+  };
 }
 
 app.post(
   "/webhooks/github",
   express.raw({ type: "application/json" }),
+  // Runtime guard: assert req.body is a Buffer. If a future refactor moves
+  // express.json() above this route, the guard fires a loud 500 instead of
+  // silently 401-ing every webhook delivery.
+  assertWebhookRawBodyOrder("webhook"),
   async (req: Request, res: Response) => {
     const handler = webhookHandler;
     if (!handler) {
-      res.status(503).json({ error: "Server still initializing" });
+      const classified = classifyWebhookUnavailable({ sourceType: "github" });
+      res.status(classified.status).json(classified.body);
       return;
     }
     try {
@@ -193,10 +458,12 @@ app.post(
 app.post(
   "/webhooks/slack",
   express.raw({ type: "application/json" }),
+  assertWebhookRawBodyOrder("slack-webhook"),
   async (req: Request, res: Response) => {
     const handler = slackWebhookHandler;
     if (!handler) {
-      res.status(503).json({ error: "Server still initializing" });
+      const classified = classifyWebhookUnavailable({ sourceType: "slack" });
+      res.status(classified.status).json(classified.body);
       return;
     }
     try {
@@ -214,10 +481,12 @@ app.post(
 app.post(
   "/webhooks/discord",
   express.raw({ type: "application/json" }),
+  assertWebhookRawBodyOrder("discord-webhook"),
   async (req: Request, res: Response) => {
     const handler = discordWebhookHandler;
     if (!handler) {
-      res.status(503).json({ error: "Server still initializing" });
+      const classified = classifyWebhookUnavailable({ sourceType: "discord" });
+      res.status(classified.status).json(classified.body);
       return;
     }
     try {
@@ -245,7 +514,7 @@ if (process.env.PATHFINDER_TRACE_CLAUDE_AI === "1") {
     // Route through the shared helper so tracing, rate limiting, and
     // analytics dev-bypass all agree on the resolved IP (and all share
     // the same X-Forwarded-For spoof protection when trust_proxy=false).
-    const ip = clientIp(req, trustProxy);
+    const ip = clientIp(req, isTrustingProxy());
     if (
       ip.startsWith("160.79.106") ||
       ip.startsWith("104.192.205") ||
@@ -457,9 +726,20 @@ export function reapIdleSessionsTickForTesting(opts: {
     // Propagate the delete back to the canonical map. The reaper already
     // deleted from the snapshot.
     delete opts.transports[sid];
+
+    // R4-6: per-step cleanup with a per-sid summary log so operators can
+    // distinguish "all three steps ran cleanly" from "some threw" from
+    // "dep wasn't injected". The aggregate log below still fires; this
+    // replaces the earlier silent-success behavior.
+    type StepResult = "ok" | "throw" | "skipped";
+    let stateResult: StepResult = opts.sessionStateManager ? "ok" : "skipped";
+    let ipLimiterResult: StepResult = opts.ipLimiter ? "ok" : "skipped";
+    let workspaceResult: StepResult = opts.workspaceManager ? "ok" : "skipped";
+
     try {
       opts.sessionStateManager?.cleanup(sid);
     } catch (e) {
+      stateResult = "throw";
       console.error(
         `[mcp] Session state cleanup failed for ${sid.slice(0, 8)}:`,
         e,
@@ -468,16 +748,21 @@ export function reapIdleSessionsTickForTesting(opts: {
     try {
       opts.ipLimiter?.remove(sid);
     } catch (e) {
+      ipLimiterResult = "throw";
       console.error(`[mcp] IP limiter cleanup failed:`, e);
     }
     try {
       opts.workspaceManager?.cleanup(sid);
     } catch (e) {
+      workspaceResult = "throw";
       console.error(
         `[mcp] Workspace cleanup failed for ${sid.slice(0, 8)}:`,
         e,
       );
     }
+    console.log(
+      `[mcp] Reap cleanup sid=${sid.slice(0, 8)} state=${stateResult} ipLimiter=${ipLimiterResult} workspace=${workspaceResult}`,
+    );
   }
   if (reapedStreamable.length > 0) {
     console.log(
@@ -552,10 +837,11 @@ function reapIdleSessionsTick(): void {
  *   body here, so the losing client sees a silent TCP close. The loud
  *   `console.warn` below is the operator-side compensation.
  *
- *   TODO: revisit this asymmetry if/when the MCP SDK exposes a way to
- *   emit a protocol-level error frame during onsessioninitialized — at
- *   that point both transports can converge on the same "descriptive
- *   rejection" shape and this helper can stop being the quiet one.
+ *   If a future MCP SDK version exposes a way to emit a protocol-level
+ *   error frame during onsessioninitialized, both transports can
+ *   converge on the same "descriptive rejection" shape and this helper
+ *   can stop being the quiet one. Until then the silent-disconnect is
+ *   the documented SDK-imposed behavior — not a TODO, a constraint.
  *
  * Note on step 1: the MCP SDK's `StreamableHTTPServerTransport.send()`
  * requires a live SSE stream (see node_modules/.../webStandardStreamableHttp
@@ -795,12 +1081,19 @@ export function handleSessionInitAccept(opts: {
     // a paranoid guard prevents a throw from crashing the outer handler) we
     // can't write a body, so the caller gets whatever Express does by
     // default (empty response, eventual connection close).
+    // R4-5 — surface a machine-readable `reason` discriminant on the 503
+    // body so operators and clients can tell this failure mode
+    // (workspace_init_failed) apart from the other rollback paths
+    // (state_init_failed, ip_limit_rollback) without parsing the human
+    // message. The discriminant lives on `error.data` per JSON-RPC 2.0 —
+    // clients that already read `error.code`/`error.message` keep working.
     if (res && !res.headersSent) {
       res.status(503).json({
         jsonrpc: "2.0",
         error: {
           code: -32003,
           message: "Server unavailable: failed to initialize session workspace",
+          data: { reason: "workspace_init_failed" },
         },
         id: null,
       });
@@ -811,6 +1104,157 @@ export function handleSessionInitAccept(opts: {
     `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(tMap).length} active) [${ip}]`,
   );
   return true;
+}
+
+/**
+ * Rollback helper for the `server.connect(transport)` /
+ * `completeInitRequestSafely` path in the /mcp POST initialize handler.
+ *
+ * Motivation (Z-1): after handleSessionInitAccept succeeds the handler has
+ * already:
+ *   - registered transports[preSid] + sessionLastActivity[preSid]
+ *   - incremented the ipLimiter counter (tryAdd succeeded pre-accept)
+ *   - ensureSession'd the workspace
+ *   - wired transport.onclose to cleanup
+ * It then calls `server.connect(transport)` followed by handleRequest via
+ * completeInitRequestSafely. If EITHER throws (createMcpServer wiring bug,
+ * bash-instance lookup failure, OOM during construction, closed-stream mid-
+ * handleRequest without an onsessioninitialized race), NOTHING calls
+ * transport.close() — so onclose never fires — and the session is stranded
+ * against max_sessions_per_ip until the 30-minute TTL reaper cleans it.
+ *
+ * Design invariant: cleanup runs EXACTLY ONCE for this sid.
+ *
+ * The obvious "seed rejectedSids then close()" approach is unsound when the
+ * onclose handler IS wired (our case): close() fires onclose, onclose reads
+ * rejectedSids.has(sid), drains the marker, then runs the suppression branch
+ * — but only if the marker is still present when onclose runs. If we drain
+ * inline to keep the Set bounded regardless of whether onclose fires, the
+ * later-firing onclose sees an empty Set and runs the cleanup chain a second
+ * time. We avoid both horns by DETACHING transport.onclose before calling
+ * close(). The inline rollback below is the sole owner of the cleanup chain;
+ * any onclose invocation from the SDK lands on our neutralized handler and
+ * is a no-op.
+ *
+ * Per-step try/catch on each cleanup mirrors the onclose + reaper +
+ * handleSessionInitAccept rollback pattern: a throw from one step must not
+ * skip the others. ipLimiter.remove in particular is load-bearing — a
+ * rollback that bails before ipLimiter.remove leaks the counter against
+ * this IP until TTL reap, which is the exact failure mode this helper
+ * exists to prevent.
+ *
+ * Caller (the /mcp POST handler) wraps server.connect + handleRequest in a
+ * try/catch, invokes this helper, then rethrows so the outer catch-all
+ * writes the 500 body (preserving the pre-existing response behavior).
+ *
+ * Exported for tests.
+ */
+export function rollbackSessionAfterConnectFailure(opts: {
+  transport: {
+    close: () => Promise<void> | void;
+    onclose?: (() => void) | null;
+  };
+  sid: string;
+  transports: Record<string, unknown>;
+  sessionLastActivity: Record<string, number>;
+  ipLimiter?: { remove: (sid: string) => void };
+  sessionStateManager?: { cleanup: (sid: string) => void };
+  workspaceManager?: { cleanup: (sid: string) => void };
+}): void {
+  const {
+    transport,
+    sid,
+    transports: tMap,
+    sessionLastActivity: lastActivityMap,
+    ipLimiter: limiter,
+    sessionStateManager: sessionState,
+    workspaceManager: workspace,
+  } = opts;
+
+  // Detach the wired onclose handler BEFORE we fire close(). The MCP SDK may
+  // invoke onclose as part of stream teardown; replacing it with a wrapper
+  // (rather than a no-op) preserves any prior onclose the SDK or surrounding
+  // code had attached for its OWN bookkeeping, while suppressing OUR cleanup
+  // branch so the inline rollback below remains the single cleanup run.
+  //
+  // Saving `priorOnclose` matters because the MCP SDK wires internal state
+  // teardown on its StreamableHTTPServerTransport.onclose at construction;
+  // blindly clobbering with `() => {}` would leak SDK-internal listeners
+  // (request-queue drain, in-flight response rejection) and mask those
+  // failures from the runtime. The wrapper invokes it in a try/catch so a
+  // prior-handler throw never reaches this rollback's own per-step errors.
+  const priorOnclose = transport.onclose ?? null;
+  // Seed the rejected-sid marker BEFORE wiring the wrapper so that when the
+  // prior handler (the cleanup-running onclose from handleSessionInitAccept,
+  // or any other application-level listener gated on rejectedSids) executes,
+  // it self-detects the rollback-in-progress case and skips its own cleanup
+  // chain. Its SDK-internal bookkeeping (request-queue drain, in-flight
+  // response rejection) still runs — only the application cleanup short-
+  // circuits. The inline rollback below then drains the marker by running
+  // exactly once.
+  rejectedSids.add(sid);
+  transport.onclose = () => {
+    // Our application cleanup branch is guarded by rejectedSids.has(sid) on
+    // the prior handler side; because we seeded the marker, the prior
+    // handler's application cleanup is a no-op. Forward the invocation so
+    // any SDK-internal onclose wiring (stream teardown listeners, request-
+    // queue drain) still fires.
+    if (priorOnclose) {
+      try {
+        priorOnclose();
+      } catch (e) {
+        console.error(
+          `[mcp] prior transport.onclose threw during rollback for ${sid.slice(0, 8)}:`,
+          e,
+        );
+      }
+    }
+  };
+
+  delete tMap[sid];
+  delete lastActivityMap[sid];
+
+  try {
+    limiter?.remove(sid);
+  } catch (e) {
+    console.error(
+      `[mcp] ipLimiter rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      e,
+    );
+  }
+  try {
+    sessionState?.cleanup(sid);
+  } catch (e) {
+    console.error(
+      `[mcp] sessionStateManager rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      e,
+    );
+  }
+  try {
+    workspace?.cleanup(sid);
+  } catch (e) {
+    console.error(
+      `[mcp] workspaceManager rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      e,
+    );
+  }
+
+  // Fire-and-forget close so async rejections land in console.error rather
+  // than unhandledRejection. Matches handleSessionInitAccept's pattern.
+  Promise.resolve()
+    .then(() => transport.close())
+    .catch((closeErr) => {
+      console.error(
+        `[mcp] transport.close after server.connect/handleRequest throw failed for ${sid.slice(0, 8)}:`,
+        closeErr,
+      );
+    })
+    .finally(() => {
+      // Drain the rejected-sid marker once the close() settles, regardless
+      // of whether the prior onclose fired and drained it already
+      // (rejectedSids.delete is idempotent). Keeps the Set bounded.
+      rejectedSids.delete(sid);
+    });
 }
 
 /**
@@ -880,14 +1324,32 @@ export async function closeAllSessions(opts: {
   const { transports: tMap, sseTransports: sseMap } = opts;
 
   const streamableSids = Object.keys(tMap);
-  const streamableResults = await Promise.allSettled(
-    streamableSids.map((sid) =>
-      Promise.resolve().then(() => tMap[sid].close()),
+  const sseSids = Object.keys(sseMap);
+
+  // R3 #11: run the two close batches in parallel rather than sequentially.
+  // Shutdown latency upper bound becomes max(streamableClose, sseClose)
+  // instead of their sum, which matters when the orchestrator's kill-
+  // deadline is tight and both maps are non-trivial. allSettled semantics
+  // still isolate a single slow/rejecting close from the rest.
+  const [streamableResults, sseResults] = await Promise.all([
+    Promise.allSettled(
+      streamableSids.map((sid) =>
+        Promise.resolve().then(() => tMap[sid].close()),
+      ),
     ),
-  );
+    Promise.allSettled(
+      sseSids.map((sid) => Promise.resolve().then(() => sseMap[sid].close())),
+    ),
+  ]);
+
+  // R3 #12 — track which sids rejected so the summary log can name them.
+  // Per-sid error logs stay for full-stack diagnosis; the summary is what
+  // operators grep for when they just want the count + labels.
+  const streamableRejectedSids: string[] = [];
   streamableResults.forEach((result, i) => {
     const sid = streamableSids[i];
     if (result.status === "rejected") {
+      streamableRejectedSids.push(sid);
       console.error(
         `[shutdown] Streamable-HTTP transport close failed for ${sid.slice(0, 8)}:`,
         result.reason,
@@ -896,18 +1358,24 @@ export async function closeAllSessions(opts: {
     delete tMap[sid];
   });
   if (streamableSids.length > 0) {
+    if (streamableRejectedSids.length > 0) {
+      // Summary first so a log scanner gate-filtering for "rejected" still
+      // sees the aggregate count. Label list is full-sids truncated to 8
+      // chars to stay parseable.
+      console.error(
+        `[shutdown] Streamable-HTTP close: ${streamableRejectedSids.length} of ${streamableSids.length} rejected — sids: ${streamableRejectedSids.map((s) => s.slice(0, 8)).join(", ")}`,
+      );
+    }
     console.log(
       `[shutdown] Closed ${streamableSids.length} Streamable-HTTP transport${streamableSids.length === 1 ? "" : "s"}`,
     );
   }
 
-  const sseSids = Object.keys(sseMap);
-  const sseResults = await Promise.allSettled(
-    sseSids.map((sid) => Promise.resolve().then(() => sseMap[sid].close())),
-  );
+  const sseRejectedSids: string[] = [];
   sseResults.forEach((result, i) => {
     const sid = sseSids[i];
     if (result.status === "rejected") {
+      sseRejectedSids.push(sid);
       console.error(
         `[shutdown] SSE transport close failed for ${sid.slice(0, 8)}:`,
         result.reason,
@@ -916,6 +1384,11 @@ export async function closeAllSessions(opts: {
     delete sseMap[sid];
   });
   if (sseSids.length > 0) {
+    if (sseRejectedSids.length > 0) {
+      console.error(
+        `[shutdown] SSE close: ${sseRejectedSids.length} of ${sseSids.length} rejected — sids: ${sseRejectedSids.map((s) => s.slice(0, 8)).join(", ")}`,
+      );
+    }
     console.log(
       `[shutdown] Closed ${sseSids.length} SSE transport${sseSids.length === 1 ? "" : "s"}`,
     );
@@ -930,7 +1403,27 @@ let sessionReaperInterval: ReturnType<typeof setInterval> | undefined;
 // run yet, or the config omits the flag, we IGNORE X-Forwarded-For and fall
 // back to the socket address — matching the hardened, spoof-resistant
 // default documented in types.ts.
-let trustProxy = false;
+// R4-14: widened to match the types.ts schema. Express's `app.set("trust
+// proxy", …)` accepts boolean | number | string[] (list of CIDRs) so the
+// config surface exposes all three. `clientIp` still takes a boolean — we
+// derive it via `isTrustingProxy(trustProxy)` below.
+let trustProxy: boolean | number | string[] = false;
+
+/**
+ * Reduce the widened `trust_proxy` config value to a boolean for `clientIp`
+ * and the analytics-dev-bypass guard. Anything other than the literal `false`
+ * (including `true`, a positive hop count, or any non-empty CIDR list) means
+ * "we're honoring X-Forwarded-For in some form" — the spoof risk surface
+ * is identical from `clientIp`'s perspective, so we collapse to a boolean.
+ */
+function isTrustingProxy(
+  value: boolean | number | string[] = trustProxy,
+): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return false;
+}
 
 /**
  * Test-only accessor for the module-level trustProxy flag. The flag is set
@@ -940,18 +1433,52 @@ let trustProxy = false;
  * reset to `false` in an afterEach / finally so other tests don't inherit
  * the stale value.
  */
-export function __setTrustProxyForTesting(value: boolean): void {
+export function __setTrustProxyForTesting(
+  value: boolean | number | string[],
+): void {
   trustProxy = value;
+}
+
+/**
+ * R4-3 — dispatch an existing-session /mcp request and update its activity
+ * stamp AFTER the transport handler returns successfully. A throw from
+ * handleRequest propagates to the outer catch-all in the /mcp route
+ * WITHOUT bumping sessionLastActivity — so a consistently-failing transport
+ * eventually crosses the TTL threshold and the idle reaper sweeps it
+ * instead of infinitely re-refreshing the stamp on every failed call.
+ *
+ * Exported so tests can assert the success/throw branch of the ordering
+ * contract without standing up Express + a live SDK transport.
+ */
+export async function handleExistingSessionRequest<TReq, TRes>(opts: {
+  sid: string;
+  transport: {
+    handleRequest: (req: TReq, res: TRes, body?: unknown) => Promise<void>;
+  };
+  req: TReq;
+  res: TRes;
+  sessionLastActivity: Record<string, number>;
+  /** Optional clock injection for deterministic tests. */
+  now?: () => number;
+}): Promise<void> {
+  const now = opts.now ?? Date.now;
+  await opts.transport.handleRequest(
+    opts.req,
+    opts.res,
+    (opts.req as unknown as { body?: unknown })?.body,
+  );
+  // Stamp update runs AFTER await returns without throwing — a throw
+  // propagates out before this line executes.
+  opts.sessionLastActivity[opts.sid] = now();
 }
 
 app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    const ip = clientIp(req, trustProxy);
+    const ip = clientIp(req, isTrustingProxy());
 
     // Existing session — route to its transport
     if (sessionId && transports[sessionId]) {
-      sessionLastActivity[sessionId] = Date.now();
       const method = req.body?.method as string | undefined;
       if (method === "tools/call") {
         const params = req.body?.params as Record<string, unknown> | undefined;
@@ -981,7 +1508,18 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       } else if (method === "tools/list") {
         console.log(`[mcp] tools/list [${ip}]`);
       }
-      await transports[sessionId].handleRequest(req, res, req.body);
+      // R4-3 — update sessionLastActivity AFTER handleRequest returns
+      // successfully, not before. Pre-refresh let a consistently-throwing
+      // transport keep bumping its stamp on every failed request and evade
+      // the idle reaper. Routing through the helper below also makes the
+      // success-vs-throw contract unit-testable without spinning up Express.
+      await handleExistingSessionRequest({
+        sid: sessionId,
+        transport: transports[sessionId],
+        req,
+        res,
+        sessionLastActivity,
+      });
       return;
     }
 
@@ -1219,20 +1757,42 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         bashTelemetry,
         workspaceManager,
       );
-      await server.connect(transport);
-      // completeInitRequestSafely swallows throws from handleRequest when
-      // onsessioninitialized's defensive race-fallback closed the transport
-      // mid-flight (initOutcome.rejected=true). The fallback already handled
-      // the response lifecycle; a naked await here would bubble the closed-
-      // transport throw into the outer catch-all and produce a 500 write on
-      // top of the 429 the fallback already streamed.
-      await completeInitRequestSafely(
-        transport,
-        req,
-        res,
-        req.body,
-        initOutcome,
-      );
+      // Z-1: server.connect(transport) can throw AFTER handleSessionInitAccept
+      // committed maps + ipLimiter counter + ensureSession + onclose wiring.
+      // Without an explicit rollback, the session is stranded against
+      // max_sessions_per_ip until TTL reap because nothing calls
+      // transport.close(), so onclose never fires. Wrap BOTH server.connect
+      // and completeInitRequestSafely so the rollback chain runs regardless
+      // of where the throw originates (connect wiring bug OR handleRequest
+      // mid-flight throw that completeInitRequestSafely rethrows). Rethrow
+      // into the outer catch-all so the 500 response behavior is preserved.
+      try {
+        await server.connect(transport);
+        // completeInitRequestSafely swallows throws from handleRequest when
+        // onsessioninitialized's defensive race-fallback closed the transport
+        // mid-flight (initOutcome.rejected=true). The fallback already handled
+        // the response lifecycle; a naked await here would bubble the closed-
+        // transport throw into the outer catch-all and produce a 500 write on
+        // top of the 429 the fallback already streamed.
+        await completeInitRequestSafely(
+          transport,
+          req,
+          res,
+          req.body,
+          initOutcome,
+        );
+      } catch (connectErr) {
+        rollbackSessionAfterConnectFailure({
+          transport,
+          sid: preSid,
+          transports,
+          sessionLastActivity,
+          ipLimiter,
+          sessionStateManager,
+          workspaceManager,
+        });
+        throw connectErr;
+      }
       return;
     }
 
@@ -1340,8 +1900,10 @@ const sseHandlers = createSseHandlers({
   workspaceManager: () => workspaceManager,
   // Late-bound via getter: trustProxy is resolved inside startServer() from
   // the loaded config, after this handler factory has already been invoked
-  // at module-load time.
-  trustProxy: () => trustProxy,
+  // at module-load time. Collapse to boolean for the SSE handlers' clientIp
+  // contract — the spoof-risk surface is identical whether we're trusting by
+  // hop count, CIDR list, or a blanket `true`.
+  trustProxy: () => isTrustingProxy(),
   rateLimitRetryAfterSeconds: () => retryAfterSecondsFromTtl(),
   createMcpServer: () => {
     let transportRef: SSEServerTransport | undefined;
@@ -1631,6 +2193,48 @@ export function __resetAnalyticsTokenForTesting(): void {
 }
 
 /**
+ * R4-8 — startup-time guard for the production-analytics token.
+ *
+ * Previously `getAnalyticsToken()` would auto-generate a process-ephemeral
+ * UUID when analytics was enabled without an explicit token. That token was
+ * unique per replica, so in multi-replica deployments the dashboard could
+ * authenticate against replica A and then hit replica B on the next request
+ * and be rejected with 401 (replica B minted its own different UUID).
+ *
+ * The fix: at startup, when `analytics.enabled && nodeEnv === "production"`
+ * and neither `analytics.token` nor the ANALYTICS_TOKEN env var is set, we
+ * throw a clear error so operators discover the missing config BEFORE the
+ * server starts serving. The existing runtime throw inside
+ * `getAnalyticsToken()` remains as a defense-in-depth second check; this
+ * assert just moves the discovery to process boot.
+ *
+ * Pure function so tests can drive every combination of
+ * (nodeEnv × enabled × configuredToken × envToken) without booting the full
+ * server.
+ */
+export function assertAnalyticsTokenConfigured(opts: {
+  nodeEnv: string;
+  analyticsEnabled: boolean;
+  configuredToken: string | undefined;
+  envToken: string | undefined;
+}): void {
+  if (!opts.analyticsEnabled) return;
+  if (opts.nodeEnv !== "production") return;
+  // Treat empty string same as undefined — `analytics.token: ""` in YAML
+  // otherwise silently skips the guard.
+  const hasConfigured =
+    !!opts.configuredToken && opts.configuredToken.length > 0;
+  const hasEnv = !!opts.envToken && opts.envToken.length > 0;
+  if (hasConfigured || hasEnv) return;
+  throw new Error(
+    "ANALYTICS_TOKEN required in production (set analytics.token in config " +
+      "or the ANALYTICS_TOKEN env var). Auto-generated tokens are " +
+      "process-ephemeral and break multi-replica deployments — a dashboard " +
+      "authenticated against one replica will 401 on another.",
+  );
+}
+
+/**
  * Return true if the request originated from a loopback interface. Trusts
  * ONLY `req.socket.remoteAddress` (not `X-Forwarded-For` — that's client-
  * controlled and would let anyone forge "I'm localhost").
@@ -1663,7 +2267,7 @@ function isLocalhostReq(req: Request): boolean {
   // trust_proxy or bind the dev server directly without a fronting proxy.
   // A startup WARN is emitted from startServer() when both flags are set so
   // this behavior isn't silent.
-  if (trustProxy) return false;
+  if (isTrustingProxy()) return false;
   const addr = req.socket?.remoteAddress ?? "";
   if (!addr) return false;
   try {
@@ -1678,9 +2282,28 @@ function isLocalhostReq(req: Request): boolean {
     }
     // IPv6 loopback is exactly ::1.
     return (parsed as ipaddr.IPv6).toNormalizedString() === "0:0:0:0:0:0:0:1";
-  } catch {
+  } catch (err) {
+    // R3 #14 — emit a warn-level log so an operator bisecting why the
+    // analytics dev-bypass stopped working can see that the parse itself
+    // failed. This path only fires on malformed TCP peer addresses, which
+    // in practice is very rare — so warn-level isn't spammy, and it's
+    // visible in production log aggregators that filter out debug. Return
+    // contract is unchanged — unparseable addresses still resolve to
+    // "not localhost" (fail-closed).
+    console.warn(
+      `[isLocalhostReq] ipaddr.parse failed for addr=${addr}: ${formatErrorForLog(err)}`,
+    );
     return false;
   }
+}
+
+/**
+ * Test-only export — isLocalhostReq is module-scoped because the live
+ * path needs access to the module-level `trustProxy` mutable flag. Tests
+ * drive it via this helper so they don't have to spoof TCP sockets.
+ */
+export function __isLocalhostReqForTesting(req: Request): boolean {
+  return isLocalhostReq(req);
 }
 
 /**
@@ -1757,7 +2380,7 @@ export function analyticsAuth(
     analyticsCfg = getAnalyticsConfig();
   } catch (err) {
     console.error(
-      `[analytics] auth misconfigured: config read failed: ${err instanceof Error ? err.message : String(err)}`,
+      `[analytics] auth misconfigured: config read failed: ${formatErrorForLog(err)}`,
     );
     res.status(503).json({
       error: "misconfigured",
@@ -1795,9 +2418,7 @@ export function analyticsAuth(
   try {
     token = getAnalyticsToken();
   } catch (err) {
-    console.error(
-      `[analytics] auth misconfigured: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    console.error(`[analytics] auth misconfigured: ${formatErrorForLog(err)}`);
     res.status(503).json({
       error: "misconfigured",
       error_description: tokenDescription,
@@ -1829,15 +2450,30 @@ export function analyticsAuth(
   }
 
   const provided = authHeader.slice(7);
-  // Constant-time comparison so an attacker can't infer the token from
-  // response-time differences. Buffers must be the same length; mismatched
-  // lengths fail fast.
   const providedBuf = Buffer.from(provided, "utf8");
   const tokenBuf = Buffer.from(token, "utf8");
-  if (
-    providedBuf.length !== tokenBuf.length ||
-    !timingSafeEqual(providedBuf, tokenBuf)
-  ) {
+  // R4-18 — dedicated early return on length mismatch BEFORE calling
+  // timingSafeEqual. crypto.timingSafeEqual REQUIRES same-length buffers;
+  // passing different lengths throws ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH
+  // which would escape as an unhandled 500. The previous shape fused the
+  // check into `len !== len || !timingSafeEqual(...)` — correct today
+  // because || short-circuits, but a future refactor swapping operator
+  // precedence or reordering the operands would crash at the call. The
+  // early return is both self-documenting and robust to refactor errors.
+  //
+  // Separating the checks does NOT leak a timing oracle on token length:
+  // the correct token length is already observable via the error body
+  // shape and the call latency to any non-constant-time string op in
+  // JavaScript. The value of timingSafeEqual is protecting the BYTES of
+  // the secret once the lengths match, which this structure preserves.
+  if (providedBuf.length !== tokenBuf.length) {
+    res.status(403).json({
+      error: "forbidden",
+      error_description: "Invalid analytics token",
+    });
+    return;
+  }
+  if (!timingSafeEqual(providedBuf, tokenBuf)) {
     res.status(403).json({
       error: "forbidden",
       error_description: "Invalid analytics token",
@@ -2045,8 +2681,13 @@ export function parsePositiveIntParam(
 ): number | { error: string } {
   if (raw === undefined || raw === null || raw === "") return defaultValue;
   if (typeof raw !== "string") return { error: "must be a string" };
+  // R4-10: STRICT /^\d+$/ guard BEFORE Number.parseInt. Without this, inputs
+  // like "1.5", "1e3", " 123", and "123abc" would be silently coerced by
+  // parseInt's permissive grammar (truncating at the first non-digit / after
+  // implicit trim) and the function would return a plausible-looking
+  // positive integer for gibberish input. See the dedicated test cases.
   if (!/^\d+$/.test(raw)) return { error: "must be a positive integer" };
-  const n = parseInt(raw, 10);
+  const n = Number.parseInt(raw, 10);
   if (n <= 0) return { error: "must be > 0" };
   if (n > max) return { error: `must be <= ${max}` };
   return n;
@@ -2161,7 +2802,7 @@ export function registerAnalyticsRoutes(
         res.json(summary);
       } catch (err) {
         console.error(
-          `[analytics] Summary query failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value}):`,
+          `[analytics] Summary query failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} ip=${clientIp(req, trustProxy)}):`,
           err,
         );
         res.status(500).json({ error: "Failed to fetch analytics summary" });
@@ -2197,7 +2838,7 @@ export function registerAnalyticsRoutes(
         res.json(queries);
       } catch (err) {
         console.error(
-          `[analytics] Top queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value}):`,
+          `[analytics] Top queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value} ip=${clientIp(req, trustProxy)}):`,
           err,
         );
         res.status(500).json({ error: "Failed to fetch top queries" });
@@ -2233,7 +2874,7 @@ export function registerAnalyticsRoutes(
         res.json(queries);
       } catch (err) {
         console.error(
-          `[analytics] Empty queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value}):`,
+          `[analytics] Empty queries failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} limit=${limitParsed.value} ip=${clientIp(req, trustProxy)}):`,
           err,
         );
         res.status(500).json({ error: "Failed to fetch empty queries" });
@@ -2260,7 +2901,7 @@ export function registerAnalyticsRoutes(
         res.json(counts);
       } catch (err) {
         console.error(
-          `[analytics] Tool counts failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value}):`,
+          `[analytics] Tool counts failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} ip=${clientIp(req, trustProxy)}):`,
           err,
         );
         res.status(500).json({ error: "Failed to fetch tool counts" });
@@ -2310,25 +2951,59 @@ export function registerAnalyticsRoutes(
         res.status(404).json({ error: "analytics dashboard not available" });
         return;
       }
+      // R3 #8 — emit a correlation ID in BOTH the server log and the
+      // response body. Operators who get a user report can grep logs for
+      // the ID the user saw and jump straight to the failing stack
+      // without cross-referencing timestamps. Using short randomUUID
+      // slices keeps the ID operator-readable while still collision-safe
+      // at our failure-log volumes.
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
       console.error(
-        `[analytics] sendFile failed path=${_analyticsHtmlPath}:`,
+        `[analytics] sendFile failed path=${_analyticsHtmlPath} cid=${correlationId}:`,
         err,
       );
-      res.status(500).json({ error: "analytics dashboard unavailable" });
+      // Emit snake_case `correlation_id` in the response body to match the
+      // convention analyticsAuth already uses for OAuth-style
+      // `error_description` (RFC 6749 snake_case). Internal variable stays
+      // camelCase per JS convention; only the wire format standardizes.
+      res.status(500).json({
+        error: "analytics dashboard unavailable",
+        correlation_id: correlationId,
+      });
     });
   });
 }
 
-// Wire the analytics routes onto the top-level app at import time so the
-// production server exposes them on listen(). Tests that want to mount the
-// real handlers can call registerAnalyticsRoutes() on their own app.
-registerAnalyticsRoutes(app);
+// R4-19: single surface — `registerAnalyticsRoutes` is the canonical way to
+// mount the analytics routes. Production wires it up inside startServer()
+// before app.listen(); tests that want the real handlers call it on their
+// own app. Do NOT add a module-load-time side-effect call here: that created
+// a second surface that (a) confused readers about which was canonical and
+// (b) coupled mere module import (e.g. an unrelated re-export in a test
+// fixture) to mutating the module-level app.
 
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
 export async function startServer(options?: ServerOptions): Promise<void> {
+  // Top-level try/catch around the entire startup sequence so synchronous
+  // throws from getConfig/getServerConfig AND async failures from
+  // initializeSchema/checkAndIndex carry a uniform '[startup] fatal:' log
+  // prefix before propagating. Without this wrapper, failures escape as
+  // bare rejections: index.ts' .catch prints them, but ops can't grep for
+  // a single stable token to correlate startup-crash incidents across
+  // deployments. Re-throw so callers (src/index.ts and its process.exit
+  // path) keep their existing exit-code contract.
+  try {
+    return await startServerInner(options);
+  } catch (err) {
+    console.error("[startup] fatal:", err);
+    throw err;
+  }
+}
+
+async function startServerInner(options?: ServerOptions): Promise<void> {
   if (options?.configPath) {
     process.env.PATHFINDER_CONFIG = options.configPath;
   }
@@ -2362,9 +3037,14 @@ export async function startServer(options?: ServerOptions): Promise<void> {
   // must agree, always.
   trustProxy = serverCfg.server.trust_proxy ?? false;
   app.set("trust proxy", trustProxy);
-  if (trustProxy) {
+  if (isTrustingProxy()) {
+    // R4-14: print the configured value so operators can confirm the shape
+    // (blanket boolean, hop count, or CIDR list) actually took effect.
+    const rendered = Array.isArray(trustProxy)
+      ? `[${trustProxy.join(", ")}]`
+      : String(trustProxy);
     console.log(
-      "[startup] trust_proxy=true — honoring X-Forwarded-For (reverse proxy must strip/rewrite this header)",
+      `[startup] trust_proxy=${rendered} — honoring X-Forwarded-For (reverse proxy must strip/rewrite this header)`,
     );
     if (cfg.nodeEnv === "development") {
       // Dev bypass and trust_proxy=true is an unsupported combination:
@@ -2375,7 +3055,58 @@ export async function startServer(options?: ServerOptions): Promise<void> {
         "[startup] trust_proxy=true + NODE_ENV=development is unsupported — analytics dev bypass is DISABLED to prevent exposing the dashboard via a fronting proxy",
       );
     }
+  } else {
+    // R3 #18: give operators a positive confirmation that the hardened
+    // default is in effect. Without this, an operator who enabled
+    // trust_proxy expecting it to take effect had to grep for the absence
+    // of the truthy log above to infer the state — fragile.
+    //
+    // Non-production warning (test/staging/unset all count): emit the
+    // reminder as a WARN so dev/staging operators running locally or in
+    // preview environments surface the hardening in console output, where
+    // they're most likely to be surprised by XFF being ignored (e.g. when
+    // spoofing a client IP for local testing). In production we stay at
+    // INFO level so the ops log isn't noised up with a steady-state
+    // confirmation on every boot.
+    if (cfg.nodeEnv === "production") {
+      console.log(
+        "[startup] trust_proxy=false — X-Forwarded-For ignored; client IP derived from socket (hardened default)",
+      );
+    } else {
+      console.warn(
+        `[startup] trust_proxy=false (NODE_ENV=${cfg.nodeEnv ?? "<unset>"}) — X-Forwarded-For ignored; client IP derived from socket (hardened default). Set trust_proxy in pathfinder.yaml when running behind a reverse proxy.`,
+      );
+    }
   }
+
+  // R4-13 — assert document-extraction peer deps (pdf-parse / mammoth) are
+  // present when the config wires document sources with PDF/DOCX file
+  // patterns. Surfacing the missing peer now (instead of at first-file
+  // indexing time hours later) gives operators the install command
+  // alongside the rest of their startup errors.
+  await assertDocumentPeerDepsForSources(
+    serverCfg.sources as ReadonlyArray<{
+      type: string;
+      file_patterns?: string[];
+      [key: string]: unknown;
+    }>,
+  );
+
+  // R4-8 — refuse to start in production when analytics is enabled but no
+  // stable token is configured. The runtime `getAnalyticsToken()` throw is
+  // too late: the error only surfaces on the first /api/analytics request
+  // AND — worse — a pre-R4-8 replica would auto-generate its own token and
+  // silently start answering with an unshared secret. Fail loudly here so
+  // the missing ANALYTICS_TOKEN is discovered at deploy time, not hours
+  // later when the dashboard starts randomly 401-ing against the other
+  // replicas.
+  const analyticsCfg = getAnalyticsConfig();
+  assertAnalyticsTokenConfigured({
+    nodeEnv: cfg.nodeEnv,
+    analyticsEnabled: !!analyticsCfg?.enabled,
+    configuredToken: analyticsCfg?.token,
+    envToken: process.env.ANALYTICS_TOKEN,
+  });
 
   // Configure session TTL and IP rate limiter from config
   const maxSessionsPerIp = serverCfg.server.max_sessions_per_ip ?? 20;
@@ -2432,7 +3163,7 @@ export async function startServer(options?: ServerOptions): Promise<void> {
           .catch((err) =>
             console.error(
               "[telemetry] Periodic flush failed:",
-              err instanceof Error ? err.message : String(err),
+              formatErrorForLog(err),
             ),
           );
       }, 60_000);
@@ -2498,25 +3229,21 @@ export async function startServer(options?: ServerOptions): Promise<void> {
       });
     };
 
-    orchestrator
-      .checkAndIndex()
-      .then(() => {
-        // Always refresh bash instances after startup index check.
-        // The initial bash build (above) runs before repos are cloned,
-        // so the filesystem may be empty. If checkAndIndex skipped
-        // reindexing (DB already current), onReindexComplete won't fire
-        // and the bash filesystem would stay empty without this.
-        const allSourceNames = serverCfg.sources.map((s) => s.name);
-        return refreshBashInstances(allSourceNames, "startup-refresh");
-      })
-      .catch((err) => {
-        console.error("[startup] Initial index check failed:", err);
-      });
+    // R3 #5: use two distinct catches so an index-check failure and a
+    // bash-refresh failure surface under distinguishable log prefixes.
+    // Previously the combined `.then(refresh).catch(...)` mis-labeled
+    // refresh failures as "[startup] Initial index check failed:" — an
+    // operator reading logs couldn't tell which operation actually broke.
+    runStartupIndexAndBashRefresh(orchestrator, serverCfg.sources);
 
     orchestrator.startNightlyReindex();
   } else {
     console.log("[startup] No search tools configured — skipping indexing");
   }
+
+  // R4-19: explicit mount — the module-load side-effect was removed so this
+  // is now the single call site for the production app.
+  registerAnalyticsRoutes(app);
 
   const serverName = serverCfg.server.name;
   const server = app.listen(port, () => {

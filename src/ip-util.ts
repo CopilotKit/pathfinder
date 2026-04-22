@@ -19,8 +19,23 @@ import type { Request } from "express";
  * reverse proxy that strips and rewrites the incoming `X-Forwarded-For`
  * header. Railway's edge does this correctly; a bare `node` process exposed
  * directly to the public internet does not.
+ *
+ * IMPORTANT — Express `trust proxy = true` leftmost-XFF caveat: see the
+ * detailed warning in startServer() in `src/server.ts` (search for
+ * "leftmost (client-supplied, potentially spoofable)"). In short, Express's
+ * boolean `trust proxy = true` trusts EVERY hop in the X-Forwarded-For chain
+ * and resolves `req.ip` to the LEFTMOST entry — which is the client-supplied
+ * (and therefore spoofable) value unless the fronting reverse proxy strips
+ * and rewrites XFF before it reaches us. For tighter single-hop deployments
+ * prefer a numeric hop count (`app.set("trust proxy", 1)`); the IP allowlist
+ * bypass in the per-IP session limiter is only as strong as the trust
+ * boundary configured here. See `pathfinder.example.yaml` next to
+ * `server.trust_proxy` for the operator-facing version of this warning.
  */
-export function clientIp(req: Request, trustProxy: boolean): string {
+export function clientIp(
+  req: Request,
+  trustProxy: boolean | number | string[],
+): string {
   // NOTE: we use `||` rather than `??` throughout so the empty string also
   // falls through to the next candidate. An empty `remoteAddress` can show
   // up after abrupt disconnects, in some HTTP/2 upgrade paths, and in test
@@ -28,7 +43,16 @@ export function clientIp(req: Request, trustProxy: boolean): string {
   // into a single "" counter in the per-IP rate limiter, letting one
   // client DoS every other client in that state. `||` treats "" the same
   // as undefined/null and keeps walking the fallback chain.
-  if (trustProxy) {
+  //
+  // `trustProxy` mirrors Express's `trust proxy` union: truthy boolean,
+  // positive hop count, or non-empty CIDR/IP array all honor req.ip (which
+  // Express resolves from the XFF chain). Falsy boolean / 0 / empty array
+  // ignores XFF and trusts only the TCP peer.
+  const honorXff =
+    trustProxy === true ||
+    (typeof trustProxy === "number" && trustProxy > 0) ||
+    (Array.isArray(trustProxy) && trustProxy.length > 0);
+  if (honorXff) {
     // Express populates req.ip from the XFF chain when `trust proxy` is set.
     // Fall back to the socket if the framework somehow didn't resolve one
     // (or left an empty string), and to "unknown" only as a last resort so

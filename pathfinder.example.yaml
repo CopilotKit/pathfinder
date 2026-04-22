@@ -30,6 +30,22 @@ server:
   # When false (the default), X-Forwarded-For is ignored and the server
   # uses the TCP socket's peer address. Leave this false for any server
   # exposed directly to the public internet.
+  #
+  # Hosted note — Railway, Fly, Render, Heroku, Cloud Run, AWS App
+  # Runner, Vercel, and similar PaaS edges ALWAYS sit in front of your
+  # container and terminate TLS, so the socket peer the server sees is
+  # the platform proxy — never the real client. On these platforms you
+  # MUST set trust_proxy (to true, a hop count, or a trusted-proxy CIDR
+  # allowlist matching your platform's docs) or every rate-limit bucket
+  # and CIDR allowlist entry evaluates against the proxy IP instead of
+  # the real caller.
+  #
+  # Accepted values:
+  #   false             — ignore X-Forwarded-For (hardened default)
+  #   true              — trust every hop (only safe when the platform
+  #                       strips client-supplied X-Forwarded-For)
+  #   <integer>         — trust N hops (e.g. 1 for single-proxy Railway)
+  #   [<cidr>, ...]     — allowlist of trusted proxy CIDRs
   trust_proxy: false
 
 sources:

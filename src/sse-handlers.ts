@@ -1,4 +1,5 @@
 import type { Request, Response, RequestHandler } from "express";
+import { randomUUID } from "node:crypto";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bearerMiddleware } from "./oauth/handlers.js";
@@ -347,9 +348,26 @@ export function createSseHandlers(deps: SseHandlerDeps): {
             ),
           );
         if (!res.headersSent) {
+          // R4-5 — emit a machine-readable `reason` discriminant
+          // (workspace_init_failed) so monitoring + client code can tell
+          // this rollback apart from state_init_failed / ip_limit_rollback
+          // without parsing the human message. The discriminant is nested
+          // under `error.data` to match the /mcp (JSON-RPC) rollback body
+          // shape — clients read `body.error.data.reason` on BOTH transports.
+          //
+          // The outer envelope stays SSE-flavored (`error`/`message` at top
+          // level rather than the full JSON-RPC wrapper) because a pure
+          // JSON-RPC body on the GET /sse handshake would surprise existing
+          // clients that never expected it there. We only standardize the
+          // INNER discriminant placement; the outer shape remains transport-
+          // appropriate.
           res.status(503).json({
-            error: "workspace_unavailable",
-            reason: "Failed to initialize session workspace. Please try again.",
+            error: {
+              code: "workspace_unavailable",
+              message:
+                "Failed to initialize session workspace. Please try again.",
+              data: { reason: "workspace_init_failed" },
+            },
           });
         }
         return;
@@ -365,9 +383,21 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         `[mcp] New SSE session ${sessionId.slice(0, 8)} (${Object.keys(sseTransports).length} active) [${ip}]`,
       );
     } catch (err) {
-      console.error("[mcp] SSE connection error:", err);
+      // R3 #9 — emit a correlation ID in BOTH the log line and the
+      // response body so operators who get a user report ("SSE session
+      // failed") can grep the ID from the user and land on the exact
+      // failing stack. Short-form ID keeps it operator-readable.
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
+      console.error(`[mcp] SSE connection error cid=${correlationId}:`, err);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Failed to establish SSE session" });
+        // Emit snake_case `correlation_id` in the response body to match the
+        // convention analyticsAuth already uses for OAuth-style
+        // `error_description` (RFC 6749 snake_case). Internal variable stays
+        // camelCase per JS convention; only the wire format standardizes.
+        res.status(500).json({
+          error: "Failed to establish SSE session",
+          correlation_id: correlationId,
+        });
       }
     }
   };
@@ -401,12 +431,24 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       });
       return;
     }
-    sessionLastActivity[sessionId] = Date.now();
+    // R4-3 — do NOT bump sessionLastActivity BEFORE handlePostMessage. A
+    // consistently-throwing transport would otherwise keep refreshing its
+    // idle-reaper stamp on every failed call and never time out. The stamp
+    // is updated inside the try block AFTER a successful await, so a throw
+    // propagates to the catch below without updating it.
     try {
       await transport.handlePostMessage(req, res, req.body);
+      sessionLastActivity[sessionId] = Date.now();
     } catch (err) {
+      // R3 #10 — include client IP so this log line matches the
+      // info-density of the sibling 404 branches (missing-session-id /
+      // unknown-session-id). Operators debugging a broken client now
+      // have `ip` + `sid` on every failure path, not just the
+      // not-found paths.
+      const trustProxy = resolve(deps.trustProxy ?? false) ?? false;
+      const ip = clientIp(req, trustProxy);
       console.error(
-        `[mcp] SSE handlePostMessage failed for session ${sessionId.slice(0, 8)}:`,
+        `[mcp] SSE handlePostMessage failed for session ${sessionId.slice(0, 8)} ip=${ip}:`,
         err,
       );
       if (!res.headersSent) {

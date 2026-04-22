@@ -223,7 +223,7 @@ describe("handleSessionInitRaceFallback", () => {
     await new Promise((r) => setTimeout(r, 10));
   });
 
-  it("emits a JSON-RPC error frame (or documented fallback) before closing the transport", async () => {
+  it("closes the transport and logs a diagnostic warn without calling transport.send (pinned fallback contract)", async () => {
     const { handleSessionInitRaceFallback } = await import("../server.js");
 
     const transports: Record<string, { close: () => Promise<void> }> = {};
@@ -267,31 +267,32 @@ describe("handleSessionInitRaceFallback", () => {
     // Allow send/close microtasks to flush.
     await new Promise((r) => setTimeout(r, 20));
 
-    if (sendCalls.length > 0) {
-      // Happy path: the fallback emitted a JSON-RPC error frame via
-      // transport.send BEFORE closing so the client sees a descriptive
-      // rejection rather than a silent disconnect.
-      const frame = sendCalls[0] as Record<string, unknown>;
-      expect(frame.jsonrpc).toBe("2.0");
-      expect((frame.error as Record<string, unknown>)?.code).toBe(-32005);
-      expect(sentAt).toBeDefined();
-      expect(closedAt).toBeDefined();
-      expect(sentAt!).toBeLessThanOrEqual(closedAt!);
-    } else {
-      // Documented fallback path: if transport.send isn't safe at this point
-      // in the SDK lifecycle, the race-fallback still closes the transport
-      // but MUST log a diagnostic warn — the silent-disconnect footgun
-      // turns into a loud log line instead.
-      expect(closedAt).toBeDefined();
-      const warnCalls = warnSpy.mock.calls.map((c) => c[0]);
-      const rejectedLog = warnCalls.find(
-        (m) =>
-          typeof m === "string" &&
-          m.includes("race fallback") &&
-          m.includes(sid.slice(0, 8)),
-      );
-      expect(rejectedLog).toBeDefined();
-    }
+    // Pinned contract (R3 #24 / R4-15): the fallback MUST take the
+    // "silent-disconnect + loud warn" path because the MCP SDK lifecycle
+    // rejects transport.send() inside onsessioninitialized (send() throws
+    // "Not connected" — the stream controller isn't wired yet). The JSDoc
+    // on handleSessionInitRaceFallback in src/server.ts documents this as
+    // intentional. Prior to this commit the test accepted EITHER branch,
+    // which is a contract-less assertion: the code has always taken the
+    // fallback, so the "happy path" branch was unreachable dead validation.
+    // If a future SDK change unlocks transport.send() here, that's a
+    // separate diff — update the contract AND the test together.
+
+    // (1) transport.send must NOT be called.
+    expect(sendCalls.length).toBe(0);
+    expect(sentAt).toBeUndefined();
+    // (2) transport.close WAS called.
+    expect(closedAt).toBeDefined();
+    // (3) A diagnostic warn fired with the sid prefix so operators can
+    //     correlate the silent disconnect with a rate-limit trip.
+    const warnCalls = warnSpy.mock.calls.map((c) => c[0]);
+    const rejectedLog = warnCalls.find(
+      (m) =>
+        typeof m === "string" &&
+        m.includes("race fallback") &&
+        m.includes(sid.slice(0, 8)),
+    );
+    expect(rejectedLog).toBeDefined();
 
     warnSpy.mockRestore();
     errSpy.mockRestore();
@@ -558,6 +559,63 @@ describe("reapIdleSessionsTick (R3 #1: SSE reaper dep plumbing)", () => {
     // Map entry gone (reaper deletes inline).
     expect(sseTransports["sse-stale"]).toBeUndefined();
   });
+
+  it("emits a per-sid cleanup summary log for each reaped streamable session (R4-6)", async () => {
+    const { reapIdleSessionsTickForTesting } = await import("../server.js");
+
+    const transports: Record<string, { close: () => Promise<void> | void }> = {
+      "stale-a": { close: async () => {} },
+      "stale-b": { close: async () => {} },
+    };
+    const sseTransports: Record<string, { close: () => Promise<void> | void }> =
+      {};
+    const sessionLastActivity: Record<string, number> = {
+      "stale-a": Date.now() - 10 * 60 * 1000,
+      "stale-b": Date.now() - 10 * 60 * 1000,
+    };
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      reapIdleSessionsTickForTesting({
+        transports,
+        sseTransports,
+        sessionLastActivity,
+        ttlMs: 5 * 60 * 1000,
+        now: Date.now(),
+        ipLimiter: { remove: () => {} },
+        workspaceManager: {
+          cleanup: (sid: string) => {
+            if (sid === "stale-b") throw new Error("workspace-boom");
+          },
+        },
+        sessionStateManager: { cleanup: () => {} },
+      });
+
+      const summaryLines = logSpy.mock.calls
+        .map((c) => c.join(" "))
+        .filter((line) => line.includes("Reap cleanup"));
+      // One summary line per reaped streamable sid.
+      expect(summaryLines.length).toBe(2);
+      const summaryForA = summaryLines.find((l) => l.includes("stale-a"));
+      const summaryForB = summaryLines.find((l) => l.includes("stale-b"));
+      expect(summaryForA).toBeDefined();
+      expect(summaryForB).toBeDefined();
+      // The stale-a row reports ok for every step; stale-b reports workspace=throw.
+      expect(summaryForA).toMatch(/state=ok/);
+      expect(summaryForA).toMatch(/ipLimiter=ok/);
+      expect(summaryForA).toMatch(/workspace=ok/);
+      expect(summaryForB).toMatch(/workspace=(throw|failed|err)/);
+      // The aggregate log still fires.
+      const aggregate = logSpy.mock.calls
+        .map((c) => c.join(" "))
+        .find((line) => line.includes("Reaped 2 idle sessions"));
+      expect(aggregate).toBeDefined();
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -821,6 +879,73 @@ describe("handleSessionInitAccept (R3 #2 rollback signaling + H2 sessionStateMan
 
       expect(statusCalled).toBe(false);
       expect(jsonCalled).toBe(false);
+    } finally {
+      consoleErrSpy.mockRestore();
+    }
+  });
+
+  it("R4-17: still runs rollback side effects (map delete, ipLimiter.remove, close) when headersSent is true", async () => {
+    const { handleSessionInitAccept } = await import("../server.js");
+
+    const consoleErrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    try {
+      const sid = "r4-17-sid";
+      const transports: Record<string, unknown> = {
+        [sid]: { fake: true },
+        other: { fake: true },
+      };
+      const sessionLastActivity: Record<string, number> = {
+        [sid]: Date.now(),
+        other: Date.now(),
+      };
+
+      let ipLimiterRemovedSid: string | undefined;
+      let closeCalled = false;
+
+      const res = {
+        headersSent: true,
+        status: () => res,
+        json: () => res,
+      };
+
+      handleSessionInitAccept({
+        transport: {
+          close: async () => {
+            closeCalled = true;
+          },
+        },
+        sid,
+        ip: "9.9.9.9",
+        transports,
+        sessionLastActivity,
+        ipLimiter: {
+          remove: (s: string) => {
+            ipLimiterRemovedSid = s;
+          },
+        },
+        workspaceManager: {
+          ensureSession: () => {
+            throw new Error("ensure-hs-boom");
+          },
+        },
+        res: res as unknown as Parameters<
+          typeof handleSessionInitAccept
+        >[0]["res"],
+      });
+
+      // Allow the microtask-scheduled transport.close() to run.
+      await new Promise((r) => setImmediate(r));
+
+      // Side effects that MUST run even when the body couldn't be written:
+      expect(transports[sid]).toBeUndefined();
+      expect(sessionLastActivity[sid]).toBeUndefined();
+      expect(ipLimiterRemovedSid).toBe(sid);
+      expect(closeCalled).toBe(true);
+      // And unrelated entries untouched.
+      expect(transports.other).toBeDefined();
+      expect(sessionLastActivity.other).toBeDefined();
     } finally {
       consoleErrSpy.mockRestore();
     }
@@ -1226,6 +1351,40 @@ describe("write429RateLimited (R3 #5: headersSent guard)", () => {
 // ---------------------------------------------------------------------------
 
 describe("closeAllSessions (shutdown helper)", () => {
+  it("runs streamable + sse close batches in parallel, not sequentially (R3 #11)", async () => {
+    const { closeAllSessions } = await import("../server.js");
+
+    const SLOW_MS = 80;
+    const transports: Record<string, { close: () => Promise<void> | void }> = {
+      "s-slow": {
+        close: () => new Promise((r) => setTimeout(r, SLOW_MS)),
+      },
+    };
+    const sseTransports: Record<string, { close: () => Promise<void> | void }> =
+      {
+        "e-slow": {
+          close: () => new Promise((r) => setTimeout(r, SLOW_MS)),
+        },
+      };
+
+    const start = Date.now();
+    await closeAllSessions({
+      transports: transports as unknown as Parameters<
+        typeof closeAllSessions
+      >[0]["transports"],
+      sseTransports: sseTransports as unknown as Parameters<
+        typeof closeAllSessions
+      >[0]["sseTransports"],
+    });
+    const elapsed = Date.now() - start;
+
+    // Sequential would be ~2*SLOW_MS, parallel ~SLOW_MS. Leave headroom for
+    // Node timer jitter: anything under 1.5*SLOW_MS proves parallelism.
+    expect(elapsed).toBeLessThan(SLOW_MS * 1.5);
+    expect(Object.keys(transports)).toEqual([]);
+    expect(Object.keys(sseTransports)).toEqual([]);
+  });
+
   it("closes every streamable-HTTP transport and every SSE transport and clears the maps", async () => {
     const { closeAllSessions } = await import("../server.js");
 
@@ -1331,6 +1490,313 @@ describe("closeAllSessions (shutdown helper)", () => {
       expect(sawSseBoom).toBe(true);
     } finally {
       consoleErrSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runStartupIndexAndBashRefresh (R3 #5): distinguishable log prefixes for
+// index-check failure vs bash-refresh failure on startup.
+// ---------------------------------------------------------------------------
+
+describe("runStartupIndexAndBashRefresh (R3 #5)", () => {
+  it("logs '[startup] Initial index check failed:' when checkAndIndex rejects", async () => {
+    const { runStartupIndexAndBashRefresh } = await import("../server.js");
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runStartupIndexAndBashRefresh(
+        {
+          checkAndIndex: async () => {
+            throw new Error("index-boom");
+          },
+        },
+        [],
+      );
+      const lines = errSpy.mock.calls.map((c) => c.join(" "));
+      const indexLine = lines.find((l) =>
+        l.includes("[startup] Initial index check failed:"),
+      );
+      const refreshLine = lines.find((l) =>
+        l.includes("[startup] Bash refresh after index check failed:"),
+      );
+      expect(indexLine).toBeDefined();
+      expect(refreshLine).toBeUndefined();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("logs '[startup] Bash refresh after index check failed:' when refresh rejects (NOT the index prefix)", async () => {
+    // Stub getServerConfig to return a bash tool so refreshBashInstances
+    // reaches its rebuild path, then force rebuildBashInstance to throw.
+    mockGetServerConfig.mockReturnValue({
+      server: { name: "t", version: "0" },
+      sources: [{ name: "src-a", type: "github", repo: "x/y" }],
+      tools: [
+        {
+          name: "bash",
+          type: "bash",
+          sources: ["src-a"],
+          bash: { virtual_files: false },
+        },
+      ],
+    });
+    const bashFs = await import("../mcp/tools/bash-fs.js");
+    const rebuildSpy = vi
+      .spyOn(bashFs, "rebuildBashInstance")
+      .mockRejectedValueOnce(new Error("refresh-boom"));
+
+    const { runStartupIndexAndBashRefresh } = await import("../server.js");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runStartupIndexAndBashRefresh(
+        {
+          checkAndIndex: async () => {
+            /* resolves */
+          },
+        },
+        [{ name: "src-a" }],
+      );
+      const lines = errSpy.mock.calls.map((c) => c.join(" "));
+      const indexLine = lines.find((l) =>
+        l.includes("[startup] Initial index check failed:"),
+      );
+      const refreshLine = lines.find((l) =>
+        l.includes("[startup] Bash refresh after index check failed:"),
+      );
+      expect(refreshLine).toBeDefined();
+      expect(indexLine).toBeUndefined();
+    } finally {
+      errSpy.mockRestore();
+      rebuildSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rollbackSessionAfterConnectFailure (Z-1): fires when server.connect /
+// completeInitRequestSafely throws AFTER handleSessionInitAccept committed
+// maps + ipLimiter counter + onclose wiring. Must (a) tear down the session
+// exactly once and (b) not double-cleanup via the wired onclose handler.
+// ---------------------------------------------------------------------------
+
+describe("rollbackSessionAfterConnectFailure (Z-1)", () => {
+  /**
+   * Build a fake transport whose `close()` invokes `transport.onclose` to
+   * model the MCP SDK behavior that stream teardown notifies the wired
+   * listener. The fix detaches onclose before close() runs, so onclose
+   * (assigned to the original handler) must NOT be invoked when the rollback
+   * runs — or if it is, it must be a neutralized no-op.
+   */
+  function makeTransport(sid: string) {
+    const transport: {
+      sessionId: string;
+      onclose?: () => void;
+      close: () => Promise<void>;
+      closeCalls: number;
+    } = {
+      sessionId: sid,
+      closeCalls: 0,
+      close: async () => {
+        transport.closeCalls++;
+        if (typeof transport.onclose === "function") transport.onclose();
+      },
+    };
+    return transport;
+  }
+
+  it("runs the cleanup chain exactly once even though transport.close() triggers the wired onclose", async () => {
+    const { rollbackSessionAfterConnectFailure, __rejectedSidsForTesting } =
+      await import("../server.js");
+
+    const sid = "sid-double-cleanup";
+    const transport = makeTransport(sid);
+    const transports: Record<string, unknown> = { [sid]: transport };
+    const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
+
+    const cleanupCalls = { state: 0, ipLimiter: 0, workspace: 0 };
+    const ipLimiter = {
+      remove: (_sid: string) => {
+        cleanupCalls.ipLimiter++;
+      },
+    };
+    const sessionStateManager = {
+      cleanup: (_sid: string) => {
+        cleanupCalls.state++;
+      },
+    };
+    const workspaceManager = {
+      cleanup: (_sid: string) => {
+        cleanupCalls.workspace++;
+      },
+    };
+
+    // Simulate the production onclose handler: it runs application cleanup
+    // UNLESS rejectedSids contains the sid (the suppression branch). The
+    // rollback helper seeds that marker before invoking close(), so a prod-
+    // faithful onclose short-circuits while still performing any SDK-
+    // internal teardown it wants. This test replaces that SDK teardown with
+    // a trackable side-effect (priorOncloseFired) to assert the wrapper
+    // still forwards the invocation.
+    let priorOncloseFired = 0;
+    transport.onclose = () => {
+      priorOncloseFired++;
+      if (__rejectedSidsForTesting?.().has(sid)) return;
+      // Not rejected — fall through to "real" cleanup. Should NOT run here
+      // because the rollback helper seeds rejectedSids before close().
+      sessionStateManager.cleanup(sid);
+      ipLimiter.remove(sid);
+      workspaceManager.cleanup(sid);
+    };
+
+    rollbackSessionAfterConnectFailure({
+      transport,
+      sid,
+      transports,
+      sessionLastActivity,
+      ipLimiter,
+      sessionStateManager,
+      workspaceManager,
+    });
+
+    // Allow microtask-scheduled close() to run.
+    await new Promise((r) => setImmediate(r));
+
+    // Cleanup ran exactly once (from the inline rollback chain; the prior
+    // onclose short-circuited via the rejectedSids guard).
+    expect(cleanupCalls.state).toBe(1);
+    expect(cleanupCalls.ipLimiter).toBe(1);
+    expect(cleanupCalls.workspace).toBe(1);
+    // The prior onclose was STILL invoked by the wrapper, so any SDK-internal
+    // bookkeeping it was doing still runs. This is the regression fix: the
+    // previous `transport.onclose = () => {}` neutralizer swallowed the
+    // invocation entirely, skipping SDK bookkeeping as well.
+    expect(priorOncloseFired).toBe(1);
+    expect(transport.closeCalls).toBe(1);
+    expect(transports[sid]).toBeUndefined();
+    expect(sessionLastActivity[sid]).toBeUndefined();
+  });
+
+  it("deletes transports[sid] and sessionLastActivity[sid] synchronously", async () => {
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-del";
+    const transport = makeTransport(sid);
+    const transports: Record<string, unknown> = { [sid]: transport, other: {} };
+    const sessionLastActivity: Record<string, number> = {
+      [sid]: 1,
+      other: 2,
+    };
+
+    rollbackSessionAfterConnectFailure({
+      transport,
+      sid,
+      transports,
+      sessionLastActivity,
+    });
+
+    expect(transports[sid]).toBeUndefined();
+    expect(sessionLastActivity[sid]).toBeUndefined();
+    expect(transports.other).toBeDefined();
+    expect(sessionLastActivity.other).toBe(2);
+  });
+
+  it("invokes a pre-existing transport.onclose (preserves SDK-internal bookkeeping)", async () => {
+    // Regression: earlier fix replaced transport.onclose with a bare `() => {}`
+    // no-op, which silently clobbered any SDK-internal onclose wiring (the
+    // MCP SDK StreamableHTTPServerTransport attaches onclose listeners for
+    // its own bookkeeping). The wrapper must forward the invocation so SDK
+    // state teardown still happens even while our cleanup branch skips.
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-prior-onclose";
+    const transport = makeTransport(sid);
+    const transports: Record<string, unknown> = { [sid]: transport };
+    const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
+
+    // Simulate an SDK-attached onclose (e.g. request-queue drain) that does
+    // NOT know about rejectedSids — it just wants to be told the transport
+    // closed.
+    let sdkOncloseFired = 0;
+    transport.onclose = () => {
+      sdkOncloseFired++;
+    };
+
+    rollbackSessionAfterConnectFailure({
+      transport,
+      sid,
+      transports,
+      sessionLastActivity,
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(sdkOncloseFired).toBe(1);
+  });
+
+  it("tolerates a null transport.onclose (no prior handler attached)", async () => {
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-no-prior";
+    const transport = makeTransport(sid);
+    // Explicitly no onclose.
+    transport.onclose = undefined as unknown as (() => void) | undefined;
+    const transports: Record<string, unknown> = { [sid]: transport };
+    const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
+
+    // Must not throw.
+    rollbackSessionAfterConnectFailure({
+      transport,
+      sid,
+      transports,
+      sessionLastActivity,
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(transport.closeCalls).toBe(1);
+  });
+
+  it("continues cleanup even if an earlier cleanup step throws", async () => {
+    const { rollbackSessionAfterConnectFailure } = await import("../server.js");
+
+    const sid = "sid-throwy";
+    const transport = makeTransport(sid);
+    const transports: Record<string, unknown> = { [sid]: transport };
+    const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
+
+    let ipLimiterCalled = false;
+    let workspaceCalled = false;
+    const ipLimiter = {
+      remove: (_sid: string) => {
+        ipLimiterCalled = true;
+      },
+    };
+    const sessionStateManager = {
+      cleanup: (_sid: string) => {
+        throw new Error("state-boom");
+      },
+    };
+    const workspaceManager = {
+      cleanup: (_sid: string) => {
+        workspaceCalled = true;
+      },
+    };
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      rollbackSessionAfterConnectFailure({
+        transport,
+        sid,
+        transports,
+        sessionLastActivity,
+        ipLimiter,
+        sessionStateManager,
+        workspaceManager,
+      });
+      await new Promise((r) => setImmediate(r));
+      expect(ipLimiterCalled).toBe(true);
+      expect(workspaceCalled).toBe(true);
+    } finally {
+      errSpy.mockRestore();
     }
   });
 });
