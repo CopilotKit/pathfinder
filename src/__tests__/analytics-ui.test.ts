@@ -2708,4 +2708,203 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     expect(win.location.search).toBe(urlBefore);
     expect(win.location.search).not.toContain("2099");
   });
+
+  // Finding (R2) — future-date rejection uses UTC today, but <input type="date">
+  // and URL-pasted dates express the user's LOCAL calendar. Users east of UTC
+  // (Tokyo UTC+9, Sydney UTC+10, etc.) have a nightly band where their local
+  // "today" is one calendar day ahead of UTC "today". During that band, picking
+  // local today in the custom-range picker — or deep-linking to ?to=<local
+  // today> — is silently rejected as "future".
+  //
+  // Fix: allow dates up to today_UTC + 1 as the upper bound. Strictly beyond
+  // is still unambiguously future and still rejected.
+  //
+  // System time: 2026-04-20T10:00:00Z → todayISO() === "2026-04-20".
+  // tomorrowISO() === "2026-04-21" (the user's local "today" in Tokyo morning).
+  // "2026-04-22" is strictly future-future and must still be rejected.
+
+  it("readWindowFromUrl accepts ?to=<today_UTC + 1> so eastern-TZ users aren't rejected", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(2, 100).summary,
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    // Tokyo early-morning scenario: UTC today is 2026-04-20, but the user's
+    // local calendar reads 2026-04-21 and they deep-link to
+    // ?from=2026-04-20&to=2026-04-21 (their local "today"). Pre-fix this is
+    // rejected as future and falls back to the 7-day default — the exact
+    // silent-regression we're fixing.
+    const { calls } = await loadDashboardAtUrl(
+      "http://localhost/analytics?from=2026-04-20&to=2026-04-21",
+      endpoints,
+    );
+
+    const summaryCall = calls.find((u) =>
+      u.startsWith("/api/analytics/summary"),
+    );
+    expect(summaryCall).toBeDefined();
+    const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+    // Post-fix: the range is accepted (from/to propagate to the fetch).
+    expect(qs.from).toBe("2026-04-20");
+    expect(qs.to).toBe("2026-04-21");
+    expect(qs.days).toBeUndefined();
+  });
+
+  it("Apply handler accepts to=<today_UTC + 1> (eastern-TZ local today)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(2, 100).summary,
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    const { dom, win, calls } = await loadDashboardAtUrl(
+      "http://localhost/analytics",
+      endpoints,
+    );
+    const fetchCountBefore = calls.length;
+
+    vi.spyOn(dom.window.console, "warn").mockImplementation(() => {});
+
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const customPreset = dom.window.document.querySelector(
+      ".preset[data-custom]",
+    ) as HTMLElement;
+    customPreset.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    const fromEl = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    const toEl = dom.window.document.getElementById(
+      "dateToInput",
+    ) as HTMLInputElement;
+    // from = today_UTC, to = today_UTC + 1 (local today in Tokyo/Sydney morning).
+    fromEl.value = "2026-04-20";
+    fromEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    toEl.value = "2026-04-21";
+    toEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    dom.window.document
+      .getElementById("dateApplyBtn")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    await flushAsync();
+
+    // No inline error.
+    const dateErr = dom.window.document.getElementById(
+      "dateError",
+    ) as HTMLElement | null;
+    expect(dateErr).not.toBeNull();
+    expect(dateErr!.style.display).not.toBe("block");
+
+    // A new fetch fired (range applied).
+    expect(calls.length).toBeGreaterThan(fetchCountBefore);
+    const summaryCall = [...calls]
+      .reverse()
+      .find((u) => u.startsWith("/api/analytics/summary"));
+    expect(summaryCall).toBeDefined();
+    const qs = parseQS(summaryCall!.split("?")[1] ?? "");
+    expect(qs.from).toBe("2026-04-20");
+    expect(qs.to).toBe("2026-04-21");
+
+    // URL reflects the applied range.
+    const finalQS = parseQS(
+      win.location.search.startsWith("?")
+        ? win.location.search.slice(1)
+        : win.location.search,
+    );
+    expect(finalQS.from).toBe("2026-04-20");
+    expect(finalQS.to).toBe("2026-04-21");
+  });
+
+  it("still rejects to=<today_UTC + 2> in both URL and Apply handler (guard against over-permissive fix)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-20T10:00:00.000Z"));
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 100).summary,
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+    };
+
+    // URL deep-link path: today+2 is unambiguously future-future and must
+    // still be rejected — falls back to the 7-day default.
+    const deep = await loadDashboardAtUrl(
+      "http://localhost/analytics?from=2026-04-20&to=2026-04-22",
+      endpoints,
+    );
+    const deepSummary = deep.calls.find((u) =>
+      u.startsWith("/api/analytics/summary"),
+    );
+    expect(deepSummary).toBeDefined();
+    const deepQS = parseQS(deepSummary!.split("?")[1] ?? "");
+    expect(deepQS.days).toBe("7");
+    expect(deepQS.from).toBeUndefined();
+    expect(deepQS.to).toBeUndefined();
+
+    // Apply handler path: fresh mount, open custom, pick today+2, click Apply.
+    const { dom, win, calls } = await loadDashboardAtUrl(
+      "http://localhost/analytics",
+      endpoints,
+    );
+    const fetchCountBefore = calls.length;
+    const urlBefore = win.location.search;
+
+    vi.spyOn(dom.window.console, "warn").mockImplementation(() => {});
+
+    dom.window.document
+      .getElementById("datePill")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    const customPreset = dom.window.document.querySelector(
+      ".preset[data-custom]",
+    ) as HTMLElement;
+    customPreset.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    const fromEl = dom.window.document.getElementById(
+      "dateFromInput",
+    ) as HTMLInputElement;
+    const toEl = dom.window.document.getElementById(
+      "dateToInput",
+    ) as HTMLInputElement;
+    fromEl.value = "2026-04-20";
+    fromEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    toEl.value = "2026-04-22";
+    toEl.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    dom.window.document
+      .getElementById("dateApplyBtn")!
+      .dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    await flushAsync();
+
+    expect(calls.length).toBe(fetchCountBefore);
+    const dateErr = dom.window.document.getElementById(
+      "dateError",
+    ) as HTMLElement | null;
+    expect(dateErr).not.toBeNull();
+    expect(dateErr!.style.display).toBe("block");
+    expect(dateErr!.textContent).toBe("End date cannot be in the future.");
+    expect(win.location.search).toBe(urlBefore);
+  });
 });
