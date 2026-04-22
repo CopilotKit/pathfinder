@@ -2805,12 +2805,17 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       );
     await flushAsync();
 
-    // No inline error.
+    // No inline error. On successful Apply the popover closes, which tears
+    // down the #dateError element entirely — so either "no error element in
+    // DOM" (popover closed) or "display !== 'block'" (element exists but
+    // hidden) both indicate acceptance. Rejection paths keep the popover
+    // open AND set display:block, which this assertion excludes.
     const dateErr = dom.window.document.getElementById(
       "dateError",
     ) as HTMLElement | null;
-    expect(dateErr).not.toBeNull();
-    expect(dateErr!.style.display).not.toBe("block");
+    if (dateErr) {
+      expect(dateErr.style.display).not.toBe("block");
+    }
 
     // A new fetch fired (range applied).
     expect(calls.length).toBeGreaterThan(fetchCountBefore);

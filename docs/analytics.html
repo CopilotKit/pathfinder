@@ -768,6 +768,30 @@
         return y + "-" + m + "-" + dd;
       }
 
+      // tomorrowISO returns today's UTC date + 1 day. Used as the upper bound
+      // for future-date rejection in custom-range validation and URL parsing,
+      // so that a user east of UTC (e.g. Tokyo early-morning, Sydney, etc.)
+      // can still pick their LOCAL "today" without it being rejected as
+      // "future" under UTC reckoning. <input type="date"> and URL-pasted
+      // dates express the user's local calendar; todayISO() is UTC. Every
+      // UTC+ timezone has a nightly band where local-today === UTC-today + 1,
+      // so we allow up to and including tomorrowISO() and reject anything
+      // strictly beyond (which is unambiguously future-future in every zone).
+      function tomorrowISO() {
+        var d = new Date();
+        var t = new Date(
+          Date.UTC(
+            d.getUTCFullYear(),
+            d.getUTCMonth(),
+            d.getUTCDate() + 1,
+          ),
+        );
+        var y = t.getUTCFullYear();
+        var m = String(t.getUTCMonth() + 1).padStart(2, "0");
+        var dd = String(t.getUTCDate()).padStart(2, "0");
+        return y + "-" + m + "-" + dd;
+      }
+
       // --- URL persistence for the time-window selector ---
       // The selected window (preset days, Today, or custom from/to range) is
       // mirrored into the page URL so that reloading or sharing a deep link
@@ -828,9 +852,13 @@
           if (roundTrip(fromDate) !== fromRaw) return null;
           if (roundTrip(toDate) !== toRaw) return null;
           if (fromRaw > toRaw) return null;
-          // Reject future ranges (to > today UTC). Uses string compare; both
-          // sides are YYYY-MM-DD so lexicographic order matches chronological.
-          if (toRaw > todayISO()) return null;
+          // Reject future ranges. Upper bound is tomorrowISO() (today_UTC + 1)
+          // so users east of UTC whose local "today" reads as UTC tomorrow —
+          // Tokyo early-morning, Sydney, etc. — aren't silently rejected when
+          // deep-linking to their local today. Dates strictly beyond today+1
+          // are unambiguously future in every timezone. String compare is
+          // fine: both sides are YYYY-MM-DD so lexicographic === chronological.
+          if (toRaw > tomorrowISO()) return null;
           return { mode: "range", from: fromRaw, to: toRaw };
         }
         var daysRaw = params.get("days");
@@ -1395,8 +1423,11 @@
             // Reject future ranges to match readWindowFromUrl's contract —
             // without this guard, interactive Apply accepts a future range
             // that a bookmarked/shared URL of the same selection would
-            // reject, silently snapping back to the 7-day default.
-            if (t > todayISO()) {
+            // reject, silently snapping back to the 7-day default. Upper
+            // bound is tomorrowISO() (today_UTC + 1) so users east of UTC
+            // whose local "today" reads as UTC tomorrow can still pick their
+            // local today. See tomorrowISO() for the TZ rationale.
+            if (t > tomorrowISO()) {
               if (dateErr) {
                 dateErr.textContent = "End date cannot be in the future.";
                 dateErr.style.display = "block";
