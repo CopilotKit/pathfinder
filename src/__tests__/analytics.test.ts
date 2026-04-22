@@ -211,7 +211,8 @@ describe("getAnalyticsSummary", () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] });
 
     await getAnalyticsSummary({}, 14);
 
@@ -291,10 +292,7 @@ describe("getAnalyticsSummary earliest_query_day", () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ earliest_day: "2026-03-01" }] });
 
-    await getAnalyticsSummary(
-      { tool_type: "search", source: "docs" },
-      30,
-    );
+    await getAnalyticsSummary({ tool_type: "search", source: "docs" }, 30);
 
     // Index 5 is the new earliest-day subquery (0=total, 1=summary, 2=latency,
     // 3=by-source, 4=per-day, 5=earliest-day).

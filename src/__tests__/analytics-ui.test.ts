@@ -2156,9 +2156,9 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
     // written URL so we confirm both: days=14 is added AND from/to are
     // dropped in the same write.
     const finalSearch = win.location.search;
-    const finalQS = parseQS(finalSearch.startsWith("?")
-      ? finalSearch.slice(1)
-      : finalSearch);
+    const finalQS = parseQS(
+      finalSearch.startsWith("?") ? finalSearch.slice(1) : finalSearch,
+    );
     expect(finalQS.days).toBe("14");
     expect(finalQS.from).toBeUndefined();
     expect(finalQS.to).toBeUndefined();
@@ -2211,9 +2211,9 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
     await flushAsync();
 
     const finalSearch = win.location.search;
-    const finalQS = parseQS(finalSearch.startsWith("?")
-      ? finalSearch.slice(1)
-      : finalSearch);
+    const finalQS = parseQS(
+      finalSearch.startsWith("?") ? finalSearch.slice(1) : finalSearch,
+    );
     expect(finalQS.from).toBe("2024-02-10");
     expect(finalQS.to).toBe("2024-02-20");
     expect(finalQS.days).toBeUndefined();
@@ -2350,9 +2350,9 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
     for (let i = 0; i < 5; i++) await flushAsync();
 
     const finalSearch = win.location.search;
-    const finalQS = parseQS(finalSearch.startsWith("?")
-      ? finalSearch.slice(1)
-      : finalSearch);
+    const finalQS = parseQS(
+      finalSearch.startsWith("?") ? finalSearch.slice(1) : finalSearch,
+    );
     expect(finalQS.preview).toBe("1");
     expect(finalQS.days).toBe("14");
     expect(finalQS.from).toBeUndefined();
@@ -2478,9 +2478,9 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     // writeWindowToUrl().
     expect(replaceSpy).toHaveBeenCalled();
     const finalSearch = win.location.search;
-    const finalQS = parseQS(finalSearch.startsWith("?")
-      ? finalSearch.slice(1)
-      : finalSearch);
+    const finalQS = parseQS(
+      finalSearch.startsWith("?") ? finalSearch.slice(1) : finalSearch,
+    );
     expect(finalQS.from).toBe(targetDay);
     expect(finalQS.to).toBe(targetDay);
     expect(finalQS.days).toBeUndefined();
@@ -2503,9 +2503,9 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     );
 
     const finalSearch = win.location.search;
-    const finalQS = parseQS(finalSearch.startsWith("?")
-      ? finalSearch.slice(1)
-      : finalSearch);
+    const finalQS = parseQS(
+      finalSearch.startsWith("?") ? finalSearch.slice(1) : finalSearch,
+    );
     // After fix (Finding 3) URL_MAX_DAYS === ALL_TIME_DAYS === 99999.
     expect(finalQS.days).toBe("99999");
   });
@@ -2527,9 +2527,9 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     );
 
     const finalSearch = win.location.search;
-    const finalQS = parseQS(finalSearch.startsWith("?")
-      ? finalSearch.slice(1)
-      : finalSearch);
+    const finalQS = parseQS(
+      finalSearch.startsWith("?") ? finalSearch.slice(1) : finalSearch,
+    );
     // Post-fix we always emit the effective state. Default is 7 days.
     expect(finalQS.days).toBe("7");
     expect(finalQS.from).toBeUndefined();
@@ -2558,9 +2558,9 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     expect(pillLabel).toBe("All time");
 
     const finalSearch = win.location.search;
-    const finalQS = parseQS(finalSearch.startsWith("?")
-      ? finalSearch.slice(1)
-      : finalSearch);
+    const finalQS = parseQS(
+      finalSearch.startsWith("?") ? finalSearch.slice(1) : finalSearch,
+    );
     expect(finalQS.days).toBe("99999");
   });
 
@@ -2582,9 +2582,9 @@ describe("analytics dashboard UI — URL persistence parity", () => {
 
     // URL is re-synced to the clamped value (via Finding 2 fix).
     const finalSearch = win.location.search;
-    const finalQS = parseQS(finalSearch.startsWith("?")
-      ? finalSearch.slice(1)
-      : finalSearch);
+    const finalQS = parseQS(
+      finalSearch.startsWith("?") ? finalSearch.slice(1) : finalSearch,
+    );
     expect(finalQS.days).toBe("99999");
 
     // Outbound summary fetch uses the clamped value too.
@@ -2626,7 +2626,9 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     Object.assign(win, { Date: globalThis.Date });
     installChartStub(win);
     // No fetch needed — we only evaluate the helpers.
-    Object.assign(win, { fetch: vi.fn(() => Promise.reject(new Error("n/a"))) });
+    Object.assign(win, {
+      fetch: vi.fn(() => Promise.reject(new Error("n/a"))),
+    });
 
     const scriptEl = dom.window.document.querySelector("script:not([src])");
     const code = scriptEl!.textContent ?? "";
