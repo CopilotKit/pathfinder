@@ -228,4 +228,100 @@ describe("analytics per-day gap-fill (PGlite integration)", () => {
     );
     expect(sumOfBars).toBe(1);
   });
+
+  // Regression guard for the range-mode sum-invariant. The rolling test
+  // above already exercises this invariant on an aligned rolling window; the
+  // interesting case is a user-chosen range with non-midnight from/to where
+  // the outer series runs over `$from::date..$to::date` but the inner WHERE
+  // uses full-timestamp comparison. Rows that straddle the range boundaries
+  // at sub-day resolution must be accepted/rejected by BOTH sides in lock
+  // step so sum-of-bars equals total_queries_window exactly.
+  it("range sum-invariant: non-midnight from/to with straddle rows preserves sum-of-bars == total_queries_window", async () => {
+    const from = new Date(`${utcDayString(-5)}T15:00:00.000Z`);
+    const to = new Date(`${utcDayString(-2)}T18:00:00.000Z`);
+
+    await seedQueryLog(db, [
+      // Before `from` by 1 minute → must be excluded.
+      {
+        created_at: new Date(from.getTime() - 60_000),
+        query_text: "before-from",
+      },
+      // After `from` by 1 minute → must be included.
+      {
+        created_at: new Date(from.getTime() + 60_000),
+        query_text: "after-from",
+      },
+      // Before `to` by 1 minute → must be included.
+      {
+        created_at: new Date(to.getTime() - 60_000),
+        query_text: "before-to",
+      },
+      // After `to` by 1 minute → must be excluded.
+      {
+        created_at: new Date(to.getTime() + 60_000),
+        query_text: "after-to",
+      },
+    ]);
+
+    const result = await getAnalyticsSummary({ from, to }, 7);
+
+    // Inclusive day span: from::date == today-5, to::date == today-2 → 4 days.
+    expect(result.queries_per_day_window).toHaveLength(4);
+    for (const entry of result.queries_per_day_window) {
+      expect(typeof entry.count).toBe("number");
+      expect(Number.isFinite(entry.count)).toBe(true);
+    }
+
+    const sumOfBars = result.queries_per_day_window.reduce(
+      (acc, r) => acc + r.count,
+      0,
+    );
+    expect(result.total_queries_window).toBe(2);
+    expect(sumOfBars).toBe(result.total_queries_window);
+  });
+
+  // Production Postgres sessions often have `TimeZone` set to a non-UTC
+  // value (e.g. America/Los_Angeles on RDS managed configs that inherit a
+  // region default). Without an explicit `AT TIME ZONE 'UTC'` on the inner
+  // `date_trunc`, the inner aggregate groups by the session-local day while
+  // the outer `generate_series` emits UTC-midnight days — a silent mismatch
+  // that drops bars for rows whose UTC day differs from the session-local
+  // day at the time they were logged. PGlite defaults to UTC, which is why
+  // the other tests pass; flipping the session TZ here reproduces the
+  // production-only regression locally.
+  it("non-UTC session TZ: per-day grouping stays in UTC regardless of TimeZone GUC", async () => {
+    // Seed a row deliberately placed on a UTC/LA day boundary. 06:30 UTC
+    // on day 0 is 23:30 on day -1 in America/Los_Angeles (PDT = UTC-7).
+    // A naive `date_trunc('day', created_at)` in the LA session would
+    // bucket this row on day -1; the UTC-normalized grouping MUST bucket
+    // it on day 0 to stay aligned with the series.
+    const row = new Date(`${utcDayString(0)}T06:30:00.000Z`);
+    await seedQueryLog(db, [{ created_at: row }]);
+
+    // Save and override session TZ. PGlite keeps the GUC until reset, so
+    // always restore in a try/finally to avoid leaking into later tests.
+    const prev = await db.query<{ TimeZone: string }>("SHOW TimeZone");
+    const prevTz = prev.rows[0]?.TimeZone ?? "UTC";
+    await db.query("SET TIME ZONE 'America/Los_Angeles'");
+    try {
+      const result = await getAnalyticsSummary({}, 7);
+
+      expect(result.queries_per_day_window).toHaveLength(7);
+      expect(result.total_queries_window).toBe(1);
+
+      const sumOfBars = result.queries_per_day_window.reduce(
+        (acc, r) => acc + r.count,
+        0,
+      );
+      expect(sumOfBars).toBe(result.total_queries_window);
+
+      // The row should land on today (UTC), not on yesterday (LA).
+      const todayBar = result.queries_per_day_window.find(
+        (r) => r.day === utcDayString(0),
+      );
+      expect(todayBar?.count).toBe(1);
+    } finally {
+      await db.query(`SET TIME ZONE '${prevTz}'`);
+    }
+  });
 });
