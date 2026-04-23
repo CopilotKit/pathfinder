@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="#0a0a0f"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+
+  <!-- Cyan accent line at top -->
+  <rect x="0" y="0" width="1200" height="2" fill="#00ccff"/>
+
+  <!-- Diamond: narrower horizontally, taller vertically, thick outline -->
+  <polygon
+    points="600,130 640,210 600,290 560,210"
+    fill="none"
+    stroke="#00ccff"
+    stroke-width="6"
+    stroke-linejoin="round"
+  />
+
+  <!-- "pathfinder" title -->
+  <text x="600" y="360" text-anchor="middle" font-family="'Instrument Sans', -apple-system, system-ui, sans-serif" font-weight="700" font-size="48" fill="#ffffff">pathfinder</text>
+
+  <!-- Tagline -->
+  <text x="600" y="400" text-anchor="middle" font-family="'Instrument Sans', -apple-system, system-ui, sans-serif" font-weight="400" font-size="24" fill="#8888a0">The knowledge server for AI agents</text>
+
+  <!-- Bottom left: command -->
+  <text x="60" y="590" font-family="'JetBrains Mono', 'SF Mono', 'Fira Code', monospace" font-size="16" fill="#555570">$ pathfinder serve</text>
+
+  <!-- Bottom right: URL -->
+  <text x="1140" y="590" text-anchor="end" font-family="'JetBrains Mono', 'SF Mono', 'Fira Code', monospace" font-size="16" fill="#555570">pathfinder.copilotkit.dev</text>
+</svg>
