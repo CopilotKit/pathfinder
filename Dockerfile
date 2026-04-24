@@ -28,6 +28,7 @@ COPY --from=build /app/dist/ ./dist/
 COPY docs/analytics.html ./docs/analytics.html
 COPY deploy/copilotkit-docs.yaml ./copilotkit-docs.yaml
 COPY deploy/pathfinder-docs.yaml ./pathfinder-docs.yaml
+COPY deploy/aimock-docs.yaml ./aimock-docs.yaml
 COPY pathfinder.example.yaml ./pathfinder.example.yaml
 COPY .env.example ./.env.example
 CMD ["node", "dist/cli.js", "serve"]

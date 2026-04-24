@@ -1,0 +1,125 @@
+server:
+  name: aimock-docs
+  version: "1.0.0"
+  # Anthropic crawler — bypasses per-IP session limit (requires trust_proxy: true to match the forwarded IP)
+  allowlist: ["160.79.106.35"]
+  # Safe to enable: Railway's edge discards any client-supplied X-Forwarded-For
+  # and sets its own trusted value, so the leftmost XFF entry is the real peer.
+  trust_proxy: true
+
+sources:
+  - name: docs
+    type: html
+    repo: https://github.com/CopilotKit/aimock.git
+    path: docs/
+    base_url: https://aimock.copilotkit.dev/
+    url_derivation:
+      strip_prefix: "docs/"
+      strip_suffix: ".html"
+      strip_index: true
+    file_patterns:
+      - "**/*.html"
+    chunk:
+      target_tokens: 600
+      overlap_tokens: 50
+
+  - name: code
+    type: code
+    repo: https://github.com/CopilotKit/aimock.git
+    path: src/
+    file_patterns:
+      - "**/*.ts"
+    exclude_patterns:
+      - "**/__tests__/**"
+      - "**/*.test.*"
+      - "**/*.spec.*"
+    skip_dirs:
+      - node_modules
+      - dist
+      - .git
+    max_file_size: 102400
+    chunk:
+      target_lines: 80
+      overlap_lines: 10
+
+tools:
+  - name: search-docs
+    type: search
+    description: "Search aimock documentation for guides on mocking LLM APIs, fixture authoring, provider configuration, streaming, and test integration. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: docs
+    default_limit: 5
+    max_limit: 20
+    result_format: docs
+
+  - name: search-code
+    type: search
+    description: "Search the aimock codebase to find implementations of routers, providers, response builders, mock handlers, and fixture loaders. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    source: code
+    default_limit: 10
+    max_limit: 20
+    result_format: code
+
+  - name: explore-docs
+    type: bash
+    description: "Explore aimock documentation files using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.html\" | head -20' or 'cat /INDEX.md' to see what's available."
+    sources: [docs]
+    bash:
+      session_state: true
+      grep_strategy: hybrid
+      virtual_files: true
+
+  - name: explore-code
+    type: bash
+    description: "Explore aimock source code using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.ts\" | head -20' to see what's available."
+    sources: [code]
+    bash:
+      session_state: true
+      grep_strategy: hybrid
+      virtual_files: true
+
+  - name: submit-feedback
+    type: collect
+    description: "After using search results, submit feedback on whether the advice worked or not. Report what you tried and whether it succeeded or failed."
+    response: "Feedback recorded. Thank you."
+    schema:
+      tool_name:
+        type: string
+        description: "Which search tool was used"
+        required: true
+      query:
+        type: string
+        description: "The original search query"
+        required: true
+      rating:
+        type: enum
+        values: ["helpful", "not_helpful"]
+        description: "Whether the results were helpful"
+        required: true
+      comment:
+        type: string
+        description: "What was tried, what failed/worked, what info was missing"
+        required: true
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536
+
+indexing:
+  auto_reindex: true
+  reindex_hour_utc: 3
+  stale_threshold_hours: 24
+
+analytics:
+  enabled: true
+
+webhook:
+  repo_sources:
+    "CopilotKit/aimock":
+      - docs
+      - code
+  path_triggers:
+    docs:
+      - "docs/"
+    code:
+      - "src/"
