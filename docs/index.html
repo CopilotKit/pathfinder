@@ -73,7 +73,9 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
 
 /* Hero */
-.hero { padding: 120px 0 3rem; max-width: 1120px; margin: 0 auto; padding-left: 2rem; padding-right: 2rem; }
+.hero { padding: 120px 0 3rem; max-width: 1120px; margin: 0 auto; padding-left: 2rem; padding-right: 2rem; position: relative; overflow: hidden; }
+.hero::before { content: ""; position: absolute; top: -200px; left: 50%; transform: translateX(-50%); width: 800px; height: 600px; background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%); pointer-events: none; z-index: 0; }
+.hero > * { position: relative; z-index: 1; }
 .badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 32px; animation: fadeUp 0.8s var(--ease-out-expo) both; }
 .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
@@ -106,7 +108,9 @@ nav .container { display:flex; align-items:center; justify-content:space-between
 @keyframes fadeInLine { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
 
 /* Features */
-.features { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; }
+.features { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; position: relative; overflow: hidden; }
+.features::before { content: ""; position: absolute; top: -100px; left: 50%; transform: translateX(-50%); width: 1000px; height: 800px; background: radial-gradient(ellipse, rgba(68, 136, 255, 0.08) 0%, rgba(0, 204, 255, 0.05) 40%, transparent 70%); pointer-events: none; z-index: 0; }
+.features > * { position: relative; z-index: 1; }
 .features h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; text-align: center; }
 .features .section-sub { color: var(--text-secondary); margin-bottom: 2rem; font-size: 16px; text-align: center; }
 
