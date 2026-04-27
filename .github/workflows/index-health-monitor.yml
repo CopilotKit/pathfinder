@@ -1,15 +1,15 @@
 name: Index Health Monitor
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: "0 */4 * * *"
   workflow_dispatch:
     inputs:
       force_notify:
-        description: 'Send notifications regardless of state machine'
+        description: "Send notifications regardless of state machine"
         type: boolean
         default: false
       dry_run:
-        description: 'Run checks but do not notify or update state'
+        description: "Run checks but do not notify or update state"
         type: boolean
         default: false
 jobs:
