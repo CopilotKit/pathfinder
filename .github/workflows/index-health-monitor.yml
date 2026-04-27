@@ -1,0 +1,476 @@
+name: Index Health Monitor
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      force_notify:
+        description: "Send notifications regardless of state machine"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Run checks but do not notify or update state"
+        type: boolean
+        default: false
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore state from cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/health-monitor-state.json
+          key: index-health-state-
+          restore-keys: |
+            index-health-state-
+
+      - name: Run health probes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_NOTIFY: ${{ inputs.force_notify || 'false' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          STATE_FILE="/tmp/health-monitor-state.json"
+          NOTIFY_FILE="/tmp/health-monitor-notifications.txt"
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          NOW=$(date -u +%s)
+          NOW_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          BULLET=$(printf '\xe2\x80\xa2')
+
+          # Initialize notification file
+          : > "$NOTIFY_FILE"
+
+          # Initialize state file if missing or invalid
+          if [ ! -f "$STATE_FILE" ] || ! jq empty "$STATE_FILE" 2>/dev/null; then
+            echo '{}' > "$STATE_FILE"
+          fi
+
+          # --- Instance configurations ---
+          declare -A INSTANCE_URLS
+          INSTANCE_URLS[copilotkit-docs]="https://mcp.copilotkit.ai"
+          INSTANCE_URLS[pathfinder-docs]="https://mcp.pathfinder.copilotkit.dev"
+
+          declare -A CHUNK_FLOORS
+          CHUNK_FLOORS[copilotkit-docs]=1000
+          CHUNK_FLOORS[pathfinder-docs]=50
+
+          # Source-to-repo mappings stored as "source:owner/repo:branch" entries
+          COPILOTKIT_DOCS_SOURCES=(
+            "docs:CopilotKit/CopilotKit:main"
+            "code:CopilotKit/CopilotKit:main"
+            "ag-ui-docs:ag-ui-protocol/ag-ui:main"
+            "ag-ui-code:ag-ui-protocol/ag-ui:main"
+          )
+          PATHFINDER_DOCS_SOURCES=(
+            "pathfinder-docs:CopilotKit/pathfinder:main"
+          )
+
+          # --- GitHub API: prefetch HEAD commits ---
+          HEAD_COMMITS_FILE="/tmp/head-commits.json"
+
+          prefetch_head_commits() {
+            local entries=("$@")
+            local seen=()
+            echo '{}' > "$HEAD_COMMITS_FILE"
+            for entry in "${entries[@]}"; do
+              local remainder="${entry#*:}"
+              local repo="${remainder%%:*}"
+              local branch="${remainder##*:}"
+              local cache_key="${repo}:${branch}"
+              # Deduplicate
+              local already=false
+              for s in "${seen[@]+"${seen[@]}"}"; do
+                if [ "$s" = "$cache_key" ]; then already=true; break; fi
+              done
+              [ "$already" = true ] && continue
+              seen+=("$cache_key")
+              local sha=""
+              local api_response
+              if api_response=$(curl -sf --max-time 30 \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${repo}/commits/${branch}" 2>/dev/null); then
+                sha=$(echo "$api_response" | jq -r '.sha // empty' | head -c 8)
+              fi
+              local tmp
+              tmp=$(jq --arg k "$cache_key" --arg v "$sha" '.[$k] = $v' "$HEAD_COMMITS_FILE")
+              echo "$tmp" > "$HEAD_COMMITS_FILE"
+            done
+          }
+
+          get_head_commit() {
+            local repo="$1"
+            local branch="$2"
+            local cache_key="${repo}:${branch}"
+            jq -r --arg k "$cache_key" '.[$k] // empty' "$HEAD_COMMITS_FILE"
+          }
+
+          # --- Check one instance ---
+          check_instance() {
+            local instance="$1"
+            local url="$2"
+            local chunk_floor="$3"
+            shift 3
+            local sources=("$@")
+
+            local issues=()
+            local total_chunks=0
+            local source_count=0
+            local health_json=""
+
+            # 1. Liveness check
+            if ! health_json=$(curl -sf --max-time 30 "${url}/health" 2>/dev/null); then
+              issues+=("liveness: unreachable (HTTP error or timeout)")
+              # Cannot proceed without a response
+              echo "ISSUES:$(printf '%s\n' "${issues[@]}" | jq -R . | jq -sc .)"
+              echo "TOTAL_CHUNKS:0"
+              echo "SOURCE_COUNT:0"
+              return
+            fi
+
+            # 2. Parse response
+            if ! echo "$health_json" | jq empty 2>/dev/null; then
+              issues+=("liveness: invalid JSON response")
+              echo "ISSUES:$(printf '%s\n' "${issues[@]}" | jq -R . | jq -sc .)"
+              echo "TOTAL_CHUNKS:0"
+              echo "SOURCE_COUNT:0"
+              return
+            fi
+
+            # 3. Service status
+            local status
+            status=$(echo "$health_json" | jq -r '.status // "unknown"')
+            if [ "$status" != "ok" ]; then
+              issues+=("service degraded: ${status}")
+            fi
+
+            # 4. Source errors -- check sources in the health response
+            local known_keys=()
+            for entry in "${sources[@]}"; do
+              known_keys+=("${entry%%:*}")
+            done
+
+            while IFS= read -r source_line; do
+              local src_key src_status src_error
+              src_key=$(echo "$source_line" | jq -r '.key')
+              src_status=$(echo "$source_line" | jq -r '.status')
+              src_error=$(echo "$source_line" | jq -r '.error // empty')
+
+              # Skip sources not in our mapping
+              local known=false
+              for k in "${known_keys[@]}"; do
+                if [ "$k" = "$src_key" ]; then
+                  known=true
+                  break
+                fi
+              done
+              [ "$known" = true ] || continue
+
+              if [ "$src_status" = "error" ]; then
+                issues+=("source error: ${src_key} -- ${src_error}")
+              fi
+            done < <(echo "$health_json" | jq -c '.index.sources[]? // empty')
+
+            # 5. Commit drift
+            for entry in "${sources[@]}"; do
+              local src_key src_repo src_branch
+              src_key="${entry%%:*}"
+              local remainder="${entry#*:}"
+              src_repo="${remainder%%:*}"
+              src_branch="${remainder##*:}"
+
+              # Find this source in the health response
+              local src_data
+              src_data=$(echo "$health_json" | jq -c --arg key "$src_key" '.index.sources[]? | select(.key == $key)' 2>/dev/null)
+              [ -n "$src_data" ] || continue
+
+              local src_status
+              src_status=$(echo "$src_data" | jq -r '.status // empty')
+              # Skip if mid-reindex
+              [ "$src_status" != "indexing" ] || continue
+
+              local indexed_commit
+              indexed_commit=$(echo "$src_data" | jq -r '.commit // empty')
+              [ -n "$indexed_commit" ] || continue
+
+              local head_commit
+              head_commit=$(get_head_commit "$src_repo" "$src_branch")
+              if [ -z "$head_commit" ]; then
+                issues+=("commit drift: ${src_key} -- could not fetch HEAD for ${src_repo}@${src_branch} (GitHub API error)")
+                continue
+              fi
+
+              if [ "$indexed_commit" != "$head_commit" ]; then
+                # Check last_indexed age
+                local last_indexed_ts
+                last_indexed_ts=$(echo "$src_data" | jq -r '.last_indexed // empty')
+                if [ -n "$last_indexed_ts" ]; then
+                  local indexed_epoch
+                  if ! indexed_epoch=$(date -d "$last_indexed_ts" +%s 2>/dev/null); then
+                    issues+=("commit drift: ${src_key} -- indexed ${indexed_commit}, HEAD is ${head_commit} (could not parse last_indexed timestamp '${last_indexed_ts}')")
+                    continue
+                  fi
+                  local age_hours=$(( (NOW - indexed_epoch) / 3600 ))
+                  if [ "$age_hours" -ge 6 ]; then
+                    issues+=("commit drift: ${src_key} -- indexed ${indexed_commit}, HEAD is ${head_commit} (last indexed ${age_hours}h ago)")
+                  fi
+                else
+                  issues+=("commit drift: ${src_key} -- indexed ${indexed_commit}, HEAD is ${head_commit} (last_indexed timestamp unavailable)")
+                fi
+              fi
+            done
+
+            # 6. Chunk floor
+            total_chunks=$(echo "$health_json" | jq -r '.index.total_chunks // 0')
+            if [ "$total_chunks" -lt "$chunk_floor" ]; then
+              issues+=("chunk count: ${total_chunks} below minimum ${chunk_floor}")
+            fi
+
+            # Count sources
+            source_count=$(echo "$health_json" | jq '[.index.sources[]?] | length')
+
+            # Output results
+            if [ ${#issues[@]} -eq 0 ]; then
+              echo "ISSUES:[]"
+            else
+              echo "ISSUES:$(printf '%s\n' "${issues[@]}" | jq -R . | jq -sc .)"
+            fi
+            echo "TOTAL_CHUNKS:${total_chunks}"
+            echo "SOURCE_COUNT:${source_count}"
+          }
+
+          # --- State machine ---
+          process_instance() {
+            local instance="$1"
+            local url="$2"
+            local chunk_floor="$3"
+            shift 3
+            local sources=("$@")
+
+            echo "=== Checking ${instance} ==="
+
+            # Run checks and capture output
+            local check_output
+            check_output=$(check_instance "$instance" "$url" "$chunk_floor" "${sources[@]}")
+
+            local issues_json total_chunks source_count
+            issues_json=$(echo "$check_output" | grep '^ISSUES:' | head -1 | sed 's/^ISSUES://')
+            total_chunks=$(echo "$check_output" | grep '^TOTAL_CHUNKS:' | head -1 | sed 's/^TOTAL_CHUNKS://')
+            source_count=$(echo "$check_output" | grep '^SOURCE_COUNT:' | head -1 | sed 's/^SOURCE_COUNT://')
+
+            local issue_count
+            issue_count=$(echo "$issues_json" | jq 'length')
+
+            echo "  Issues found: ${issue_count}"
+            if [ "$issue_count" -gt 0 ]; then
+              echo "$issues_json" | jq -r '.[]' | while read -r iss; do
+                echo "    - ${iss}"
+              done
+            fi
+
+            # Determine new status
+            local new_status="green"
+            if [ "$issue_count" -gt 0 ]; then
+              new_status="red"
+            fi
+
+            # Read existing state for this instance
+            local old_state
+            old_state=$(jq -c --arg inst "$instance" '.[$inst] // {"status":"unknown","since":"","last_notified":"","notifications_24h":[],"issues":[]}' "$STATE_FILE")
+
+            local old_status
+            old_status=$(echo "$old_state" | jq -r '.status')
+            local old_since
+            old_since=$(echo "$old_state" | jq -r '.since // empty')
+
+            echo "  State transition: ${old_status} -> ${new_status}"
+
+            # Determine if we should notify
+            local should_notify=false
+            local notify_type=""
+
+            case "${old_status}:${new_status}" in
+              unknown:green)
+                should_notify=true
+                notify_type="baseline"
+                ;;
+              unknown:red)
+                should_notify=true
+                notify_type="alert"
+                ;;
+              green:green)
+                should_notify=false
+                ;;
+              green:red)
+                should_notify=true
+                notify_type="alert"
+                ;;
+              red:green)
+                should_notify=true
+                notify_type="recovery"
+                ;;
+              red:red)
+                # Rate-limit: max 2 notifications per 24h
+                local recent_count
+                recent_count=$(echo "$old_state" | jq --argjson now "$NOW" '[.notifications_24h[]? | select((. | tonumber) > ($now - 86400))] | length')
+                if [ "$recent_count" -lt 2 ]; then
+                  should_notify=true
+                  notify_type="repeat"
+                else
+                  echo "  Notification suppressed (rate limit: ${recent_count} in last 24h)"
+                fi
+                ;;
+            esac
+
+            # Force notify override
+            if [ "$FORCE_NOTIFY" = "true" ]; then
+              should_notify=true
+              if [ -z "$notify_type" ]; then
+                if [ "$new_status" = "green" ]; then
+                  notify_type="baseline"
+                else
+                  notify_type="alert"
+                fi
+              fi
+            fi
+
+            # Build notification message
+            if [ "$should_notify" = true ]; then
+              local message=""
+              local issues_bullets=""
+
+              # Pre-build bullet list of issues
+              if [ "$issue_count" -gt 0 ]; then
+                issues_bullets=$(echo "$issues_json" | jq -r '.[]' | while IFS= read -r iss; do
+                  printf '%s %s\n' "$BULLET" "$iss"
+                done)
+              fi
+
+              case "$notify_type" in
+                alert)
+                  if [ "$old_status" = "red" ]; then
+                    message=$(printf 'Pathfinder index health: %s still RED (since %s UTC)\n%s\n%s' "$instance" "$old_since" "$issues_bullets" "$RUN_URL")
+                  else
+                    message=$(printf 'Pathfinder index health: %s is RED\n%s\n%s' "$instance" "$issues_bullets" "$RUN_URL")
+                  fi
+                  ;;
+                repeat)
+                  message=$(printf 'Pathfinder index health: %s still RED (since %s UTC)\n%s\n%s' "$instance" "$old_since" "$issues_bullets" "$RUN_URL")
+                  ;;
+                recovery)
+                  message=$(printf 'Pathfinder index health: %s recovered (was RED since %s UTC)\nAll sources indexed and current.' "$instance" "$old_since")
+                  ;;
+                baseline)
+                  message=$(printf 'Pathfinder index health: %s baseline established -- GREEN\n%s sources indexed, %s total chunks.' "$instance" "$source_count" "$total_chunks")
+                  ;;
+              esac
+
+              if [ -n "$message" ]; then
+                echo "  Notification: ${notify_type}"
+                # Write notification as JSON line
+                jq -nc --arg inst "$instance" --arg text "$message" '{instance: $inst, text: $text}' >> "$NOTIFY_FILE"
+              fi
+            fi
+
+            # Update state
+            local new_since="$old_since"
+            if [ "$old_status" != "$new_status" ]; then
+              new_since="$NOW_ISO"
+            fi
+
+            local new_notifications_24h
+            new_notifications_24h=$(echo "$old_state" | jq -c --argjson now "$NOW" '[.notifications_24h[]? | select((. | tonumber) > ($now - 86400))]')
+
+            local new_last_notified
+            new_last_notified=$(echo "$old_state" | jq -r '.last_notified // empty')
+
+            # Write updated state back
+            local updated_state
+            updated_state=$(jq -nc \
+              --arg status "$new_status" \
+              --arg since "$new_since" \
+              --arg last_notified "$new_last_notified" \
+              --argjson notifications_24h "$new_notifications_24h" \
+              --argjson issues "$issues_json" \
+              '{status: $status, since: $since, last_notified: $last_notified, notifications_24h: $notifications_24h, issues: $issues}')
+
+            # Merge into state file (atomic write)
+            local tmp_state
+            tmp_state=$(jq --arg inst "$instance" --argjson state "$updated_state" '.[$inst] = $state' "$STATE_FILE")
+            echo "$tmp_state" > "${STATE_FILE}.tmp"
+            mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+            echo "  State saved: status=${new_status}, since=${new_since}"
+          }
+
+          # --- Main ---
+          # Prefetch HEAD commits for all unique repos (avoids subshell cache loss)
+          prefetch_head_commits "${COPILOTKIT_DOCS_SOURCES[@]}" "${PATHFINDER_DOCS_SOURCES[@]}"
+
+          process_instance "copilotkit-docs" \
+            "${INSTANCE_URLS[copilotkit-docs]}" \
+            "${CHUNK_FLOORS[copilotkit-docs]}" \
+            "${COPILOTKIT_DOCS_SOURCES[@]}"
+
+          process_instance "pathfinder-docs" \
+            "${INSTANCE_URLS[pathfinder-docs]}" \
+            "${CHUNK_FLOORS[pathfinder-docs]}" \
+            "${PATHFINDER_DOCS_SOURCES[@]}"
+
+          echo ""
+          echo "=== Final state ==="
+          jq . "$STATE_FILE"
+
+          echo ""
+          echo "=== Notifications ==="
+          if [ -s "$NOTIFY_FILE" ]; then
+            cat "$NOTIFY_FILE"
+          else
+            echo "(none)"
+          fi
+
+      - name: Send Slack notifications
+        if: always() && inputs.dry_run != 'true'
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          set -euo pipefail
+
+          NOTIFY_FILE="/tmp/health-monitor-notifications.txt"
+          if [ ! -s "$NOTIFY_FILE" ]; then
+            echo "No notifications to send."
+            exit 0
+          fi
+
+          STATE_FILE="/tmp/health-monitor-state.json"
+          NOW_EPOCH=$(date -u +%s)
+          NOW_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          while IFS= read -r line; do
+            instance=$(echo "$line" | jq -r '.instance')
+            text=$(echo "$line" | jq -r '.text')
+            if [ -n "$SLACK_WEBHOOK" ]; then
+              payload=$(jq -nc --arg t "$text" '{text: $t}')
+              if curl -sf --max-time 30 -X POST "$SLACK_WEBHOOK" \
+                -H 'Content-Type: application/json' \
+                -d "$payload" 2>/dev/null; then
+                tmp_state=$(jq --arg inst "$instance" --argjson ts "$NOW_EPOCH" --arg iso "$NOW_ISO" \
+                  '.[$inst].notifications_24h += [$ts] | .[$inst].last_notified = $iso' \
+                  "$STATE_FILE")
+                echo "$tmp_state" > "${STATE_FILE}.tmp"
+                mv "${STATE_FILE}.tmp" "$STATE_FILE"
+              else
+                echo "::warning::Slack notification failed for ${instance}"
+              fi
+            else
+              echo "::warning::SLACK_WEBHOOK not configured -- notification not sent: ${instance}"
+            fi
+          done < "$NOTIFY_FILE"
+
+      - name: Save state to cache
+        uses: actions/cache/save@v4
+        if: always() && inputs.dry_run != 'true'
+        with:
+          path: /tmp/health-monitor-state.json
+          key: index-health-state-${{ github.run_id }}
