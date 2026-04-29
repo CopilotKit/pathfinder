@@ -1,17 +1,16 @@
 // P2P telemetry client — fire-and-forget POSTs to a CopilotKit-hosted
-// telemetry-sink Lambda which fans out to Scarf, Reo, and other
-// downstream services for company deanonymization.
+// telemetry-sink Lambda which fans out to downstream services for
+// company deanonymization.
 //
 // Active only on the hosted pathfinder.copilotkit.dev instance: when
 // PATHFINDER_TELEMETRY_URL is unset, every emit() is a no-op so OSS
-// self-hosters send nothing. Tier 1 emits a single event,
+// self-hosters send nothing. Emits a single event,
 // `pathfinder.session.created`, carrying the originating MCP client's IP
 // so the Lambda can attribute the session to a company downstream.
 //
 // Design rationale (vs. the queue+flush shape used by BashTelemetry):
 // session-create is rare (one per MCP client connect, not per tool call),
 // so a per-event POST is fine and avoids a flush-on-shutdown contract.
-// Revisit if Tier 2 ever sends per-tool-call events.
 
 import { randomUUID } from "node:crypto";
 
