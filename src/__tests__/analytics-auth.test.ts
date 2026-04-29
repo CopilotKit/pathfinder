@@ -41,6 +41,9 @@ beforeEach(() => {
     discordPublicKey: "",
     notionToken: "",
     mcpJwtSecret: "e".repeat(64),
+    p2pTelemetryUrl: undefined,
+    p2pTelemetryDisabled: false,
+    packageVersion: "test",
   });
   mockGetServerConfig.mockReturnValue({
     server: { name: "pathfinder-test", version: "0.0.0" },
@@ -115,6 +118,9 @@ describe("analyticsAuth 503 message prod vs non-prod", () => {
       discordPublicKey: "",
       notionToken: "",
       mcpJwtSecret: "e".repeat(64),
+      p2pTelemetryUrl: undefined,
+      p2pTelemetryDisabled: false,
+      packageVersion: "test",
     });
     mockGetAnalyticsConfig.mockReturnValue({
       enabled: true,
@@ -158,6 +164,9 @@ describe("analyticsAuth 503 message prod vs non-prod", () => {
       discordPublicKey: "",
       notionToken: "",
       mcpJwtSecret: "e".repeat(64),
+      p2pTelemetryUrl: undefined,
+      p2pTelemetryDisabled: false,
+      packageVersion: "test",
     });
     mockGetAnalyticsConfig.mockReturnValue({
       enabled: true,
@@ -216,6 +225,9 @@ describe("analyticsAuth 503 message prod vs non-prod", () => {
       discordPublicKey: "",
       notionToken: "",
       mcpJwtSecret: "e".repeat(64),
+      p2pTelemetryUrl: undefined,
+      p2pTelemetryDisabled: false,
+      packageVersion: "test",
     });
 
     server = await buildAndStart();
@@ -253,6 +265,9 @@ describe("analyticsAuth 503 message prod vs non-prod", () => {
         discordPublicKey: "",
         notionToken: "",
         mcpJwtSecret: "e".repeat(64),
+        p2pTelemetryUrl: undefined,
+        p2pTelemetryDisabled: false,
+        packageVersion: "test",
       };
     }
 

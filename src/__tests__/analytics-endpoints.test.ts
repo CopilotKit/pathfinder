@@ -35,6 +35,9 @@ vi.mock("../config.js", () => ({
     discordPublicKey: "",
     notionToken: "",
     mcpJwtSecret: "x".repeat(32),
+    p2pTelemetryUrl: undefined,
+    p2pTelemetryDisabled: false,
+    packageVersion: "test",
   }),
   hasSearchTools: vi.fn().mockReturnValue(false),
   hasKnowledgeTools: vi.fn().mockReturnValue(false),
@@ -68,6 +71,9 @@ const DEFAULT_TEST_CONFIG = {
   discordPublicKey: "",
   notionToken: "",
   mcpJwtSecret: "x".repeat(32),
+  p2pTelemetryUrl: undefined,
+  p2pTelemetryDisabled: false,
+  packageVersion: "test",
 };
 
 function mockRes() {
@@ -349,6 +355,9 @@ describe("analyticsAuth middleware", () => {
       discordPublicKey: "",
       notionToken: "",
       mcpJwtSecret: "x".repeat(32),
+      p2pTelemetryUrl: undefined,
+      p2pTelemetryDisabled: false,
+      packageVersion: "test",
     });
     const res = mockRes();
     const next = vi.fn();
@@ -386,6 +395,9 @@ describe("analyticsAuth middleware", () => {
       discordPublicKey: "",
       notionToken: "",
       mcpJwtSecret: "x".repeat(32),
+      p2pTelemetryUrl: undefined,
+      p2pTelemetryDisabled: false,
+      packageVersion: "test",
     });
     const res = mockRes();
     const next = vi.fn();
@@ -425,6 +437,9 @@ describe("analyticsAuth middleware", () => {
       discordPublicKey: "",
       notionToken: "",
       mcpJwtSecret: "x".repeat(32),
+      p2pTelemetryUrl: undefined,
+      p2pTelemetryDisabled: false,
+      packageVersion: "test",
     });
     const consoleErrSpy = vi
       .spyOn(console, "error")
@@ -466,6 +481,9 @@ describe("analyticsAuth middleware", () => {
       discordPublicKey: "",
       notionToken: "",
       mcpJwtSecret: "x".repeat(32),
+      p2pTelemetryUrl: undefined,
+      p2pTelemetryDisabled: false,
+      packageVersion: "test",
     });
     const res = mockRes();
     const next = vi.fn();

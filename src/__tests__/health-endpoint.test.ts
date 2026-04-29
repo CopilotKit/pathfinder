@@ -23,6 +23,9 @@ vi.mock("../config.js", () => ({
     discordPublicKey: "",
     notionToken: "",
     mcpJwtSecret: "x".repeat(32),
+    p2pTelemetryUrl: undefined,
+    p2pTelemetryDisabled: false,
+    packageVersion: "test",
   }),
   // Force the /health handler down the DB-probing branch so we exercise
   // the 503 error-response code path.

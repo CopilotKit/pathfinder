@@ -20,6 +20,9 @@ vi.mock("../config.js", () => ({
     discordPublicKey: "",
     notionToken: "",
     mcpJwtSecret: "x".repeat(32),
+    p2pTelemetryUrl: undefined,
+    p2pTelemetryDisabled: false,
+    packageVersion: "test",
   }),
   getServerConfig: vi.fn().mockReturnValue({
     server: { name: "test", version: "0.0.0" },

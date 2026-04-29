@@ -76,6 +76,9 @@ vi.mock("../config.js", () => {
       cloneDir: "/tmp/test",
       notionToken: "",
       mcpJwtSecret: "x".repeat(32),
+      p2pTelemetryUrl: undefined,
+      p2pTelemetryDisabled: false,
+      packageVersion: "test",
     }),
     getServerConfig: vi.fn().mockReturnValue({
       server: { name: "test", version: "1.0" },
@@ -195,6 +198,9 @@ const defaultConfig = {
   cloneDir: "/tmp/test",
   notionToken: "",
   mcpJwtSecret: "x".repeat(32),
+  p2pTelemetryUrl: undefined,
+  p2pTelemetryDisabled: false,
+  packageVersion: "test",
 };
 
 describe("validateConfig", () => {

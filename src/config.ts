@@ -2,7 +2,8 @@
 
 import "dotenv/config";
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
   ServerConfigSchema,
@@ -12,6 +13,28 @@ import {
   isFileSourceConfig,
 } from "./types.js";
 import { resolveJwtSecret } from "./oauth/secret.js";
+
+// Resolve package.json on first parseConfig() call. Used by code paths
+// that need the package version (e.g. p2p-telemetry payloads). Lives
+// inside parseConfig (rather than at module load) so it doesn't fire
+// during getServerConfig-only call paths, and so the existing config
+// tests that mock readFileSync to YAML don't see an extra read at import
+// time. Matches the dev/prod layout — package.json sits one directory
+// above src/ in dev and one above dist/ in published builds. Falls back
+// to "unknown" if reading fails so a malformed install doesn't crash
+// startup.
+function readPackageVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = resolve(here, "..", "package.json");
+    const raw = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      version?: string;
+    };
+    return raw.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 // ── Environment variable config (secrets and runtime settings) ────────────────
 
@@ -30,6 +53,23 @@ export interface Config {
   discordPublicKey: string;
   notionToken: string;
   mcpJwtSecret: string;
+  /**
+   * URL of the CopilotKit-hosted telemetry-sink Lambda. Hosted-only — when
+   * unset (the default for OSS deployments), the p2p-telemetry client
+   * no-ops and pathfinder sends nothing externally. Set on the hosted
+   * pathfinder.copilotkit.dev Railway deployment via the
+   * PATHFINDER_TELEMETRY_URL env var.
+   */
+  p2pTelemetryUrl: string | undefined;
+  /**
+   * Independent kill switch for the telemetry client (PATHFINDER_TELEMETRY_DISABLED).
+   * Lets ops disable telemetry without a redeploy by setting "1"/"true" —
+   * useful if the sink misbehaves and we don't want to chase a config
+   * rollback. When true, emit() no-ops even if the URL is set.
+   */
+  p2pTelemetryDisabled: boolean;
+  /** Pathfinder package version, read from package.json at startup. */
+  packageVersion: string;
 }
 
 /**
@@ -150,6 +190,17 @@ function parseConfig(): Config {
   const nodeEnv = process.env.NODE_ENV || "development";
   const mcpJwtSecret = resolveJwtSecret({ nodeEnv });
 
+  // P2P telemetry — empty string env value treated as unset so a stray
+  // `PATHFINDER_TELEMETRY_URL=` line in a .env file doesn't accidentally
+  // enable the client with a bogus URL.
+  const rawP2pUrl = process.env.PATHFINDER_TELEMETRY_URL?.trim();
+  const p2pTelemetryUrl =
+    rawP2pUrl && rawP2pUrl.length > 0 ? rawP2pUrl : undefined;
+  const rawP2pDisabled =
+    process.env.PATHFINDER_TELEMETRY_DISABLED?.trim().toLowerCase();
+  const p2pTelemetryDisabled =
+    rawP2pDisabled === "1" || rawP2pDisabled === "true";
+
   return {
     databaseUrl,
     openaiApiKey: openaiApiKey ?? "",
@@ -165,6 +216,9 @@ function parseConfig(): Config {
     discordPublicKey,
     notionToken,
     mcpJwtSecret,
+    p2pTelemetryUrl,
+    p2pTelemetryDisabled,
+    packageVersion: readPackageVersion(),
   };
 }
 

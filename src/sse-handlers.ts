@@ -4,6 +4,8 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bearerMiddleware } from "./oauth/handlers.js";
 import type { IpSessionLimiter } from "./ip-limiter.js";
+import type { P2PTelemetry } from "./p2p-telemetry.js";
+import type { AuthContext } from "./oauth/handlers.js";
 import {
   buildRateLimitPayload,
   clampRetryAfterSeconds,
@@ -100,6 +102,15 @@ export interface SseHandlerDeps {
    * factory is called.
    */
   trustProxy?: boolean | (() => boolean);
+  /**
+   * P2P telemetry client for emitting `pathfinder.session.created` events
+   * to the CopilotKit-hosted telemetry-sink. Optional — when undefined, no
+   * events are emitted (matches the OSS deployment posture). Accepts a
+   * getter for the same late-binding reason as ipLimiter/workspaceManager:
+   * the client is constructed inside startServer() but createSseHandlers()
+   * runs at module load.
+   */
+  p2pTelemetry?: P2PTelemetry | (() => P2PTelemetry | undefined);
 }
 
 function resolve<T>(value: T | (() => T)): T {
@@ -382,6 +393,22 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       console.log(
         `[mcp] New SSE session ${sessionId.slice(0, 8)} (${Object.keys(sseTransports).length} active) [${ip}]`,
       );
+
+      // Telemetry — fire after the session is fully accepted so we don't
+      // double-count rate-limit rejections or transport-construction
+      // failures. P2PTelemetry handles its own no-op when disabled or
+      // unconfigured; isEnabled() probe avoids resolving user-agent on
+      // every connect when telemetry is off.
+      const p2pTelemetry = resolve(deps.p2pTelemetry);
+      if (p2pTelemetry?.isEnabled()) {
+        p2pTelemetry.emit("pathfinder.session.created", {
+          client_ip: ip,
+          transport: "sse",
+          session_id_prefix: sessionId.slice(0, 8),
+          user_agent: req.headers["user-agent"] ?? "",
+          authenticated: !!(req as Request & { auth?: AuthContext }).auth,
+        });
+      }
     } catch (err) {
       // R3 #9 — emit a correlation ID in BOTH the log line and the
       // response body so operators who get a user report ("SSE session
