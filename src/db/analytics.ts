@@ -596,7 +596,12 @@ export async function getAnalyticsSummary(
 /**
  * Get top queries by frequency over the last N days, or over the explicit
  * `filter.from`/`filter.to` range when provided. Groups by (query_text,
- * tool_name) and orders by count desc.
+ * tool_name) and orders by count desc. Excludes (query_text, tool_name)
+ * pairs whose every event returned zero results — those belong exclusively
+ * in `getEmptyQueries`. Without this filter, a query that only ever returns
+ * empty would render in BOTH the Top Queries and Empty Result Queries
+ * tables with the same count, and the dashboard's two tables disagree on
+ * the predicate for "empty."
  */
 export async function getTopQueries(
   days: number = 7,
@@ -628,6 +633,7 @@ export async function getTopQueries(
     FROM query_log
     ${where}
     GROUP BY query_text, tool_name
+    HAVING bool_or(result_count > 0)
     ORDER BY count DESC
     LIMIT $${redactedIdx + 1}`,
     [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],

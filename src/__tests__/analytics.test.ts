@@ -419,6 +419,20 @@ describe("getTopQueries", () => {
     expect(sql).not.toContain("'<redacted>'");
     expect(params).toContain(REDACTED_QUERY_TEXT);
   });
+
+  it("excludes pure-empty (query_text, tool_name) groups via HAVING bool_or(result_count > 0)", async () => {
+    // Without this predicate, a query that ONLY ever returned zero results
+    // shows up in BOTH the Top Queries table (count > 0) and the Empty
+    // Result Queries table (result_count = 0), and the dashboard's two
+    // tables disagree on the predicate for "empty." The HAVING clause
+    // narrows Top Queries to groups where at least one event returned a
+    // non-empty result.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries();
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("HAVING bool_or(result_count > 0)");
+  });
 });
 
 // ---------------------------------------------------------------------------
