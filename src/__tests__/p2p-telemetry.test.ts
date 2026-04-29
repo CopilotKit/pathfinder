@@ -19,8 +19,10 @@ function build(
     if (typeof overrides.fetchResult === "function") {
       return overrides.fetchResult();
     }
-    return (overrides.fetchResult as Response | undefined) ??
-      (new Response("", { status: 202 }));
+    return (
+      (overrides.fetchResult as Response | undefined) ??
+      new Response("", { status: 202 })
+    );
   });
   const telemetry = new P2PTelemetry({
     url: "url" in overrides ? overrides.url : "https://sink.example/ingest",
@@ -113,9 +115,7 @@ describe("P2PTelemetry", () => {
         const signal = (init as RequestInit).signal as AbortSignal;
         // Resolve only when aborted, so the test can assert the timer fires.
         return new Promise((_resolve, reject) => {
-          signal.addEventListener("abort", () =>
-            reject(new Error("aborted")),
-          );
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
         });
       },
     );

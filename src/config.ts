@@ -196,7 +196,8 @@ function parseConfig(): Config {
   const rawP2pUrl = process.env.PATHFINDER_TELEMETRY_URL?.trim();
   const p2pTelemetryUrl =
     rawP2pUrl && rawP2pUrl.length > 0 ? rawP2pUrl : undefined;
-  const rawP2pDisabled = process.env.PATHFINDER_TELEMETRY_DISABLED?.trim().toLowerCase();
+  const rawP2pDisabled =
+    process.env.PATHFINDER_TELEMETRY_DISABLED?.trim().toLowerCase();
   const p2pTelemetryDisabled =
     rawP2pDisabled === "1" || rawP2pDisabled === "true";
 
