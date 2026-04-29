@@ -33,6 +33,9 @@ vi.mock("../config.js", () => ({
     discordPublicKey: "",
     notionToken: "",
     mcpJwtSecret: "x".repeat(32),
+    p2pTelemetryUrl: undefined,
+    p2pTelemetryDisabled: false,
+    packageVersion: "test",
   }),
   hasSearchTools: vi.fn().mockReturnValue(false),
   hasKnowledgeTools: vi.fn().mockReturnValue(false),
@@ -949,6 +952,9 @@ describe("Analytics server routes (HTTP-level)", () => {
         discordPublicKey: "",
         notionToken: "",
         mcpJwtSecret: "x".repeat(32),
+        p2pTelemetryUrl: undefined,
+        p2pTelemetryDisabled: false,
+        packageVersion: "test",
       });
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
@@ -986,6 +992,9 @@ describe("Analytics server routes (HTTP-level)", () => {
         discordPublicKey: "",
         notionToken: "",
         mcpJwtSecret: "x".repeat(32),
+        p2pTelemetryUrl: undefined,
+        p2pTelemetryDisabled: false,
+        packageVersion: "test",
       });
       const fakeReq = {
         socket: { remoteAddress: "203.0.113.7" },
@@ -1009,6 +1018,9 @@ describe("Analytics server routes (HTTP-level)", () => {
         discordPublicKey: "",
         notionToken: "",
         mcpJwtSecret: "x".repeat(32),
+        p2pTelemetryUrl: undefined,
+        p2pTelemetryDisabled: false,
+        packageVersion: "test",
       });
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
@@ -1045,6 +1057,9 @@ describe("Analytics server routes (HTTP-level)", () => {
         discordPublicKey: "",
         notionToken: "",
         mcpJwtSecret: "x".repeat(32),
+        p2pTelemetryUrl: undefined,
+        p2pTelemetryDisabled: false,
+        packageVersion: "test",
       });
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
@@ -1095,6 +1110,9 @@ describe("Analytics server routes (HTTP-level)", () => {
         discordPublicKey: "",
         notionToken: "",
         mcpJwtSecret: "x".repeat(32),
+        p2pTelemetryUrl: undefined,
+        p2pTelemetryDisabled: false,
+        packageVersion: "test",
       });
     }
 

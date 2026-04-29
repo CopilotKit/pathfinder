@@ -20,6 +20,9 @@ vi.mock("../config.js", () => ({
     discordPublicKey: "",
     notionToken: "",
     mcpJwtSecret: "e".repeat(64),
+    p2pTelemetryUrl: undefined,
+    p2pTelemetryDisabled: false,
+    packageVersion: "test",
   }),
   getServerConfig: vi.fn().mockReturnValue({
     server: { name: "pathfinder-e2e", version: "0.0.0" },

@@ -98,6 +98,24 @@ docker compose up
 
 Step-by-step migration guide: **[Migrate from Mintlify](https://pathfinder.copilotkit.dev/migrate-from-mintlify)**
 
+## Telemetry
+
+**Self-hosted Pathfinder sends nothing externally.** No phone-home, no analytics. The telemetry code path is gated on a CopilotKit-internal env var that isn't set in any image you pull or any package you install — running your own copy is opt-out by default, with no flag to flip.
+
+**The hosted instance at `mcp.pathfinder.copilotkit.dev`** records one event per MCP client connection — fired when a fresh client (claude.ai, Cursor, a custom MCP client) opens a session against the hosted server. The event contains:
+
+- the client's IP address
+- the User-Agent string
+- the MCP transport in use (`sse` or `streamable_http`)
+- the first 8 characters of the session ID (for log correlation)
+- whether the client presented an OAuth bearer token
+
+What it does **not** contain: search queries, knowledge tool inputs, response content, full session IDs, or JWT subjects — anything inside an MCP request stays on the hosted server. There is no per-tool-call event of any kind.
+
+The event is sent to a CopilotKit-controlled endpoint and forwarded to a small set of third-party analytics providers, which use the IP for company-level attribution — i.e., figuring out which organizations are evaluating the hosted instance. There's no individual-user identification; the IP is the only personal data point in the payload, and it's processed by those providers per their published terms.
+
+If you'd rather not have any of this happen, run your own copy — Quick Start above gets you there in two commands. Same code, same features, no telemetry env vars set.
+
 ## Documentation
 
 **[https://pathfinder.copilotkit.dev](https://pathfinder.copilotkit.dev)**

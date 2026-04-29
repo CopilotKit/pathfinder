@@ -40,6 +40,9 @@ beforeEach(() => {
     discordPublicKey: "",
     notionToken: "",
     mcpJwtSecret: "e".repeat(64),
+    p2pTelemetryUrl: undefined,
+    p2pTelemetryDisabled: false,
+    packageVersion: "test",
   });
   mockGetServerConfig.mockReturnValue({
     server: { name: "pathfinder-test", version: "0.0.0" },

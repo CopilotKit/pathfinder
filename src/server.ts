@@ -41,6 +41,8 @@ import { createSlackWebhookHandler } from "./webhooks/slack.js";
 import { createDiscordWebhookHandler } from "./webhooks/discord.js";
 import { SessionStateManager } from "./mcp/tools/bash-session.js";
 import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
+import { P2PTelemetry } from "./p2p-telemetry.js";
+import type { AuthContext } from "./oauth/handlers.js";
 import { insertCollectedData } from "./db/queries.js";
 import { IpSessionLimiter } from "./ip-limiter.js";
 import {
@@ -193,6 +195,10 @@ const bashInstances = new Map<string, Bash>();
 const sessionStateManager = new SessionStateManager();
 let bashTelemetry: BashTelemetry | undefined;
 let telemetryFlushInterval: ReturnType<typeof setInterval> | undefined;
+// P2P telemetry client — constructed once in startServer() from config so
+// the URL/disabled flag is read after dotenv has loaded. Late-bound into
+// SSE handlers via getter; passed directly into handleSessionInitAccept.
+let p2pTelemetry: P2PTelemetry | undefined;
 
 // Pending webhook-triggered bash-refresh timers. Each webhook delivery
 // schedules a setTimeout to refresh bash instances after a brief delay
@@ -1011,6 +1017,20 @@ export function handleSessionInitAccept(opts: {
     headersSent: boolean;
     status: (code: number) => { json: (body: unknown) => unknown };
   };
+  /**
+   * P2P telemetry client + per-request fields needed for the
+   * pathfinder.session.created event. Both optional to preserve existing
+   * test call sites that don't care; production caller passes them when
+   * the hosted instance has telemetry configured. Emit fires only on the
+   * success path — rollbacks return without telemetering, matching the
+   * SSE handler's "after-accept" gate.
+   */
+  p2pTelemetry?: {
+    isEnabled: () => boolean;
+    emit: (event: string, props: Record<string, unknown>) => void;
+  };
+  userAgent?: string;
+  authenticated?: boolean;
 }): boolean {
   const {
     transport,
@@ -1022,6 +1042,9 @@ export function handleSessionInitAccept(opts: {
     workspaceManager: workspace,
     sessionStateManager: sessionState,
     res,
+    p2pTelemetry,
+    userAgent,
+    authenticated,
   } = opts;
   try {
     workspace?.ensureSession(sid);
@@ -1103,6 +1126,22 @@ export function handleSessionInitAccept(opts: {
   console.log(
     `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(tMap).length} active) [${ip}]`,
   );
+
+  // Telemetry — fire only after ensureSession succeeded so we don't
+  // emit on rolled-back sessions. Mirrors the SSE handler's after-accept
+  // gate. The client's own no-op handles disabled/unconfigured cases;
+  // isEnabled() avoids constructing the property bag on every connect
+  // when telemetry is off.
+  if (p2pTelemetry?.isEnabled()) {
+    p2pTelemetry.emit("pathfinder.session.created", {
+      client_ip: ip,
+      transport: "streamable_http",
+      session_id_prefix: sid.slice(0, 8),
+      user_agent: userAgent ?? "",
+      authenticated: authenticated ?? false,
+    });
+  }
+
   return true;
 }
 
@@ -1684,6 +1723,9 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         workspaceManager,
         sessionStateManager,
         res,
+        p2pTelemetry,
+        userAgent: req.headers["user-agent"] ?? "",
+        authenticated: !!(req as Request & { auth?: AuthContext }).auth,
       });
       if (!accepted) {
         // Rollback already tore down the transport + wrote the 503 body (if
@@ -1905,6 +1947,8 @@ const sseHandlers = createSseHandlers({
   // hop count, CIDR list, or a blanket `true`.
   trustProxy: () => isTrustingProxy(),
   rateLimitRetryAfterSeconds: () => retryAfterSecondsFromTtl(),
+  // Late-bound: p2pTelemetry is constructed inside startServer().
+  p2pTelemetry: () => p2pTelemetry,
   createMcpServer: () => {
     let transportRef: SSEServerTransport | undefined;
     // The handler creates the transport first, then calls createMcpServer()
@@ -3170,6 +3214,20 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
     }
     console.log("[startup] Bash telemetry enabled (60s flush interval).");
   }
+
+  // P2P telemetry — constructed unconditionally so the SSE/mcp emit sites
+  // always have an instance to call. The instance no-ops internally when
+  // url is unset (OSS deployments) or PATHFINDER_TELEMETRY_DISABLED is on.
+  // Logging the active state at startup makes the hosted-vs-OSS posture
+  // visible in operator logs without leaking the URL itself.
+  p2pTelemetry = new P2PTelemetry({
+    url: cfg.p2pTelemetryUrl,
+    disabled: cfg.p2pTelemetryDisabled,
+    packageVersion: cfg.packageVersion,
+  });
+  console.log(
+    `[startup] P2P telemetry ${p2pTelemetry.isEnabled() ? "enabled" : "disabled"}.`,
+  );
 
   // Log active sources from config
   const sourceNames = serverCfg.sources.map((s) => `${s.name} (${s.type})`);

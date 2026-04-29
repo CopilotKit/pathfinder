@@ -21,6 +21,9 @@ vi.mock("../config.js", () => ({
     discordPublicKey: "",
     notionToken: "",
     mcpJwtSecret: "e".repeat(64),
+    p2pTelemetryUrl: undefined,
+    p2pTelemetryDisabled: false,
+    packageVersion: "test",
   }),
   getServerConfig: vi.fn().mockReturnValue({
     server: { name: "pathfinder-test", version: "0.0.0" },
@@ -423,6 +426,110 @@ describe("SSE transport routes", () => {
     // Wait briefly for server-side 'close' event to propagate.
     await new Promise((r) => setTimeout(r, 50));
     expect(deps.sseTransports[sid]).toBeUndefined();
+  });
+
+  it("emits pathfinder.session.created on a successful SSE connect", async () => {
+    const emitMock = vi.fn();
+    const { app } = buildApp({
+      p2pTelemetry: {
+        isEnabled: () => true,
+        emit: emitMock,
+      } as unknown as SseHandlerDeps["p2pTelemetry"],
+    });
+    server = await startServer(app);
+    const url = baseUrlOf(server);
+
+    const res = await fetch(`${url}/sse`, {
+      headers: { Accept: "text/event-stream", "User-Agent": "TestClient/1.0" },
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (!buffer.includes("event: endpoint")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+    }
+    const sid = buffer.match(/sessionId=([0-9a-f-]+)/)![1];
+
+    expect(emitMock).toHaveBeenCalledTimes(1);
+    const [eventName, props] = emitMock.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(eventName).toBe("pathfinder.session.created");
+    expect(props.transport).toBe("sse");
+    expect(props.session_id_prefix).toBe(sid.slice(0, 8));
+    expect(props.user_agent).toBe("TestClient/1.0");
+    expect(props.authenticated).toBe(false);
+    expect(typeof props.client_ip).toBe("string");
+
+    await reader.cancel();
+  });
+
+  it("does not emit pathfinder.session.created when telemetry is disabled", async () => {
+    const emitMock = vi.fn();
+    const { app } = buildApp({
+      p2pTelemetry: {
+        isEnabled: () => false,
+        emit: emitMock,
+      } as unknown as SseHandlerDeps["p2pTelemetry"],
+    });
+    server = await startServer(app);
+    const url = baseUrlOf(server);
+
+    const res = await fetch(`${url}/sse`, {
+      headers: { Accept: "text/event-stream" },
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (!buffer.includes("event: endpoint")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+    }
+    expect(emitMock).not.toHaveBeenCalled();
+    await reader.cancel();
+  });
+
+  it("does not emit pathfinder.session.created when the IP rate limit rejects", async () => {
+    const emitMock = vi.fn();
+    // Limiter with cap 1 — first connect succeeds (and emits), second is
+    // rejected (must not emit).
+    const limiter = new IpSessionLimiter(1);
+    const { app } = buildApp({
+      ipLimiter: limiter,
+      p2pTelemetry: {
+        isEnabled: () => true,
+        emit: emitMock,
+      } as unknown as SseHandlerDeps["p2pTelemetry"],
+    });
+    server = await startServer(app);
+    const url = baseUrlOf(server);
+
+    const res1 = await fetch(`${url}/sse`, {
+      headers: { Accept: "text/event-stream" },
+    });
+    const reader1 = res1.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer1 = "";
+    while (!buffer1.includes("event: endpoint")) {
+      const { value, done } = await reader1.read();
+      if (done) break;
+      buffer1 += decoder.decode(value, { stream: true });
+    }
+
+    const res2 = await fetch(`${url}/sse`, {
+      headers: { Accept: "text/event-stream" },
+    });
+    expect(res2.status).toBe(429);
+    await res2.body?.cancel();
+
+    // Exactly one emit — for the accepted session, not the rejected one.
+    expect(emitMock).toHaveBeenCalledTimes(1);
+
+    await reader1.cancel();
   });
 });
 
