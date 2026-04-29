@@ -370,6 +370,24 @@
         text-align: center;
         font-style: italic;
       }
+
+      /* Screen-reader-only / scraper-friendly mirror of canvas chart data.
+         Canvas elements expose nothing useful to assistive tech or to HTML
+         scrapes; a sibling <table> kept off-screen lets both consume the
+         same numbers the visible chart shows. Standard "visually hidden"
+         pattern: positioned, clipped, and with whitespace preserved so the
+         screen reader announces the table cells. */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
     </style>
   <script src="/pixels.js" defer></script>
   </head>
@@ -382,12 +400,42 @@
     <div class="chart-row">
       <div class="chart-box">
         <h2 id="dailyChartTitle">Queries per Day</h2>
-        <canvas id="dailyChart"></canvas>
+        <canvas
+          id="dailyChart"
+          role="img"
+          aria-labelledby="dailyChartTitle"
+          aria-describedby="dailyChartTable"
+        ></canvas>
         <span class="chart-caption">Click a bar to filter to that day</span>
+        <table id="dailyChartTable" class="sr-only">
+          <caption>Queries per day (data table for screen readers)</caption>
+          <thead>
+            <tr>
+              <th scope="col">Day</th>
+              <th scope="col">Queries</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
       <div class="chart-box">
-        <h2>Queries by Source</h2>
-        <canvas id="sourceChart"></canvas>
+        <h2 id="sourceChartTitle">Queries by Source</h2>
+        <canvas
+          id="sourceChart"
+          role="img"
+          aria-labelledby="sourceChartTitle"
+          aria-describedby="sourceChartTable"
+        ></canvas>
+        <table id="sourceChartTable" class="sr-only">
+          <caption>Queries by source (data table for screen readers)</caption>
+          <thead>
+            <tr>
+              <th scope="col">Source</th>
+              <th scope="col">Queries</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </div>
 
@@ -1106,15 +1154,21 @@
           return sum + t.count;
         }, 0);
 
-        // Tool-type group (left)
+        // Tool-type group (left). Skip the "All" pill when only one tool type
+        // exists in the window: it would render with the same count as the
+        // single per-tool pill (e.g. `All (3,214)` next to `Search (3,214)`)
+        // and look like a broken filter. Re-appears once a second tool type
+        // is recorded.
         var toolHtml = '<div class="filter-group tool-group">';
-        toolHtml +=
-          '<span class="pill' +
-          (activeToolType === null ? " active" : "") +
-          '" data-tool-all="1">' +
-          'All <span class="count">(' +
-          total.toLocaleString() +
-          ")</span></span>";
+        if (toolCounts.length > 1) {
+          toolHtml +=
+            '<span class="pill' +
+            (activeToolType === null ? " active" : "") +
+            '" data-tool-all="1">' +
+            'All <span class="count">(' +
+            total.toLocaleString() +
+            ")</span></span>";
+        }
         toolCounts.forEach(function (t) {
           var isActive = activeToolType === t.tool_type;
           var label =
@@ -1834,6 +1888,28 @@
             },
           );
 
+          // Mirror the daily chart's data into a screen-reader-only table
+          // (#dailyChartTable). Canvas elements are opaque to assistive tech
+          // and HTML scrapers; the sr-only table gives both consumers the
+          // same numbers the visible bars encode.
+          var dailyTableBody = document.querySelector(
+            "#dailyChartTable tbody",
+          );
+          if (dailyTableBody) {
+            dailyTableBody.innerHTML =
+              perDayArr
+                .map(function (d) {
+                  return (
+                    "<tr><td>" +
+                    esc(String(d.day)) +
+                    "</td><td>" +
+                    esc(safeNumber(d.count).toLocaleString()) +
+                    "</td></tr>"
+                  );
+                })
+                .join("") || "<tr><td colspan=\"2\">No data</td></tr>";
+          }
+
           // Source chart - destroy previous instance
           if (sourceChartInstance) {
             sourceChartInstance.destroy();
@@ -1868,6 +1944,28 @@
                 options: { responsive: true },
               },
             );
+          }
+
+          // Mirror source chart data into the sr-only table. Renders even
+          // when the chart itself doesn't (sourcesArr.length === 0) so
+          // screen readers always see "No data" rather than a stale row
+          // from a prior load.
+          var sourceTableBody = document.querySelector(
+            "#sourceChartTable tbody",
+          );
+          if (sourceTableBody) {
+            sourceTableBody.innerHTML =
+              sourcesArr
+                .map(function (s) {
+                  return (
+                    "<tr><td>" +
+                    esc(String(s.source_name)) +
+                    "</td><td>" +
+                    esc(safeNumber(s.count).toLocaleString()) +
+                    "</td></tr>"
+                  );
+                })
+                .join("") || "<tr><td colspan=\"2\">No data</td></tr>";
           }
 
           // Top queries table (now with Tool column)
@@ -1911,10 +2009,21 @@
                 // string "Invalid Date", which would be rendered raw and
                 // looks like a bug. Fall back to an em dash instead, and
                 // route the result through esc() on interpolation.
+                //
+                // Render as ISO-8601 in UTC (e.g. "2026-04-29 06:10:04 UTC")
+                // rather than the browser locale's mixed month-first / 12h
+                // format. The dashboard is internal and read across
+                // timezones; an explicit, sortable, timezone-labelled
+                // timestamp avoids ambiguity. Trim ISO milliseconds and the
+                // "T"/"Z" separators for readability while keeping it
+                // unambiguously parseable.
                 var lastSeenRaw = q.last_seen ? new Date(q.last_seen) : null;
                 var lastSeenStr =
                   lastSeenRaw && Number.isFinite(lastSeenRaw.getTime())
-                    ? lastSeenRaw.toLocaleString()
+                    ? lastSeenRaw
+                        .toISOString()
+                        .replace("T", " ")
+                        .replace(/\.\d{3}Z$/, " UTC")
                     : "\u2014";
                 return (
                   '<tr class="empty"><td>' +
