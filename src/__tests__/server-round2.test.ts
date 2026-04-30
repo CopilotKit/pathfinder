@@ -400,95 +400,24 @@ describe("write429RateLimited (helper used by /mcp pre-check)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// onsessioninitialized accept-handler: ensureSession throw rolls back state
-// (R2 #5)
+// onsessioninitialized accept-handler: lazy workspace (no ensureSession call)
 // ---------------------------------------------------------------------------
 
-describe("handleSessionInitAccept (ensureSession failure rollback)", () => {
-  it("rolls back ipLimiter + clears maps + closes transport when ensureSession throws (no IP-quota leak)", async () => {
+describe("handleSessionInitAccept (lazy workspace)", () => {
+  it("does NOT call ensureSession — workspace allocation is lazy", async () => {
     const { handleSessionInitAccept } = await import("../server.js");
 
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    try {
-      const sid = "ensure-boom-sid";
-      const ip = "9.9.9.9";
-      const transports: Record<string, unknown> = {};
-      const sessionLastActivity: Record<string, number> = {};
-      transports[sid] = { fake: true };
-      sessionLastActivity[sid] = Date.now();
-
-      const removedSids: string[] = [];
-      const ipLimiter = {
-        remove: (s: string) => {
-          removedSids.push(s);
-        },
-      };
-      const workspaceManager = {
-        ensureSession: () => {
-          throw new Error("ensure-boom");
-        },
-      };
-      const closedSids: string[] = [];
-      const transport = {
-        close: async () => {
-          closedSids.push(sid);
-        },
-      };
-
-      handleSessionInitAccept({
-        transport,
-        sid,
-        ip,
-        transports,
-        sessionLastActivity,
-        ipLimiter,
-        workspaceManager,
-      });
-
-      // Synchronous: maps cleared, ipLimiter rolled back (no TTL leak).
-      expect(transports[sid]).toBeUndefined();
-      expect(sessionLastActivity[sid]).toBeUndefined();
-      expect(removedSids).toEqual([sid]);
-
-      // Microtask: transport.close() completes.
-      await new Promise((r) => setTimeout(r, 10));
-      expect(closedSids).toEqual([sid]);
-
-      const sawBoom = consoleErrSpy.mock.calls.some((c) =>
-        c.some(
-          (arg) =>
-            (typeof arg === "string" && arg.includes("ensure-boom")) ||
-            (arg instanceof Error && arg.message === "ensure-boom"),
-        ),
-      );
-      expect(sawBoom).toBe(true);
-    } finally {
-      consoleErrSpy.mockRestore();
-    }
-  });
-
-  it("happy path: ensureSession succeeds and maps stay populated", async () => {
-    const { handleSessionInitAccept } = await import("../server.js");
-
-    const sid = "ensure-ok-sid";
+    const sid = "lazy-ws-sid";
     const transports: Record<string, unknown> = { [sid]: { fake: true } };
     const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
 
     const ensureCalls: string[] = [];
-    handleSessionInitAccept({
+    const result = handleSessionInitAccept({
       transport: { close: async () => {} },
       sid,
       ip: "1.1.1.1",
       transports,
       sessionLastActivity,
-      ipLimiter: {
-        remove: () => {
-          // must NOT be called on the happy path
-          throw new Error("remove should not be called");
-        },
-      },
       workspaceManager: {
         ensureSession: (s: string) => {
           ensureCalls.push(s);
@@ -496,9 +425,13 @@ describe("handleSessionInitAccept (ensureSession failure rollback)", () => {
       },
     });
 
-    expect(ensureCalls).toEqual([sid]);
+    // ensureSession should NOT be called (lazy allocation)
+    expect(ensureCalls).toEqual([]);
+    // Maps stay populated
     expect(transports[sid]).toBeDefined();
     expect(sessionLastActivity[sid]).toBeDefined();
+    // Returns true (accepted)
+    expect(result).toBe(true);
   });
 });
 
@@ -622,336 +555,36 @@ describe("reapIdleSessionsTick (R3 #1: SSE reaper dep plumbing)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// R3 #2 + H2: handleSessionInitAccept returns false on rollback; includes
-// sessionStateManager cleanup in the rollback chain.
+// handleSessionInitAccept always returns true with lazy workspace (no rollback
+// path since ensureSession is no longer called eagerly).
 // ---------------------------------------------------------------------------
 
-describe("handleSessionInitAccept (R3 #2 rollback signaling + H2 sessionStateManager)", () => {
-  it("returns false when ensureSession throws so caller can skip server.connect/handleRequest", async () => {
-    const { handleSessionInitAccept } = await import("../server.js");
-
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    try {
-      const sid = "r3-rollback-sid";
-      const transports: Record<string, unknown> = { [sid]: { fake: true } };
-      const sessionLastActivity: Record<string, number> = {
-        [sid]: Date.now(),
-      };
-
-      const result = handleSessionInitAccept({
-        transport: { close: async () => {} },
-        sid,
-        ip: "9.9.9.9",
-        transports,
-        sessionLastActivity,
-        ipLimiter: { remove: () => {} },
-        workspaceManager: {
-          ensureSession: () => {
-            throw new Error("ensure-r3-boom");
-          },
-        },
-      });
-
-      expect(result).toBe(false);
-    } finally {
-      consoleErrSpy.mockRestore();
-    }
-  });
-
-  it("returns true on the happy path (caller proceeds to server.connect/handleRequest)", async () => {
+describe("handleSessionInitAccept (lazy workspace — always accepts)", () => {
+  it("returns true and does not call ensureSession", async () => {
     const { handleSessionInitAccept } = await import("../server.js");
 
     const sid = "r3-ok-sid";
     const transports: Record<string, unknown> = { [sid]: { fake: true } };
     const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
 
+    const ensureCalls: string[] = [];
     const result = handleSessionInitAccept({
       transport: { close: async () => {} },
       sid,
       ip: "1.1.1.1",
       transports,
       sessionLastActivity,
-      ipLimiter: { remove: () => {} },
       workspaceManager: {
-        ensureSession: () => {},
+        ensureSession: (s: string) => {
+          ensureCalls.push(s);
+        },
       },
     });
 
     expect(result).toBe(true);
-  });
-
-  it("H2: rollback also invokes sessionStateManager.cleanup(sid) when provided", async () => {
-    const { handleSessionInitAccept } = await import("../server.js");
-
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    try {
-      const sid = "r3-sstate-sid";
-      const transports: Record<string, unknown> = { [sid]: { fake: true } };
-      const sessionLastActivity: Record<string, number> = {
-        [sid]: Date.now(),
-      };
-
-      const cleanedSessionStateSids: string[] = [];
-      handleSessionInitAccept({
-        transport: { close: async () => {} },
-        sid,
-        ip: "9.9.9.9",
-        transports,
-        sessionLastActivity,
-        ipLimiter: { remove: () => {} },
-        workspaceManager: {
-          ensureSession: () => {
-            throw new Error("ensure-r3-state-boom");
-          },
-        },
-        sessionStateManager: {
-          cleanup: (s: string) => {
-            cleanedSessionStateSids.push(s);
-          },
-        },
-      });
-
-      expect(cleanedSessionStateSids).toEqual([sid]);
-    } finally {
-      consoleErrSpy.mockRestore();
-    }
-  });
-
-  it("H2: a throw from sessionStateManager.cleanup does not mask the rollback (maps still cleared, transport still closed)", async () => {
-    const { handleSessionInitAccept } = await import("../server.js");
-
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    try {
-      const sid = "r3-sstate-throw-sid";
-      const transports: Record<string, unknown> = { [sid]: { fake: true } };
-      const sessionLastActivity: Record<string, number> = {
-        [sid]: Date.now(),
-      };
-
-      const closedSids: string[] = [];
-      const result = handleSessionInitAccept({
-        transport: {
-          close: async () => {
-            closedSids.push(sid);
-          },
-        },
-        sid,
-        ip: "9.9.9.9",
-        transports,
-        sessionLastActivity,
-        ipLimiter: { remove: () => {} },
-        workspaceManager: {
-          ensureSession: () => {
-            throw new Error("ensure-boom");
-          },
-        },
-        sessionStateManager: {
-          cleanup: () => {
-            throw new Error("sstate-cleanup-boom");
-          },
-        },
-      });
-
-      expect(result).toBe(false);
-      expect(transports[sid]).toBeUndefined();
-      expect(sessionLastActivity[sid]).toBeUndefined();
-      await new Promise((r) => setTimeout(r, 10));
-      expect(closedSids).toEqual([sid]);
-      const sawSstateBoom = consoleErrSpy.mock.calls.some((c) =>
-        c.some(
-          (arg) =>
-            (typeof arg === "string" && arg.includes("sstate-cleanup-boom")) ||
-            (arg instanceof Error && arg.message === "sstate-cleanup-boom"),
-        ),
-      );
-      expect(sawSstateBoom).toBe(true);
-    } finally {
-      consoleErrSpy.mockRestore();
-    }
-  });
-
-  it("R3 #2: writes a 503 response body on rollback when res is provided and headers not yet sent", async () => {
-    const { handleSessionInitAccept } = await import("../server.js");
-
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    try {
-      const sid = "r3-503-sid";
-      const transports: Record<string, unknown> = { [sid]: { fake: true } };
-      const sessionLastActivity: Record<string, number> = {
-        [sid]: Date.now(),
-      };
-
-      let statusWritten: number | undefined;
-      let bodyWritten: Record<string, unknown> | undefined;
-      const res = {
-        headersSent: false,
-        status: (c: number) => {
-          statusWritten = c;
-          return res;
-        },
-        json: (b: Record<string, unknown>) => {
-          bodyWritten = b;
-          return res;
-        },
-      };
-
-      handleSessionInitAccept({
-        transport: { close: async () => {} },
-        sid,
-        ip: "9.9.9.9",
-        transports,
-        sessionLastActivity,
-        ipLimiter: { remove: () => {} },
-        workspaceManager: {
-          ensureSession: () => {
-            throw new Error("ensure-503-boom");
-          },
-        },
-        res: res as unknown as Parameters<
-          typeof handleSessionInitAccept
-        >[0]["res"],
-      });
-
-      expect(statusWritten).toBe(503);
-      expect(bodyWritten).toBeDefined();
-      const err = (bodyWritten as Record<string, unknown>).error as
-        | Record<string, unknown>
-        | undefined;
-      // JSON-RPC shape: error.code/message. A plain string also acceptable —
-      // just verify the client gets a structured signal.
-      expect(
-        typeof (bodyWritten as Record<string, unknown>).error !== "undefined",
-      ).toBe(true);
-      void err;
-    } finally {
-      consoleErrSpy.mockRestore();
-    }
-  });
-
-  it("R3 #2: does NOT write a response body on rollback when headersSent is already true", async () => {
-    const { handleSessionInitAccept } = await import("../server.js");
-
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    try {
-      const sid = "r3-hs-sent-sid";
-      const transports: Record<string, unknown> = { [sid]: { fake: true } };
-      const sessionLastActivity: Record<string, number> = {
-        [sid]: Date.now(),
-      };
-
-      let statusCalled = false;
-      let jsonCalled = false;
-      const res = {
-        headersSent: true,
-        status: () => {
-          statusCalled = true;
-          return res;
-        },
-        json: () => {
-          jsonCalled = true;
-          return res;
-        },
-      };
-
-      handleSessionInitAccept({
-        transport: { close: async () => {} },
-        sid,
-        ip: "9.9.9.9",
-        transports,
-        sessionLastActivity,
-        ipLimiter: { remove: () => {} },
-        workspaceManager: {
-          ensureSession: () => {
-            throw new Error("ensure-hs-boom");
-          },
-        },
-        res: res as unknown as Parameters<
-          typeof handleSessionInitAccept
-        >[0]["res"],
-      });
-
-      expect(statusCalled).toBe(false);
-      expect(jsonCalled).toBe(false);
-    } finally {
-      consoleErrSpy.mockRestore();
-    }
-  });
-
-  it("R4-17: still runs rollback side effects (map delete, ipLimiter.remove, close) when headersSent is true", async () => {
-    const { handleSessionInitAccept } = await import("../server.js");
-
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    try {
-      const sid = "r4-17-sid";
-      const transports: Record<string, unknown> = {
-        [sid]: { fake: true },
-        other: { fake: true },
-      };
-      const sessionLastActivity: Record<string, number> = {
-        [sid]: Date.now(),
-        other: Date.now(),
-      };
-
-      let ipLimiterRemovedSid: string | undefined;
-      let closeCalled = false;
-
-      const res = {
-        headersSent: true,
-        status: () => res,
-        json: () => res,
-      };
-
-      handleSessionInitAccept({
-        transport: {
-          close: async () => {
-            closeCalled = true;
-          },
-        },
-        sid,
-        ip: "9.9.9.9",
-        transports,
-        sessionLastActivity,
-        ipLimiter: {
-          remove: (s: string) => {
-            ipLimiterRemovedSid = s;
-          },
-        },
-        workspaceManager: {
-          ensureSession: () => {
-            throw new Error("ensure-hs-boom");
-          },
-        },
-        res: res as unknown as Parameters<
-          typeof handleSessionInitAccept
-        >[0]["res"],
-      });
-
-      // Allow the microtask-scheduled transport.close() to run.
-      await new Promise((r) => setImmediate(r));
-
-      // Side effects that MUST run even when the body couldn't be written:
-      expect(transports[sid]).toBeUndefined();
-      expect(sessionLastActivity[sid]).toBeUndefined();
-      expect(ipLimiterRemovedSid).toBe(sid);
-      expect(closeCalled).toBe(true);
-      // And unrelated entries untouched.
-      expect(transports.other).toBeDefined();
-      expect(sessionLastActivity.other).toBeDefined();
-    } finally {
-      consoleErrSpy.mockRestore();
-    }
+    expect(ensureCalls).toEqual([]);
+    expect(transports[sid]).toBeDefined();
+    expect(sessionLastActivity[sid]).toBeDefined();
   });
 });
 
@@ -1026,7 +659,7 @@ describe("rejected-sid suppression (R3 #3 / H1)", () => {
     }
   });
 
-  it("handleSessionInitAccept rollback marks the sid as rejected", async () => {
+  it("handleSessionInitAccept does NOT mark sid as rejected (lazy workspace, no rollback)", async () => {
     const serverMod = await import("../server.js");
     const { handleSessionInitAccept } = serverMod;
     const wasRejected = (
@@ -1036,27 +669,23 @@ describe("rejected-sid suppression (R3 #3 / H1)", () => {
     ).wasSessionRejectedForTesting;
     expect(typeof wasRejected).toBe("function");
 
-    const sid = "accept-rollback-marks-rejected";
+    const sid = "accept-no-rollback";
     const transports: Record<string, unknown> = { [sid]: { fake: true } };
     const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      handleSessionInitAccept({
+      const result = handleSessionInitAccept({
         transport: { close: async () => {} },
         sid,
         ip: "9.9.9.9",
         transports,
         sessionLastActivity,
-        ipLimiter: { remove: () => {} },
-        workspaceManager: {
-          ensureSession: () => {
-            throw new Error("ensure-mark-boom");
-          },
-        },
       });
-      expect(wasRejected!(sid)).toBe(true);
+      // With lazy workspace, accept always succeeds and never marks rejected
+      expect(result).toBe(true);
+      expect(wasRejected!(sid)).toBe(false);
     } finally {
-      errSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 });
@@ -1122,7 +751,7 @@ describe("rejectedSids inline-rollback drain (R4 #1)", () => {
     }
   });
 
-  it("drainRejectedSidForInlineRollback also clears markers left by handleSessionInitAccept rollback", async () => {
+  it("handleSessionInitAccept no longer marks rejected (lazy workspace)", async () => {
     const serverMod = await import("../server.js");
     const { handleSessionInitAccept } = serverMod;
     const wasRejected = (
@@ -1130,38 +759,26 @@ describe("rejectedSids inline-rollback drain (R4 #1)", () => {
         wasSessionRejectedForTesting?: (sid: string) => boolean;
       }
     ).wasSessionRejectedForTesting;
-    const drain = (
-      serverMod as unknown as {
-        drainRejectedSidForInlineRollback?: (sid: string) => void;
-      }
-    ).drainRejectedSidForInlineRollback;
 
-    expect(typeof drain).toBe("function");
     expect(typeof wasRejected).toBe("function");
 
-    const sid = "accept-rollback-leak";
+    const sid = "accept-no-drain";
     const transports: Record<string, unknown> = { [sid]: { fake: true } };
     const sessionLastActivity: Record<string, number> = { [sid]: Date.now() };
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      handleSessionInitAccept({
+      const result = handleSessionInitAccept({
         transport: { close: async () => {} },
         sid,
         ip: "9.9.9.9",
         transports,
         sessionLastActivity,
-        ipLimiter: { remove: () => {} },
-        workspaceManager: {
-          ensureSession: () => {
-            throw new Error("ensure-drain-boom");
-          },
-        },
       });
-      expect(wasRejected!(sid)).toBe(true);
-      drain!(sid);
+      // With lazy workspace, accept always succeeds, nothing to drain
+      expect(result).toBe(true);
       expect(wasRejected!(sid)).toBe(false);
     } finally {
-      errSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 });
