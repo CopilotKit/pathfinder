@@ -308,6 +308,8 @@ export const ServerConfigSchema = z
       version: z.string().min(1),
       max_sessions_per_ip: z.number().int().positive().optional(),
       session_ttl_minutes: z.number().int().positive().optional(),
+      max_sessions: z.number().int().positive().optional(),
+      session_unused_ttl_minutes: z.number().int().positive().optional(),
       // IP/CIDR entries that bypass max_sessions_per_ip. Empty by default.
       // Example: ["160.79.106.35"] to allowlist the Anthropic Assistant
       // crawler, or ["10.0.0.0/8"] for an internal health probe range.
