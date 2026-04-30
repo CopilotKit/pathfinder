@@ -47,6 +47,7 @@ export function registerKnowledgeTool(
   server: McpServer,
   embeddingClient: EmbeddingProvider,
   toolConfig: KnowledgeToolConfig,
+  options?: { onToolCall?: () => void },
 ): void {
   const inputSchema = {
     query: z
@@ -76,6 +77,7 @@ export function registerKnowledgeTool(
     toolConfig.description,
     inputSchema,
     async ({ query, limit, min_confidence }) => {
+      options?.onToolCall?.();
       const effectiveLimit = limit ?? toolConfig.default_limit;
       const effectiveConfidence = min_confidence ?? toolConfig.min_confidence;
       const startMs = Date.now();

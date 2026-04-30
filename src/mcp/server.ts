@@ -22,6 +22,7 @@ export function createMcpServer(
   getSessionId?: () => string | undefined,
   telemetry?: BashTelemetry,
   workspace?: WorkspaceManager,
+  hooks?: { onToolCall?: () => void },
 ): McpServer {
   const cfg = getConfig();
   const serverCfg = getServerConfig();
@@ -49,10 +50,10 @@ export function createMcpServer(
   for (const tool of serverCfg.tools) {
     switch (tool.type) {
       case "collect":
-        registerCollectTool(server, tool);
+        registerCollectTool(server, tool, { onToolCall: hooks?.onToolCall });
         break;
       case "search":
-        registerSearchTool(server, getEmbeddingProvider(), tool);
+        registerSearchTool(server, getEmbeddingProvider(), tool, { onToolCall: hooks?.onToolCall });
         break;
       case "bash": {
         const bash = bashInstances?.get(tool.name);
@@ -82,11 +83,12 @@ export function createMcpServer(
           telemetry,
           workspace: needsWorkspace ? workspace : undefined,
           getSessionId: needsWorkspace ? getSessionId : undefined,
+          onToolCall: hooks?.onToolCall,
         });
         break;
       }
       case "knowledge":
-        registerKnowledgeTool(server, getEmbeddingProvider(), tool);
+        registerKnowledgeTool(server, getEmbeddingProvider(), tool, { onToolCall: hooks?.onToolCall });
         break;
       default: {
         const _exhaustive: never = tool;

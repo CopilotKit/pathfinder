@@ -56,6 +56,7 @@ export function yamlSchemaToZod(
 export function registerCollectTool(
   server: McpServer,
   toolConfig: CollectToolConfig,
+  options?: { onToolCall?: () => void },
 ): void {
   const zodShape = yamlSchemaToZod(toolConfig.schema);
 
@@ -64,6 +65,7 @@ export function registerCollectTool(
     toolConfig.description,
     zodShape,
     async (input) => {
+      options?.onToolCall?.();
       try {
         await insertCollectedData(toolConfig.name, input);
         return {
