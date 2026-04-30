@@ -53,7 +53,9 @@ export function createMcpServer(
         registerCollectTool(server, tool, { onToolCall: hooks?.onToolCall });
         break;
       case "search":
-        registerSearchTool(server, getEmbeddingProvider(), tool, { onToolCall: hooks?.onToolCall });
+        registerSearchTool(server, getEmbeddingProvider(), tool, {
+          onToolCall: hooks?.onToolCall,
+        });
         break;
       case "bash": {
         const bash = bashInstances?.get(tool.name);
@@ -88,7 +90,9 @@ export function createMcpServer(
         break;
       }
       case "knowledge":
-        registerKnowledgeTool(server, getEmbeddingProvider(), tool, { onToolCall: hooks?.onToolCall });
+        registerKnowledgeTool(server, getEmbeddingProvider(), tool, {
+          onToolCall: hooks?.onToolCall,
+        });
         break;
       default: {
         const _exhaustive: never = tool;

@@ -146,9 +146,7 @@ export interface CapacityInputs {
  * `retryAfterSeconds` is clamped through the shared sanitizer so all
  * callers (HTTP header, JSON-RPC data, logs) see the same integer.
  */
-export function buildCapacityPayload(
-  inputs: CapacityInputs,
-): CapacityPayload {
+export function buildCapacityPayload(inputs: CapacityInputs): CapacityPayload {
   const { totalSessions, maxSessions } = inputs;
   const retryAfterSeconds = clampRetryAfterSeconds(inputs.retryAfterSeconds);
   return {

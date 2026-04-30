@@ -161,9 +161,16 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         const total = deps.getTotalSessionCount?.() ?? 0;
         const max = deps.getMaxSessions?.() ?? 0;
         console.error(`[mcp] Global session cap reached: ${total}/${max}`);
-        res.status(503).set("Retry-After", "30").json(
-          buildCapacityPayload({ totalSessions: total, maxSessions: max, retryAfterSeconds: 30 }),
-        );
+        res
+          .status(503)
+          .set("Retry-After", "30")
+          .json(
+            buildCapacityPayload({
+              totalSessions: total,
+              maxSessions: max,
+              retryAfterSeconds: 30,
+            }),
+          );
         return;
       }
 
@@ -237,7 +244,8 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         if (sseTransports[sessionId]) {
           delete sseTransports[sessionId];
           delete sessionLastActivity[sessionId];
-          if (deps.sessionHasBeenUsed) delete deps.sessionHasBeenUsed[sessionId];
+          if (deps.sessionHasBeenUsed)
+            delete deps.sessionHasBeenUsed[sessionId];
           try {
             resolve(deps.ipLimiter)?.remove(sessionId);
           } catch (e) {

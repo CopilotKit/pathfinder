@@ -866,7 +866,7 @@ function reapIdleSessionsTick(): void {
       const usedCount = Object.keys(sessionHasBeenUsed).length;
       const unusedCount = total - usedCount;
       console.warn(
-        `[mcp] Session capacity at ${total}/${MAX_SESSIONS} (${Math.round(total / MAX_SESSIONS * 100)}%) — used: ${usedCount}, unused: ${unusedCount}`,
+        `[mcp] Session capacity at ${total}/${MAX_SESSIONS} (${Math.round((total / MAX_SESSIONS) * 100)}%) — used: ${usedCount}, unused: ${unusedCount}`,
       );
     }
   }
@@ -1554,10 +1554,19 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       // Global session cap — reject before doing any per-IP work.
       if (isAtGlobalCapacity(transports, sseTransports, MAX_SESSIONS)) {
         const total = getTotalSessionCount(transports, sseTransports);
-        console.error(`[mcp] Global session cap reached: ${total}/${MAX_SESSIONS}`);
-        res.status(503).set("Retry-After", "30").json(
-          buildCapacityPayload({ totalSessions: total, maxSessions: MAX_SESSIONS!, retryAfterSeconds: 30 }),
+        console.error(
+          `[mcp] Global session cap reached: ${total}/${MAX_SESSIONS}`,
         );
+        res
+          .status(503)
+          .set("Retry-After", "30")
+          .json(
+            buildCapacityPayload({
+              totalSessions: total,
+              maxSessions: MAX_SESSIONS!,
+              retryAfterSeconds: 30,
+            }),
+          );
         return;
       }
 
@@ -1787,7 +1796,9 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
           );
         }
         const total = getTotalSessionCount(transports, sseTransports);
-        const capInfo = MAX_SESSIONS ? ` (${total}/${MAX_SESSIONS})` : ` (${total} active)`;
+        const capInfo = MAX_SESSIONS
+          ? ` (${total}/${MAX_SESSIONS})`
+          : ` (${total} active)`;
         console.log(`[mcp] Session ${sid.slice(0, 8)} closed${capInfo}`);
       };
       const server = createMcpServer(
@@ -1953,7 +1964,8 @@ const sseHandlers = createSseHandlers({
   rateLimitRetryAfterSeconds: () => retryAfterSecondsFromTtl(),
   // Late-bound: p2pTelemetry is constructed inside startServer().
   p2pTelemetry: () => p2pTelemetry,
-  isAtGlobalCapacity: () => isAtGlobalCapacity(transports, sseTransports, MAX_SESSIONS),
+  isAtGlobalCapacity: () =>
+    isAtGlobalCapacity(transports, sseTransports, MAX_SESSIONS),
   getTotalSessionCount: () => getTotalSessionCount(transports, sseTransports),
   getMaxSessions: () => MAX_SESSIONS,
   sessionHasBeenUsed,
@@ -3170,7 +3182,8 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
   const maxSessionsPerIp = serverCfg.server.max_sessions_per_ip ?? 20;
   SESSION_TTL_MS = (serverCfg.server.session_ttl_minutes ?? 30) * 60 * 1000;
   MAX_SESSIONS = serverCfg.server.max_sessions ?? 1000;
-  SESSION_UNUSED_TTL_MS = (serverCfg.server.session_unused_ttl_minutes ?? 15) * 60 * 1000;
+  SESSION_UNUSED_TTL_MS =
+    (serverCfg.server.session_unused_ttl_minutes ?? 15) * 60 * 1000;
   const allowlist = serverCfg.server.allowlist ?? [];
   ipLimiter = new IpSessionLimiter(maxSessionsPerIp, { allowlist });
   if (allowlist.length > 0) {

@@ -81,7 +81,9 @@ describe("isAtGlobalCapacity", () => {
   it("returns true when total >= maxSessions", async () => {
     const { isAtGlobalCapacity } = await import("../server.js");
     expect(isAtGlobalCapacity({ a: {}, b: {} }, { c: {} }, 3)).toBe(true);
-    expect(isAtGlobalCapacity({ a: {}, b: {} }, { c: {}, d: {} }, 3)).toBe(true);
+    expect(isAtGlobalCapacity({ a: {}, b: {} }, { c: {}, d: {} }, 3)).toBe(
+      true,
+    );
   });
 
   it("returns false when total < maxSessions", async () => {
@@ -101,7 +103,9 @@ describe("reapIdleStreamableSessions (two-tier TTL)", () => {
     const closeCalls: string[] = [];
     const transports: Record<string, { close: () => Promise<void> }> = {
       "unused-sid": {
-        close: async () => { closeCalls.push("unused-sid"); },
+        close: async () => {
+          closeCalls.push("unused-sid");
+        },
       },
     };
     const sessionLastActivity: Record<string, number> = {
@@ -300,7 +304,11 @@ describe("createMcpServer (onToolCall hooks)", () => {
       undefined,
       undefined,
       undefined,
-      { onToolCall: () => { calls.push("called"); } },
+      {
+        onToolCall: () => {
+          calls.push("called");
+        },
+      },
     );
 
     // The server should be created successfully.

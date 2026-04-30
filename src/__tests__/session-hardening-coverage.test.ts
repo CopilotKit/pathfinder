@@ -313,12 +313,10 @@ describe("closeAllSessions sessionHasBeenUsed cleanup (gap 3)", () => {
       "s-1": { close: async () => {} },
       "s-2": { close: async () => {} },
     };
-    const sseTransports: Record<
-      string,
-      { close: () => Promise<void> | void }
-    > = {
-      "e-1": { close: async () => {} },
-    };
+    const sseTransports: Record<string, { close: () => Promise<void> | void }> =
+      {
+        "e-1": { close: async () => {} },
+      };
 
     await closeAllSessions({
       transports: transports as never,
@@ -338,10 +336,8 @@ describe("closeAllSessions sessionHasBeenUsed cleanup (gap 3)", () => {
     const transports: Record<string, { close: () => Promise<void> | void }> = {
       "s-1": { close: async () => {} },
     };
-    const sseTransports: Record<
-      string,
-      { close: () => Promise<void> | void }
-    > = {};
+    const sseTransports: Record<string, { close: () => Promise<void> | void }> =
+      {};
 
     // Should not throw when sessionHasBeenUsed is not provided
     await expect(
@@ -406,7 +402,11 @@ describe("createMcpServer onToolCall threading (gap 5)", () => {
       undefined,
       undefined,
       undefined,
-      { onToolCall: () => { calls.push("called"); } },
+      {
+        onToolCall: () => {
+          calls.push("called");
+        },
+      },
     );
 
     expect(server).toBeDefined();

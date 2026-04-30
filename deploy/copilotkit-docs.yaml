@@ -132,7 +132,7 @@ tools:
 
   - name: explore-docs
     type: bash
-    description: "Explore CopilotKit and AG-UI documentation files using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.mdx\" | head -20' or 'cat /INDEX.md' to see what's available."
+    description: 'Explore CopilotKit and AG-UI documentation files using bash commands (find, grep, cat, ls, head). Start with ''find / -name "*.mdx" | head -20'' or ''cat /INDEX.md'' to see what''s available.'
     sources: [docs, ag-ui-docs]
     bash:
       session_state: true
@@ -141,7 +141,7 @@ tools:
 
   - name: explore-code
     type: bash
-    description: "Explore CopilotKit and AG-UI source code files using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.ts\" | head -20' to see what's available."
+    description: 'Explore CopilotKit and AG-UI source code files using bash commands (find, grep, cat, ls, head). Start with ''find / -name "*.ts" | head -20'' to see what''s available.'
     sources: [code, ag-ui-code]
     bash:
       session_state: true
