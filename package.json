@@ -1,102 +1,102 @@
 {
-    "name": "@copilotkit/pathfinder",
-    "version": "1.12.0",
-    "description": "The knowledge server for AI agents — index docs, code, Notion, Slack, and Discord into searchable, agent-accessible knowledge via MCP. Supports OpenAI, Ollama, and local transformers.js embeddings.",
-    "type": "module",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/CopilotKit/pathfinder"
+  "name": "@copilotkit/pathfinder",
+  "version": "1.13.0",
+  "description": "The knowledge server for AI agents — index docs, code, Notion, Slack, and Discord into searchable, agent-accessible knowledge via MCP. Supports OpenAI, Ollama, and local transformers.js embeddings.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CopilotKit/pathfinder"
+  },
+  "homepage": "https://pathfinder.copilotkit.dev",
+  "keywords": [
+    "mcp",
+    "ai",
+    "agents",
+    "documentation",
+    "search",
+    "rag",
+    "embeddings",
+    "copilotkit",
+    "notion",
+    "slack",
+    "discord",
+    "knowledge",
+    "filesystem"
+  ],
+  "license": "Elastic-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "bin": {
+    "pathfinder": "dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "seed-index": "tsx scripts/seed-index.ts",
+    "seed-analytics": "tsx scripts/seed-analytics.ts",
+    "test-search": "tsx scripts/test-search.ts",
+    "integration-test": "tsx scripts/integration-test.ts",
+    "fixture:breeze-api": "node fixtures/breeze-api/server.js",
+    "fixture:breeze-docs": "DATABASE_URL=pglite:///tmp/breeze-docs PATHFINDER_CONFIG=fixtures/breeze-api/pathfinder.yaml tsx src/index.ts",
+    "fixture:breeze-docs:bash": "DATABASE_URL=pglite:///tmp/breeze-docs-bash PATHFINDER_CONFIG=fixtures/breeze-api/pathfinder-bash.yaml tsx src/index.ts",
+    "fixture:breeze-broken-docs": "DATABASE_URL=pglite:///tmp/breeze-broken-docs PATHFINDER_CONFIG=fixtures/breeze-api/pathfinder-broken.yaml tsx src/index.ts",
+    "fixture:breeze-broken-docs:bash": "DATABASE_URL=pglite:///tmp/breeze-broken-docs-bash PATHFINDER_CONFIG=fixtures/breeze-api/pathfinder-broken-bash.yaml tsx src/index.ts",
+    "claude": "_MCP_PORT=${PORT:-3001} && _MCP_TMPDIR=$(mktemp -d) && echo \"{\\\"mcpServers\\\":{\\\"pathfinder\\\":{\\\"type\\\":\\\"http\\\",\\\"url\\\":\\\"http://localhost:${_MCP_PORT}/mcp\\\",\\\"headers\\\":{}}}}\" > \"$_MCP_TMPDIR/mcp.json\" && (cd \"$_MCP_TMPDIR\" && claude --strict-mcp-config --mcp-config \"$_MCP_TMPDIR/mcp.json\"); rm -rf \"$_MCP_TMPDIR\"",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@discordjs/rest": "^2.6.1",
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "@notionhq/client": "^5.17.0",
+    "@slack/web-api": "^7.15.0",
+    "cheerio": "^1.2.0",
+    "commander": "^14.0.3",
+    "cors": "^2.8.5",
+    "discord-api-types": "^0.38.44",
+    "discord-interactions": "^4.4.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "ipaddr.js": "^2.2.0",
+    "just-bash": "^2.14.0",
+    "openai": "^4.80.0",
+    "pg": "^8.13.0",
+    "pgvector": "^0.2.0",
+    "simple-git": "^3.27.0",
+    "yaml": "^2.8.3",
+    "zod": "^3.23.8"
+  },
+  "peerDependencies": {
+    "@xenova/transformers": "^2.17.0",
+    "pdf-parse": "^1.1.0",
+    "mammoth": "^1.7.0"
+  },
+  "peerDependenciesMeta": {
+    "@xenova/transformers": {
+      "optional": true
     },
-    "homepage": "https://pathfinder.copilotkit.dev",
-    "keywords": [
-        "mcp",
-        "ai",
-        "agents",
-        "documentation",
-        "search",
-        "rag",
-        "embeddings",
-        "copilotkit",
-        "notion",
-        "slack",
-        "discord",
-        "knowledge",
-        "filesystem"
-    ],
-    "license": "Elastic-2.0",
-    "engines": {
-        "node": ">=20"
+    "pdf-parse": {
+      "optional": true
     },
-    "main": "dist/index.js",
-    "bin": {
-        "pathfinder": "dist/cli.js"
-    },
-    "publishConfig": {
-        "access": "public"
-    },
-    "scripts": {
-        "build": "tsc",
-        "start": "node dist/index.js",
-        "dev": "tsx watch src/index.ts",
-        "seed-index": "tsx scripts/seed-index.ts",
-        "seed-analytics": "tsx scripts/seed-analytics.ts",
-        "test-search": "tsx scripts/test-search.ts",
-        "integration-test": "tsx scripts/integration-test.ts",
-        "fixture:breeze-api": "node fixtures/breeze-api/server.js",
-        "fixture:breeze-docs": "DATABASE_URL=pglite:///tmp/breeze-docs PATHFINDER_CONFIG=fixtures/breeze-api/pathfinder.yaml tsx src/index.ts",
-        "fixture:breeze-docs:bash": "DATABASE_URL=pglite:///tmp/breeze-docs-bash PATHFINDER_CONFIG=fixtures/breeze-api/pathfinder-bash.yaml tsx src/index.ts",
-        "fixture:breeze-broken-docs": "DATABASE_URL=pglite:///tmp/breeze-broken-docs PATHFINDER_CONFIG=fixtures/breeze-api/pathfinder-broken.yaml tsx src/index.ts",
-        "fixture:breeze-broken-docs:bash": "DATABASE_URL=pglite:///tmp/breeze-broken-docs-bash PATHFINDER_CONFIG=fixtures/breeze-api/pathfinder-broken-bash.yaml tsx src/index.ts",
-        "claude": "_MCP_PORT=${PORT:-3001} && _MCP_TMPDIR=$(mktemp -d) && echo \"{\\\"mcpServers\\\":{\\\"pathfinder\\\":{\\\"type\\\":\\\"http\\\",\\\"url\\\":\\\"http://localhost:${_MCP_PORT}/mcp\\\",\\\"headers\\\":{}}}}\" > \"$_MCP_TMPDIR/mcp.json\" && (cd \"$_MCP_TMPDIR\" && claude --strict-mcp-config --mcp-config \"$_MCP_TMPDIR/mcp.json\"); rm -rf \"$_MCP_TMPDIR\"",
-        "test": "vitest run"
-    },
-    "dependencies": {
-        "@discordjs/rest": "^2.6.1",
-        "@modelcontextprotocol/sdk": "^1.25.2",
-        "@notionhq/client": "^5.17.0",
-        "@slack/web-api": "^7.15.0",
-        "cheerio": "^1.2.0",
-        "commander": "^14.0.3",
-        "cors": "^2.8.5",
-        "discord-api-types": "^0.38.44",
-        "discord-interactions": "^4.4.0",
-        "dotenv": "^17.3.1",
-        "express": "^5.2.1",
-        "ipaddr.js": "^2.2.0",
-        "just-bash": "^2.14.0",
-        "openai": "^4.80.0",
-        "pg": "^8.13.0",
-        "pgvector": "^0.2.0",
-        "simple-git": "^3.27.0",
-        "yaml": "^2.8.3",
-        "zod": "^3.23.8"
-    },
-    "peerDependencies": {
-        "@xenova/transformers": "^2.17.0",
-        "pdf-parse": "^1.1.0",
-        "mammoth": "^1.7.0"
-    },
-    "peerDependenciesMeta": {
-        "@xenova/transformers": {
-            "optional": true
-        },
-        "pdf-parse": {
-            "optional": true
-        },
-        "mammoth": {
-            "optional": true
-        }
-    },
-    "devDependencies": {
-        "@electric-sql/pglite": "^0.4.2",
-        "@types/cors": "^2.8.19",
-        "@types/express": "^5.0.6",
-        "@types/jsdom": "^28.0.1",
-        "@types/node": "^25.0.6",
-        "@types/pg": "^8.11.10",
-        "jsdom": "^28.0.0",
-        "tsx": "^4.21.0",
-        "typescript": "^5.9.3",
-        "vitest": "^4.1.2"
+    "mammoth": {
+      "optional": true
     }
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.4.2",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsdom": "^28.0.1",
+    "@types/node": "^25.0.6",
+    "@types/pg": "^8.11.10",
+    "jsdom": "^28.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.2"
+  }
 }

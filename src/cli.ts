@@ -11,7 +11,7 @@ const program = new Command();
 program
   .name("pathfinder")
   .description("The knowledge server for AI agents")
-  .version("1.12.0");
+  .version("1.13.0");
 
 program
   .command("init")
