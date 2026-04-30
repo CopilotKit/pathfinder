@@ -1,6 +1,9 @@
 server:
   name: pathfinder-docs
   version: "1.4.0"
+  max_sessions: 1000
+  session_ttl_minutes: 30
+  session_unused_ttl_minutes: 15
   # Anthropic crawler — bypasses per-IP session limit (requires trust_proxy: true to match the forwarded IP)
   allowlist: ["160.79.106.35"]
   # Safe to enable: Railway's edge discards any client-supplied X-Forwarded-For

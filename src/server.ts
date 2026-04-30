@@ -48,6 +48,7 @@ import { IpSessionLimiter } from "./ip-limiter.js";
 import {
   jsonRpcRateLimitError,
   clampRetryAfterSeconds,
+  buildCapacityPayload,
 } from "./rate-limit-response.js";
 import { clientIp } from "./ip-util.js";
 import ipaddr from "ipaddr.js";
@@ -557,6 +558,34 @@ const transports: Record<string, StreamableHTTPServerTransport> = {};
 const sseTransports: Record<string, SSEServerTransport> = {};
 const sessionLastActivity: Record<string, number> = {};
 let SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes default, overridden by config
+let MAX_SESSIONS: number | undefined;
+const sessionHasBeenUsed: Record<string, boolean> = {};
+let SESSION_UNUSED_TTL_MS = 15 * 60 * 1000; // 15 minutes default for unused sessions
+
+/**
+ * Total session count across both Streamable-HTTP and SSE transports.
+ * Exported for tests and SSE handler dep injection.
+ */
+export function getTotalSessionCount(
+  t: Record<string, unknown>,
+  s: Record<string, unknown>,
+): number {
+  return Object.keys(t).length + Object.keys(s).length;
+}
+
+/**
+ * Returns true when the global session cap has been reached. When
+ * maxSessions is undefined the cap is disabled and this always returns false.
+ */
+export function isAtGlobalCapacity(
+  t: Record<string, unknown>,
+  s: Record<string, unknown>,
+  maxSessions: number | undefined,
+): boolean {
+  if (maxSessions === undefined) return false;
+  return getTotalSessionCount(t, s) >= maxSessions;
+}
+
 let ipLimiter: IpSessionLimiter | undefined;
 let workspaceManager: WorkspaceManager | undefined;
 
@@ -657,15 +686,26 @@ export function drainRejectedSidForInlineRollback(sid: string): void {
 export function reapIdleStreamableSessions(opts: {
   transports: Record<string, { close: () => Promise<void> | void }>;
   sessionLastActivity: Record<string, number>;
-  ttlMs: number;
+  ttlMs?: number;
+  usedTtlMs?: number;
+  unusedTtlMs?: number;
+  sessionHasBeenUsed?: Record<string, boolean>;
   now?: number;
 }): string[] {
-  const { transports, sessionLastActivity, ttlMs } = opts;
+  const { transports, sessionLastActivity } = opts;
   const now = opts.now ?? Date.now();
   const reaped: string[] = [];
   for (const sid of Object.keys(transports)) {
     const last = sessionLastActivity[sid] ?? 0;
-    if (now - last > ttlMs) {
+    // Two-tier TTL: used sessions get the longer TTL, unused get the shorter one.
+    // Falls back to flat ttlMs for backward compatibility.
+    let ttl: number;
+    if (opts.usedTtlMs !== undefined && opts.unusedTtlMs !== undefined) {
+      ttl = opts.sessionHasBeenUsed?.[sid] ? opts.usedTtlMs : opts.unusedTtlMs;
+    } else {
+      ttl = opts.ttlMs ?? 30 * 60 * 1000;
+    }
+    if (now - last > ttl) {
       const transport = transports[sid];
       // Async rejections must land in console.error, not the unhandled-
       // rejection stream. `void transport.close()` only catches synchronous
@@ -680,6 +720,7 @@ export function reapIdleStreamableSessions(opts: {
         );
       delete transports[sid];
       delete sessionLastActivity[sid];
+      delete opts.sessionHasBeenUsed?.[sid];
       reaped.push(sid);
     }
   }
@@ -708,6 +749,9 @@ export function reapIdleSessionsTickForTesting(opts: {
   sseTransports: Record<string, { close: () => Promise<void> | void }>;
   sessionLastActivity: Record<string, number>;
   ttlMs: number;
+  usedTtlMs?: number;
+  unusedTtlMs?: number;
+  sessionHasBeenUsed?: Record<string, boolean>;
   now?: number;
   ipLimiter?: { remove: (sid: string) => void };
   workspaceManager?: { cleanup: (sid: string) => void };
@@ -726,6 +770,9 @@ export function reapIdleSessionsTickForTesting(opts: {
     transports: streamableOnly,
     sessionLastActivity: opts.sessionLastActivity,
     ttlMs: opts.ttlMs,
+    usedTtlMs: opts.usedTtlMs,
+    unusedTtlMs: opts.unusedTtlMs,
+    sessionHasBeenUsed: opts.sessionHasBeenUsed,
     now,
   });
   for (const sid of reapedStreamable) {
@@ -793,6 +840,9 @@ export function reapIdleSessionsTickForTesting(opts: {
     sseTransports: opts.sseTransports,
     sessionLastActivity: opts.sessionLastActivity,
     ttlMs: opts.ttlMs,
+    usedTtlMs: opts.usedTtlMs,
+    unusedTtlMs: opts.unusedTtlMs,
+    sessionHasBeenUsed: opts.sessionHasBeenUsed,
     now,
     ipLimiter: opts.ipLimiter,
     workspaceManager: opts.workspaceManager,
@@ -809,11 +859,26 @@ export function reapIdleSessionsTickForTesting(opts: {
 // (including from tests) doesn't leak a 5-minute setInterval into the loop.
 // Thin closure over module state that delegates to the parametric form.
 function reapIdleSessionsTick(): void {
+  // 80% capacity warning
+  if (MAX_SESSIONS !== undefined) {
+    const total = getTotalSessionCount(transports, sseTransports);
+    if (total >= MAX_SESSIONS * 0.8) {
+      const usedCount = Object.keys(sessionHasBeenUsed).length;
+      const unusedCount = total - usedCount;
+      console.warn(
+        `[mcp] Session capacity at ${total}/${MAX_SESSIONS} (${Math.round((total / MAX_SESSIONS) * 100)}%) — used: ${usedCount}, unused: ${unusedCount}`,
+      );
+    }
+  }
+
   reapIdleSessionsTickForTesting({
     transports,
     sseTransports,
     sessionLastActivity,
     ttlMs: SESSION_TTL_MS,
+    usedTtlMs: SESSION_TTL_MS,
+    unusedTtlMs: SESSION_UNUSED_TTL_MS,
+    sessionHasBeenUsed,
     ipLimiter,
     workspaceManager,
     sessionStateManager,
@@ -1033,96 +1098,15 @@ export function handleSessionInitAccept(opts: {
   authenticated?: boolean;
 }): boolean {
   const {
-    transport,
     sid,
     ip,
     transports: tMap,
-    sessionLastActivity: lastActivityMap,
-    ipLimiter: limiter,
-    workspaceManager: workspace,
-    sessionStateManager: sessionState,
-    res,
     p2pTelemetry,
     userAgent,
     authenticated,
   } = opts;
-  try {
-    workspace?.ensureSession(sid);
-  } catch (err) {
-    console.error(
-      `[mcp] workspaceManager.ensureSession failed for ${sid.slice(0, 8)} [${ip}]; rolling back session:`,
-      err,
-    );
-    // Roll back the ipLimiter counter — tryAdd incremented it immediately
-    // before this function ran, and without this rollback the counter
-    // would leak until SESSION_TTL reap. Guard the remove() call so a
-    // rollback throw doesn't mask the original ensureSession error.
-    try {
-      limiter?.remove(sid);
-    } catch (rollbackErr) {
-      console.error(
-        `[mcp] ipLimiter rollback failed for ${sid.slice(0, 8)}:`,
-        rollbackErr,
-      );
-    }
-    // sessionStateManager cleanup: currently a no-op because ensureSession
-    // runs before any session state registration, but add it to the rollback
-    // chain so a future reordering (e.g. registering shell state inside
-    // accept-handler) can't leak per-session state. Per-step try/catch
-    // matches the onclose / reaper pattern.
-    try {
-      sessionState?.cleanup(sid);
-    } catch (rollbackErr) {
-      console.error(
-        `[mcp] sessionStateManager rollback failed for ${sid.slice(0, 8)}:`,
-        rollbackErr,
-      );
-    }
-    // Inline map deletion — do NOT wait for onclose (the transport may
-    // never reach the wired-stream state after the mid-init failure).
-    delete tMap[sid];
-    delete lastActivityMap[sid];
-    // Mark the sid as rejected so the transport.onclose handler (which the
-    // SDK fires asynchronously once transport.close() completes) skips the
-    // cleanup chain + the misleading "Session closed (N active)" log — all
-    // of that work already ran inline above.
-    rejectedSids.add(sid);
-    // Fire-and-forget close; async rejections land in console.error.
-    // Direct .close() (no optional chaining): callers always provide a
-    // transport with .close(), and the optional chain obscured typing.
-    Promise.resolve()
-      .then(() => transport.close())
-      .catch((closeErr) => {
-        console.error(
-          `[mcp] transport.close after ensureSession failure threw for ${sid.slice(0, 8)}:`,
-          closeErr,
-        );
-      });
-    // Client-visible rejection: write a 503 JSON body when we still own the
-    // response stream. If headers were already sent (extremely unlikely at
-    // this point — ensureSession runs before the SDK wires the stream — but
-    // a paranoid guard prevents a throw from crashing the outer handler) we
-    // can't write a body, so the caller gets whatever Express does by
-    // default (empty response, eventual connection close).
-    // R4-5 — surface a machine-readable `reason` discriminant on the 503
-    // body so operators and clients can tell this failure mode
-    // (workspace_init_failed) apart from the other rollback paths
-    // (state_init_failed, ip_limit_rollback) without parsing the human
-    // message. The discriminant lives on `error.data` per JSON-RPC 2.0 —
-    // clients that already read `error.code`/`error.message` keep working.
-    if (res && !res.headersSent) {
-      res.status(503).json({
-        jsonrpc: "2.0",
-        error: {
-          code: -32003,
-          message: "Server unavailable: failed to initialize session workspace",
-          data: { reason: "workspace_init_failed" },
-        },
-        id: null,
-      });
-    }
-    return false;
-  }
+  // Lazy workspace allocation: ensureSession is no longer called eagerly.
+  // Bash tool handlers call workspace.ensureSession(sid) lazily per-operation.
   console.log(
     `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(tMap).length} active) [${ip}]`,
   );
@@ -1359,6 +1343,7 @@ export async function completeInitRequestSafely<TReq, TRes, TBody>(
 export async function closeAllSessions(opts: {
   transports: Record<string, { close: () => Promise<void> | void }>;
   sseTransports: Record<string, { close: () => Promise<void> | void }>;
+  sessionHasBeenUsed?: Record<string, boolean>;
 }): Promise<void> {
   const { transports: tMap, sseTransports: sseMap } = opts;
 
@@ -1395,6 +1380,7 @@ export async function closeAllSessions(opts: {
       );
     }
     delete tMap[sid];
+    if (opts.sessionHasBeenUsed) delete opts.sessionHasBeenUsed[sid];
   });
   if (streamableSids.length > 0) {
     if (streamableRejectedSids.length > 0) {
@@ -1421,6 +1407,7 @@ export async function closeAllSessions(opts: {
       );
     }
     delete sseMap[sid];
+    if (opts.sessionHasBeenUsed) delete opts.sessionHasBeenUsed[sid];
   });
   if (sseSids.length > 0) {
     if (sseRejectedSids.length > 0) {
@@ -1564,6 +1551,25 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
 
     // New session — must be an initialize request
     if (!sessionId && isInitializeRequest(req.body)) {
+      // Global session cap — reject before doing any per-IP work.
+      if (isAtGlobalCapacity(transports, sseTransports, MAX_SESSIONS)) {
+        const total = getTotalSessionCount(transports, sseTransports);
+        console.error(
+          `[mcp] Global session cap reached: ${total}/${MAX_SESSIONS}`,
+        );
+        res
+          .status(503)
+          .set("Retry-After", "30")
+          .json(
+            buildCapacityPayload({
+              totalSessions: total,
+              maxSessions: MAX_SESSIONS!,
+              retryAfterSeconds: 30,
+            }),
+          );
+        return;
+      }
+
       // Pre-check the IP limiter BEFORE creating the transport. The previous
       // flow created the transport, let onsessioninitialized run, then
       // transport.close()'d — which produced a silent disconnect on the
@@ -1761,6 +1767,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         // state for this sid is released.
         delete transports[sid];
         delete sessionLastActivity[sid];
+        delete sessionHasBeenUsed[sid];
         // Per-operation try/catch so a throw from one cleanup step
         // doesn't skip the others — this mirrors the reaper tick above
         // and prevents ipLimiter / workspace state from drifting when
@@ -1788,9 +1795,11 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
             e,
           );
         }
-        console.log(
-          `[mcp] Session ${sid.slice(0, 8)} closed (${Object.keys(transports).length} active)`,
-        );
+        const total = getTotalSessionCount(transports, sseTransports);
+        const capInfo = MAX_SESSIONS
+          ? ` (${total}/${MAX_SESSIONS})`
+          : ` (${total} active)`;
+        console.log(`[mcp] Session ${sid.slice(0, 8)} closed${capInfo}`);
       };
       const server = createMcpServer(
         bashInstances,
@@ -1798,6 +1807,12 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         () => transport.sessionId ?? undefined,
         bashTelemetry,
         workspaceManager,
+        {
+          onToolCall: () => {
+            const sid = transport.sessionId;
+            if (sid) sessionHasBeenUsed[sid] = true;
+          },
+        },
       );
       // Z-1: server.connect(transport) can throw AFTER handleSessionInitAccept
       // committed maps + ipLimiter counter + ensureSession + onclose wiring.
@@ -1949,6 +1964,11 @@ const sseHandlers = createSseHandlers({
   rateLimitRetryAfterSeconds: () => retryAfterSecondsFromTtl(),
   // Late-bound: p2pTelemetry is constructed inside startServer().
   p2pTelemetry: () => p2pTelemetry,
+  isAtGlobalCapacity: () =>
+    isAtGlobalCapacity(transports, sseTransports, MAX_SESSIONS),
+  getTotalSessionCount: () => getTotalSessionCount(transports, sseTransports),
+  getMaxSessions: () => MAX_SESSIONS,
+  sessionHasBeenUsed,
   createMcpServer: () => {
     let transportRef: SSEServerTransport | undefined;
     // The handler creates the transport first, then calls createMcpServer()
@@ -1960,6 +1980,12 @@ const sseHandlers = createSseHandlers({
       () => transportRef?.sessionId,
       bashTelemetry,
       workspaceManager,
+      {
+        onToolCall: () => {
+          const sid = transportRef?.sessionId;
+          if (sid) sessionHasBeenUsed[sid] = true;
+        },
+      },
     );
     // Intercept connect() so we can capture the transport reference for
     // the getSessionId closure above.
@@ -3155,6 +3181,9 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
   // Configure session TTL and IP rate limiter from config
   const maxSessionsPerIp = serverCfg.server.max_sessions_per_ip ?? 20;
   SESSION_TTL_MS = (serverCfg.server.session_ttl_minutes ?? 30) * 60 * 1000;
+  MAX_SESSIONS = serverCfg.server.max_sessions ?? 1000;
+  SESSION_UNUSED_TTL_MS =
+    (serverCfg.server.session_unused_ttl_minutes ?? 15) * 60 * 1000;
   const allowlist = serverCfg.server.allowlist ?? [];
   ipLimiter = new IpSessionLimiter(maxSessionsPerIp, { allowlist });
   if (allowlist.length > 0) {
@@ -3169,7 +3198,7 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
     sessionReaperInterval = setInterval(reapIdleSessionsTick, 5 * 60 * 1000);
   }
   console.log(
-    `[startup] IP rate limit: ${maxSessionsPerIp} sessions/IP, TTL: ${serverCfg.server.session_ttl_minutes ?? 30}m`,
+    `[startup] IP rate limit: ${maxSessionsPerIp} sessions/IP, TTL: ${serverCfg.server.session_ttl_minutes ?? 30}m, unused TTL: ${serverCfg.server.session_unused_ttl_minutes ?? 15}m, global cap: ${MAX_SESSIONS}`,
   );
 
   // Initialize workspace manager if any bash tool has workspace enabled
@@ -3362,7 +3391,7 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
     // Promise.allSettled so one slow/rejecting stream doesn't stall the
     // rest past the orchestrator's kill-deadline.
     try {
-      await closeAllSessions({ transports, sseTransports });
+      await closeAllSessions({ transports, sseTransports, sessionHasBeenUsed });
     } catch (e) {
       console.error("[shutdown] closeAllSessions threw:", e);
     }

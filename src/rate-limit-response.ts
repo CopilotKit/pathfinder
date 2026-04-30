@@ -116,6 +116,49 @@ export function buildRateLimitPayload(
   };
 }
 
+/**
+ * JSON-RPC server-error-range code for global capacity rejections.
+ *
+ * Distinct from the per-IP rate-limit code (-32005) so clients can
+ * distinguish "too many sessions from your IP" from "server is full."
+ */
+export const JSONRPC_CAPACITY_CODE = -32006;
+
+export interface CapacityPayload {
+  error: "capacity_exceeded";
+  reason: "server-capacity";
+  totalSessions: number;
+  maxSessions: number;
+  retryAfterSeconds: number;
+  contact: string;
+}
+
+export interface CapacityInputs {
+  totalSessions: number;
+  maxSessions: number;
+  retryAfterSeconds: number;
+}
+
+/**
+ * Build the rejection body for a global session-capacity refusal.
+ *
+ * Mirrors buildRateLimitPayload but with capacity-specific fields.
+ * `retryAfterSeconds` is clamped through the shared sanitizer so all
+ * callers (HTTP header, JSON-RPC data, logs) see the same integer.
+ */
+export function buildCapacityPayload(inputs: CapacityInputs): CapacityPayload {
+  const { totalSessions, maxSessions } = inputs;
+  const retryAfterSeconds = clampRetryAfterSeconds(inputs.retryAfterSeconds);
+  return {
+    error: "capacity_exceeded",
+    reason: "server-capacity",
+    totalSessions,
+    maxSessions,
+    retryAfterSeconds,
+    contact: RATE_LIMIT_CONTACT,
+  };
+}
+
 export interface JsonRpcRateLimitFrame {
   jsonrpc: "2.0";
   id: string | number | null;

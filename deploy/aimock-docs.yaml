@@ -1,6 +1,9 @@
 server:
   name: aimock-docs
   version: "1.0.0"
+  max_sessions: 1000
+  session_ttl_minutes: 30
+  session_unused_ttl_minutes: 15
   # Anthropic crawler — bypasses per-IP session limit (requires trust_proxy: true to match the forwarded IP)
   allowlist: ["160.79.106.35"]
   # Safe to enable: Railway's edge discards any client-supplied X-Forwarded-For
@@ -61,7 +64,7 @@ tools:
 
   - name: explore-docs
     type: bash
-    description: "Explore aimock documentation files using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.html\" | head -20' or 'cat /INDEX.md' to see what's available."
+    description: 'Explore aimock documentation files using bash commands (find, grep, cat, ls, head). Start with ''find / -name "*.html" | head -20'' or ''cat /INDEX.md'' to see what''s available.'
     sources: [docs]
     bash:
       session_state: true
@@ -70,7 +73,7 @@ tools:
 
   - name: explore-code
     type: bash
-    description: "Explore aimock source code using bash commands (find, grep, cat, ls, head). Start with 'find / -name \"*.ts\" | head -20' to see what's available."
+    description: 'Explore aimock source code using bash commands (find, grep, cat, ls, head). Start with ''find / -name "*.ts" | head -20'' to see what''s available.'
     sources: [code]
     bash:
       session_state: true

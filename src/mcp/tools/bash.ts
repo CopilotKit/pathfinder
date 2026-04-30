@@ -51,6 +51,8 @@ export interface BashToolOptions {
   workspace?: WorkspaceManager;
   /** Resolver for session ID — used by workspace interception. */
   getSessionId?: () => string | undefined;
+  /** Callback invoked when a tool handler fires, for session-used tracking. */
+  onToolCall?: () => void;
 }
 
 export function registerBashTool(
@@ -98,6 +100,7 @@ export function registerBashTool(
     toolConfig.description,
     inputSchema,
     async ({ command }) => {
+      options?.onToolCall?.();
       try {
         const sessionState = getSessionState();
         const cwd = sessionState?.getCwd() ?? "/";

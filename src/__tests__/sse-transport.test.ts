@@ -710,19 +710,14 @@ describe("SSE transport hardening (Round 2)", () => {
     consoleWarnSpy.mockRestore();
   });
 
-  it("cleans up the limiter counter when workspaceManager.ensureSession throws", async () => {
-    // Build a workspace manager stub whose ensureSession() throws. If the
-    // handler doesn't install cleanup before ensureSession, the limiter
-    // counter leaks permanently. This test drives the fix: either install
-    // cleanup first OR catch and undo.
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
+  it("does not call ensureSession eagerly (lazy workspace allocation)", async () => {
+    // After session hardening, ensureSession is no longer called eagerly
+    // during session creation. Workspace allocation is lazy — the bash tool
+    // handlers call workspace.ensureSession(sid) per-operation.
     const limiter = new IpSessionLimiter(2);
+    const ensureSessionSpy = vi.fn();
     const workspaceManager = {
-      ensureSession: vi.fn(() => {
-        throw new Error("workspace-boom");
-      }),
+      ensureSession: ensureSessionSpy,
       cleanup: vi.fn(),
       cleanupAll: vi.fn(),
     };
@@ -734,32 +729,18 @@ describe("SSE transport hardening (Round 2)", () => {
     server = await startServer(app);
     const url = baseUrlOf(server);
 
-    // Attempt the session. The server-side handler should throw, clean up,
-    // and return 500 (headers not yet sent) — key assertion: limiter counter
-    // must be zero after the failure.
     const res = await fetch(`${url}/sse`).catch((err) => ({
       ok: false,
       status: 0,
       err,
     }));
-    // The response may be 500 (caught in the outer try) or the stream may
-    // end abruptly depending on when the error lands; either way we care
-    // about the limiter state afterwards.
     if ("body" in res && res.body) {
       await (res.body as ReadableStream).cancel().catch(() => {});
     }
-
-    // Wait a tick for the cleanup chain to settle.
     await new Promise((r) => setTimeout(r, 20));
 
-    // Dual-stack loopback can surface the socket peer as either "127.0.0.1"
-    // or "::ffff:127.0.0.1" depending on how Node bound the listener. A
-    // hardcoded assertion on one form would pass vacuously if the limiter
-    // actually keyed under the other form — leaving the real leak invisible.
-    // Asserting both covers either resolution path.
-    expect(limiter.getSessionCount("127.0.0.1")).toBe(0);
-    expect(limiter.getSessionCount("::ffff:127.0.0.1")).toBe(0);
-    consoleErrSpy.mockRestore();
+    // ensureSession should NOT have been called
+    expect(ensureSessionSpy).not.toHaveBeenCalled();
   });
 
   it("reaper invokes ipLimiter.remove and workspaceManager.cleanup for reaped SSE sessions (ownership fix)", async () => {
@@ -1491,65 +1472,33 @@ describe("SSE transport hardening (Round 4)", () => {
     consoleErrSpy.mockRestore();
   });
 
-  it("/sse ensureSession throw: full rollback (counters, maps, transport.close, 503)", async () => {
-    // R4 finding 2: handler must wrap workspaceManager.ensureSession in
-    // try/catch and run the full rollback chain when it throws —
-    // ipLimiter.remove + sessionStateManager.cleanup + map deletion +
-    // transport.close + 503 JSON response. Matches handleSessionInitAccept
-    // semantics in server.ts.
-    const consoleErrSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-
+  it("/sse lazy workspace: ensureSession is NOT called eagerly during session creation", async () => {
+    // After session hardening, ensureSession is no longer called eagerly.
+    // Workspace allocation is lazy per bash tool operation.
     const limiter = new IpSessionLimiter(3);
+    const ensureSessionSpy = vi.fn();
     const workspaceManager = {
-      ensureSession: vi.fn(() => {
-        throw new Error("ensure-boom");
-      }),
+      ensureSession: ensureSessionSpy,
       cleanup: vi.fn(),
     };
-    const sessionStateCleanup = vi.fn();
 
-    const { SSEServerTransport } =
-      await import("@modelcontextprotocol/sdk/server/sse.js");
-    const closeSpy = vi
-      .spyOn(SSEServerTransport.prototype, "close")
-      .mockImplementation(async function () {});
-
-    const { app, deps } = buildApp({
+    const { app } = buildApp({
       ipLimiter: limiter,
       workspaceManager,
-      sessionStateManager: { cleanup: sessionStateCleanup },
     });
     server = await startServer(app);
     const url = baseUrlOf(server);
 
     const res = await fetch(`${url}/sse`);
-    expect(res.status).toBe(503);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body.error).toBeDefined();
-
-    // Let async rollback settle.
+    // Session should be created successfully — SSE stream starts
+    // (status 200 or stream starts, not 503).
+    if ("body" in res && res.body) {
+      await (res.body as ReadableStream).cancel().catch(() => {});
+    }
     await new Promise((r) => setTimeout(r, 30));
 
-    // Limiter counter is 0 in both normalized forms (dual-stack loopback).
-    expect(limiter.getSessionCount("127.0.0.1")).toBe(0);
-    expect(limiter.getSessionCount("::ffff:127.0.0.1")).toBe(0);
-    // Map entries cleared.
-    expect(Object.keys(deps.sseTransports).length).toBe(0);
-    expect(Object.keys(deps.sessionLastActivity).length).toBe(0);
-    // sessionStateManager.cleanup called as part of rollback.
-    expect(sessionStateCleanup).toHaveBeenCalledTimes(1);
-    // transport.close called to drop transport-held resources.
-    expect(closeSpy).toHaveBeenCalledTimes(1);
-    // workspaceManager.cleanup was NOT called during rollback (symmetric to
-    // handleSessionInitAccept: ensureSession-throw means the workspace
-    // didn't acquire state worth cleaning; we only roll back ipLimiter +
-    // sessionStateManager + transport).
-    expect(workspaceManager.cleanup).not.toHaveBeenCalled();
-
-    closeSpy.mockRestore();
-    consoleErrSpy.mockRestore();
+    // ensureSession should NOT have been called
+    expect(ensureSessionSpy).not.toHaveBeenCalled();
   });
 
   it("disconnect between registration and tryAdd: cleanup.remove tolerates unknown sid", async () => {

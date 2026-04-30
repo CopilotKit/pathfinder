@@ -1,5 +1,14 @@
 # @copilotkit/pathfinder
 
+## 1.13.0
+
+### Minor Changes
+
+- **Global Session Cap**: New `server.max_sessions` config (default: 1000). Returns HTTP 503 with `CapacityPayload` when the total concurrent session count across all IPs exceeds the cap. Logs a warning at 80% utilization.
+- **Two-Tier TTL**: New `server.session_unused_ttl_minutes` config (default: 15). Sessions that never invoke a tool are reaped at the shorter TTL; sessions that have invoked a tool use the existing `session_ttl_minutes` (default: 30). "Used" is tracked at the tool-invocation level, not the protocol-message level.
+- **Lazy Workspace Allocation**: Workspace directories are no longer created eagerly at session init. Bash tools already create them lazily per-operation, so sessions that never invoke bash tools incur zero filesystem I/O.
+- **Observability**: Session close logs show count as percentage of cap. Reaper tick logs show used/unused breakdown.
+
 ## 1.12.0
 
 ### Minor Changes
@@ -95,6 +104,7 @@
 
 - **Notion Data Provider**: Index Notion pages and database entries as searchable markdown documents. Recursive block-to-markdown conversion, database property serialization as YAML frontmatter, configurable page depth, self-throttled API client (340ms/req)
 - **Deleted Page Detection**: Two-pass incremental acquire detects pages that were deleted, archived, or had integration access revoked — removes stale chunks automatically
+
 ### Patch Changes
 
 - Improve test coverage from 53% to 75% lines across the project (1044 → 1698 tests)

@@ -8,6 +8,7 @@ import type { P2PTelemetry } from "./p2p-telemetry.js";
 import type { AuthContext } from "./oauth/handlers.js";
 import {
   buildRateLimitPayload,
+  buildCapacityPayload,
   clampRetryAfterSeconds,
 } from "./rate-limit-response.js";
 import type { WorkspaceManager } from "./workspace.js";
@@ -111,6 +112,20 @@ export interface SseHandlerDeps {
    * runs at module load.
    */
   p2pTelemetry?: P2PTelemetry | (() => P2PTelemetry | undefined);
+  /**
+   * Global session capacity check. When true, the server has reached its
+   * configured max_sessions cap and no new sessions should be accepted.
+   */
+  isAtGlobalCapacity?: () => boolean;
+  /** Total session count across both transports. */
+  getTotalSessionCount?: () => number;
+  /** Configured global session cap. */
+  getMaxSessions?: () => number | undefined;
+  /**
+   * Per-session "has been used" map. A session is "used" when a tool handler
+   * fires. Unused sessions get a shorter TTL from the reaper.
+   */
+  sessionHasBeenUsed?: Record<string, boolean>;
 }
 
 function resolve<T>(value: T | (() => T)): T {
@@ -140,6 +155,24 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       const ip = clientIp(req, trustProxy);
       const ipLimiter = resolve(deps.ipLimiter);
       const workspaceManager = resolve(deps.workspaceManager);
+
+      // Global session cap — reject before doing any per-IP work.
+      if (deps.isAtGlobalCapacity?.()) {
+        const total = deps.getTotalSessionCount?.() ?? 0;
+        const max = deps.getMaxSessions?.() ?? 0;
+        console.error(`[mcp] Global session cap reached: ${total}/${max}`);
+        res
+          .status(503)
+          .set("Retry-After", "30")
+          .json(
+            buildCapacityPayload({
+              totalSessions: total,
+              maxSessions: max,
+              retryAfterSeconds: 30,
+            }),
+          );
+        return;
+      }
 
       // Pre-check BEFORE constructing the transport. Mirrors the /mcp path's
       // pattern: on a rate-limit rejection we should emit a descriptive
@@ -211,6 +244,8 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         if (sseTransports[sessionId]) {
           delete sseTransports[sessionId];
           delete sessionLastActivity[sessionId];
+          if (deps.sessionHasBeenUsed)
+            delete deps.sessionHasBeenUsed[sessionId];
           try {
             resolve(deps.ipLimiter)?.remove(sessionId);
           } catch (e) {
@@ -306,83 +341,8 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         return;
       }
 
-      // Wrap ensureSession in try/catch so a synchronous throw (ENOSPC,
-      // EACCES, corrupted workspace, etc.) runs the full rollback chain
-      // inline instead of relying on the outer catch + res.on('close') to
-      // eventually clean up. Without this, ipLimiter.tryAdd above already
-      // incremented the counter AND we registered map entries — the outer
-      // catch writes 500 but there's no guarantee the close listener
-      // actually fires on an unconnected transport, so counters + workspace
-      // state leak against the IP's cap until TTL reap (30m default).
-      //
-      // Semantics mirror handleSessionInitAccept in server.ts: rollback
-      // clears ipLimiter + sessionStateManager + map entries, closes the
-      // transport on a microtask, and writes a structured 503 body when
-      // headers haven't been sent. workspaceManager.cleanup is NOT called
-      // here because ensureSession threw — nothing to clean.
-      try {
-        workspaceManager?.ensureSession(sessionId);
-      } catch (ensureErr) {
-        console.error(
-          `[mcp] SSE workspaceManager.ensureSession failed for ${sessionId.slice(0, 8)} [${ip}]; rolling back session:`,
-          ensureErr,
-        );
-        // Per-step try/catch so a rollback step failure doesn't mask the
-        // original ensureSession error or skip subsequent steps.
-        try {
-          resolve(deps.ipLimiter)?.remove(sessionId);
-        } catch (e) {
-          console.error(
-            `[mcp] SSE ensureSession-rollback ipLimiter.remove failed for ${sessionId.slice(0, 8)}:`,
-            e,
-          );
-        }
-        try {
-          resolve(deps.sessionStateManager)?.cleanup(sessionId);
-        } catch (e) {
-          console.error(
-            `[mcp] SSE ensureSession-rollback sessionState.cleanup failed for ${sessionId.slice(0, 8)}:`,
-            e,
-          );
-        }
-        // Delete map entries BEFORE scheduling close so the onclose guard
-        // (`if sseTransports[sessionId]`) short-circuits when the SDK
-        // eventually fires onclose for the now-closed transport.
-        delete sseTransports[sessionId];
-        delete sessionLastActivity[sessionId];
-        Promise.resolve()
-          .then(() => transport.close())
-          .catch((e) =>
-            console.error(
-              `[mcp] SSE ensureSession-rollback transport.close rejected for ${sessionId.slice(0, 8)}:`,
-              e,
-            ),
-          );
-        if (!res.headersSent) {
-          // R4-5 — emit a machine-readable `reason` discriminant
-          // (workspace_init_failed) so monitoring + client code can tell
-          // this rollback apart from state_init_failed / ip_limit_rollback
-          // without parsing the human message. The discriminant is nested
-          // under `error.data` to match the /mcp (JSON-RPC) rollback body
-          // shape — clients read `body.error.data.reason` on BOTH transports.
-          //
-          // The outer envelope stays SSE-flavored (`error`/`message` at top
-          // level rather than the full JSON-RPC wrapper) because a pure
-          // JSON-RPC body on the GET /sse handshake would surprise existing
-          // clients that never expected it there. We only standardize the
-          // INNER discriminant placement; the outer shape remains transport-
-          // appropriate.
-          res.status(503).json({
-            error: {
-              code: "workspace_unavailable",
-              message:
-                "Failed to initialize session workspace. Please try again.",
-              data: { reason: "workspace_init_failed" },
-            },
-          });
-        }
-        return;
-      }
+      // Lazy workspace allocation: ensureSession is no longer called eagerly.
+      // Bash tool handlers call workspace.ensureSession(sid) lazily per-operation.
 
       // Attach a per-session MCP server. createMcpServer().connect() calls
       // transport.start() internally which writes SSE headers + the
@@ -519,7 +479,10 @@ export function createSseHandlers(deps: SseHandlerDeps): {
 export function reapIdleSseSessions(opts: {
   sseTransports: Record<string, { close: () => Promise<void> | void }>;
   sessionLastActivity: Record<string, number>;
-  ttlMs: number;
+  ttlMs?: number;
+  usedTtlMs?: number;
+  unusedTtlMs?: number;
+  sessionHasBeenUsed?: Record<string, boolean>;
   now?: number;
   /**
    * IP rate limiter — optional. When present the reaper calls
@@ -544,7 +507,6 @@ export function reapIdleSseSessions(opts: {
   const {
     sseTransports,
     sessionLastActivity,
-    ttlMs,
     ipLimiter,
     workspaceManager,
     sessionStateManager,
@@ -553,12 +515,20 @@ export function reapIdleSseSessions(opts: {
   const reaped: string[] = [];
   for (const sid of Object.keys(sseTransports)) {
     const last = sessionLastActivity[sid] ?? 0;
-    if (now - last > ttlMs) {
+    // Two-tier TTL: used sessions get the longer TTL, unused get the shorter one.
+    let ttl: number;
+    if (opts.usedTtlMs !== undefined && opts.unusedTtlMs !== undefined) {
+      ttl = opts.sessionHasBeenUsed?.[sid] ? opts.usedTtlMs : opts.unusedTtlMs;
+    } else {
+      ttl = opts.ttlMs ?? 30 * 60 * 1000;
+    }
+    if (now - last > ttl) {
       const transport = sseTransports[sid];
       // Delete map entries FIRST so the handler's onclose guard
       // short-circuits when close() eventually fires its callback.
       delete sseTransports[sid];
       delete sessionLastActivity[sid];
+      delete opts.sessionHasBeenUsed?.[sid];
       // Inline cleanup — the reaper owns this for the server-timeout path.
       // Per-step try/catch so a failure in one step doesn't skip the others.
       try {

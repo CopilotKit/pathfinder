@@ -69,6 +69,7 @@ export function registerSearchTool(
   server: McpServer,
   embeddingClient: EmbeddingProvider,
   toolConfig: SearchToolConfig,
+  options?: { onToolCall?: () => void },
 ): void {
   const inputSchema = {
     query: z.string().describe("The search query"),
@@ -100,6 +101,7 @@ export function registerSearchTool(
     toolConfig.description,
     inputSchema,
     async ({ query, limit, min_score, version }) => {
+      options?.onToolCall?.();
       const effectiveLimit = limit ?? toolConfig.default_limit;
       const searchMode = toolConfig.search_mode ?? "vector";
       const startMs = Date.now();
