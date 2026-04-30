@@ -52,12 +52,12 @@ claude mcp add pathfinder-docs --transport http https://mcp.pathfinder.copilotki
 
 Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source code — into a PostgreSQL vector database. Supports OpenAI, Ollama, and local transformers.js embeddings — no API key required for local providers. It serves configurable search and filesystem exploration tools via [MCP](https://modelcontextprotocol.io), so AI agents can search your docs semantically and browse files with bash commands.
 
-| Tool Type | What It Does | Example |
-|-----------|-------------|---------|
-| **Search** | Semantic search over indexed content | `search-docs("how to authenticate")` |
-| **Bash** | Virtual filesystem with find, grep, cat, ls | `explore-docs("cat /docs/quickstart.mdx")` |
-| **Collect** | Structured data collection from agents | `submit-feedback(rating: "helpful")` |
-| **Knowledge** | Browse/search FAQ pairs from conversational sources | `knowledge-base("how to deploy")` |
+| Tool Type     | What It Does                                        | Example                                    |
+| ------------- | --------------------------------------------------- | ------------------------------------------ |
+| **Search**    | Semantic search over indexed content                | `search-docs("how to authenticate")`       |
+| **Bash**      | Virtual filesystem with find, grep, cat, ls         | `explore-docs("cat /docs/quickstart.mdx")` |
+| **Collect**   | Structured data collection from agents              | `submit-feedback(rating: "helpful")`       |
+| **Knowledge** | Browse/search FAQ pairs from conversational sources | `knowledge-base("how to deploy")`          |
 
 ## Features
 
@@ -72,7 +72,7 @@ Pathfinder indexes your GitHub repos — docs (Markdown, MDX, HTML) and source c
 - **[Conversational Sources](https://pathfinder.copilotkit.dev/config)** — Slack threads and Discord forums distilled into searchable Q&A pairs
 - **[Auto-Generated Endpoints](https://pathfinder.copilotkit.dev/usage)** — `/llms.txt`, `/llms-full.txt`, `/faq.txt`, `/.well-known/skills/default/skill.md`
 - **[Webhook Reindexing](https://pathfinder.copilotkit.dev/deploy)** — GitHub push triggers incremental reindex
-- **[IP Rate Limiting](https://pathfinder.copilotkit.dev/config)** — Per-IP session caps and configurable TTL
+- **[Session Management](https://pathfinder.copilotkit.dev/config)** — Global session cap, per-IP rate limiting, two-tier TTL (active vs unused sessions)
 - **[Analytics](https://pathfinder.copilotkit.dev/analytics)** — Query logging, top queries, empty results, latency metrics at `/analytics`
 
 ## CLI

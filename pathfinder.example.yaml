@@ -5,11 +5,19 @@
 server:
   name: my-project-docs
   version: "1.0.0"
+  # max_sessions: 1000                # Global max concurrent sessions across all IPs (default: 1000)
+  #                                   # When exceeded, returns HTTP 503 with JSON
+  #                                   # {error, reason, totalSessions, maxSessions, retryAfterSeconds, contact}
+  #                                   # and a Retry-After header.
   # max_sessions_per_ip: 20           # Max concurrent MCP sessions per IP (default: 20)
   #                                   # When exceeded, returns HTTP 429 with JSON
   #                                   # {error, reason, limit, currentCount, retryAfterSeconds, contact}
   #                                   # and a Retry-After header.
-  # session_ttl_minutes: 30           # Idle session timeout in minutes (default: 30)
+  # session_ttl_minutes: 30           # Idle session timeout for active sessions (default: 30)
+  #                                   # "Active" = has invoked at least one tool (search, bash, etc.)
+  # session_unused_ttl_minutes: 15    # Idle session timeout for unused sessions (default: 15)
+  #                                   # "Unused" = connected but never invoked a tool.
+  #                                   # Set to match Railway's 15-min SSE hard limit.
   # allowlist:                        # IPs / CIDRs that bypass max_sessions_per_ip. Empty by default.
   #   - "160.79.106.35"               # Example: Anthropic Assistant crawler
   #   - "10.0.0.0/8"                  # Example: internal health-probe CIDR
@@ -104,7 +112,7 @@ tools:
     sources: [docs]
     bash:
       session_state: true
-      grep_strategy: hybrid  # memory | vector | hybrid
+      grep_strategy: hybrid # memory | vector | hybrid
       virtual_files: true
 
   # ── Knowledge tool (for FAQ/Q&A sources) ──

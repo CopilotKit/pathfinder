@@ -1,893 +1,1954 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Configuration Reference — Pathfinder</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Full annotated pathfinder.yaml reference — server, sources, tools, embedding, indexing, and webhooks.">
-<meta property="og:type" content="article">
-<meta property="og:url" content="https://pathfinder.copilotkit.dev/config">
-<meta property="og:title" content="Configuration Reference — Pathfinder">
-<meta property="og:description" content="Full annotated pathfinder.yaml reference with example configs.">
-<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.svg">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Configuration Reference — Pathfinder">
-<meta name="twitter:description" content="Full annotated pathfinder.yaml reference with example configs.">
-<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root {
-    --bg-deep: #0a0a0f;
-    --bg-surface: #111118;
-    --bg-card: #16161f;
-    --border: #222233;
-    --text-primary: #e8e8f0;
-    --text-secondary: #8888a0;
-    --text-dim: #555570;
-    --accent: #00ccff;
-    --accent-dim: #00aadd;
-    --accent-glow: rgba(0,204,255,0.15);
-    --blue: #4488ff;
-    --purple: #aa66ff;
-    --warning: #ffaa00;
-    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
-    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
-}
-* { margin:0; padding:0; box-sizing:border-box; }
-html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
-body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
-code, pre, kbd { font-feature-settings: "liga" 0, "calt" 0; }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Configuration Reference — Pathfinder</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta
+      name="description"
+      content="Full annotated pathfinder.yaml reference — server, sources, tools, embedding, indexing, and webhooks."
+    />
+    <meta property="og:type" content="article" />
+    <meta
+      property="og:url"
+      content="https://pathfinder.copilotkit.dev/config"
+    />
+    <meta property="og:title" content="Configuration Reference — Pathfinder" />
+    <meta
+      property="og:description"
+      content="Full annotated pathfinder.yaml reference with example configs."
+    />
+    <meta
+      property="og:image"
+      content="https://pathfinder.copilotkit.dev/og-image.svg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Configuration Reference — Pathfinder" />
+    <meta
+      name="twitter:description"
+      content="Full annotated pathfinder.yaml reference with example configs."
+    />
+    <meta
+      name="twitter:image"
+      content="https://pathfinder.copilotkit.dev/og-image.svg"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-deep: #0a0a0f;
+        --bg-surface: #111118;
+        --bg-card: #16161f;
+        --border: #222233;
+        --text-primary: #e8e8f0;
+        --text-secondary: #8888a0;
+        --text-dim: #555570;
+        --accent: #00ccff;
+        --accent-dim: #00aadd;
+        --accent-glow: rgba(0, 204, 255, 0.15);
+        --blue: #4488ff;
+        --purple: #aa66ff;
+        --warning: #ffaa00;
+        --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+        --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-size: 16px;
+      }
+      body {
+        background: var(--bg-deep);
+        color: var(--text-primary);
+        font-family: var(--sans);
+        line-height: 1.6;
+        overflow-x: hidden;
+      }
+      code,
+      pre,
+      kbd {
+        font-feature-settings:
+          "liga" 0,
+          "calt" 0;
+      }
 
-/* Noise overlay */
-body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
-    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-}
+      /* Noise overlay */
+      body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 9999;
+        background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      }
 
-/* Container */
-.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+      /* Container */
+      .container {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 2rem;
+      }
 
-/* Top Nav */
-.top-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1rem 0;
-    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
-.top-nav .nav-inner { max-width: 1400px; margin: 0 auto; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; }
-.nav-brand { display: flex; align-items: center; gap: 0.75rem; font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
-.nav-brand span { color: var(--accent); }
-.nav-links { display: flex; align-items: center; gap: 2rem; list-style: none; }
-.nav-links a { color: var(--text-secondary); font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: color 0.2s; }
-.nav-links a:hover { color: var(--text-primary); text-decoration: none; }
-.nav-links .gh-link, .nav-links .gh-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
-.nav-links .gh-link:hover, .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+      /* Top Nav */
+      .top-nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        padding: 1rem 0;
+        background: rgba(10, 10, 15, 0.85);
+        backdrop-filter: blur(20px) saturate(1.4);
+        -webkit-backdrop-filter: blur(20px) saturate(1.4);
+        border-bottom: 1px solid var(--border);
+      }
+      .top-nav .nav-inner {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 0 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .nav-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 1rem;
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-brand span {
+        color: var(--accent);
+      }
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+        list-style: none;
+      }
+      .nav-links a {
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .nav-links a:hover {
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-links .gh-link,
+      .nav-links .gh-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      .nav-links .gh-link:hover,
+      .nav-links .gh-btn:hover {
+        border-color: var(--text-dim);
+        background: var(--bg-card);
+      }
 
-/* Docs Layout */
-:root { --sidebar-width: 260px; }
-.docs-layout {
-    display: flex;
-    margin-top: 57px;
-    min-height: calc(100vh - 57px);
-}
+      /* Docs Layout */
+      :root {
+        --sidebar-width: 260px;
+      }
+      .docs-layout {
+        display: flex;
+        margin-top: 57px;
+        min-height: calc(100vh - 57px);
+      }
 
-/* Left Sidebar */
-.sidebar {
-    position: fixed;
-    top: 57px;
-    left: 0;
-    width: var(--sidebar-width);
-    height: calc(100vh - 57px);
-    overflow-y: auto;
-    background: var(--bg-surface);
-    border-right: 1px solid var(--border);
-    padding: 1.5rem 0;
-    z-index: 50;
-}
-.sidebar-section { padding: 0 1.25rem; margin-bottom: 1.5rem; }
-.sidebar-section h3 {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-dim);
-    margin-bottom: 0.5rem;
-    padding: 0 0.5rem;
-}
-.sidebar-section a {
-    display: block;
-    padding: 0.35rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s;
-}
-.sidebar-section a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
-.sidebar-section a.active { color: var(--accent); background: var(--accent-glow); }
+      /* Left Sidebar */
+      .sidebar {
+        position: fixed;
+        top: 57px;
+        left: 0;
+        width: var(--sidebar-width);
+        height: calc(100vh - 57px);
+        overflow-y: auto;
+        background: var(--bg-surface);
+        border-right: 1px solid var(--border);
+        padding: 1.5rem 0;
+        z-index: 50;
+      }
+      .sidebar-section {
+        padding: 0 1.25rem;
+        margin-bottom: 1.5rem;
+      }
+      .sidebar-section h3 {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--text-dim);
+        margin-bottom: 0.5rem;
+        padding: 0 0.5rem;
+      }
+      .sidebar-section a {
+        display: block;
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .sidebar-section a:hover {
+        color: var(--text-primary);
+        background: var(--bg-card);
+        text-decoration: none;
+      }
+      .sidebar-section a.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
 
-/* Main Content */
-.docs-content {
-    margin-left: var(--sidebar-width);
-    padding: 3rem 3rem;
-    max-width: calc(100vw - var(--sidebar-width) - 240px);
-    min-width: 0;
-}
-.docs-content h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 1rem; }
-.docs-content h1 .accent { color: var(--accent); }
-.docs-content .lead { font-size: 1.1rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 2rem; }
-.docs-content h2 { font-size: 1.5rem; font-weight: 600; margin-top: 3rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); scroll-margin-top: 80px; }
-.docs-content h3 { font-size: 1.15rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; scroll-margin-top: 80px; }
-.docs-content p { color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem; }
-.docs-content ul, .docs-content ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; }
-.docs-content li { margin-bottom: 0.35rem; line-height: 1.6; }
-.docs-content li strong { color: var(--text-primary); }
-.docs-content a { color: var(--accent); text-decoration: none; }
-.docs-content a:hover { text-decoration: underline; }
+      /* Main Content */
+      .docs-content {
+        margin-left: var(--sidebar-width);
+        padding: 3rem 3rem;
+        max-width: calc(100vw - var(--sidebar-width) - 240px);
+        min-width: 0;
+      }
+      .docs-content h1 {
+        font-size: 2.25rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        margin-bottom: 1rem;
+      }
+      .docs-content h1 .accent {
+        color: var(--accent);
+      }
+      .docs-content .lead {
+        font-size: 1.1rem;
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 2rem;
+      }
+      .docs-content h2 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-top: 3rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--border);
+        scroll-margin-top: 80px;
+      }
+      .docs-content h3 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin-top: 2rem;
+        margin-bottom: 0.75rem;
+        scroll-margin-top: 80px;
+      }
+      .docs-content p {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 1rem;
+      }
+      .docs-content ul,
+      .docs-content ol {
+        color: var(--text-secondary);
+        margin-bottom: 1rem;
+        padding-left: 1.5rem;
+      }
+      .docs-content li {
+        margin-bottom: 0.35rem;
+        line-height: 1.6;
+      }
+      .docs-content li strong {
+        color: var(--text-primary);
+      }
+      .docs-content a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .docs-content a:hover {
+        text-decoration: underline;
+      }
 
-/* Page TOC (right sidebar) */
-.page-toc {
-    position: fixed;
-    top: 80px;
-    right: 1rem;
-    width: 200px;
-    max-height: calc(100vh - 100px);
-    overflow-y: auto;
-    font-size: 0.78rem;
-}
-.page-toc-label {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-dim);
-    padding: 0 0.5rem;
-    margin-bottom: 0.75rem;
-}
-.page-toc a {
-    display: block;
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
-    color: var(--text-secondary);
-    font-size: 0.78rem;
-    line-height: 1.4;
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s;
-}
-.page-toc a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
-.page-toc a.active { color: var(--accent); background: var(--accent-glow); }
-.page-toc a.toc-h3 { padding-left: 1.5rem; font-size: 0.72rem; color: var(--text-dim); }
-@media (max-width: 1200px) { .page-toc { display: none; } }
+      /* Page TOC (right sidebar) */
+      .page-toc {
+        position: fixed;
+        top: 80px;
+        right: 1rem;
+        width: 200px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+        font-size: 0.78rem;
+      }
+      .page-toc-label {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--text-dim);
+        padding: 0 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      .page-toc a {
+        display: block;
+        padding: 0.3rem 0.5rem;
+        border-radius: 4px;
+        color: var(--text-secondary);
+        font-size: 0.78rem;
+        line-height: 1.4;
+        text-decoration: none;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .page-toc a:hover {
+        color: var(--text-primary);
+        background: var(--bg-card);
+        text-decoration: none;
+      }
+      .page-toc a.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
+      .page-toc a.toc-h3 {
+        padding-left: 1.5rem;
+        font-size: 0.72rem;
+        color: var(--text-dim);
+      }
+      @media (max-width: 1200px) {
+        .page-toc {
+          display: none;
+        }
+      }
 
-/* Sidebar toggle (mobile) */
-.sidebar-toggle {
-    display: none;
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 1.25rem;
-    cursor: pointer;
-    padding: 0.25rem;
-}
+      /* Sidebar toggle (mobile) */
+      .sidebar-toggle {
+        display: none;
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 1.25rem;
+        cursor: pointer;
+        padding: 0.25rem;
+      }
 
-/* Code blocks */
-.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
-.code-block .comment { color: var(--text-dim); }
-.code-block .key { color: var(--warning); }
-.code-block .value { color: var(--blue); }
-.code-block .cmd { color: var(--accent); }
+      /* Code blocks */
+      .code-block {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px 20px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.7;
+        overflow-x: auto;
+        margin-bottom: 16px;
+        color: var(--text-primary);
+        white-space: pre;
+      }
+      .code-block .comment {
+        color: var(--text-dim);
+      }
+      .code-block .key {
+        color: var(--warning);
+      }
+      .code-block .value {
+        color: var(--blue);
+      }
+      .code-block .cmd {
+        color: var(--accent);
+      }
 
-/* Inline code */
-.docs-content code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
+      /* Inline code */
+      .docs-content code {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.15rem 0.4rem;
+        font-family: var(--mono);
+        font-size: 0.85em;
+      }
 
-/* Footer */
-.docs-footer {
-    margin-left: var(--sidebar-width);
-    padding: 3rem 4rem;
-    max-width: 860px;
-    border-top: 1px solid var(--border);
-}
-.docs-footer .footer-inner { display: flex; justify-content: space-between; align-items: center; }
-.footer-left { font-family: var(--mono); font-size: 0.8rem; color: var(--text-dim); }
-.footer-left .prompt { color: var(--accent); }
-.footer-links { display: flex; gap: 2rem; list-style: none; }
-.footer-links a { color: var(--text-dim); font-size: 0.85rem; text-decoration: none; transition: color 0.2s; }
-.footer-links a:hover { color: var(--text-primary); text-decoration: none; }
+      /* Footer */
+      .docs-footer {
+        margin-left: var(--sidebar-width);
+        padding: 3rem 4rem;
+        max-width: 860px;
+        border-top: 1px solid var(--border);
+      }
+      .docs-footer .footer-inner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .footer-left {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        color: var(--text-dim);
+      }
+      .footer-left .prompt {
+        color: var(--accent);
+      }
+      .footer-links {
+        display: flex;
+        gap: 2rem;
+        list-style: none;
+      }
+      .footer-links a {
+        color: var(--text-dim);
+        font-size: 0.85rem;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .footer-links a:hover {
+        color: var(--text-primary);
+        text-decoration: none;
+      }
 
-/* Responsive: Tablet */
-@media (max-width: 768px) {
-    .docs-footer { margin-left: 0; padding: 1.5rem; }
-    .nav-links { gap: 1rem; }
-    .article h2 { font-size: 22px; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
-}
+      /* Responsive: Tablet */
+      @media (max-width: 768px) {
+        .docs-footer {
+          margin-left: 0;
+          padding: 1.5rem;
+        }
+        .nav-links {
+          gap: 1rem;
+        }
+        .article h2 {
+          font-size: 22px;
+        }
+        .code-block {
+          font-size: 11px;
+          padding: 12px 14px;
+        }
+      }
 
-/* Responsive */
-@media (max-width: 1024px) {
-    .docs-content { padding: 2rem; margin-left: var(--sidebar-width); margin-right: 0; }
-}
-@media (max-width: 768px) {
-    .sidebar-toggle { display: block; }
-    .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
-    .sidebar.open { transform: translateX(0); }
-    .docs-content { margin-left: 0; padding: 1.5rem; }
-    .nav-links a:not(.gh-link) { display: none; }
-}
-@media (max-width: 480px) {
-    .docs-content h1 { font-size: 1.75rem; }
-    .docs-content .lead { font-size: 0.95rem; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
-}
-</style>
-<script src="/pixels.js" defer></script>
-</head>
-<body>
+      /* Responsive */
+      @media (max-width: 1024px) {
+        .docs-content {
+          padding: 2rem;
+          margin-left: var(--sidebar-width);
+          margin-right: 0;
+        }
+      }
+      @media (max-width: 768px) {
+        .sidebar-toggle {
+          display: block;
+        }
+        .sidebar {
+          transform: translateX(-100%);
+          transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .sidebar.open {
+          transform: translateX(0);
+        }
+        .docs-content {
+          margin-left: 0;
+          padding: 1.5rem;
+        }
+        .nav-links a:not(.gh-link) {
+          display: none;
+        }
+      }
+      @media (max-width: 480px) {
+        .docs-content h1 {
+          font-size: 1.75rem;
+        }
+        .docs-content .lead {
+          font-size: 0.95rem;
+        }
+        .code-block {
+          font-size: 11px;
+          padding: 12px 14px;
+        }
+      }
+    </style>
+    <script src="/pixels.js" defer></script>
+  </head>
+  <body>
+    <nav class="top-nav">
+      <div class="nav-inner">
+        <div style="display: flex; align-items: center; gap: 1rem">
+          <button
+            class="sidebar-toggle"
+            onclick="
+              document.querySelector('.sidebar').classList.toggle('open')
+            "
+            aria-label="Toggle sidebar"
+          >
+            &#9776;
+          </button>
+          <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
+        </div>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
+          <li>
+            <a
+              href="https://github.com/CopilotKit/pathfinder"
+              class="gh-btn"
+              target="_blank"
+              ><svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+              >
+                <path
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+                />
+              </svg>
+              GitHub</a
+            >
+          </li>
+        </ul>
+      </div>
+    </nav>
 
-<nav class="top-nav">
-  <div class="nav-inner">
-    <div style="display: flex; align-items: center; gap: 1rem">
-      <button class="sidebar-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')" aria-label="Toggle sidebar">&#9776;</button>
-      <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
-    </div>
-    <ul class="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
-      <li><a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a></li>
-    </ul>
-  </div>
-</nav>
+    <div class="docs-layout">
+      <aside class="sidebar" id="sidebar"></aside>
 
-<div class="docs-layout">
-  <aside class="sidebar" id="sidebar"></aside>
+      <main class="docs-content">
+        <h1>Configuration <span class="accent">Reference</span></h1>
+        <p class="lead">
+          Everything in Pathfinder is driven by a single
+          <code>pathfinder.yaml</code> file. This is the full annotated
+          reference.
+        </p>
 
-  <main class="docs-content">
-    <h1>Configuration <span class="accent">Reference</span></h1>
-    <p class="lead">Everything in Pathfinder is driven by a single <code>pathfinder.yaml</code> file. This is the full annotated reference.</p>
+        <h2 id="server">server</h2>
 
-    <h2 id="server">server</h2>
+        <p>Top-level server identity and session management.</p>
 
-    <p>Top-level server identity and session management.</p>
+        <div class="code-block">
+          <span class="key">server:</span> <span class="key">name:</span>
+          <span class="value">my-project-docs</span>
+          <span class="comment"># Server name, exposed in MCP metadata</span>
+          <span class="key">version:</span> <span class="value">1.0.0</span>
+          <span class="comment"># Server version string</span>
+          <span class="key">max_sessions:</span> <span class="value">1000</span>
+          <span class="comment"
+            ># Global max concurrent sessions (default: 1000)</span
+          >
+          <span class="key">max_sessions_per_ip:</span>
+          <span class="value">20</span>
+          <span class="comment"
+            ># Max concurrent MCP sessions per IP (default: 20)</span
+          >
+          <span class="key">session_ttl_minutes:</span>
+          <span class="value">30</span>
+          <span class="comment"
+            ># Idle timeout for active sessions (default: 30)</span
+          >
+          <span class="key">session_unused_ttl_minutes:</span>
+          <span class="value">15</span>
+          <span class="comment"
+            ># Idle timeout for unused sessions (default: 15)</span
+          >
+          <span class="key">allowlist:</span>
+          <span class="comment"
+            ># IPs / CIDRs that bypass max_sessions_per_ip (default: [])</span
+          >
+          <span class="comment"
+            ># NOTE: entries match the per-request client IP only. Behind a
+            reverse proxy</span
+          >
+          <span class="comment"
+            ># (Railway, Fly, Nginx, etc.) the server only ever sees the proxy's
+            TCP socket</span
+          >
+          <span class="comment"
+            ># peer as the client IP. That IP is not stable across deploys and
+            should not be</span
+          >
+          <span class="comment"
+            ># allowlisted — set trust_proxy: true to trust X-Forwarded-For
+            instead.</span
+          >
+          <span class="comment"
+            ># Directly-exposed servers use the socket peer.</span
+          >
+          - <span class="value">"160.79.106.35"</span>
+          <span class="comment"># Example: Anthropic Assistant crawler</span> -
+          <span class="value">"10.0.0.0/8"</span>
+          <span class="comment"># Example: internal health-probe CIDR</span>
+          <span class="key">trust_proxy:</span> <span class="value">false</span>
+          <span class="comment"
+            ># Honor X-Forwarded-For (default: false — see warning below)</span
+          >
+        </div>
 
-    <div class="code-block"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">my-project-docs</span>             <span class="comment"># Server name, exposed in MCP metadata</span>
-  <span class="key">version:</span> <span class="value">1.0.0</span>                    <span class="comment"># Server version string</span>
-  <span class="key">max_sessions_per_ip:</span> <span class="value">20</span>           <span class="comment"># Max concurrent MCP sessions per IP (default: 20)</span>
-  <span class="key">session_ttl_minutes:</span> <span class="value">30</span>           <span class="comment"># Idle session timeout in minutes (default: 30)</span>
-  <span class="key">allowlist:</span>                       <span class="comment"># IPs / CIDRs that bypass max_sessions_per_ip (default: [])</span>
-    <span class="comment"># NOTE: entries match the per-request client IP only. Behind a reverse proxy</span>
-    <span class="comment"># (Railway, Fly, Nginx, etc.) the server only ever sees the proxy's TCP socket</span>
-    <span class="comment"># peer as the client IP. That IP is not stable across deploys and should not be</span>
-    <span class="comment"># allowlisted — set trust_proxy: true to trust X-Forwarded-For instead.</span>
-    <span class="comment"># Directly-exposed servers use the socket peer.</span>
-    - <span class="value">"160.79.106.35"</span>              <span class="comment"># Example: Anthropic Assistant crawler</span>
-    - <span class="value">"10.0.0.0/8"</span>                 <span class="comment"># Example: internal health-probe CIDR</span>
-  <span class="key">trust_proxy:</span> <span class="value">false</span>                  <span class="comment"># Honor X-Forwarded-For (default: false — see warning below)</span></div>
+        <ul>
+          <li>
+            <strong>name</strong> — Identifies the server in MCP tool
+            descriptions. Required.
+          </li>
+          <li><strong>version</strong> — Semantic version string. Required.</li>
+          <li>
+            <strong>max_sessions</strong> — Global cap on total concurrent
+            sessions across all IPs. When exceeded, new connections receive a
+            <code>503</code> with a descriptive JSON body (<code
+              >error: "capacity_exceeded"</code
+            >, <code>totalSessions</code>, <code>maxSessions</code>,
+            <code>retryAfterSeconds</code>, <code>contact</code>) and a
+            <code>Retry-After</code> header. A warning is logged when sessions
+            exceed 80% of this cap. Optional, defaults to 1000.
+          </li>
+          <li>
+            <strong>max_sessions_per_ip</strong> — Per-IP rate limiting.
+            Prevents a single IP from opening too many concurrent sessions.
+            Optional, defaults to 20.
+          </li>
+          <li>
+            <strong>session_ttl_minutes</strong> — Idle timeout for
+            <em>active</em> sessions (sessions that have invoked at least one
+            tool). Sessions with no activity for this many minutes are cleaned
+            up. Optional, defaults to 30.
+          </li>
+          <li>
+            <strong>session_unused_ttl_minutes</strong> — Idle timeout for
+            <em>unused</em> sessions (sessions that connected but never invoked
+            a tool). Designed to shed idle MCP connections quickly while keeping
+            active sessions alive longer. Set to 15 by default to match
+            Railway's 15-minute SSE connection hard limit. Optional.
+          </li>
+          <li>
+            <strong>allowlist</strong> — Array of IPv4/IPv6 addresses or CIDR
+            ranges that bypass <code>max_sessions_per_ip</code> entirely. Use
+            for trusted crawlers (e.g. <code>160.79.106.35</code> — Anthropic
+            Assistant) or internal health-probe ranges. Optional, defaults to
+            empty. Entries are matched against the per-request client IP —
+            <strong
+              >behind a reverse proxy this requires
+              <code>trust_proxy: true</code></strong
+            >; with the default <code>trust_proxy: false</code> the server only
+            sees the proxy's TCP socket address and no upstream client IP will
+            ever match. Directly-exposed servers use the socket peer and need no
+            extra config. Clients that hit the limit receive a
+            <code>429</code> with a descriptive JSON body (<code>error</code>,
+            <code>reason</code>, <code>limit</code>, <code>currentCount</code>,
+            <code>retryAfterSeconds</code>, <code>contact</code>) and a
+            <code>Retry-After</code> header.
+          </li>
+          <li>
+            <strong>trust_proxy</strong> — Whether to honor the
+            <code>X-Forwarded-For</code> header for client-IP resolution (used
+            by rate limiting, allowlist checks, tracing, and analytics). When
+            <code>true</code>, the server populates <code>req.ip</code> from the
+            leftmost entry of <code>X-Forwarded-For</code>. This is REQUIRED
+            when the server runs behind a reverse proxy (Railway, Fly, Nginx,
+            etc.) that sets <code>X-Forwarded-For</code>. Optional, defaults to
+            <code>false</code>. <strong>⚠️ Security:</strong> only enable this
+            when the proxy discards any client-supplied
+            <code>X-Forwarded-For</code> AND sets its own trusted value. If the
+            proxy passes through client-supplied <code>X-Forwarded-For</code>,
+            attackers can send <code>X-Forwarded-For: 160.79.106.35</code> to be
+            seen as an allowlisted IP and bypass the rate limiter entirely. When
+            <code>false</code> (default), <code>X-Forwarded-For</code> is
+            ignored and the server uses the TCP socket's peer address.
+          </li>
+        </ul>
 
-    <ul>
-        <li><strong>name</strong> — Identifies the server in MCP tool descriptions. Required.</li>
-        <li><strong>version</strong> — Semantic version string. Required.</li>
-        <li><strong>max_sessions_per_ip</strong> — Rate limiting. Prevents a single IP from opening too many concurrent sessions. Optional, defaults to 20.</li>
-        <li><strong>session_ttl_minutes</strong> — Sessions with no activity for this many minutes are cleaned up. Optional, defaults to 30.</li>
-        <li><strong>allowlist</strong> — Array of IPv4/IPv6 addresses or CIDR ranges that bypass <code>max_sessions_per_ip</code> entirely. Use for trusted crawlers (e.g. <code>160.79.106.35</code> — Anthropic Assistant) or internal health-probe ranges. Optional, defaults to empty. Entries are matched against the per-request client IP — <strong>behind a reverse proxy this requires <code>trust_proxy: true</code></strong>; with the default <code>trust_proxy: false</code> the server only sees the proxy's TCP socket address and no upstream client IP will ever match. Directly-exposed servers use the socket peer and need no extra config. Clients that hit the limit receive a <code>429</code> with a descriptive JSON body (<code>error</code>, <code>reason</code>, <code>limit</code>, <code>currentCount</code>, <code>retryAfterSeconds</code>, <code>contact</code>) and a <code>Retry-After</code> header.</li>
-        <li><strong>trust_proxy</strong> — Whether to honor the <code>X-Forwarded-For</code> header for client-IP resolution (used by rate limiting, allowlist checks, tracing, and analytics). When <code>true</code>, the server populates <code>req.ip</code> from the leftmost entry of <code>X-Forwarded-For</code>. This is REQUIRED when the server runs behind a reverse proxy (Railway, Fly, Nginx, etc.) that sets <code>X-Forwarded-For</code>. Optional, defaults to <code>false</code>.
-            <strong>⚠️ Security:</strong> only enable this when the proxy discards any client-supplied <code>X-Forwarded-For</code> AND sets its own trusted value. If the proxy passes through client-supplied <code>X-Forwarded-For</code>, attackers can send <code>X-Forwarded-For: 160.79.106.35</code> to be seen as an allowlisted IP and bypass the rate limiter entirely. When <code>false</code> (default), <code>X-Forwarded-For</code> is ignored and the server uses the TCP socket's peer address.</li>
-    </ul>
+        <h2 id="sources">sources</h2>
 
-    <h2 id="sources">sources</h2>
+        <p>
+          Define where your content lives. Each source becomes a virtual
+          filesystem that agents can explore.
+        </p>
 
-    <p>Define where your content lives. Each source becomes a virtual filesystem that agents can explore.</p>
+        <div class="code-block">
+          <span class="key">sources:</span> - <span class="key">name:</span>
+          <span class="value">docs</span>
+          <span class="comment"># Unique name, referenced by tools</span>
+          <span class="key">type:</span> <span class="value">markdown</span>
+          <span class="comment"
+            ># markdown | code | raw-text | html | document | slack | discord |
+            notion</span
+          >
+          <span class="key">repo:</span>
+          <span class="value">https://github.com/org/repo.git</span>
+          <span class="comment"># Git repo URL (optional for local paths)</span>
+          <span class="key">branch:</span> <span class="value">main</span>
+          <span class="comment"
+            ># Git branch to track (default: default branch)</span
+          >
+          <span class="key">path:</span> <span class="value">docs/</span>
+          <span class="comment"># Directory within the repo to index</span>
+          <span class="key">version:</span> <span class="value">v2</span>
+          <span class="comment"
+            ># Version tag for multi-version docs (optional)</span
+          >
+          <span class="key">file_patterns:</span>
+          <span class="comment"># Glob patterns for files to include</span> -
+          <span class="value">"**/*.mdx"</span> -
+          <span class="value">"**/*.md"</span>
+          <span class="key">exclude_patterns:</span>
+          <span class="comment"># Glob patterns to exclude (optional)</span> -
+          <span class="value">"**/node_modules/**"</span> -
+          <span class="value">"**/_internal/**"</span>
+          <span class="key">skip_dirs:</span>
+          <span class="comment"
+            ># Directory names to skip entirely (optional)</span
+          >
+          - <span class="value">.git</span> -
+          <span class="value">node_modules</span>
+          <span class="key">max_file_size:</span>
+          <span class="value">100000</span>
+          <span class="comment"
+            ># Max file size in bytes to index (optional)</span
+          >
+          <span class="key">category:</span> <span class="value">faq</span>
+          <span class="comment"
+            ># Optional. Marks content as FAQ for /faq.txt and knowledge
+            tools</span
+          >
+          <span class="key">base_url:</span>
+          <span class="value">https://docs.example.com</span>
+          <span class="comment"
+            ># Base URL for generating doc links (optional)</span
+          >
+          <span class="key">url_derivation:</span>
+          <span class="comment"
+            ># How to derive URLs from file paths (optional)</span
+          >
+          <span class="key">strip_prefix:</span>
+          <span class="value">docs/</span>
+          <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
+          <span class="key">strip_route_groups:</span>
+          <span class="value">true</span> <span class="key">strip_index:</span>
+          <span class="value">true</span> <span class="key">chunk:</span>
+          <span class="comment"># How to split content for embeddings</span>
+          <span class="key">target_tokens:</span> <span class="value">600</span>
+          <span class="comment"># For markdown/raw-text sources</span>
+          <span class="key">overlap_tokens:</span> <span class="value">50</span>
+          <span class="comment"># Token overlap between chunks</span>
+          <span class="key">target_lines:</span> <span class="value">100</span>
+          <span class="comment"># For code sources</span>
+          <span class="key">overlap_lines:</span> <span class="value">10</span>
+          <span class="comment"># Line overlap between chunks</span>
+        </div>
 
-    <div class="code-block"><span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>                               <span class="comment"># Unique name, referenced by tools</span>
-    <span class="key">type:</span> <span class="value">markdown</span>                           <span class="comment"># markdown | code | raw-text | html | document | slack | discord | notion</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>    <span class="comment"># Git repo URL (optional for local paths)</span>
-    <span class="key">branch:</span> <span class="value">main</span>                             <span class="comment"># Git branch to track (default: default branch)</span>
-    <span class="key">path:</span> <span class="value">docs/</span>                              <span class="comment"># Directory within the repo to index</span>
-    <span class="key">version:</span> <span class="value">v2</span>                              <span class="comment"># Version tag for multi-version docs (optional)</span>
-    <span class="key">file_patterns:</span>                           <span class="comment"># Glob patterns for files to include</span>
-      - <span class="value">"**/*.mdx"</span>
-      - <span class="value">"**/*.md"</span>
-    <span class="key">exclude_patterns:</span>                        <span class="comment"># Glob patterns to exclude (optional)</span>
-      - <span class="value">"**/node_modules/**"</span>
-      - <span class="value">"**/_internal/**"</span>
-    <span class="key">skip_dirs:</span>                               <span class="comment"># Directory names to skip entirely (optional)</span>
-      - <span class="value">.git</span>
-      - <span class="value">node_modules</span>
-    <span class="key">max_file_size:</span> <span class="value">100000</span>                    <span class="comment"># Max file size in bytes to index (optional)</span>
-    <span class="key">category:</span> <span class="value">faq</span>                            <span class="comment"># Optional. Marks content as FAQ for /faq.txt and knowledge tools</span>
-    <span class="key">base_url:</span> <span class="value">https://docs.example.com</span>       <span class="comment"># Base URL for generating doc links (optional)</span>
-    <span class="key">url_derivation:</span>                          <span class="comment"># How to derive URLs from file paths (optional)</span>
-      <span class="key">strip_prefix:</span> <span class="value">docs/</span>
-      <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
-      <span class="key">strip_route_groups:</span> <span class="value">true</span>
-      <span class="key">strip_index:</span> <span class="value">true</span>
-    <span class="key">chunk:</span>                                   <span class="comment"># How to split content for embeddings</span>
-      <span class="key">target_tokens:</span> <span class="value">600</span>                     <span class="comment"># For markdown/raw-text sources</span>
-      <span class="key">overlap_tokens:</span> <span class="value">50</span>                     <span class="comment"># Token overlap between chunks</span>
-      <span class="key">target_lines:</span> <span class="value">100</span>                      <span class="comment"># For code sources</span>
-      <span class="key">overlap_lines:</span> <span class="value">10</span>                      <span class="comment"># Line overlap between chunks</span></div>
-
-    <ul>
-        <li><strong>type</strong> — Determines chunking strategy. <code>markdown</code> splits on headings and uses token-based chunks. <code>code</code> splits on function boundaries and uses line-based chunks. <code>raw-text</code> treats content as plain text with token-based chunks. <code>html</code> parses HTML structure and extracts text content with token-based chunks. <code>document</code> extracts text from PDF and DOCX files with token-based chunks.</li>
-        <li><strong>category</strong> — Optional tag applied to all chunks from this source. Sources with <code>category: faq</code> contribute to the <code>/faq.txt</code> endpoint and can be queried via knowledge tools.</li>
-        <li><strong>repo</strong> — If provided, Pathfinder clones and updates from this repo. Omit for local directories.</li>
-        <li><strong>version</strong> — Tags all indexed chunks with this version string. Used for version-filtered search queries.</li>
-        <li><strong>base_url</strong> — Base URL prepended to the derived slug when generating document links. Works together with <code>url_derivation</code>.</li>
-        <li><strong>url_derivation</strong> — Controls how file paths are transformed into URL slugs that get appended to <code>base_url</code>. Each step is applied in order:
+        <ul>
+          <li>
+            <strong>type</strong> — Determines chunking strategy.
+            <code>markdown</code> splits on headings and uses token-based
+            chunks. <code>code</code> splits on function boundaries and uses
+            line-based chunks. <code>raw-text</code> treats content as plain
+            text with token-based chunks. <code>html</code> parses HTML
+            structure and extracts text content with token-based chunks.
+            <code>document</code> extracts text from PDF and DOCX files with
+            token-based chunks.
+          </li>
+          <li>
+            <strong>category</strong> — Optional tag applied to all chunks from
+            this source. Sources with <code>category: faq</code> contribute to
+            the <code>/faq.txt</code> endpoint and can be queried via knowledge
+            tools.
+          </li>
+          <li>
+            <strong>repo</strong> — If provided, Pathfinder clones and updates
+            from this repo. Omit for local directories.
+          </li>
+          <li>
+            <strong>version</strong> — Tags all indexed chunks with this version
+            string. Used for version-filtered search queries.
+          </li>
+          <li>
+            <strong>base_url</strong> — Base URL prepended to the derived slug
+            when generating document links. Works together with
+            <code>url_derivation</code>.
+          </li>
+          <li>
+            <strong>url_derivation</strong> — Controls how file paths are
+            transformed into URL slugs that get appended to
+            <code>base_url</code>. Each step is applied in order:
             <ul>
-                <li><strong>strip_prefix</strong> — Remove this prefix from the file path before generating the URL. For example, <code>"docs/"</code> turns <code>docs/guide/auth.mdx</code> into <code>guide/auth.mdx</code>.</li>
-                <li><strong>strip_suffix</strong> — Remove the file extension. For example, <code>".mdx"</code> turns <code>guide/auth.mdx</code> into <code>guide/auth</code>.</li>
-                <li><strong>strip_route_groups</strong> — When <code>true</code>, removes Next.js-style route group segments like <code>(marketing)</code> or <code>(guides)</code> from the path.</li>
-                <li><strong>strip_index</strong> — When <code>true</code>, removes a trailing <code>/index</code> from the path (e.g. <code>guide/auth/index</code> becomes <code>guide/auth</code>).</li>
+              <li>
+                <strong>strip_prefix</strong> — Remove this prefix from the file
+                path before generating the URL. For example,
+                <code>"docs/"</code> turns <code>docs/guide/auth.mdx</code> into
+                <code>guide/auth.mdx</code>.
+              </li>
+              <li>
+                <strong>strip_suffix</strong> — Remove the file extension. For
+                example, <code>".mdx"</code> turns
+                <code>guide/auth.mdx</code> into <code>guide/auth</code>.
+              </li>
+              <li>
+                <strong>strip_route_groups</strong> — When <code>true</code>,
+                removes Next.js-style route group segments like
+                <code>(marketing)</code> or <code>(guides)</code> from the path.
+              </li>
+              <li>
+                <strong>strip_index</strong> — When <code>true</code>, removes a
+                trailing <code>/index</code> from the path (e.g.
+                <code>guide/auth/index</code> becomes <code>guide/auth</code>).
+              </li>
             </ul>
-        </li>
-        <li><strong>chunk</strong> — Use <code>target_tokens</code>/<code>overlap_tokens</code> for markdown and raw-text sources. Use <code>target_lines</code>/<code>overlap_lines</code> for code sources.</li>
-    </ul>
-
-    <p><em>Note: The <code>chunk</code> config is available on all source types, but the effect varies. Markdown, raw-text, HTML, and document sources use token-based chunks (<code>target_tokens</code>/<code>overlap_tokens</code>). Code sources use line-based chunks (<code>target_lines</code>/<code>overlap_lines</code>). For Slack and Discord, the Q&amp;A chunker produces one chunk per Q&amp;A pair and chunk settings have no effect. For Notion, the markdown chunker respects <code>target_tokens</code> and <code>overlap_tokens</code>.</em></p>
-
-    <h3 id="source-markdown">Source type: markdown</h3>
-
-    <p>Splits content on Markdown headings and uses token-based chunks. Best for documentation written in <code>.md</code> or <code>.mdx</code> files. Configure with <code>target_tokens</code> and <code>overlap_tokens</code>.</p>
-
-    <h3 id="source-code">Source type: code</h3>
-
-    <p>Splits on function/class boundaries and uses line-based chunks. Best for source code. Configure with <code>target_lines</code> and <code>overlap_lines</code>.</p>
-
-    <h3 id="source-raw-text">Source type: raw-text</h3>
-
-    <p>Treats content as unstructured plain text with token-based chunks. Use when content has no Markdown or code structure.</p>
-
-    <h3 id="source-html">Source type: html</h3>
-
-    <p>Parses HTML structure, extracts text content, and uses token-based chunks. Best for static sites, rendered documentation, or any HTML content.</p>
-
-    <h3 id="source-slack">Source type: slack</h3>
-
-    <p>Indexes Slack threads as Q&amp;A pairs. An LLM distills each qualifying thread into a question-answer pair with a confidence score. All pairs are stored; confidence filtering happens at query time.</p>
-
-    <div class="code-block"><span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">community-support</span>
-    <span class="key">type:</span> <span class="value">slack</span>
-    <span class="key">category:</span> <span class="value">faq</span>
-    <span class="key">channels:</span>
-      - <span class="value">C06ABC123</span>                        <span class="comment"># Channel IDs to index</span>
-      - <span class="value">C06DEF456</span>
-    <span class="key">confidence_threshold:</span> <span class="value">0.7</span>            <span class="comment"># Min confidence for query results (0-1)</span>
-    <span class="key">trigger_emoji:</span> <span class="value">white_check_mark</span>      <span class="comment"># Emoji reaction triggers immediate reindex of thread</span>
-    <span class="key">min_thread_replies:</span> <span class="value">2</span>                <span class="comment"># Minimum replies for a thread to be indexed</span>
-    <span class="key">distiller_model:</span> <span class="value">gpt-4o-mini</span>         <span class="comment"># LLM model for distillation (default: gpt-4o-mini)</span></div>
-
-    <ul>
-        <li><strong>channels</strong> — Array of Slack channel IDs to monitor. The bot must be a member of each channel.</li>
-        <li><strong>confidence_threshold</strong> — Minimum confidence score (0-1) for Q&amp;A pairs to appear in query results. Pairs below this threshold are still stored but filtered out at query time.</li>
-        <li><strong>trigger_emoji</strong> — When a user reacts with this emoji on a thread, it triggers immediate reindexing of that thread. Useful for curating high-quality answers.</li>
-        <li><strong>min_thread_replies</strong> — Threads with fewer replies are skipped during indexing.</li>
-        <li><strong>distiller_model</strong> — The OpenAI model used to distill threads into Q&amp;A pairs. Defaults to <code>gpt-4o-mini</code>.</li>
-    </ul>
-
-    <p>Required environment variables: <code>SLACK_BOT_TOKEN</code>, <code>SLACK_SIGNING_SECRET</code> (for emoji-triggered webhook verification).</p>
-
-    <h3 id="source-discord">Source type: discord</h3>
-
-    <p>Indexes Discord channels as Q&amp;A pairs. Supports two channel types with different extraction strategies.</p>
-
-    <div class="code-block"><span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">discord-support</span>
-    <span class="key">type:</span> <span class="value">discord</span>
-    <span class="key">category:</span> <span class="value">faq</span>
-    <span class="key">guild_id:</span> <span class="value">"1234567890"</span>               <span class="comment"># Discord server (guild) ID</span>
-    <span class="key">channels:</span>
-      - <span class="key">id:</span> <span class="value">"1111111111"</span>                 <span class="comment"># Text channel — LLM distillation</span>
-        <span class="key">type:</span> <span class="value">text</span>
-      - <span class="key">id:</span> <span class="value">"2222222222"</span>                 <span class="comment"># Forum channel — direct Q&amp;A extraction</span>
-        <span class="key">type:</span> <span class="value">forum</span>
-    <span class="key">confidence_threshold:</span> <span class="value">0.7</span>            <span class="comment"># Min confidence for query results (0-1)</span>
-    <span class="key">min_thread_replies:</span> <span class="value">2</span>                <span class="comment"># Minimum replies for text threads</span></div>
-
-    <ul>
-        <li><strong>guild_id</strong> — The Discord server ID.</li>
-        <li><strong>channels</strong> — Array of channel objects, each with an <code>id</code> and <code>type</code>.</li>
-        <li><strong>type: text</strong> — Text channels use LLM distillation (same as Slack). Threads are distilled into Q&amp;A pairs with confidence scores.</li>
-        <li><strong>type: forum</strong> — Forum channels extract Q&amp;A directly from the post title (question) and replies (answer). Confidence is always 1.0 since the structure is explicit.</li>
-        <li><strong>confidence_threshold</strong> — Minimum confidence for query results. Forum posts always pass (confidence 1.0).</li>
-        <li><strong>min_thread_replies</strong> — Applies to text channel threads only.</li>
-        <li><strong>distiller_model</strong> — OpenAI model for thread distillation on text channels. Optional, defaults to <code>gpt-4o-mini</code>.</li>
-    </ul>
-
-    <p>Discord does not support emoji-triggered reindexing (requires Gateway WebSocket, which Pathfinder does not maintain).</p>
-
-    <p>Required environment variables: <code>DISCORD_BOT_TOKEN</code>, <code>DISCORD_PUBLIC_KEY</code> (for webhook Ed25519 verification). The bot needs the <code>MESSAGE_CONTENT</code> privileged intent and <code>Read Message History</code> + <code>View Channels</code> permissions.</p>
-
-    <h3 id="source-notion">Source type: notion</h3>
-
-    <p>Index Notion pages and database entries as searchable markdown documents. Blocks are recursively converted to markdown, and database entry properties are serialized as YAML frontmatter.</p>
-
-    <div class="code-block"><span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">notion-wiki</span>
-    <span class="key">type:</span> <span class="value">notion</span>
-    <span class="key">root_pages:</span>
-      - <span class="value">"abc123def456..."</span>         <span class="comment"># Notion page IDs to index (including children)</span>
-    <span class="key">databases:</span>
-      - <span class="value">"789xyz..."</span>               <span class="comment"># Database IDs — all entries indexed</span>
-    <span class="key">max_depth:</span> <span class="value">5</span>                  <span class="comment"># How deep to recurse into child pages (1-20, default: 5)</span>
-    <span class="key">include_properties:</span> <span class="value">true</span>      <span class="comment"># Serialize database properties as YAML frontmatter (default: true)</span>
-    <span class="key">chunk:</span>
-      <span class="key">target_tokens:</span> <span class="value">600</span>
-      <span class="key">overlap_tokens:</span> <span class="value">50</span></div>
-
-    <ul>
-        <li><strong>root_pages</strong> — Array of Notion page IDs. Each page and its children (up to <code>max_depth</code>) are indexed. Optional, defaults to <code>[]</code>.</li>
-        <li><strong>databases</strong> — Array of Notion database IDs. All entries in each database are indexed with their properties. Optional, defaults to <code>[]</code>.</li>
-        <li><strong>max_depth</strong> — Maximum depth for recursive child page discovery. Range 1-20, default 5.</li>
-        <li><strong>include_properties</strong> — When true, database entry properties (Status, Priority, Tags, etc.) are prepended as YAML frontmatter to the page content. Default true.</li>
-    </ul>
-
-    <p>If both <code>root_pages</code> and <code>databases</code> are empty, all pages accessible to the integration token are indexed. Requires <code>NOTION_TOKEN</code> environment variable.</p>
-
-    <p>By default, Notion sources are indexed as documents and referenced by <code>search</code> tools. To also make them available via <code>knowledge</code> tools and the <code>/faq.txt</code> endpoint, add <code>category: faq</code> to the source config — useful for Notion databases structured as Q&amp;A or FAQ collections.</p>
-
-    <h3 id="source-document">Source type: document</h3>
-
-    <p>Index PDF and DOCX files. Requires optional peer dependencies: <code>npm install pdf-parse</code> for PDF support and <code>npm install mammoth</code> for DOCX support. Uses token-based chunks like markdown sources.</p>
-
-    <div class="code-block"><span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">manuals</span>
-    <span class="key">type:</span> <span class="value">document</span>
-    <span class="key">path:</span> <span class="value">./documents</span>
-    <span class="key">file_patterns:</span>
-      - <span class="value">"**/*.pdf"</span>
-      - <span class="value">"**/*.docx"</span>
-    <span class="key">max_file_size:</span> <span class="value">10485760</span>              <span class="comment"># 10MB default limit</span>
-    <span class="key">chunk:</span>
-      <span class="key">target_tokens:</span> <span class="value">600</span>
-      <span class="key">overlap_tokens:</span> <span class="value">50</span></div>
-
-    <ul>
-        <li><strong>PDF support</strong> — Requires <code>pdf-parse</code> peer dependency. Text is extracted page-by-page. Scanned PDFs (image-only pages with no extractable text) are detected and skipped with a warning.</li>
-        <li><strong>DOCX support</strong> — Requires <code>mammoth</code> peer dependency. Document content is converted to plain text for chunking.</li>
-        <li><strong>max_file_size</strong> — Defaults to 10MB (10485760 bytes) for document sources. Large files are skipped with a warning.</li>
-    </ul>
-
-    <h3>url_derivation example</h3>
-
-    <p>Given a file at <code>docs/(guides)/getting-started/index.mdx</code> with the following config:</p>
-
-    <div class="code-block"><span class="key">base_url:</span> <span class="value">https://docs.example.com/</span>
-<span class="key">url_derivation:</span>
-  <span class="key">strip_prefix:</span> <span class="value">docs/</span>
-  <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
-  <span class="key">strip_route_groups:</span> <span class="value">true</span>
-  <span class="key">strip_index:</span> <span class="value">true</span></div>
-
-    <p>The derivation steps produce:</p>
-
-    <div class="code-block"><span class="comment"># Original file path</span>
-docs/(guides)/getting-started/index.mdx
-
-<span class="comment"># After strip_prefix: "docs/"</span>
-(guides)/getting-started/index.mdx
-
-<span class="comment"># After strip_suffix: ".mdx"</span>
-(guides)/getting-started/index
-
-<span class="comment"># After strip_route_groups: true</span>
-getting-started/index
-
-<span class="comment"># After strip_index: true</span>
-getting-started
-
-<span class="comment"># Final URL = base_url + slug</span>
-https://docs.example.com/getting-started</div>
-
-    <h2 id="tools">tools</h2>
-
-    <p>Tools are what agents actually call. Four types: <code>search</code>, <code>bash</code>, <code>collect</code>, and <code>knowledge</code>.</p>
-
-    <h3 id="tool-search">search</h3>
-
-    <p>Semantic search over embedded content. Requires a database and embedding config.</p>
-
-    <div class="code-block"><span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>                 <span class="comment"># Tool name exposed to agents</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">description:</span> <span class="value">Search the docs</span>      <span class="comment"># Description shown to agents</span>
-    <span class="key">source:</span> <span class="value">docs</span>                      <span class="comment"># Which source to search</span>
-    <span class="key">default_limit:</span> <span class="value">5</span>                  <span class="comment"># Default number of results</span>
-    <span class="key">max_limit:</span> <span class="value">20</span>                     <span class="comment"># Maximum results an agent can request</span>
-    <span class="key">result_format:</span> <span class="value">docs</span>               <span class="comment"># docs | code | raw</span>
-    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Minimum cosine similarity threshold (0-1, optional)</span>
-    <span class="key">search_mode:</span> <span class="value">vector</span>               <span class="comment"># vector (default) | keyword | hybrid</span></div>
-
-    <h3 id="search-modes">Search Modes</h3>
-
-    <p>The <code>search_mode</code> field controls how search queries are executed:</p>
-
-    <ul>
-      <li><strong>vector</strong> (default) — cosine similarity on embeddings. Best for semantic/conceptual queries.</li>
-      <li><strong>keyword</strong> — PostgreSQL full-text search (tsvector/tsquery). Best for exact terms, error codes, and technical identifiers. Does not require an embedding call at query time.</li>
-      <li><strong>hybrid</strong> — runs both vector and keyword searches in parallel, then merges results using Reciprocal Rank Fusion (RRF, k=60). Best overall recall for mixed query types.</li>
-    </ul>
-
-    <h3 id="tool-bash">bash</h3>
-
-    <p>Filesystem exploration with find, grep, cat, ls, head. Works with no database.</p>
-
-    <div class="code-block"><span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">explore-docs</span>                 <span class="comment"># Tool name exposed to agents</span>
-    <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">description:</span> <span class="value">Explore the docs</span>      <span class="comment"># Description shown to agents</span>
-    <span class="key">sources:</span> [<span class="value">docs</span>]                    <span class="comment"># Sources to mount (can be multiple)</span>
-    <span class="key">bash:</span>
-      <span class="key">session_state:</span> <span class="value">true</span>              <span class="comment"># Persist CWD across commands</span>
-      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>            <span class="comment"># memory | vector | hybrid</span>
-      <span class="key">virtual_files:</span> <span class="value">true</span>              <span class="comment"># Expose qmd and related as virtual commands</span>
-      <span class="key">workspace:</span> <span class="value">true</span>                  <span class="comment"># Enable writable /workspace directory</span>
-      <span class="key">max_file_size:</span> <span class="value">100000</span>            <span class="comment"># Max file size for cat output (bytes)</span>
-      <span class="key">cache:</span>
-        <span class="key">max_entries:</span> <span class="value">100</span>               <span class="comment"># Max cached command results</span>
-        <span class="key">ttl_seconds:</span> <span class="value">300</span>               <span class="comment"># Cache TTL in seconds</span></div>
-
-    <ul>
-        <li><strong>grep_strategy</strong> — <code>memory</code> passes grep through to bash unchanged. <code>vector</code> intercepts grep and runs semantic search. <code>hybrid</code> runs bash grep first, falls back to semantic if no results.</li>
-        <li><strong>workspace</strong> — When true, agents can write files to <code>/workspace/</code>. Requires a persistent volume in production (see <a href="/deploy">Deploy Guide</a>).</li>
-        <li><strong>session_state</strong> — When true, <code>cd</code> persists across tool calls within a session.</li>
-    </ul>
-
-    <h3 id="tool-collect">collect</h3>
-
-    <p>Data collection tools. Agents submit structured data based on a JSON schema you define. Submitted data is stored in the local PostgreSQL database in the <code>collected_data</code> table, with a <code>tool_name</code> column and a <code>data</code> JSONB column containing the fields from your schema. What you do with the collected data is up to you — query it directly, build dashboards, pipe it to analytics, or export it. Pathfinder stores it; you decide how to use it.</p>
-
-    <div class="code-block"><span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">submit-feedback</span>
-    <span class="key">type:</span> <span class="value">collect</span>
-    <span class="key">description:</span> <span class="value">Report search quality or broken links</span>
-    <span class="key">response:</span> <span class="value">Thanks for the feedback!</span>
-    <span class="key">schema:</span>
-      <span class="key">rating:</span>
-        <span class="key">type:</span> <span class="value">enum</span>
-        <span class="key">description:</span> <span class="value">How helpful was the result?</span>
-        <span class="key">required:</span> <span class="value">true</span>
-        <span class="key">values:</span> [<span class="value">helpful</span>, <span class="value">somewhat</span>, <span class="value">not_helpful</span>]
-      <span class="key">comment:</span>
-        <span class="key">type:</span> <span class="value">string</span>
-        <span class="key">description:</span> <span class="value">Optional details</span></div>
-
-    <h3 id="tool-knowledge">knowledge</h3>
-
-    <p>FAQ and knowledge base tool. Exposes Q&amp;A pairs from FAQ-category sources (Slack, Discord) to agents. Supports two modes: browse (no query, returns recent pairs) and search (semantic query over pairs).</p>
-
-    <div class="code-block"><span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">knowledge-base</span>
-    <span class="key">type:</span> <span class="value">knowledge</span>
-    <span class="key">description:</span> <span class="value">Search community Q&amp;A knowledge base</span>
-    <span class="key">sources:</span> [<span class="value">community-support</span>, <span class="value">discord-support</span>]   <span class="comment"># Sources with category: faq</span>
-    <span class="key">min_confidence:</span> <span class="value">0.7</span>                             <span class="comment"># Override source-level confidence threshold</span>
-    <span class="key">default_limit:</span> <span class="value">10</span>                               <span class="comment"># Default number of results</span>
-    <span class="key">max_limit:</span> <span class="value">50</span>                                   <span class="comment"># Maximum results an agent can request</span></div>
-
-    <ul>
-        <li><strong>sources</strong> — Array of source names. These sources should have <code>category: faq</code> set.</li>
-        <li><strong>min_confidence</strong> — Override the per-source confidence threshold for this tool. Q&amp;A pairs below this score are filtered from results.</li>
-        <li><strong>default_limit</strong> — Number of results returned when the agent doesn't specify a limit.</li>
-        <li><strong>max_limit</strong> — Upper bound on results the agent can request.</li>
-    </ul>
-
-    <p>When called without a query, the tool returns recent Q&amp;A pairs (browse mode). When called with a query, it performs semantic search over the pairs.</p>
-
-    <h2 id="embedding">embedding</h2>
-
-    <p>Required when using search tools. Configures how content is embedded for vector search.</p>
-
-    <div class="code-block"><span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">openai</span>                    <span class="comment"># openai | ollama | local</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>       <span class="comment"># Model name (provider-specific)</span>
-  <span class="key">dimensions:</span> <span class="value">1536</span>                    <span class="comment"># Vector dimensions (must match model)</span></div>
-
-    <h3>Provider options</h3>
-
-    <p>Three embedding providers are supported. <code>OPENAI_API_KEY</code> is only required when using the <code>openai</code> provider.</p>
-
-    <p><strong>OpenAI</strong> (default) — uses the OpenAI embeddings API. Requires <code>OPENAI_API_KEY</code>.</p>
-
-    <div class="code-block"><span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">openai</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
-  <span class="key">dimensions:</span> <span class="value">1536</span></div>
-
-    <p><strong>Ollama</strong> — calls a local Ollama instance over HTTP. No API key needed. Requires <a href="https://ollama.ai">Ollama</a> running with the model pulled (<code>ollama pull nomic-embed-text</code>).</p>
-
-    <div class="code-block"><span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">ollama</span>
-  <span class="key">model:</span> <span class="value">nomic-embed-text</span>
-  <span class="key">dimensions:</span> <span class="value">768</span>
-  <span class="key">base_url:</span> <span class="value">http://localhost:11434</span>   <span class="comment"># Optional, this is the default</span></div>
-
-    <p><strong>Local</strong> — runs <code>@xenova/transformers</code> in-process. Zero external dependencies, CPU-only. Install the optional peer dependency: <code>npm install @xenova/transformers</code>.</p>
-
-    <div class="code-block"><span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">local</span>
-  <span class="key">model:</span> <span class="value">Xenova/all-MiniLM-L6-v2</span>
-  <span class="key">dimensions:</span> <span class="value">384</span></div>
-
-    <div class="gap-card">
-        <h4>Dimension mismatch detection</h4>
-        <p>If you change embedding providers or models on an existing database, Pathfinder warns at startup when the configured dimensions don't match the existing vector index. You'll need to reindex to use the new dimensions.</p>
+          </li>
+          <li>
+            <strong>chunk</strong> — Use <code>target_tokens</code>/<code
+              >overlap_tokens</code
+            >
+            for markdown and raw-text sources. Use
+            <code>target_lines</code>/<code>overlap_lines</code> for code
+            sources.
+          </li>
+        </ul>
+
+        <p>
+          <em
+            >Note: The <code>chunk</code> config is available on all source
+            types, but the effect varies. Markdown, raw-text, HTML, and document
+            sources use token-based chunks
+            (<code>target_tokens</code>/<code>overlap_tokens</code>). Code
+            sources use line-based chunks
+            (<code>target_lines</code>/<code>overlap_lines</code>). For Slack
+            and Discord, the Q&amp;A chunker produces one chunk per Q&amp;A pair
+            and chunk settings have no effect. For Notion, the markdown chunker
+            respects <code>target_tokens</code> and
+            <code>overlap_tokens</code>.</em
+          >
+        </p>
+
+        <h3 id="source-markdown">Source type: markdown</h3>
+
+        <p>
+          Splits content on Markdown headings and uses token-based chunks. Best
+          for documentation written in <code>.md</code> or
+          <code>.mdx</code> files. Configure with <code>target_tokens</code> and
+          <code>overlap_tokens</code>.
+        </p>
+
+        <h3 id="source-code">Source type: code</h3>
+
+        <p>
+          Splits on function/class boundaries and uses line-based chunks. Best
+          for source code. Configure with <code>target_lines</code> and
+          <code>overlap_lines</code>.
+        </p>
+
+        <h3 id="source-raw-text">Source type: raw-text</h3>
+
+        <p>
+          Treats content as unstructured plain text with token-based chunks. Use
+          when content has no Markdown or code structure.
+        </p>
+
+        <h3 id="source-html">Source type: html</h3>
+
+        <p>
+          Parses HTML structure, extracts text content, and uses token-based
+          chunks. Best for static sites, rendered documentation, or any HTML
+          content.
+        </p>
+
+        <h3 id="source-slack">Source type: slack</h3>
+
+        <p>
+          Indexes Slack threads as Q&amp;A pairs. An LLM distills each
+          qualifying thread into a question-answer pair with a confidence score.
+          All pairs are stored; confidence filtering happens at query time.
+        </p>
+
+        <div class="code-block">
+          <span class="key">sources:</span> - <span class="key">name:</span>
+          <span class="value">community-support</span>
+          <span class="key">type:</span> <span class="value">slack</span>
+          <span class="key">category:</span> <span class="value">faq</span>
+          <span class="key">channels:</span>
+          - <span class="value">C06ABC123</span>
+          <span class="comment"># Channel IDs to index</span> -
+          <span class="value">C06DEF456</span>
+          <span class="key">confidence_threshold:</span>
+          <span class="value">0.7</span>
+          <span class="comment"># Min confidence for query results (0-1)</span>
+          <span class="key">trigger_emoji:</span>
+          <span class="value">white_check_mark</span>
+          <span class="comment"
+            ># Emoji reaction triggers immediate reindex of thread</span
+          >
+          <span class="key">min_thread_replies:</span>
+          <span class="value">2</span>
+          <span class="comment"
+            ># Minimum replies for a thread to be indexed</span
+          >
+          <span class="key">distiller_model:</span>
+          <span class="value">gpt-4o-mini</span>
+          <span class="comment"
+            ># LLM model for distillation (default: gpt-4o-mini)</span
+          >
+        </div>
+
+        <ul>
+          <li>
+            <strong>channels</strong> — Array of Slack channel IDs to monitor.
+            The bot must be a member of each channel.
+          </li>
+          <li>
+            <strong>confidence_threshold</strong> — Minimum confidence score
+            (0-1) for Q&amp;A pairs to appear in query results. Pairs below this
+            threshold are still stored but filtered out at query time.
+          </li>
+          <li>
+            <strong>trigger_emoji</strong> — When a user reacts with this emoji
+            on a thread, it triggers immediate reindexing of that thread. Useful
+            for curating high-quality answers.
+          </li>
+          <li>
+            <strong>min_thread_replies</strong> — Threads with fewer replies are
+            skipped during indexing.
+          </li>
+          <li>
+            <strong>distiller_model</strong> — The OpenAI model used to distill
+            threads into Q&amp;A pairs. Defaults to <code>gpt-4o-mini</code>.
+          </li>
+        </ul>
+
+        <p>
+          Required environment variables: <code>SLACK_BOT_TOKEN</code>,
+          <code>SLACK_SIGNING_SECRET</code> (for emoji-triggered webhook
+          verification).
+        </p>
+
+        <h3 id="source-discord">Source type: discord</h3>
+
+        <p>
+          Indexes Discord channels as Q&amp;A pairs. Supports two channel types
+          with different extraction strategies.
+        </p>
+
+        <div class="code-block">
+          <span class="key">sources:</span> - <span class="key">name:</span>
+          <span class="value">discord-support</span>
+          <span class="key">type:</span> <span class="value">discord</span>
+          <span class="key">category:</span> <span class="value">faq</span>
+          <span class="key">guild_id:</span>
+          <span class="value">"1234567890"</span>
+          <span class="comment"># Discord server (guild) ID</span>
+          <span class="key">channels:</span>
+          - <span class="key">id:</span> <span class="value">"1111111111"</span>
+          <span class="comment"># Text channel — LLM distillation</span>
+          <span class="key">type:</span> <span class="value">text</span> -
+          <span class="key">id:</span> <span class="value">"2222222222"</span>
+          <span class="comment"
+            ># Forum channel — direct Q&amp;A extraction</span
+          >
+          <span class="key">type:</span> <span class="value">forum</span>
+          <span class="key">confidence_threshold:</span>
+          <span class="value">0.7</span>
+          <span class="comment"># Min confidence for query results (0-1)</span>
+          <span class="key">min_thread_replies:</span>
+          <span class="value">2</span>
+          <span class="comment"># Minimum replies for text threads</span>
+        </div>
+
+        <ul>
+          <li><strong>guild_id</strong> — The Discord server ID.</li>
+          <li>
+            <strong>channels</strong> — Array of channel objects, each with an
+            <code>id</code> and <code>type</code>.
+          </li>
+          <li>
+            <strong>type: text</strong> — Text channels use LLM distillation
+            (same as Slack). Threads are distilled into Q&amp;A pairs with
+            confidence scores.
+          </li>
+          <li>
+            <strong>type: forum</strong> — Forum channels extract Q&amp;A
+            directly from the post title (question) and replies (answer).
+            Confidence is always 1.0 since the structure is explicit.
+          </li>
+          <li>
+            <strong>confidence_threshold</strong> — Minimum confidence for query
+            results. Forum posts always pass (confidence 1.0).
+          </li>
+          <li>
+            <strong>min_thread_replies</strong> — Applies to text channel
+            threads only.
+          </li>
+          <li>
+            <strong>distiller_model</strong> — OpenAI model for thread
+            distillation on text channels. Optional, defaults to
+            <code>gpt-4o-mini</code>.
+          </li>
+        </ul>
+
+        <p>
+          Discord does not support emoji-triggered reindexing (requires Gateway
+          WebSocket, which Pathfinder does not maintain).
+        </p>
+
+        <p>
+          Required environment variables: <code>DISCORD_BOT_TOKEN</code>,
+          <code>DISCORD_PUBLIC_KEY</code> (for webhook Ed25519 verification).
+          The bot needs the <code>MESSAGE_CONTENT</code> privileged intent and
+          <code>Read Message History</code> +
+          <code>View Channels</code> permissions.
+        </p>
+
+        <h3 id="source-notion">Source type: notion</h3>
+
+        <p>
+          Index Notion pages and database entries as searchable markdown
+          documents. Blocks are recursively converted to markdown, and database
+          entry properties are serialized as YAML frontmatter.
+        </p>
+
+        <div class="code-block">
+          <span class="key">sources:</span> - <span class="key">name:</span>
+          <span class="value">notion-wiki</span> <span class="key">type:</span>
+          <span class="value">notion</span>
+          <span class="key">root_pages:</span>
+          - <span class="value">"abc123def456..."</span>
+          <span class="comment"
+            ># Notion page IDs to index (including children)</span
+          >
+          <span class="key">databases:</span>
+          - <span class="value">"789xyz..."</span>
+          <span class="comment"># Database IDs — all entries indexed</span>
+          <span class="key">max_depth:</span> <span class="value">5</span>
+          <span class="comment"
+            ># How deep to recurse into child pages (1-20, default: 5)</span
+          >
+          <span class="key">include_properties:</span>
+          <span class="value">true</span>
+          <span class="comment"
+            ># Serialize database properties as YAML frontmatter (default:
+            true)</span
+          >
+          <span class="key">chunk:</span>
+          <span class="key">target_tokens:</span> <span class="value">600</span>
+          <span class="key">overlap_tokens:</span> <span class="value">50</span>
+        </div>
+
+        <ul>
+          <li>
+            <strong>root_pages</strong> — Array of Notion page IDs. Each page
+            and its children (up to <code>max_depth</code>) are indexed.
+            Optional, defaults to <code>[]</code>.
+          </li>
+          <li>
+            <strong>databases</strong> — Array of Notion database IDs. All
+            entries in each database are indexed with their properties.
+            Optional, defaults to <code>[]</code>.
+          </li>
+          <li>
+            <strong>max_depth</strong> — Maximum depth for recursive child page
+            discovery. Range 1-20, default 5.
+          </li>
+          <li>
+            <strong>include_properties</strong> — When true, database entry
+            properties (Status, Priority, Tags, etc.) are prepended as YAML
+            frontmatter to the page content. Default true.
+          </li>
+        </ul>
+
+        <p>
+          If both <code>root_pages</code> and <code>databases</code> are empty,
+          all pages accessible to the integration token are indexed. Requires
+          <code>NOTION_TOKEN</code> environment variable.
+        </p>
+
+        <p>
+          By default, Notion sources are indexed as documents and referenced by
+          <code>search</code> tools. To also make them available via
+          <code>knowledge</code> tools and the <code>/faq.txt</code> endpoint,
+          add <code>category: faq</code> to the source config — useful for
+          Notion databases structured as Q&amp;A or FAQ collections.
+        </p>
+
+        <h3 id="source-document">Source type: document</h3>
+
+        <p>
+          Index PDF and DOCX files. Requires optional peer dependencies:
+          <code>npm install pdf-parse</code> for PDF support and
+          <code>npm install mammoth</code> for DOCX support. Uses token-based
+          chunks like markdown sources.
+        </p>
+
+        <div class="code-block">
+          <span class="key">sources:</span> - <span class="key">name:</span>
+          <span class="value">manuals</span> <span class="key">type:</span>
+          <span class="value">document</span> <span class="key">path:</span>
+          <span class="value">./documents</span>
+          <span class="key">file_patterns:</span>
+          - <span class="value">"**/*.pdf"</span> -
+          <span class="value">"**/*.docx"</span>
+          <span class="key">max_file_size:</span>
+          <span class="value">10485760</span>
+          <span class="comment"># 10MB default limit</span>
+          <span class="key">chunk:</span>
+          <span class="key">target_tokens:</span> <span class="value">600</span>
+          <span class="key">overlap_tokens:</span> <span class="value">50</span>
+        </div>
+
+        <ul>
+          <li>
+            <strong>PDF support</strong> — Requires <code>pdf-parse</code> peer
+            dependency. Text is extracted page-by-page. Scanned PDFs (image-only
+            pages with no extractable text) are detected and skipped with a
+            warning.
+          </li>
+          <li>
+            <strong>DOCX support</strong> — Requires <code>mammoth</code> peer
+            dependency. Document content is converted to plain text for
+            chunking.
+          </li>
+          <li>
+            <strong>max_file_size</strong> — Defaults to 10MB (10485760 bytes)
+            for document sources. Large files are skipped with a warning.
+          </li>
+        </ul>
+
+        <h3>url_derivation example</h3>
+
+        <p>
+          Given a file at
+          <code>docs/(guides)/getting-started/index.mdx</code> with the
+          following config:
+        </p>
+
+        <div class="code-block">
+          <span class="key">base_url:</span>
+          <span class="value">https://docs.example.com/</span>
+          <span class="key">url_derivation:</span>
+          <span class="key">strip_prefix:</span>
+          <span class="value">docs/</span>
+          <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
+          <span class="key">strip_route_groups:</span>
+          <span class="value">true</span> <span class="key">strip_index:</span>
+          <span class="value">true</span>
+        </div>
+
+        <p>The derivation steps produce:</p>
+
+        <div class="code-block">
+          <span class="comment"># Original file path</span>
+          docs/(guides)/getting-started/index.mdx
+
+          <span class="comment"># After strip_prefix: "docs/"</span>
+          (guides)/getting-started/index.mdx
+
+          <span class="comment"># After strip_suffix: ".mdx"</span>
+          (guides)/getting-started/index
+
+          <span class="comment"># After strip_route_groups: true</span>
+          getting-started/index
+
+          <span class="comment"># After strip_index: true</span>
+          getting-started
+
+          <span class="comment"># Final URL = base_url + slug</span>
+          https://docs.example.com/getting-started
+        </div>
+
+        <h2 id="tools">tools</h2>
+
+        <p>
+          Tools are what agents actually call. Four types: <code>search</code>,
+          <code>bash</code>, <code>collect</code>, and <code>knowledge</code>.
+        </p>
+
+        <h3 id="tool-search">search</h3>
+
+        <p>
+          Semantic search over embedded content. Requires a database and
+          embedding config.
+        </p>
+
+        <div class="code-block">
+          <span class="key">tools:</span> - <span class="key">name:</span>
+          <span class="value">search-docs</span>
+          <span class="comment"># Tool name exposed to agents</span>
+          <span class="key">type:</span> <span class="value">search</span>
+          <span class="key">description:</span>
+          <span class="value">Search the docs</span>
+          <span class="comment"># Description shown to agents</span>
+          <span class="key">source:</span> <span class="value">docs</span>
+          <span class="comment"># Which source to search</span>
+          <span class="key">default_limit:</span> <span class="value">5</span>
+          <span class="comment"># Default number of results</span>
+          <span class="key">max_limit:</span> <span class="value">20</span>
+          <span class="comment"># Maximum results an agent can request</span>
+          <span class="key">result_format:</span>
+          <span class="value">docs</span>
+          <span class="comment"># docs | code | raw</span>
+          <span class="key">min_score:</span> <span class="value">0.3</span>
+          <span class="comment"
+            ># Minimum cosine similarity threshold (0-1, optional)</span
+          >
+          <span class="key">search_mode:</span>
+          <span class="value">vector</span>
+          <span class="comment"># vector (default) | keyword | hybrid</span>
+        </div>
+
+        <h3 id="search-modes">Search Modes</h3>
+
+        <p>
+          The <code>search_mode</code> field controls how search queries are
+          executed:
+        </p>
+
+        <ul>
+          <li>
+            <strong>vector</strong> (default) — cosine similarity on embeddings.
+            Best for semantic/conceptual queries.
+          </li>
+          <li>
+            <strong>keyword</strong> — PostgreSQL full-text search
+            (tsvector/tsquery). Best for exact terms, error codes, and technical
+            identifiers. Does not require an embedding call at query time.
+          </li>
+          <li>
+            <strong>hybrid</strong> — runs both vector and keyword searches in
+            parallel, then merges results using Reciprocal Rank Fusion (RRF,
+            k=60). Best overall recall for mixed query types.
+          </li>
+        </ul>
+
+        <h3 id="tool-bash">bash</h3>
+
+        <p>
+          Filesystem exploration with find, grep, cat, ls, head. Works with no
+          database.
+        </p>
+
+        <div class="code-block">
+          <span class="key">tools:</span> - <span class="key">name:</span>
+          <span class="value">explore-docs</span>
+          <span class="comment"># Tool name exposed to agents</span>
+          <span class="key">type:</span> <span class="value">bash</span>
+          <span class="key">description:</span>
+          <span class="value">Explore the docs</span>
+          <span class="comment"># Description shown to agents</span>
+          <span class="key">sources:</span> [<span class="value">docs</span>]
+          <span class="comment"># Sources to mount (can be multiple)</span>
+          <span class="key">bash:</span>
+          <span class="key">session_state:</span>
+          <span class="value">true</span>
+          <span class="comment"># Persist CWD across commands</span>
+          <span class="key">grep_strategy:</span>
+          <span class="value">hybrid</span>
+          <span class="comment"># memory | vector | hybrid</span>
+          <span class="key">virtual_files:</span>
+          <span class="value">true</span>
+          <span class="comment"
+            ># Expose qmd and related as virtual commands</span
+          >
+          <span class="key">workspace:</span> <span class="value">true</span>
+          <span class="comment"># Enable writable /workspace directory</span>
+          <span class="key">max_file_size:</span>
+          <span class="value">100000</span>
+          <span class="comment"># Max file size for cat output (bytes)</span>
+          <span class="key">cache:</span>
+          <span class="key">max_entries:</span> <span class="value">100</span>
+          <span class="comment"># Max cached command results</span>
+          <span class="key">ttl_seconds:</span> <span class="value">300</span>
+          <span class="comment"># Cache TTL in seconds</span>
+        </div>
+
+        <ul>
+          <li>
+            <strong>grep_strategy</strong> — <code>memory</code> passes grep
+            through to bash unchanged. <code>vector</code> intercepts grep and
+            runs semantic search. <code>hybrid</code> runs bash grep first,
+            falls back to semantic if no results.
+          </li>
+          <li>
+            <strong>workspace</strong> — When true, agents can write files to
+            <code>/workspace/</code>. Requires a persistent volume in production
+            (see <a href="/deploy">Deploy Guide</a>).
+          </li>
+          <li>
+            <strong>session_state</strong> — When true, <code>cd</code> persists
+            across tool calls within a session.
+          </li>
+        </ul>
+
+        <h3 id="tool-collect">collect</h3>
+
+        <p>
+          Data collection tools. Agents submit structured data based on a JSON
+          schema you define. Submitted data is stored in the local PostgreSQL
+          database in the <code>collected_data</code> table, with a
+          <code>tool_name</code> column and a <code>data</code> JSONB column
+          containing the fields from your schema. What you do with the collected
+          data is up to you — query it directly, build dashboards, pipe it to
+          analytics, or export it. Pathfinder stores it; you decide how to use
+          it.
+        </p>
+
+        <div class="code-block">
+          <span class="key">tools:</span> - <span class="key">name:</span>
+          <span class="value">submit-feedback</span>
+          <span class="key">type:</span> <span class="value">collect</span>
+          <span class="key">description:</span>
+          <span class="value">Report search quality or broken links</span>
+          <span class="key">response:</span>
+          <span class="value">Thanks for the feedback!</span>
+          <span class="key">schema:</span>
+          <span class="key">rating:</span>
+          <span class="key">type:</span> <span class="value">enum</span>
+          <span class="key">description:</span>
+          <span class="value">How helpful was the result?</span>
+          <span class="key">required:</span> <span class="value">true</span>
+          <span class="key">values:</span> [<span class="value">helpful</span>,
+          <span class="value">somewhat</span>,
+          <span class="value">not_helpful</span>]
+          <span class="key">comment:</span>
+          <span class="key">type:</span> <span class="value">string</span>
+          <span class="key">description:</span>
+          <span class="value">Optional details</span>
+        </div>
+
+        <h3 id="tool-knowledge">knowledge</h3>
+
+        <p>
+          FAQ and knowledge base tool. Exposes Q&amp;A pairs from FAQ-category
+          sources (Slack, Discord) to agents. Supports two modes: browse (no
+          query, returns recent pairs) and search (semantic query over pairs).
+        </p>
+
+        <div class="code-block">
+          <span class="key">tools:</span> - <span class="key">name:</span>
+          <span class="value">knowledge-base</span>
+          <span class="key">type:</span> <span class="value">knowledge</span>
+          <span class="key">description:</span>
+          <span class="value">Search community Q&amp;A knowledge base</span>
+          <span class="key">sources:</span> [<span class="value"
+            >community-support</span
+          >, <span class="value">discord-support</span>]
+          <span class="comment"># Sources with category: faq</span>
+          <span class="key">min_confidence:</span>
+          <span class="value">0.7</span>
+          <span class="comment"
+            ># Override source-level confidence threshold</span
+          >
+          <span class="key">default_limit:</span> <span class="value">10</span>
+          <span class="comment"># Default number of results</span>
+          <span class="key">max_limit:</span> <span class="value">50</span>
+          <span class="comment"># Maximum results an agent can request</span>
+        </div>
+
+        <ul>
+          <li>
+            <strong>sources</strong> — Array of source names. These sources
+            should have <code>category: faq</code> set.
+          </li>
+          <li>
+            <strong>min_confidence</strong> — Override the per-source confidence
+            threshold for this tool. Q&amp;A pairs below this score are filtered
+            from results.
+          </li>
+          <li>
+            <strong>default_limit</strong> — Number of results returned when the
+            agent doesn't specify a limit.
+          </li>
+          <li>
+            <strong>max_limit</strong> — Upper bound on results the agent can
+            request.
+          </li>
+        </ul>
+
+        <p>
+          When called without a query, the tool returns recent Q&amp;A pairs
+          (browse mode). When called with a query, it performs semantic search
+          over the pairs.
+        </p>
+
+        <h2 id="embedding">embedding</h2>
+
+        <p>
+          Required when using search tools. Configures how content is embedded
+          for vector search.
+        </p>
+
+        <div class="code-block">
+          <span class="key">embedding:</span> <span class="key">provider:</span>
+          <span class="value">openai</span>
+          <span class="comment"># openai | ollama | local</span>
+          <span class="key">model:</span>
+          <span class="value">text-embedding-3-small</span>
+          <span class="comment"># Model name (provider-specific)</span>
+          <span class="key">dimensions:</span> <span class="value">1536</span>
+          <span class="comment"># Vector dimensions (must match model)</span>
+        </div>
+
+        <h3>Provider options</h3>
+
+        <p>
+          Three embedding providers are supported.
+          <code>OPENAI_API_KEY</code> is only required when using the
+          <code>openai</code> provider.
+        </p>
+
+        <p>
+          <strong>OpenAI</strong> (default) — uses the OpenAI embeddings API.
+          Requires <code>OPENAI_API_KEY</code>.
+        </p>
+
+        <div class="code-block">
+          <span class="key">embedding:</span> <span class="key">provider:</span>
+          <span class="value">openai</span> <span class="key">model:</span>
+          <span class="value">text-embedding-3-small</span>
+          <span class="key">dimensions:</span> <span class="value">1536</span>
+        </div>
+
+        <p>
+          <strong>Ollama</strong> — calls a local Ollama instance over HTTP. No
+          API key needed. Requires
+          <a href="https://ollama.ai">Ollama</a> running with the model pulled
+          (<code>ollama pull nomic-embed-text</code>).
+        </p>
+
+        <div class="code-block">
+          <span class="key">embedding:</span> <span class="key">provider:</span>
+          <span class="value">ollama</span> <span class="key">model:</span>
+          <span class="value">nomic-embed-text</span>
+          <span class="key">dimensions:</span> <span class="value">768</span>
+          <span class="key">base_url:</span>
+          <span class="value">http://localhost:11434</span>
+          <span class="comment"># Optional, this is the default</span>
+        </div>
+
+        <p>
+          <strong>Local</strong> — runs
+          <code>@xenova/transformers</code> in-process. Zero external
+          dependencies, CPU-only. Install the optional peer dependency:
+          <code>npm install @xenova/transformers</code>.
+        </p>
+
+        <div class="code-block">
+          <span class="key">embedding:</span> <span class="key">provider:</span>
+          <span class="value">local</span> <span class="key">model:</span>
+          <span class="value">Xenova/all-MiniLM-L6-v2</span>
+          <span class="key">dimensions:</span> <span class="value">384</span>
+        </div>
+
+        <div class="gap-card">
+          <h4>Dimension mismatch detection</h4>
+          <p>
+            If you change embedding providers or models on an existing database,
+            Pathfinder warns at startup when the configured dimensions don't
+            match the existing vector index. You'll need to reindex to use the
+            new dimensions.
+          </p>
+        </div>
+
+        <h2 id="indexing">indexing</h2>
+
+        <p>
+          Required when using search tools. Controls automatic reindexing
+          behavior.
+        </p>
+
+        <div class="code-block">
+          <span class="key">indexing:</span>
+          <span class="key">auto_reindex:</span> <span class="value">true</span>
+          <span class="comment"># Enable daily automatic reindexing</span>
+          <span class="key">reindex_hour_utc:</span>
+          <span class="value">3</span>
+          <span class="comment"># Hour (0-23 UTC) to run daily reindex</span>
+          <span class="key">stale_threshold_hours:</span>
+          <span class="value">24</span>
+          <span class="comment"># Re-embed chunks older than this</span>
+        </div>
+
+        <h2 id="webhook">webhook</h2>
+
+        <p>Optional. Triggers targeted reindexing when you push to GitHub.</p>
+
+        <div class="code-block">
+          <span class="key">webhook:</span>
+          <span class="key">repo_sources:</span>
+          <span class="comment"># Map GitHub repo to source names</span>
+          <span class="value">"your-org/your-repo"</span>: [<span class="value"
+            >docs</span
+          >] <span class="key">path_triggers:</span>
+          <span class="comment"># Only reindex when these paths change</span>
+          <span class="key">docs:</span> [<span class="value">"docs/"</span>]
+        </div>
+
+        <p>
+          Point a GitHub webhook at
+          <code>https://your-server/webhooks/github</code> with the
+          <code>push</code> event. Set <code>GITHUB_WEBHOOK_SECRET</code> to
+          match the webhook secret.
+        </p>
+
+        <h2 id="analytics">analytics</h2>
+
+        <p>
+          Optional. Enables query logging and the built-in analytics dashboard
+          at <code>/analytics</code>.
+        </p>
+
+        <div class="code-block">
+          <span class="key">analytics:</span> <span class="key">enabled:</span>
+          <span class="value">false</span>
+          <span class="comment"># Enable analytics (default: false)</span>
+          <span class="key">log_queries:</span> <span class="value">true</span>
+          <span class="comment"># Log all search queries (default: true)</span>
+          <span class="comment"
+            ># Bearer token for /api/analytics endpoints.</span
+          >
+          <span class="comment"
+            ># Preferred: omit `token:` and set the ANALYTICS_TOKEN env var
+            instead.</span
+          >
+          <span class="comment"
+            ># Inline literal also works (no ${VAR} interpolation — YAML is
+            loaded as-is):</span
+          >
+          <span class="comment"># token: "your-secret-here"</span>
+          <span class="key">retention_days:</span> <span class="value">90</span>
+          <span class="comment"># Days to retain data (default: 90)</span>
+        </div>
+
+        <ul>
+          <li>
+            <strong>enabled</strong> — When <code>true</code>, Pathfinder logs
+            queries and serves the analytics dashboard at
+            <code>/analytics</code>. Default <code>false</code>.
+          </li>
+          <li>
+            <strong>log_queries</strong> — When <code>true</code>, all search
+            queries are logged with latency and result counts. Default
+            <code>true</code> (when analytics is enabled).
+          </li>
+          <li>
+            <strong>token</strong> — Bearer token for authenticating requests to
+            <code>/api/analytics/*</code> endpoints. Prefer the
+            <code>ANALYTICS_TOKEN</code> environment variable; set
+            <code>analytics.token</code> only if you need the value inline (YAML
+            is loaded as-is — no <code>${VAR}</code> interpolation). One of
+            <code>analytics.token</code> or the <code>ANALYTICS_TOKEN</code> env
+            var is required when analytics is enabled.
+          </li>
+          <li>
+            <strong>retention_days</strong> — How long to keep analytics data
+            before automatic cleanup. Default 90 days.
+          </li>
+        </ul>
+
+        <p>
+          The analytics dashboard provides top queries, empty result tracking,
+          and latency metrics. API endpoints:
+          <code>/api/analytics/summary</code>,
+          <code>/api/analytics/queries</code>,
+          <code>/api/analytics/empty-queries</code>.
+        </p>
+
+        <h2 id="authentication">Authentication</h2>
+
+        <p>
+          Pathfinder runs an anonymous OAuth 2.1 flow for MCP clients
+          automatically — no config needed beyond the
+          <code>MCP_JWT_SECRET</code> environment variable documented in the
+          <a href="/deploy#environment-variables">Deployment Guide</a>. No user
+          accounts, no sign-up, no dashboard — clients that perform the
+          handshake receive a token whose subject is always
+          <code>anonymous</code>. This satisfies MCP clients that require OAuth
+          (claude.ai, newer Claude Code builds) while keeping Pathfinder a pure
+          knowledge server.
+        </p>
+
+        <h3 id="auth-endpoints">OAuth endpoints</h3>
+
+        <p>
+          All standard OAuth 2.1 + dynamic client registration endpoints are
+          served automatically:
+        </p>
+
+        <ul>
+          <li>
+            <strong><code>/.well-known/oauth-protected-resource</code></strong>
+            — resource metadata (RFC 9728).
+          </li>
+          <li>
+            <strong
+              ><code>/.well-known/oauth-authorization-server</code></strong
+            >
+            — authorization server metadata (RFC 8414).
+          </li>
+          <li>
+            <strong><code>/register</code></strong> — dynamic client
+            registration (RFC 7591). Clients register themselves on first
+            connect.
+          </li>
+          <li>
+            <strong><code>/authorize</code></strong> — authorization endpoint.
+            Renders a one-click approve page and redirects with a code.
+          </li>
+          <li>
+            <strong><code>/token</code></strong> — token endpoint. Exchanges
+            codes or refresh tokens for access tokens.
+          </li>
+          <li>
+            <strong><code>/revoke</code></strong> — token revocation (RFC 7009).
+          </li>
+        </ul>
+
+        <h3 id="auth-bearer">
+          Bearer auth on <code>/mcp</code> and <code>/sse</code>
+        </h3>
+
+        <p>
+          Both transport endpoints use <em>opportunistic</em> bearer
+          authentication:
+        </p>
+
+        <ul>
+          <li>
+            Requests without an <code>Authorization</code> header pass through
+            unchanged — useful for clients that don't speak OAuth.
+          </li>
+          <li>
+            Requests with a valid bearer token attach the token claims to the
+            session.
+          </li>
+          <li>
+            Requests with an invalid or expired bearer are rejected with
+            <code>401 Unauthorized</code> and a
+            <code>WWW-Authenticate</code> challenge pointing at the resource
+            metadata endpoint.
+          </li>
+        </ul>
+
+        <p>
+          Clients that see the 401 challenge automatically discover the OAuth
+          server, register, and retry with a valid token. Rotating
+          <code>MCP_JWT_SECRET</code> invalidates all issued tokens at once —
+          clients re-authenticate transparently on the next request.
+        </p>
+
+        <h2>Example Configs</h2>
+
+        <h3>Bash-only (no database)</h3>
+
+        <p>
+          The simplest setup. No API keys, no database. Agents explore docs with
+          shell commands.
+        </p>
+
+        <div class="code-block">
+          <span class="key">server:</span> <span class="key">name:</span>
+          <span class="value">my-docs</span> <span class="key">version:</span>
+          <span class="value">1.0.0</span>
+
+          <span class="key">sources:</span>
+          - <span class="key">name:</span> <span class="value">docs</span>
+          <span class="key">type:</span> <span class="value">markdown</span>
+          <span class="key">path:</span> <span class="value">./docs</span>
+          <span class="key">file_patterns:</span> [<span class="value"
+            >"**/*.md"</span
+          >, <span class="value">"**/*.mdx"</span>]
+
+          <span class="key">tools:</span>
+          - <span class="key">name:</span>
+          <span class="value">explore-docs</span> <span class="key">type:</span>
+          <span class="value">bash</span> <span class="key">description:</span>
+          <span class="value">Explore project documentation</span>
+          <span class="key">sources:</span> [<span class="value">docs</span>]
+          <span class="key">bash:</span>
+          <span class="key">session_state:</span>
+          <span class="value">true</span>
+        </div>
+
+        <h3>Full stack with semantic search</h3>
+
+        <p>
+          Bash exploration plus RAG search. Requires Postgres and an OpenAI API
+          key.
+        </p>
+
+        <div class="code-block">
+          <span class="key">server:</span> <span class="key">name:</span>
+          <span class="value">my-docs</span> <span class="key">version:</span>
+          <span class="value">1.0.0</span>
+
+          <span class="key">sources:</span>
+          - <span class="key">name:</span> <span class="value">docs</span>
+          <span class="key">type:</span> <span class="value">markdown</span>
+          <span class="key">repo:</span>
+          <span class="value">https://github.com/org/repo.git</span>
+          <span class="key">path:</span> <span class="value">docs/</span>
+          <span class="key">file_patterns:</span> [<span class="value"
+            >"**/*.mdx"</span
+          >, <span class="value">"**/*.md"</span>]
+          <span class="key">chunk:</span>
+          <span class="key">target_tokens:</span> <span class="value">600</span>
+          <span class="key">overlap_tokens:</span> <span class="value">50</span>
+
+          <span class="key">tools:</span>
+          - <span class="key">name:</span>
+          <span class="value">search-docs</span> <span class="key">type:</span>
+          <span class="value">search</span>
+          <span class="key">description:</span>
+          <span class="value">Semantic search over documentation</span>
+          <span class="key">source:</span> <span class="value">docs</span>
+          <span class="key">default_limit:</span> <span class="value">5</span>
+          <span class="key">max_limit:</span> <span class="value">20</span>
+          <span class="key">result_format:</span>
+          <span class="value">docs</span>
+
+          - <span class="key">name:</span>
+          <span class="value">explore-docs</span> <span class="key">type:</span>
+          <span class="value">bash</span> <span class="key">description:</span>
+          <span class="value">Explore documentation with shell commands</span>
+          <span class="key">sources:</span> [<span class="value">docs</span>]
+          <span class="key">bash:</span>
+          <span class="key">session_state:</span>
+          <span class="value">true</span>
+          <span class="key">grep_strategy:</span>
+          <span class="value">hybrid</span> <span class="key">workspace:</span>
+          <span class="value">true</span>
+
+          <span class="key">embedding:</span>
+          <span class="key">provider:</span> <span class="value">openai</span>
+          <span class="key">model:</span>
+          <span class="value">text-embedding-3-small</span>
+          <span class="key">dimensions:</span> <span class="value">1536</span>
+
+          <span class="key">indexing:</span>
+          <span class="key">auto_reindex:</span> <span class="value">true</span>
+          <span class="key">reindex_hour_utc:</span>
+          <span class="value">3</span>
+          <span class="key">stale_threshold_hours:</span>
+          <span class="value">24</span>
+        </div>
+
+        <h3>Multi-repo</h3>
+
+        <p>
+          Index docs from multiple repositories into a single Pathfinder
+          instance.
+        </p>
+
+        <div class="code-block">
+          <span class="key">server:</span> <span class="key">name:</span>
+          <span class="value">platform-docs</span>
+          <span class="key">version:</span> <span class="value">1.0.0</span>
+
+          <span class="key">sources:</span>
+          - <span class="key">name:</span> <span class="value">api-docs</span>
+          <span class="key">type:</span> <span class="value">markdown</span>
+          <span class="key">repo:</span>
+          <span class="value">https://github.com/org/api.git</span>
+          <span class="key">path:</span> <span class="value">docs/</span>
+          <span class="key">file_patterns:</span> [<span class="value"
+            >"**/*.md"</span
+          >] <span class="key">chunk:</span> {
+          <span class="key">target_tokens:</span>
+          <span class="value">600</span>,
+          <span class="key">overlap_tokens:</span>
+          <span class="value">50</span> } - <span class="key">name:</span>
+          <span class="value">sdk-docs</span> <span class="key">type:</span>
+          <span class="value">markdown</span> <span class="key">repo:</span>
+          <span class="value">https://github.com/org/sdk.git</span>
+          <span class="key">path:</span> <span class="value">docs/</span>
+          <span class="key">file_patterns:</span> [<span class="value"
+            >"**/*.mdx"</span
+          >] <span class="key">chunk:</span> {
+          <span class="key">target_tokens:</span>
+          <span class="value">600</span>,
+          <span class="key">overlap_tokens:</span>
+          <span class="value">50</span> } - <span class="key">name:</span>
+          <span class="value">sdk-source</span> <span class="key">type:</span>
+          <span class="value">code</span> <span class="key">repo:</span>
+          <span class="value">https://github.com/org/sdk.git</span>
+          <span class="key">path:</span> <span class="value">src/</span>
+          <span class="key">file_patterns:</span> [<span class="value"
+            >"**/*.ts"</span
+          >] <span class="key">chunk:</span> {
+          <span class="key">target_lines:</span> <span class="value">100</span>,
+          <span class="key">overlap_lines:</span>
+          <span class="value">10</span> }
+
+          <span class="key">tools:</span>
+          - <span class="key">name:</span> <span class="value">search-api</span>
+          <span class="key">type:</span> <span class="value">search</span>
+          <span class="key">description:</span>
+          <span class="value">Search API documentation</span>
+          <span class="key">source:</span> <span class="value">api-docs</span>
+          <span class="key">default_limit:</span> <span class="value">5</span>
+          <span class="key">max_limit:</span> <span class="value">20</span>
+          <span class="key">result_format:</span>
+          <span class="value">docs</span>
+
+          - <span class="key">name:</span> <span class="value">search-sdk</span>
+          <span class="key">type:</span> <span class="value">search</span>
+          <span class="key">description:</span>
+          <span class="value">Search SDK documentation and source</span>
+          <span class="key">source:</span> <span class="value">sdk-docs</span>
+          <span class="key">default_limit:</span> <span class="value">5</span>
+          <span class="key">max_limit:</span> <span class="value">20</span>
+          <span class="key">result_format:</span>
+          <span class="value">docs</span>
+
+          - <span class="key">name:</span>
+          <span class="value">explore-all</span> <span class="key">type:</span>
+          <span class="value">bash</span> <span class="key">description:</span>
+          <span class="value">Explore all documentation and source</span>
+          <span class="key">sources:</span> [<span class="value">api-docs</span
+          >, <span class="value">sdk-docs</span>,
+          <span class="value">sdk-source</span>]
+          <span class="key">bash:</span>
+          <span class="key">session_state:</span>
+          <span class="value">true</span>
+          <span class="key">grep_strategy:</span>
+          <span class="value">hybrid</span>
+
+          <span class="key">embedding:</span>
+          <span class="key">provider:</span> <span class="value">openai</span>
+          <span class="key">model:</span>
+          <span class="value">text-embedding-3-small</span>
+          <span class="key">dimensions:</span> <span class="value">1536</span>
+
+          <span class="key">indexing:</span>
+          <span class="key">auto_reindex:</span> <span class="value">true</span>
+          <span class="key">reindex_hour_utc:</span>
+          <span class="value">3</span>
+          <span class="key">stale_threshold_hours:</span>
+          <span class="value">24</span>
+        </div>
+
+        <h3>Multi-version</h3>
+
+        <p>
+          Serve multiple versions of the same docs. Agents can filter search
+          results by version.
+        </p>
+
+        <div class="code-block">
+          <span class="key">server:</span> <span class="key">name:</span>
+          <span class="value">versioned-docs</span>
+          <span class="key">version:</span> <span class="value">1.0.0</span>
+
+          <span class="key">sources:</span>
+          - <span class="key">name:</span> <span class="value">docs-v1</span>
+          <span class="key">type:</span> <span class="value">markdown</span>
+          <span class="key">repo:</span>
+          <span class="value">https://github.com/org/repo.git</span>
+          <span class="key">branch:</span> <span class="value">v1</span>
+          <span class="key">path:</span> <span class="value">docs/</span>
+          <span class="key">version:</span> <span class="value">v1</span>
+          <span class="key">file_patterns:</span> [<span class="value"
+            >"**/*.mdx"</span
+          >] <span class="key">chunk:</span> {
+          <span class="key">target_tokens:</span>
+          <span class="value">600</span>,
+          <span class="key">overlap_tokens:</span>
+          <span class="value">50</span> } - <span class="key">name:</span>
+          <span class="value">docs-v2</span> <span class="key">type:</span>
+          <span class="value">markdown</span> <span class="key">repo:</span>
+          <span class="value">https://github.com/org/repo.git</span>
+          <span class="key">branch:</span> <span class="value">v2</span>
+          <span class="key">path:</span> <span class="value">docs/</span>
+          <span class="key">version:</span> <span class="value">v2</span>
+          <span class="key">file_patterns:</span> [<span class="value"
+            >"**/*.mdx"</span
+          >] <span class="key">chunk:</span> {
+          <span class="key">target_tokens:</span>
+          <span class="value">600</span>,
+          <span class="key">overlap_tokens:</span>
+          <span class="value">50</span> }
+
+          <span class="key">tools:</span>
+          - <span class="key">name:</span>
+          <span class="value">search-docs</span> <span class="key">type:</span>
+          <span class="value">search</span>
+          <span class="key">description:</span>
+          <span class="value"
+            >Search docs (specify version parameter to filter)</span
+          >
+          <span class="key">source:</span> <span class="value">docs-v2</span>
+          <span class="key">default_limit:</span> <span class="value">5</span>
+          <span class="key">max_limit:</span> <span class="value">20</span>
+          <span class="key">result_format:</span>
+          <span class="value">docs</span>
+
+          - <span class="key">name:</span>
+          <span class="value">explore-docs</span> <span class="key">type:</span>
+          <span class="value">bash</span> <span class="key">description:</span>
+          <span class="value">Explore documentation filesystem</span>
+          <span class="key">sources:</span> [<span class="value">docs-v1</span>,
+          <span class="value">docs-v2</span>]
+          <span class="key">bash:</span>
+          <span class="key">session_state:</span>
+          <span class="value">true</span>
+
+          <span class="key">embedding:</span>
+          <span class="key">provider:</span> <span class="value">openai</span>
+          <span class="key">model:</span>
+          <span class="value">text-embedding-3-small</span>
+          <span class="key">dimensions:</span> <span class="value">1536</span>
+
+          <span class="key">indexing:</span>
+          <span class="key">auto_reindex:</span> <span class="value">true</span>
+          <span class="key">reindex_hour_utc:</span>
+          <span class="value">3</span>
+          <span class="key">stale_threshold_hours:</span>
+          <span class="value">24</span>
+        </div>
+      </main>
+      <aside class="page-toc" id="page-toc"></aside>
     </div>
 
-    <h2 id="indexing">indexing</h2>
-
-    <p>Required when using search tools. Controls automatic reindexing behavior.</p>
-
-    <div class="code-block"><span class="key">indexing:</span>
-  <span class="key">auto_reindex:</span> <span class="value">true</span>                  <span class="comment"># Enable daily automatic reindexing</span>
-  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>                 <span class="comment"># Hour (0-23 UTC) to run daily reindex</span>
-  <span class="key">stale_threshold_hours:</span> <span class="value">24</span>           <span class="comment"># Re-embed chunks older than this</span></div>
-
-    <h2 id="webhook">webhook</h2>
-
-    <p>Optional. Triggers targeted reindexing when you push to GitHub.</p>
-
-    <div class="code-block"><span class="key">webhook:</span>
-  <span class="key">repo_sources:</span>                         <span class="comment"># Map GitHub repo to source names</span>
-    <span class="value">"your-org/your-repo"</span>: [<span class="value">docs</span>]
-  <span class="key">path_triggers:</span>                        <span class="comment"># Only reindex when these paths change</span>
-    <span class="key">docs:</span> [<span class="value">"docs/"</span>]</div>
-
-    <p>Point a GitHub webhook at <code>https://your-server/webhooks/github</code> with the <code>push</code> event. Set <code>GITHUB_WEBHOOK_SECRET</code> to match the webhook secret.</p>
-
-    <h2 id="analytics">analytics</h2>
-
-    <p>Optional. Enables query logging and the built-in analytics dashboard at <code>/analytics</code>.</p>
-
-    <div class="code-block"><span class="key">analytics:</span>
-  <span class="key">enabled:</span> <span class="value">false</span>               <span class="comment"># Enable analytics (default: false)</span>
-  <span class="key">log_queries:</span> <span class="value">true</span>            <span class="comment"># Log all search queries (default: true)</span>
-  <span class="comment"># Bearer token for /api/analytics endpoints.</span>
-  <span class="comment"># Preferred: omit `token:` and set the ANALYTICS_TOKEN env var instead.</span>
-  <span class="comment"># Inline literal also works (no ${VAR} interpolation — YAML is loaded as-is):</span>
-  <span class="comment">#   token: "your-secret-here"</span>
-  <span class="key">retention_days:</span> <span class="value">90</span>           <span class="comment"># Days to retain data (default: 90)</span></div>
-
-    <ul>
-        <li><strong>enabled</strong> — When <code>true</code>, Pathfinder logs queries and serves the analytics dashboard at <code>/analytics</code>. Default <code>false</code>.</li>
-        <li><strong>log_queries</strong> — When <code>true</code>, all search queries are logged with latency and result counts. Default <code>true</code> (when analytics is enabled).</li>
-        <li><strong>token</strong> — Bearer token for authenticating requests to <code>/api/analytics/*</code> endpoints. Prefer the <code>ANALYTICS_TOKEN</code> environment variable; set <code>analytics.token</code> only if you need the value inline (YAML is loaded as-is — no <code>${VAR}</code> interpolation). One of <code>analytics.token</code> or the <code>ANALYTICS_TOKEN</code> env var is required when analytics is enabled.</li>
-        <li><strong>retention_days</strong> — How long to keep analytics data before automatic cleanup. Default 90 days.</li>
-    </ul>
-
-    <p>The analytics dashboard provides top queries, empty result tracking, and latency metrics. API endpoints: <code>/api/analytics/summary</code>, <code>/api/analytics/queries</code>, <code>/api/analytics/empty-queries</code>.</p>
-
-    <h2 id="authentication">Authentication</h2>
-
-    <p>Pathfinder runs an anonymous OAuth 2.1 flow for MCP clients automatically — no config needed beyond the <code>MCP_JWT_SECRET</code> environment variable documented in the <a href="/deploy#environment-variables">Deployment Guide</a>. No user accounts, no sign-up, no dashboard — clients that perform the handshake receive a token whose subject is always <code>anonymous</code>. This satisfies MCP clients that require OAuth (claude.ai, newer Claude Code builds) while keeping Pathfinder a pure knowledge server.</p>
-
-    <h3 id="auth-endpoints">OAuth endpoints</h3>
-
-    <p>All standard OAuth 2.1 + dynamic client registration endpoints are served automatically:</p>
-
-    <ul>
-        <li><strong><code>/.well-known/oauth-protected-resource</code></strong> — resource metadata (RFC 9728).</li>
-        <li><strong><code>/.well-known/oauth-authorization-server</code></strong> — authorization server metadata (RFC 8414).</li>
-        <li><strong><code>/register</code></strong> — dynamic client registration (RFC 7591). Clients register themselves on first connect.</li>
-        <li><strong><code>/authorize</code></strong> — authorization endpoint. Renders a one-click approve page and redirects with a code.</li>
-        <li><strong><code>/token</code></strong> — token endpoint. Exchanges codes or refresh tokens for access tokens.</li>
-        <li><strong><code>/revoke</code></strong> — token revocation (RFC 7009).</li>
-    </ul>
-
-    <h3 id="auth-bearer">Bearer auth on <code>/mcp</code> and <code>/sse</code></h3>
-
-    <p>Both transport endpoints use <em>opportunistic</em> bearer authentication:</p>
-
-    <ul>
-        <li>Requests without an <code>Authorization</code> header pass through unchanged — useful for clients that don't speak OAuth.</li>
-        <li>Requests with a valid bearer token attach the token claims to the session.</li>
-        <li>Requests with an invalid or expired bearer are rejected with <code>401 Unauthorized</code> and a <code>WWW-Authenticate</code> challenge pointing at the resource metadata endpoint.</li>
-    </ul>
-
-    <p>Clients that see the 401 challenge automatically discover the OAuth server, register, and retry with a valid token. Rotating <code>MCP_JWT_SECRET</code> invalidates all issued tokens at once — clients re-authenticate transparently on the next request.</p>
-
-    <h2>Example Configs</h2>
-
-    <h3>Bash-only (no database)</h3>
-
-    <p>The simplest setup. No API keys, no database. Agents explore docs with shell commands.</p>
-
-    <div class="code-block"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">my-docs</span>
-  <span class="key">version:</span> <span class="value">1.0.0</span>
-
-<span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">path:</span> <span class="value">./docs</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.md"</span>, <span class="value">"**/*.mdx"</span>]
-
-<span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">explore-docs</span>
-    <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">description:</span> <span class="value">Explore project documentation</span>
-    <span class="key">sources:</span> [<span class="value">docs</span>]
-    <span class="key">bash:</span>
-      <span class="key">session_state:</span> <span class="value">true</span></div>
-
-    <h3>Full stack with semantic search</h3>
-
-    <p>Bash exploration plus RAG search. Requires Postgres and an OpenAI API key.</p>
-
-    <div class="code-block"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">my-docs</span>
-  <span class="key">version:</span> <span class="value">1.0.0</span>
-
-<span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>, <span class="value">"**/*.md"</span>]
-    <span class="key">chunk:</span>
-      <span class="key">target_tokens:</span> <span class="value">600</span>
-      <span class="key">overlap_tokens:</span> <span class="value">50</span>
-
-<span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">description:</span> <span class="value">Semantic search over documentation</span>
-    <span class="key">source:</span> <span class="value">docs</span>
-    <span class="key">default_limit:</span> <span class="value">5</span>
-    <span class="key">max_limit:</span> <span class="value">20</span>
-    <span class="key">result_format:</span> <span class="value">docs</span>
-
-  - <span class="key">name:</span> <span class="value">explore-docs</span>
-    <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">description:</span> <span class="value">Explore documentation with shell commands</span>
-    <span class="key">sources:</span> [<span class="value">docs</span>]
-    <span class="key">bash:</span>
-      <span class="key">session_state:</span> <span class="value">true</span>
-      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>
-      <span class="key">workspace:</span> <span class="value">true</span>
-
-<span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">openai</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
-  <span class="key">dimensions:</span> <span class="value">1536</span>
-
-<span class="key">indexing:</span>
-  <span class="key">auto_reindex:</span> <span class="value">true</span>
-  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
-  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
-
-    <h3>Multi-repo</h3>
-
-    <p>Index docs from multiple repositories into a single Pathfinder instance.</p>
-
-    <div class="code-block"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">platform-docs</span>
-  <span class="key">version:</span> <span class="value">1.0.0</span>
-
-<span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">api-docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/api.git</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.md"</span>]
-    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
-
-  - <span class="key">name:</span> <span class="value">sdk-docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/sdk.git</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
-    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
-
-  - <span class="key">name:</span> <span class="value">sdk-source</span>
-    <span class="key">type:</span> <span class="value">code</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/sdk.git</span>
-    <span class="key">path:</span> <span class="value">src/</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.ts"</span>]
-    <span class="key">chunk:</span> { <span class="key">target_lines:</span> <span class="value">100</span>, <span class="key">overlap_lines:</span> <span class="value">10</span> }
-
-<span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">search-api</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">description:</span> <span class="value">Search API documentation</span>
-    <span class="key">source:</span> <span class="value">api-docs</span>
-    <span class="key">default_limit:</span> <span class="value">5</span>
-    <span class="key">max_limit:</span> <span class="value">20</span>
-    <span class="key">result_format:</span> <span class="value">docs</span>
-
-  - <span class="key">name:</span> <span class="value">search-sdk</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">description:</span> <span class="value">Search SDK documentation and source</span>
-    <span class="key">source:</span> <span class="value">sdk-docs</span>
-    <span class="key">default_limit:</span> <span class="value">5</span>
-    <span class="key">max_limit:</span> <span class="value">20</span>
-    <span class="key">result_format:</span> <span class="value">docs</span>
-
-  - <span class="key">name:</span> <span class="value">explore-all</span>
-    <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">description:</span> <span class="value">Explore all documentation and source</span>
-    <span class="key">sources:</span> [<span class="value">api-docs</span>, <span class="value">sdk-docs</span>, <span class="value">sdk-source</span>]
-    <span class="key">bash:</span>
-      <span class="key">session_state:</span> <span class="value">true</span>
-      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>
-
-<span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">openai</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
-  <span class="key">dimensions:</span> <span class="value">1536</span>
-
-<span class="key">indexing:</span>
-  <span class="key">auto_reindex:</span> <span class="value">true</span>
-  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
-  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
-
-    <h3>Multi-version</h3>
-
-    <p>Serve multiple versions of the same docs. Agents can filter search results by version.</p>
-
-    <div class="code-block"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">versioned-docs</span>
-  <span class="key">version:</span> <span class="value">1.0.0</span>
-
-<span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs-v1</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
-    <span class="key">branch:</span> <span class="value">v1</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
-    <span class="key">version:</span> <span class="value">v1</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
-    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
-
-  - <span class="key">name:</span> <span class="value">docs-v2</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
-    <span class="key">branch:</span> <span class="value">v2</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
-    <span class="key">version:</span> <span class="value">v2</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
-    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
-
-<span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">description:</span> <span class="value">Search docs (specify version parameter to filter)</span>
-    <span class="key">source:</span> <span class="value">docs-v2</span>
-    <span class="key">default_limit:</span> <span class="value">5</span>
-    <span class="key">max_limit:</span> <span class="value">20</span>
-    <span class="key">result_format:</span> <span class="value">docs</span>
-
-  - <span class="key">name:</span> <span class="value">explore-docs</span>
-    <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">description:</span> <span class="value">Explore documentation filesystem</span>
-    <span class="key">sources:</span> [<span class="value">docs-v1</span>, <span class="value">docs-v2</span>]
-    <span class="key">bash:</span>
-      <span class="key">session_state:</span> <span class="value">true</span>
-
-<span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">openai</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
-  <span class="key">dimensions:</span> <span class="value">1536</span>
-
-<span class="key">indexing:</span>
-  <span class="key">auto_reindex:</span> <span class="value">true</span>
-  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
-  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
-
-  </main>
-  <aside class="page-toc" id="page-toc"></aside>
-</div>
-
-<footer class="docs-footer">
-  <div class="footer-inner">
-    <div class="footer-left"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a></div>
-    <ul class="footer-links">
-      <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank">GitHub</a></li>
-      <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank">npm</a></li>
-    </ul>
-  </div>
-</footer>
-<script src="/sidebar.js"></script>
-</body>
+    <footer class="docs-footer">
+      <div class="footer-inner">
+        <div class="footer-left">
+          <span class="prompt">$</span> pathfinder &middot;
+          <a
+            href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE"
+            target="_blank"
+            rel="noopener"
+            style="color: inherit; text-decoration: underline"
+            >Elastic License 2.0</a
+          >
+        </div>
+        <ul class="footer-links">
+          <li>
+            <a href="https://github.com/CopilotKit/pathfinder" target="_blank"
+              >GitHub</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.npmjs.com/package/@copilotkit/pathfinder"
+              target="_blank"
+              >npm</a
+            >
+          </li>
+        </ul>
+      </div>
+    </footer>
+    <script src="/sidebar.js"></script>
+  </body>
 </html>
