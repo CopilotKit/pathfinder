@@ -57,6 +57,7 @@
     "@slack/web-api": "^7.15.0",
     "cheerio": "^1.2.0",
     "commander": "^14.0.3",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "discord-api-types": "^0.38.44",
     "discord-interactions": "^4.4.0",
@@ -73,8 +74,8 @@
   },
   "peerDependencies": {
     "@xenova/transformers": "^2.17.0",
-    "pdf-parse": "^1.1.0",
-    "mammoth": "^1.7.0"
+    "mammoth": "^1.7.0",
+    "pdf-parse": "^1.1.0"
   },
   "peerDependenciesMeta": {
     "@xenova/transformers": {
@@ -89,6 +90,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.4.2",
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsdom": "^28.0.1",

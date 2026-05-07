@@ -4,6 +4,7 @@ import express, {
   RequestHandler,
   Response,
 } from "express";
+import compression from "compression";
 import cors from "cors";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Bash } from "just-bash";
@@ -89,6 +90,8 @@ app.use(
     exposedHeaders: ["Mcp-Session-Id"],
   }),
 );
+
+app.use(compression());
 
 // Advertise llms.txt via Link header on all responses
 app.use((_req, res, next) => {
