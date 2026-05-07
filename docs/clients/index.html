@@ -379,6 +379,32 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
 
     <p>Try asking your agent to run a simple command like <code>find / -name "*.md" | head -5</code> to verify the bash tool is working, or ask a question about your docs to test semantic search.</p>
 
+    <h2>Known Concerns</h2>
+
+    <h3>SSE Parsing Bugs in Some MCP Clients</h3>
+
+    <p>Some MCP clients have bugs handling SSE-formatted responses from Streamable HTTP endpoints. This can cause initialization failures, connection drops, or cryptic errors when connecting to Pathfinder's <code>/mcp</code> endpoint.</p>
+
+    <p>The most notable example is <strong>OpenAI Codex CLI</strong>, which uses the <code>rmcp</code> Rust SDK internally. That SDK's SSE parser does not correctly handle the <code>text/event-stream</code> content type that MCP servers typically return for single-message exchanges over Streamable HTTP.</p>
+
+    <h3>Pathfinder's Mitigation</h3>
+
+    <p>Pathfinder enables <code>enableJsonResponse: true</code> on its Streamable HTTP transport. This causes the server to return <code>Content-Type: application/json</code> instead of SSE-wrapped responses for single-message exchanges (i.e., requests where the server sends exactly one response and does not need to stream). This is fully compliant with the MCP specification, which states that servers MAY return either format for non-streaming responses.</p>
+
+    <p>This setting works around the client-side bugs transparently — no configuration needed on your end.</p>
+
+    <h3>stdio Bridge Workaround</h3>
+
+    <p>If you still encounter connection issues with a particular client, you can use <a href="https://github.com/anthropics/mcp-remote">mcp-remote</a> as a stdio bridge. This converts the HTTP transport into a local stdio pipe, which every MCP client supports reliably:</p>
+
+    <div class="code-block"><span class="comment"># Codex CLI — ~/.codex/config.toml</span>
+
+[<span class="key">mcp_servers.pathfinder</span>]
+<span class="key">command</span> = <span class="value">"npx"</span>
+<span class="key">args</span> = [<span class="value">"mcp-remote@latest"</span>, <span class="value">"--http"</span>, <span class="value">"--allow-http"</span>, <span class="value">"https://mcp.copilotkit.ai/mcp"</span>]</div>
+
+    <p>Replace the URL with your own Pathfinder instance's <code>/mcp</code> endpoint. The <code>--http</code> flag tells mcp-remote to use Streamable HTTP (not SSE), and <code>--allow-http</code> permits non-TLS connections if you're running locally.</p>
+
   </main>
   <aside class="page-toc" id="page-toc"></aside>
 </div>

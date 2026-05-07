@@ -1626,6 +1626,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       const initOutcome: { rejected: boolean } = { rejected: false };
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => preSid,
+        enableJsonResponse: true,
         onsessioninitialized: (sid) => {
           // Registration moved here intentionally — we can't populate
           // transports[sid] before the transport object exists, and the SDK

@@ -1,5 +1,11 @@
 # @copilotkit/pathfinder
 
+## 1.13.1
+
+### Patch Changes
+
+- **Streamable HTTP JSON Response**: Enabled `enableJsonResponse` on the Streamable HTTP MCP transport for compatibility with clients that cannot parse SSE-formatted responses (notably OpenAI Codex CLI). Fully MCP spec-compliant — the spec allows servers to return either `application/json` or `text/event-stream` for single-message responses
+
 ## 1.13.0
 
 ### Minor Changes
