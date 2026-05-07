@@ -104,10 +104,17 @@ describe("server.ts wiring", () => {
   it("imports and uses the compression middleware", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const serverSrc = fs.readFileSync(
-      path.resolve(import.meta.dirname, "..", "server.ts"),
-      "utf-8",
-    );
+    let serverPath = path.resolve(import.meta.dirname, "..", "server.ts");
+    if (!fs.existsSync(serverPath)) {
+      serverPath = path.resolve(
+        import.meta.dirname,
+        "..",
+        "..",
+        "src",
+        "server.ts",
+      );
+    }
+    const serverSrc = fs.readFileSync(serverPath, "utf-8");
 
     expect(serverSrc).toContain('import compression from "compression"');
     expect(serverSrc).toContain("app.use(compression())");
