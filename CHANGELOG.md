@@ -1,5 +1,11 @@
 # @copilotkit/pathfinder
 
+## 1.13.2
+
+### Patch Changes
+
+- **Response Compression**: Added gzip/deflate/brotli compression via `compression` middleware for all HTTP responses. Especially beneficial for `/llms-full.txt` which can be hundreds of KB uncompressed — text typically compresses 70-85%. SSE streams are unaffected (the middleware auto-skips `text/event-stream`).
+
 ## 1.13.1
 
 ### Patch Changes
