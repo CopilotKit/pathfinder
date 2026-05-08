@@ -80,8 +80,18 @@ export async function runReindexAudit(
       }
     }
 
-    if (findings.length > 0 && cfg.slackWebhookUrl) {
-      await sendSlackAlert(findings, cfg.slackWebhookUrl);
+    if (findings.length > 0) {
+      for (const f of findings) {
+        const detail = f.direction ? ` (${f.direction})` : "";
+        const samples =
+          f.samples.length > 0 ? `: ${f.samples.slice(0, 5).join(", ")}` : "";
+        console.warn(
+          `[reindex-audit] ${f.source} — ${f.check}: ${f.count} issues${detail}${samples}`,
+        );
+      }
+      if (cfg.slackWebhookUrl) {
+        await sendSlackAlert(findings, cfg.slackWebhookUrl);
+      }
     }
 
     return findings;
