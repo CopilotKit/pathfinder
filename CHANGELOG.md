@@ -1,5 +1,13 @@
 # @copilotkit/pathfinder
 
+## 1.13.2
+
+### Patch Changes
+
+- **Post-Reindex Health Audit**: Automated integrity checks run after each reindex cycle — detects stale files in the index, scope leaks (files outside `config.path`), and chunk count divergence between DB and disk. Alerts via Slack webhook (`SLACK_WEBHOOK_URL` env var) when issues are found. Read-only — no automatic deletions.
+- **Response Compression**: Added gzip/deflate/brotli compression via `compression` middleware for all HTTP responses. Text typically compresses 70-85%, especially beneficial for `/llms-full.txt`.
+- **Stale Chunk Cleanup**: `fullAcquire` now detects and removes orphaned chunks from deleted files. Handles walkRoot-missing and git-rename cases. `incrementalAcquire` hardened with `config.path` scoping, `skipDirs` enforcement, and error handling on `--name-status` diff.
+
 ## 1.13.1
 
 ### Patch Changes
