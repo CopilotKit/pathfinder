@@ -67,7 +67,15 @@ describe("FileDataProvider", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    // Re-establish hoisted defaults after resetAllMocks clears implementations
+    mockGitInstance.clone.mockResolvedValue(undefined);
+    mockGitInstance.pull.mockResolvedValue(undefined);
+    mockGitInstance.revparse.mockResolvedValue("abc123");
+    mockGitInstance.diff.mockResolvedValue("");
+    mockGitInstance.fetch.mockResolvedValue(undefined);
+    mockGitInstance.listRemote.mockResolvedValue("abc123\tHEAD");
+    mockGetIndexedItemIds.mockResolvedValue(new Set<string>());
     mockExtractContent.mockReset();
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "fp-test-"));
     await fs.promises.writeFile(
@@ -129,7 +137,7 @@ describe("FileDataProvider", () => {
       const slackConfig = {
         name: "slack-src",
         type: "slack" as const,
-        channels: [{ id: "C1", name: "general" }],
+        channels: ["C0123456789"],
         chunk: {},
       };
       expect(
@@ -303,17 +311,6 @@ describe("FileDataProvider", () => {
       expect(result.removedIds).toEqual([]);
     });
 
-    it("handles empty DB gracefully (no prior indexed items)", async () => {
-      mockGetIndexedItemIds.mockResolvedValueOnce(new Set<string>());
-      const provider = new FileDataProvider(makeLocalConfig(), {
-        cloneDir: "/tmp/test-clones",
-      });
-      const result = await provider.fullAcquire();
-
-      expect(result.removedIds).toEqual([]);
-      expect(result.items.length).toBeGreaterThan(0);
-    });
-
     it("handles first-ever index with no prior chunks", async () => {
       mockGetIndexedItemIds.mockResolvedValueOnce(new Set<string>());
       const provider = new FileDataProvider(makeLocalConfig(), {
@@ -466,8 +463,8 @@ describe("FileDataProvider", () => {
 
       try {
         await provider.fullAcquire();
-      } catch {
-        // May fail because cloned dir won't actually exist, that's fine
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       // The clone call should use the authenticated URL
@@ -492,8 +489,8 @@ describe("FileDataProvider", () => {
 
       try {
         await provider.fullAcquire();
-      } catch {
-        // Clone won't create real dir
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       expect(mockGitInstance.clone).toHaveBeenCalledWith(
@@ -517,8 +514,8 @@ describe("FileDataProvider", () => {
 
       try {
         await provider.fullAcquire();
-      } catch {
-        // May fail downstream
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       expect(mockGitInstance.clone).toHaveBeenCalled();
@@ -741,8 +738,6 @@ describe("FileDataProvider", () => {
       );
 
       mockGitInstance.revparse.mockResolvedValue("def456");
-      // Reset diff mock to clear any leftover once-queue from prior tests
-      mockGitInstance.diff.mockReset().mockResolvedValue("");
       // --name-only lists both old and new paths for renames
       mockGitInstance.diff
         .mockResolvedValueOnce("docs/old-name.md\ndocs/new-name.md\n")
@@ -927,7 +922,7 @@ describe("FileDataProvider", () => {
       await fs.promises.chmod(unreadableDir, 0o755);
     });
 
-    it("handles stat errors on individual files during walk", async () => {
+    it("skips broken symlinks during walk", async () => {
       // Create a broken symlink — readdir will list it but stat will fail
       const brokenLink = path.join(tmpDir, "broken.md");
       await fs.promises.symlink("/nonexistent/target", brokenLink);
@@ -977,8 +972,8 @@ describe("FileDataProvider", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         await provider.fullAcquire();
-      } catch {
-        // Expected
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       // Clone should use "my-repo" as the directory name (without .git)
@@ -1003,8 +998,8 @@ describe("FileDataProvider", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         await provider.fullAcquire();
-      } catch {
-        // Expected
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       expect(mockGitInstance.clone).toHaveBeenCalledWith(
