@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { simpleGit, type SimpleGit } from "simple-git";
 import { matchesPatterns, hasLowSemanticValue } from "../utils.js";
 import { extractContent } from "../content-extractors.js";
+import { getIndexedItemIds } from "../../db/queries.js";
 import { isFileSourceConfig } from "../../types.js";
 import type { SourceConfig, FileSourceConfig } from "../../types.js";
 import type {
@@ -120,7 +121,17 @@ export class FileDataProvider implements DataProvider {
       }
     }
 
-    return { items, removedIds: [], stateToken };
+    // Detect stale files: paths in the DB but no longer on disk
+    const currentPaths = new Set(items.map((item) => item.id));
+    const indexedPaths = await getIndexedItemIds(this.config.name);
+    const removedIds = [...indexedPaths].filter((p) => !currentPaths.has(p));
+    if (removedIds.length > 0) {
+      console.log(
+        `${this.logPrefix} Full acquire: ${removedIds.length} stale files to remove from index`,
+      );
+    }
+
+    return { items, removedIds, stateToken };
   }
 
   async incrementalAcquire(lastStateToken: string): Promise<AcquisitionResult> {

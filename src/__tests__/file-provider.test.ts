@@ -23,6 +23,16 @@ vi.mock("simple-git", () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Mock getIndexedItemIds — used for stale chunk detection in fullAcquire
+// ---------------------------------------------------------------------------
+
+const mockGetIndexedItemIds = vi.fn().mockResolvedValue(new Set<string>());
+
+vi.mock("../db/queries.js", () => ({
+  getIndexedItemIds: (...args: unknown[]) => mockGetIndexedItemIds(...args),
+}));
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -229,6 +239,63 @@ describe("FileDataProvider", () => {
       consoleSpy.mockRestore();
       // Restore permissions for cleanup
       await fs.promises.chmod(unreadable, 0o644);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // fullAcquire — stale chunk cleanup
+  // -----------------------------------------------------------------------
+
+  describe("fullAcquire stale chunk cleanup", () => {
+    it("returns removedIds for files in DB but not on disk", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(
+        new Set(["readme.md", "guide.md", "old/deleted-file.md", "gone.md"]),
+      );
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      // readme.md and guide.md exist on disk, old/deleted-file.md and gone.md do not
+      expect(result.removedIds).toContain("old/deleted-file.md");
+      expect(result.removedIds).toContain("gone.md");
+      expect(result.removedIds).not.toContain("readme.md");
+      expect(result.removedIds).not.toContain("guide.md");
+    });
+
+    it("does NOT remove files that still exist on disk", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(
+        new Set(["readme.md", "guide.md", "sub/nested.md"]),
+      );
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      expect(result.removedIds).toEqual([]);
+    });
+
+    it("handles empty DB gracefully (no prior indexed items)", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(new Set<string>());
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      expect(result.removedIds).toEqual([]);
+      expect(result.items.length).toBeGreaterThan(0);
+    });
+
+    it("handles first-ever index with no prior chunks", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(new Set<string>());
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      expect(result.removedIds).toEqual([]);
+      // Should still return the current files
+      expect(result.items.length).toBe(3);
     });
   });
 
