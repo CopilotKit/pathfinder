@@ -6,17 +6,26 @@ import { FileDataProvider } from "../indexing/providers/file.js";
 import type { FileSourceConfig } from "../types.js";
 
 // ---------------------------------------------------------------------------
-// Mock simple-git — used for all remote-repo (git) code paths
+// Hoisted mocks — variables created before vi.mock hoisting
 // ---------------------------------------------------------------------------
 
-const mockGitInstance = {
-  clone: vi.fn().mockResolvedValue(undefined),
-  pull: vi.fn().mockResolvedValue(undefined),
-  revparse: vi.fn().mockResolvedValue("abc123"),
-  diff: vi.fn().mockResolvedValue(""),
-  fetch: vi.fn().mockResolvedValue(undefined),
-  listRemote: vi.fn().mockResolvedValue("abc123\tHEAD"),
-};
+const { mockGitInstance, mockGetIndexedItemIds, mockExtractContent } =
+  vi.hoisted(() => ({
+    mockGitInstance: {
+      clone: vi.fn().mockResolvedValue(undefined),
+      pull: vi.fn().mockResolvedValue(undefined),
+      revparse: vi.fn().mockResolvedValue("abc123"),
+      diff: vi.fn().mockResolvedValue(""),
+      fetch: vi.fn().mockResolvedValue(undefined),
+      listRemote: vi.fn().mockResolvedValue("abc123\tHEAD"),
+    },
+    mockGetIndexedItemIds: vi.fn().mockResolvedValue(new Set<string>()),
+    mockExtractContent: vi.fn(),
+  }));
+
+// ---------------------------------------------------------------------------
+// Mock simple-git — used for all remote-repo (git) code paths
+// ---------------------------------------------------------------------------
 
 vi.mock("simple-git", () => ({
   simpleGit: vi.fn(() => mockGitInstance),
@@ -26,11 +35,29 @@ vi.mock("simple-git", () => ({
 // Mock getIndexedItemIds — used for stale chunk detection in fullAcquire
 // ---------------------------------------------------------------------------
 
-const mockGetIndexedItemIds = vi.fn().mockResolvedValue(new Set<string>());
-
 vi.mock("../db/queries.js", () => ({
   getIndexedItemIds: (...args: unknown[]) => mockGetIndexedItemIds(...args),
 }));
+
+// ---------------------------------------------------------------------------
+// Mock content-extractors — passthrough by default, override per-test
+// ---------------------------------------------------------------------------
+
+vi.mock("../indexing/content-extractors.js", async (importOriginal) => {
+  const actual =
+    (await importOriginal()) as typeof import("../indexing/content-extractors.js");
+  return {
+    ...actual,
+    extractContent: async (
+      ...args: Parameters<typeof actual.extractContent>
+    ) => {
+      if (mockExtractContent.getMockImplementation()) {
+        return mockExtractContent(...args);
+      }
+      return actual.extractContent(...args);
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,6 +68,7 @@ describe("FileDataProvider", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockExtractContent.mockReset();
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "fp-test-"));
     await fs.promises.writeFile(
       path.join(tmpDir, "readme.md"),
@@ -296,6 +324,65 @@ describe("FileDataProvider", () => {
       expect(result.removedIds).toEqual([]);
       // Should still return the current files
       expect(result.items.length).toBe(3);
+    });
+
+    it("does NOT remove files that exist on disk but fail extractContent", async () => {
+      // readme.md exists on disk but extractContent will throw for it
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      mockExtractContent.mockImplementation(
+        async (absPath: string, _type: string) => {
+          if (absPath.endsWith("readme.md")) {
+            throw new Error("Transient I/O error");
+          }
+          // Use real fs read for other files
+          const content = await fs.promises.readFile(absPath, "utf-8");
+          return { content, metadata: {} };
+        },
+      );
+
+      // DB says readme.md is indexed — if currentPaths is built from items
+      // (which won't include readme.md due to extraction failure), readme.md
+      // would be falsely flagged as stale.
+      mockGetIndexedItemIds.mockResolvedValueOnce(
+        new Set(["readme.md", "guide.md"]),
+      );
+
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      // readme.md should NOT be in removedIds — it still exists on disk
+      expect(result.removedIds).not.toContain("readme.md");
+      // It also shouldn't be in items since extraction failed
+      const ids = result.items.map((i) => i.id);
+      expect(ids).not.toContain("readme.md");
+      // guide.md should still be present
+      expect(ids).toContain("guide.md");
+
+      mockExtractContent.mockReset();
+      errorSpy.mockRestore();
+    });
+
+    it("handles getIndexedItemIds failure gracefully", async () => {
+      mockGetIndexedItemIds.mockRejectedValueOnce(
+        new Error("DB connection refused"),
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      // Should not crash — should still return items
+      expect(result.items.length).toBe(3);
+      // removedIds should be empty since stale detection was skipped
+      expect(result.removedIds).toEqual([]);
+
+      warnSpy.mockRestore();
     });
   });
 

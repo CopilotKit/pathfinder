@@ -121,13 +121,26 @@ export class FileDataProvider implements DataProvider {
       }
     }
 
-    // Detect stale files: paths in the DB but no longer on disk
-    const currentPaths = new Set(items.map((item) => item.id));
-    const indexedPaths = await getIndexedItemIds(this.config.name);
-    const removedIds = [...indexedPaths].filter((p) => !currentPaths.has(p));
-    if (removedIds.length > 0) {
-      console.log(
-        `${this.logPrefix} Full acquire: ${removedIds.length} stale files to remove from index`,
+    // Detect stale files: paths in the DB but no longer on disk.
+    // Use matchingFiles (disk presence) rather than items (post-extraction)
+    // so files that exist but fail extraction aren't falsely flagged as stale.
+    const currentPaths = new Set(
+      matchingFiles.map((absPath) => path.relative(repoDir, absPath)),
+    );
+
+    let removedIds: string[] = [];
+    try {
+      const indexedPaths = await getIndexedItemIds(this.config.name);
+      removedIds = [...indexedPaths].filter((p) => !currentPaths.has(p));
+      if (removedIds.length > 0) {
+        console.log(
+          `${this.logPrefix} Full acquire: ${removedIds.length} stale files to remove from index`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `${this.logPrefix} Failed to check for stale files, skipping cleanup:`,
+        err instanceof Error ? err.message : err,
       );
     }
 
