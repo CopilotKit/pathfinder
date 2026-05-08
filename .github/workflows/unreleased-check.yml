@@ -26,7 +26,17 @@ jobs:
           UNRELEASED=$(git log "${TAG}..HEAD" --oneline -- 'src/' | wc -l | tr -d ' ')
 
           if [ "$UNRELEASED" -gt 0 ]; then
-            echo "::warning::${UNRELEASED} source commits on main since ${TAG} — version has not been bumped."
+            # Only alert if the oldest unreleased commit is >24h old
+            OLDEST_TS=$(git log "${TAG}..HEAD" --format='%ct' --reverse -- 'src/' | head -1)
+            NOW_TS=$(date +%s)
+            AGE_HOURS=$(( (NOW_TS - OLDEST_TS) / 3600 ))
+
+            if [ "$AGE_HOURS" -lt 24 ]; then
+              echo "Unreleased commits exist but oldest is only ${AGE_HOURS}h old — skipping alert."
+              exit 0
+            fi
+
+            echo "::warning::${UNRELEASED} source commits on main since ${TAG} (oldest: ${AGE_HOURS}h) — version has not been bumped."
             echo ""
             echo "Unreleased commits:"
             git log "${TAG}..HEAD" --oneline -- 'src/'
