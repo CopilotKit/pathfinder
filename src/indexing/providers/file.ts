@@ -45,7 +45,9 @@ export class FileDataProvider implements DataProvider {
 
   constructor(config: SourceConfig, options: ProviderOptions) {
     if (!isFileSourceConfig(config)) {
-      throw new Error("FileDataProvider cannot handle slack source type");
+      throw new Error(
+        `FileDataProvider cannot handle ${(config as { type: string }).type} source type`,
+      );
     }
     this.config = config;
     this.options = options;
@@ -205,9 +207,15 @@ export class FileDataProvider implements DataProvider {
       .split("\n")
       .map((f) => f.trim())
       .filter((f) => f.length > 0);
-    const matchingChanged = changedFiles.filter((f) =>
-      matchesPatterns(f, this.config),
-    );
+    const pathPrefix = this.config.path
+      ? this.config.path.replace(/\/$/, "") + "/"
+      : "";
+    const scopedChanged = pathPrefix
+      ? changedFiles.filter((f) => f.startsWith(pathPrefix))
+      : changedFiles;
+    const matchingChanged = scopedChanged
+      .filter((f) => !f.split("/").some((seg) => this.skipDirs.has(seg)))
+      .filter((f) => matchesPatterns(f, this.config));
 
     if (matchingChanged.length === 0) {
       console.log(`${this.logPrefix} No matching changes detected`);
@@ -219,48 +227,73 @@ export class FileDataProvider implements DataProvider {
     );
 
     // Find deleted files
-    const diffStatusOutput = await git.diff([
-      "--name-status",
-      `${lastStateToken}..HEAD`,
-    ]);
-    const statusLines = diffStatusOutput.split("\n");
-    const deletedFiles = statusLines
-      .filter((line) => line.startsWith("D\t"))
-      .map((line) => line.slice(2).trim())
-      .filter((f) => matchesPatterns(f, this.config));
-    const renamedOldPaths = statusLines
-      .filter((line) => /^R\d*\t/.test(line))
-      .map((line) => {
-        const parts = line.split("\t");
-        return parts[1]?.trim();
-      })
-      .filter((f): f is string => !!f && matchesPatterns(f, this.config));
-    const removedFiles = [...deletedFiles, ...renamedOldPaths];
+    let removedFiles: string[] = [];
+    try {
+      const diffStatusOutput = await git.diff([
+        "--name-status",
+        `${lastStateToken}..HEAD`,
+      ]);
+      const statusLines = diffStatusOutput.split("\n");
+      const deletedFiles = statusLines
+        .filter((line) => line.startsWith("D\t"))
+        .map((line) => line.slice(2).trim())
+        .filter((f) => !pathPrefix || f.startsWith(pathPrefix))
+        .filter((f) => !f.split("/").some((seg) => this.skipDirs.has(seg)))
+        .filter((f) => matchesPatterns(f, this.config));
+      const renamedOldPaths = statusLines
+        .filter((line) => /^R\d*\t/.test(line))
+        .map((line) => {
+          const parts = line.split("\t");
+          return parts[1]?.trim();
+        })
+        .filter((f): f is string => !!f)
+        .filter((f) => !pathPrefix || f.startsWith(pathPrefix))
+        .filter((f) => !f.split("/").some((seg) => this.skipDirs.has(seg)))
+        .filter((f) => matchesPatterns(f, this.config));
+      removedFiles = [...deletedFiles, ...renamedOldPaths];
+    } catch (err) {
+      console.warn(
+        `${this.logPrefix} git diff --name-status failed, skipping deletion detection:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
 
     // Read changed (non-deleted) files
     const filesToRead = matchingChanged.filter(
       (f) => !removedFiles.includes(f),
     );
     const items: ContentItem[] = [];
+    const skippedFiles: string[] = [];
     for (const relPath of filesToRead) {
       const absPath = path.join(repoDir, relPath);
       if (!fs.existsSync(absPath)) continue;
       try {
         const stat = await fs.promises.stat(absPath);
-        if (stat.size > this.maxFileSize) continue;
+        if (stat.size > this.maxFileSize) {
+          skippedFiles.push(relPath);
+          continue;
+        }
         const { content, metadata } = await extractContent(
           absPath,
           this.config.type,
         );
-        if (hasLowSemanticValue(content)) continue;
+        if (hasLowSemanticValue(content)) {
+          skippedFiles.push(relPath);
+          continue;
+        }
         items.push({ id: relPath, content, metadata });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`${this.logPrefix} Failed to read ${relPath}: ${msg}`);
+        skippedFiles.push(relPath);
       }
     }
 
-    return { items, removedIds: removedFiles, stateToken: headSha };
+    return {
+      items,
+      removedIds: [...removedFiles, ...skippedFiles],
+      stateToken: headSha,
+    };
   }
 
   async getCurrentStateToken(): Promise<string | null> {
@@ -320,10 +353,12 @@ export class FileDataProvider implements DataProvider {
       try {
         await git.pull();
         return git;
-      } catch (err) {
+      } catch (pullErr) {
+        const msg =
+          pullErr instanceof Error ? pullErr.message : String(pullErr);
         console.warn(
-          `${this.logPrefix} Corrupted repo at ${repoDir}, re-cloning:`,
-          err,
+          `${this.logPrefix} Pull failed at ${repoDir}, re-cloning:`,
+          msg,
         );
         await fs.promises.rm(repoDir, { recursive: true, force: true });
       }
@@ -352,7 +387,10 @@ export class FileDataProvider implements DataProvider {
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
     } catch (err) {
-      console.warn(`${this.logPrefix} Unable to read directory ${dir}:`, err);
+      console.warn(
+        `${this.logPrefix} Unable to read directory ${dir}:`,
+        err instanceof Error ? err.message : err,
+      );
       return results;
     }
 
@@ -368,7 +406,10 @@ export class FileDataProvider implements DataProvider {
           const stat = await fs.promises.stat(fullPath);
           if (stat.size > this.maxFileSize) continue;
         } catch (err) {
-          console.warn(`${this.logPrefix} Unable to stat ${fullPath}:`, err);
+          console.warn(
+            `${this.logPrefix} Unable to stat ${fullPath}:`,
+            err instanceof Error ? err.message : err,
+          );
           continue;
         }
         results.push(fullPath);
@@ -382,8 +423,12 @@ export class FileDataProvider implements DataProvider {
     const files = await this.walkFiles(walkRoot);
     const hash = createHash("sha256");
     for (const f of files.sort()) {
-      const stat = await fs.promises.stat(f);
-      hash.update(`${f}:${stat.mtimeMs}\n`);
+      try {
+        const stat = await fs.promises.stat(f);
+        hash.update(`${path.relative(walkRoot, f)}:${stat.mtimeMs}\n`);
+      } catch {
+        // File may have been deleted between walk and hash; skip it
+      }
     }
     return `local-${hash.digest("hex").slice(0, 12)}`;
   }
