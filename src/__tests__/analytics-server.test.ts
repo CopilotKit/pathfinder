@@ -36,6 +36,7 @@ vi.mock("../config.js", () => ({
     p2pTelemetryUrl: undefined,
     p2pTelemetryDisabled: false,
     packageVersion: "test",
+    slackWebhookUrl: "",
   }),
   hasSearchTools: vi.fn().mockReturnValue(false),
   hasKnowledgeTools: vi.fn().mockReturnValue(false),
@@ -955,6 +956,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
         packageVersion: "test",
+        slackWebhookUrl: "",
       });
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
@@ -995,6 +997,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
         packageVersion: "test",
+        slackWebhookUrl: "",
       });
       const fakeReq = {
         socket: { remoteAddress: "203.0.113.7" },
@@ -1021,6 +1024,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
         packageVersion: "test",
+        slackWebhookUrl: "",
       });
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
@@ -1060,6 +1064,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
         packageVersion: "test",
+        slackWebhookUrl: "",
       });
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
@@ -1113,6 +1118,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
         packageVersion: "test",
+        slackWebhookUrl: "",
       });
     }
 
