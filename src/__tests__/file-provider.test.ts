@@ -325,7 +325,6 @@ describe("FileDataProvider", () => {
       // Should still return the current files
       expect(result.items.length).toBe(3);
     });
-
     it("does NOT remove files that exist on disk but fail extractContent", async () => {
       // readme.md exists on disk but extractContent will throw for it
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -382,6 +381,28 @@ describe("FileDataProvider", () => {
       // removedIds should be empty since stale detection was skipped
       expect(result.removedIds).toEqual([]);
 
+      warnSpy.mockRestore();
+    });
+    it("removes all indexed files when walkRoot does not exist", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(
+        new Set(["old-file.md", "another.md"]),
+      );
+      const config = {
+        ...makeGitConfig(),
+        path: "/nonexistent/path/that/does/not/exist",
+      };
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const provider = new FileDataProvider(config, { cloneDir });
+      const result = await provider.fullAcquire();
+
+      expect(result.items).toEqual([]);
+      expect(result.removedIds).toContain("old-file.md");
+      expect(result.removedIds).toContain("another.md");
+      expect(result.removedIds).toHaveLength(2);
       warnSpy.mockRestore();
     });
   });
