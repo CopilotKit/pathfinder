@@ -4,6 +4,14 @@ import { walkSourceFiles } from "./utils.js";
 import { isFileSourceConfig } from "../types.js";
 import type { FileSourceConfig } from "../types.js";
 
+// Dedup: only alert when findings change from the previous audit run.
+// Key = "source:check", value = count. If the counts match, skip the alert.
+const lastAuditFindings = new Map<string, number>();
+
+export function resetAuditCache(): void {
+  lastAuditFindings.clear();
+}
+
 export interface AuditFinding {
   source: string;
   check: "stale_files" | "scope_leak" | "count_divergence";
@@ -80,18 +88,36 @@ export async function runReindexAudit(
       }
     }
 
-    if (findings.length > 0) {
-      for (const f of findings) {
-        const detail = f.direction ? ` (${f.direction})` : "";
-        const samples =
-          f.samples.length > 0 ? `: ${f.samples.slice(0, 5).join(", ")}` : "";
-        console.warn(
-          `[reindex-audit] ${f.source} — ${f.check}: ${f.count} issues${detail}${samples}`,
-        );
+    // Always log findings to console
+    for (const f of findings) {
+      const detail = f.direction ? ` (${f.direction})` : "";
+      const samples =
+        f.samples.length > 0 ? `: ${f.samples.slice(0, 5).join(", ")}` : "";
+      console.warn(
+        `[reindex-audit] ${f.source} — ${f.check}: ${f.count} issues${detail}${samples}`,
+      );
+    }
+
+    // Only Slack-alert on NEW or CHANGED findings (dedup)
+    const newFindings = findings.filter((f) => {
+      const key = `${f.source}:${f.check}`;
+      const prev = lastAuditFindings.get(key);
+      return prev === undefined || prev !== f.count;
+    });
+
+    // Update the dedup cache with current findings
+    // Clear entries for sources we just audited (so resolved issues don't persist)
+    for (const name of sourceNames) {
+      for (const [key] of lastAuditFindings) {
+        if (key.startsWith(`${name}:`)) lastAuditFindings.delete(key);
       }
-      if (cfg.slackWebhookUrl) {
-        await sendSlackAlert(findings, cfg.slackWebhookUrl);
-      }
+    }
+    for (const f of findings) {
+      lastAuditFindings.set(`${f.source}:${f.check}`, f.count);
+    }
+
+    if (newFindings.length > 0 && cfg.slackWebhookUrl) {
+      await sendSlackAlert(newFindings, cfg.slackWebhookUrl);
     }
 
     return findings;

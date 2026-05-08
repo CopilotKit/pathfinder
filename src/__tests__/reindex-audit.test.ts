@@ -39,6 +39,7 @@ vi.mock("../indexing/utils.js", () => ({
 
 import {
   runReindexAudit,
+  resetAuditCache,
   type AuditFinding,
 } from "../indexing/reindex-audit.js";
 
@@ -113,6 +114,7 @@ describe("runReindexAudit", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetAuditCache();
 
     // Default: single markdown source, DB and disk in sync
     const src = fileSource("docs");
