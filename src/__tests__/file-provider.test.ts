@@ -6,21 +6,58 @@ import { FileDataProvider } from "../indexing/providers/file.js";
 import type { FileSourceConfig } from "../types.js";
 
 // ---------------------------------------------------------------------------
-// Mock simple-git — used for all remote-repo (git) code paths
+// Hoisted mocks — variables created before vi.mock hoisting
 // ---------------------------------------------------------------------------
 
-const mockGitInstance = {
-  clone: vi.fn().mockResolvedValue(undefined),
-  pull: vi.fn().mockResolvedValue(undefined),
-  revparse: vi.fn().mockResolvedValue("abc123"),
-  diff: vi.fn().mockResolvedValue(""),
-  fetch: vi.fn().mockResolvedValue(undefined),
-  listRemote: vi.fn().mockResolvedValue("abc123\tHEAD"),
-};
+const { mockGitInstance, mockGetIndexedItemIds, mockExtractContent } =
+  vi.hoisted(() => ({
+    mockGitInstance: {
+      clone: vi.fn().mockResolvedValue(undefined),
+      pull: vi.fn().mockResolvedValue(undefined),
+      revparse: vi.fn().mockResolvedValue("abc123"),
+      diff: vi.fn().mockResolvedValue(""),
+      fetch: vi.fn().mockResolvedValue(undefined),
+      listRemote: vi.fn().mockResolvedValue("abc123\tHEAD"),
+    },
+    mockGetIndexedItemIds: vi.fn().mockResolvedValue(new Set<string>()),
+    mockExtractContent: vi.fn(),
+  }));
+
+// ---------------------------------------------------------------------------
+// Mock simple-git — used for all remote-repo (git) code paths
+// ---------------------------------------------------------------------------
 
 vi.mock("simple-git", () => ({
   simpleGit: vi.fn(() => mockGitInstance),
 }));
+
+// ---------------------------------------------------------------------------
+// Mock getIndexedItemIds — used for stale chunk detection in fullAcquire
+// ---------------------------------------------------------------------------
+
+vi.mock("../db/queries.js", () => ({
+  getIndexedItemIds: (...args: unknown[]) => mockGetIndexedItemIds(...args),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock content-extractors — passthrough by default, override per-test
+// ---------------------------------------------------------------------------
+
+vi.mock("../indexing/content-extractors.js", async (importOriginal) => {
+  const actual =
+    (await importOriginal()) as typeof import("../indexing/content-extractors.js");
+  return {
+    ...actual,
+    extractContent: async (
+      ...args: Parameters<typeof actual.extractContent>
+    ) => {
+      if (mockExtractContent.getMockImplementation()) {
+        return mockExtractContent(...args);
+      }
+      return actual.extractContent(...args);
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -30,7 +67,16 @@ describe("FileDataProvider", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    // Re-establish hoisted defaults after resetAllMocks clears implementations
+    mockGitInstance.clone.mockResolvedValue(undefined);
+    mockGitInstance.pull.mockResolvedValue(undefined);
+    mockGitInstance.revparse.mockResolvedValue("abc123");
+    mockGitInstance.diff.mockResolvedValue("");
+    mockGitInstance.fetch.mockResolvedValue(undefined);
+    mockGitInstance.listRemote.mockResolvedValue("abc123\tHEAD");
+    mockGetIndexedItemIds.mockResolvedValue(new Set<string>());
+    mockExtractContent.mockReset();
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "fp-test-"));
     await fs.promises.writeFile(
       path.join(tmpDir, "readme.md"),
@@ -91,7 +137,7 @@ describe("FileDataProvider", () => {
       const slackConfig = {
         name: "slack-src",
         type: "slack" as const,
-        channels: [{ id: "C1", name: "general" }],
+        channels: ["C0123456789"],
         chunk: {},
       };
       expect(
@@ -233,6 +279,132 @@ describe("FileDataProvider", () => {
   });
 
   // -----------------------------------------------------------------------
+  // fullAcquire — stale chunk cleanup
+  // -----------------------------------------------------------------------
+
+  describe("fullAcquire stale chunk cleanup", () => {
+    it("returns removedIds for files in DB but not on disk", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(
+        new Set(["readme.md", "guide.md", "old/deleted-file.md", "gone.md"]),
+      );
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      // readme.md and guide.md exist on disk, old/deleted-file.md and gone.md do not
+      expect(result.removedIds).toContain("old/deleted-file.md");
+      expect(result.removedIds).toContain("gone.md");
+      expect(result.removedIds).not.toContain("readme.md");
+      expect(result.removedIds).not.toContain("guide.md");
+    });
+
+    it("does NOT remove files that still exist on disk", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(
+        new Set(["readme.md", "guide.md", "sub/nested.md"]),
+      );
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      expect(result.removedIds).toEqual([]);
+    });
+
+    it("handles first-ever index with no prior chunks", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(new Set<string>());
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      expect(result.removedIds).toEqual([]);
+      // Should still return the current files
+      expect(result.items.length).toBe(3);
+    });
+    it("does NOT remove files that exist on disk but fail extractContent", async () => {
+      // readme.md exists on disk but extractContent will throw for it
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      mockExtractContent.mockImplementation(
+        async (absPath: string, _type: string) => {
+          if (absPath.endsWith("readme.md")) {
+            throw new Error("Transient I/O error");
+          }
+          // Use real fs read for other files
+          const content = await fs.promises.readFile(absPath, "utf-8");
+          return { content, metadata: {} };
+        },
+      );
+
+      // DB says readme.md is indexed — if currentPaths is built from items
+      // (which won't include readme.md due to extraction failure), readme.md
+      // would be falsely flagged as stale.
+      mockGetIndexedItemIds.mockResolvedValueOnce(
+        new Set(["readme.md", "guide.md"]),
+      );
+
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      // readme.md should NOT be in removedIds — it still exists on disk
+      expect(result.removedIds).not.toContain("readme.md");
+      // It also shouldn't be in items since extraction failed
+      const ids = result.items.map((i) => i.id);
+      expect(ids).not.toContain("readme.md");
+      // guide.md should still be present
+      expect(ids).toContain("guide.md");
+
+      mockExtractContent.mockReset();
+      errorSpy.mockRestore();
+    });
+
+    it("handles getIndexedItemIds failure gracefully", async () => {
+      mockGetIndexedItemIds.mockRejectedValueOnce(
+        new Error("DB connection refused"),
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const provider = new FileDataProvider(makeLocalConfig(), {
+        cloneDir: "/tmp/test-clones",
+      });
+      const result = await provider.fullAcquire();
+
+      // Should not crash — should still return items
+      expect(result.items.length).toBe(3);
+      // removedIds should be empty since stale detection was skipped
+      expect(result.removedIds).toEqual([]);
+
+      warnSpy.mockRestore();
+    });
+    it("removes all indexed files when walkRoot does not exist", async () => {
+      mockGetIndexedItemIds.mockResolvedValueOnce(
+        new Set(["old-file.md", "another.md"]),
+      );
+      const config = {
+        ...makeGitConfig(),
+        path: "/nonexistent/path/that/does/not/exist",
+      };
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const provider = new FileDataProvider(config, { cloneDir });
+      const result = await provider.fullAcquire();
+
+      expect(result.items).toEqual([]);
+      expect(result.removedIds).toContain("old-file.md");
+      expect(result.removedIds).toContain("another.md");
+      expect(result.removedIds).toHaveLength(2);
+      warnSpy.mockRestore();
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // fullAcquire — git (remote) sources
   // -----------------------------------------------------------------------
 
@@ -291,8 +463,8 @@ describe("FileDataProvider", () => {
 
       try {
         await provider.fullAcquire();
-      } catch {
-        // May fail because cloned dir won't actually exist, that's fine
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       // The clone call should use the authenticated URL
@@ -317,8 +489,8 @@ describe("FileDataProvider", () => {
 
       try {
         await provider.fullAcquire();
-      } catch {
-        // Clone won't create real dir
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       expect(mockGitInstance.clone).toHaveBeenCalledWith(
@@ -342,8 +514,8 @@ describe("FileDataProvider", () => {
 
       try {
         await provider.fullAcquire();
-      } catch {
-        // May fail downstream
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       expect(mockGitInstance.clone).toHaveBeenCalled();
@@ -553,6 +725,34 @@ describe("FileDataProvider", () => {
       expect(result.items).toEqual([]);
     });
 
+    it("adds old path to removedIds when a file is renamed", async () => {
+      // Set up the git source with a repo dir
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      await fs.promises.mkdir(path.join(repoDir, "docs"), { recursive: true });
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+      // Create the renamed file at its new location
+      await fs.promises.writeFile(
+        path.join(repoDir, "docs", "new-name.md"),
+        "# Renamed file content",
+      );
+
+      mockGitInstance.revparse.mockResolvedValue("def456");
+      // --name-only lists both old and new paths for renames
+      mockGitInstance.diff
+        .mockResolvedValueOnce("docs/old-name.md\ndocs/new-name.md\n")
+        // --name-status shows the rename
+        .mockResolvedValueOnce("R100\tdocs/old-name.md\tdocs/new-name.md\n");
+
+      const provider = new FileDataProvider(makeGitConfig(), { cloneDir });
+      const result = await provider.incrementalAcquire("abc123");
+
+      expect(result.removedIds).toContain("docs/old-name.md");
+      // new-name.md should be in items (indexed)
+      const ids = result.items.map((i) => i.id);
+      expect(ids).toContain("docs/new-name.md");
+    });
+
     it("skips files that no longer exist on disk", async () => {
       const cloneDir = path.join(tmpDir, "clones");
       const repoDir = path.join(cloneDir, "repo");
@@ -722,7 +922,7 @@ describe("FileDataProvider", () => {
       await fs.promises.chmod(unreadableDir, 0o755);
     });
 
-    it("handles stat errors on individual files during walk", async () => {
+    it("skips broken symlinks during walk", async () => {
       // Create a broken symlink — readdir will list it but stat will fail
       const brokenLink = path.join(tmpDir, "broken.md");
       await fs.promises.symlink("/nonexistent/target", brokenLink);
@@ -772,8 +972,8 @@ describe("FileDataProvider", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         await provider.fullAcquire();
-      } catch {
-        // Expected
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       // Clone should use "my-repo" as the directory name (without .git)
@@ -798,8 +998,8 @@ describe("FileDataProvider", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         await provider.fullAcquire();
-      } catch {
-        // Expected
+      } catch (err) {
+        expect(err).toBeDefined();
       }
 
       expect(mockGitInstance.clone).toHaveBeenCalledWith(
