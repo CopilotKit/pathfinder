@@ -728,6 +728,36 @@ describe("FileDataProvider", () => {
       expect(result.items).toEqual([]);
     });
 
+    it("adds old path to removedIds when a file is renamed", async () => {
+      // Set up the git source with a repo dir
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      await fs.promises.mkdir(path.join(repoDir, "docs"), { recursive: true });
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+      // Create the renamed file at its new location
+      await fs.promises.writeFile(
+        path.join(repoDir, "docs", "new-name.md"),
+        "# Renamed file content",
+      );
+
+      mockGitInstance.revparse.mockResolvedValue("def456");
+      // Reset diff mock to clear any leftover once-queue from prior tests
+      mockGitInstance.diff.mockReset().mockResolvedValue("");
+      // --name-only lists both old and new paths for renames
+      mockGitInstance.diff
+        .mockResolvedValueOnce("docs/old-name.md\ndocs/new-name.md\n")
+        // --name-status shows the rename
+        .mockResolvedValueOnce("R100\tdocs/old-name.md\tdocs/new-name.md\n");
+
+      const provider = new FileDataProvider(makeGitConfig(), { cloneDir });
+      const result = await provider.incrementalAcquire("abc123");
+
+      expect(result.removedIds).toContain("docs/old-name.md");
+      // new-name.md should be in items (indexed)
+      const ids = result.items.map((i) => i.id);
+      expect(ids).toContain("docs/new-name.md");
+    });
+
     it("skips files that no longer exist on disk", async () => {
       const cloneDir = path.join(tmpDir, "clones");
       const repoDir = path.join(cloneDir, "repo");

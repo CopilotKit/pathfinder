@@ -223,15 +223,23 @@ export class FileDataProvider implements DataProvider {
       "--name-status",
       `${lastStateToken}..HEAD`,
     ]);
-    const deletedFiles = diffStatusOutput
-      .split("\n")
+    const statusLines = diffStatusOutput.split("\n");
+    const deletedFiles = statusLines
       .filter((line) => line.startsWith("D\t"))
       .map((line) => line.slice(2).trim())
       .filter((f) => matchesPatterns(f, this.config));
+    const renamedOldPaths = statusLines
+      .filter((line) => /^R\d*\t/.test(line))
+      .map((line) => {
+        const parts = line.split("\t");
+        return parts[1]?.trim();
+      })
+      .filter((f): f is string => !!f && matchesPatterns(f, this.config));
+    const removedFiles = [...deletedFiles, ...renamedOldPaths];
 
     // Read changed (non-deleted) files
     const filesToRead = matchingChanged.filter(
-      (f) => !deletedFiles.includes(f),
+      (f) => !removedFiles.includes(f),
     );
     const items: ContentItem[] = [];
     for (const relPath of filesToRead) {
@@ -252,7 +260,7 @@ export class FileDataProvider implements DataProvider {
       }
     }
 
-    return { items, removedIds: deletedFiles, stateToken: headSha };
+    return { items, removedIds: removedFiles, stateToken: headSha };
   }
 
   async getCurrentStateToken(): Promise<string | null> {
