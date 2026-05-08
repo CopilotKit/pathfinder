@@ -36,6 +36,7 @@ import {
   type FaqChunkResult,
 } from "./types.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
+import { runReindexAudit } from "./indexing/reindex-audit.js";
 
 import { createWebhookHandler } from "./webhooks/github.js";
 import { createSlackWebhookHandler } from "./webhooks/slack.js";
@@ -3317,6 +3318,9 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
       cachedFaqTxt = null;
       refreshBashInstances(sourceNames, "reindex").catch((err) => {
         console.error("[reindex] Bash refresh failed:", err);
+      });
+      runReindexAudit(sourceNames).catch((err) => {
+        console.error("[reindex-audit] Audit failed:", err);
       });
     };
 
