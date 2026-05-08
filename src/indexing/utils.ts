@@ -1,5 +1,7 @@
 // Shared indexing utilities — used by providers, bash-fs, and test scripts.
 
+import fs from "node:fs";
+import path from "node:path";
 import type { FileSourceConfig } from "../types.js";
 
 /**
@@ -74,4 +76,100 @@ export function matchesPatterns(
   }
 
   return false;
+}
+
+// ── Default constants (mirrored from FileDataProvider) ───────────────────────
+
+const DEFAULT_SKIP_DIRS = new Set(["node_modules", "dist", "build", ".git"]);
+const DEFAULT_MAX_FILE_SIZE = 102400; // 100KB
+const DEFAULT_DOCUMENT_MAX_FILE_SIZE = 10485760; // 10MB
+
+/**
+ * Derive a repository directory name from a git URL.
+ * Example: "https://github.com/org/repo.git" → "repo"
+ */
+function repoNameFromUrl(url: string): string {
+  return (
+    url
+      .split("/")
+      .pop()
+      ?.replace(/\.git$/, "") ?? "repo"
+  );
+}
+
+/**
+ * Enumerate all source files that match a FileSourceConfig's patterns,
+ * WITHOUT reading their contents. Useful for auditing which files would
+ * be indexed vs. which are actually present in the index.
+ *
+ * Returns a Set of relative paths (relative to the repo root for git
+ * sources, or the resolved local path for local sources).
+ */
+export async function walkSourceFiles(
+  sourceConfig: FileSourceConfig,
+  cloneDir: string,
+  _githubToken?: string,
+): Promise<Set<string> | null> {
+  // Determine repo root directory
+  const repoDir = sourceConfig.repo
+    ? path.join(cloneDir, repoNameFromUrl(sourceConfig.repo))
+    : path.resolve(sourceConfig.path);
+
+  // Determine walk starting point
+  const walkRoot = sourceConfig.repo
+    ? path.join(repoDir, sourceConfig.path)
+    : repoDir;
+
+  if (!fs.existsSync(walkRoot)) {
+    return null;
+  }
+
+  const skipDirs = new Set([
+    ...DEFAULT_SKIP_DIRS,
+    ...(sourceConfig.skip_dirs ?? []),
+  ]);
+  const maxFileSize =
+    sourceConfig.max_file_size ??
+    (sourceConfig.type === "document"
+      ? DEFAULT_DOCUMENT_MAX_FILE_SIZE
+      : DEFAULT_MAX_FILE_SIZE);
+
+  const result = new Set<string>();
+
+  async function walk(dir: string): Promise<void> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      console.warn(
+        `[walkSourceFiles] Failed to read directory ${dir}:`,
+        err instanceof Error ? err.message : err,
+      );
+      return;
+    }
+
+    for (const entry of entries) {
+      if (skipDirs.has(entry.name)) continue;
+      const fullPath = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          if (stat.size > maxFileSize) continue;
+        } catch {
+          continue;
+        }
+
+        const relPath = path.relative(repoDir, fullPath);
+        if (matchesPatterns(relPath, sourceConfig)) {
+          result.add(relPath);
+        }
+      }
+    }
+  }
+
+  await walk(walkRoot);
+  return result;
 }

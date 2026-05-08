@@ -70,6 +70,8 @@ export interface Config {
   p2pTelemetryDisabled: boolean;
   /** Pathfinder package version, read from package.json at startup. */
   packageVersion: string;
+  /** Slack webhook URL for operational alerts (reindex audit, deploy health). */
+  slackWebhookUrl: string;
 }
 
 /**
@@ -219,6 +221,7 @@ function parseConfig(): Config {
     p2pTelemetryUrl,
     p2pTelemetryDisabled,
     packageVersion: readPackageVersion(),
+    slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? "",
   };
 }
 

@@ -38,6 +38,7 @@ vi.mock("../config.js", () => ({
     p2pTelemetryUrl: undefined,
     p2pTelemetryDisabled: false,
     packageVersion: "test",
+    slackWebhookUrl: "",
   }),
   hasSearchTools: vi.fn().mockReturnValue(false),
   hasKnowledgeTools: vi.fn().mockReturnValue(false),
@@ -74,6 +75,7 @@ const DEFAULT_TEST_CONFIG = {
   p2pTelemetryUrl: undefined,
   p2pTelemetryDisabled: false,
   packageVersion: "test",
+  slackWebhookUrl: "",
 };
 
 function mockRes() {
@@ -358,6 +360,7 @@ describe("analyticsAuth middleware", () => {
       p2pTelemetryUrl: undefined,
       p2pTelemetryDisabled: false,
       packageVersion: "test",
+      slackWebhookUrl: "",
     });
     const res = mockRes();
     const next = vi.fn();
@@ -398,6 +401,7 @@ describe("analyticsAuth middleware", () => {
       p2pTelemetryUrl: undefined,
       p2pTelemetryDisabled: false,
       packageVersion: "test",
+      slackWebhookUrl: "",
     });
     const res = mockRes();
     const next = vi.fn();
@@ -440,6 +444,7 @@ describe("analyticsAuth middleware", () => {
       p2pTelemetryUrl: undefined,
       p2pTelemetryDisabled: false,
       packageVersion: "test",
+      slackWebhookUrl: "",
     });
     const consoleErrSpy = vi
       .spyOn(console, "error")
@@ -484,6 +489,7 @@ describe("analyticsAuth middleware", () => {
       p2pTelemetryUrl: undefined,
       p2pTelemetryDisabled: false,
       packageVersion: "test",
+      slackWebhookUrl: "",
     });
     const res = mockRes();
     const next = vi.fn();
