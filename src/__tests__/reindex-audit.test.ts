@@ -176,6 +176,24 @@ describe("runReindexAudit", () => {
       expect(stale!.samples.length).toBeLessThanOrEqual(10);
     });
 
+    it("skips audit when walk root does not exist (walkSourceFiles returns null)", async () => {
+      mockWalkSourceFiles.mockResolvedValue(null);
+      mockGetIndexedItemIds.mockResolvedValue(
+        new Set(["README.md", "old.md", "stale.md"]),
+      );
+
+      const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const findings = await runReindexAudit(["docs"]);
+
+      expect(findings).toEqual([]);
+      expect(mockGetIndexedItemIds).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("walk root not found"),
+      );
+      consoleSpy.mockRestore();
+    });
+
     it("skips non-file sources (e.g., slack, notion)", async () => {
       mockGetServerConfig.mockReturnValue(
         serverConfig([
@@ -243,21 +261,19 @@ describe("runReindexAudit", () => {
       expect(leak).toBeUndefined();
     });
 
-    it("skips scope check when config.path is '.' or empty", async () => {
-      for (const pathVal of [".", ""]) {
-        const src = fileSource("docs", {
-          repo: "https://github.com/org/repo.git",
-          path: pathVal || ".",
-        });
-        mockGetServerConfig.mockReturnValue(serverConfig([src]));
+    it("skips scope check when config.path is '.'", async () => {
+      const src = fileSource("docs", {
+        repo: "https://github.com/org/repo.git",
+        path: ".",
+      });
+      mockGetServerConfig.mockReturnValue(serverConfig([src]));
 
-        mockGetIndexedItemIds.mockResolvedValue(new Set(["anywhere/file.md"]));
-        mockWalkSourceFiles.mockResolvedValue(new Set(["anywhere/file.md"]));
+      mockGetIndexedItemIds.mockResolvedValue(new Set(["anywhere/file.md"]));
+      mockWalkSourceFiles.mockResolvedValue(new Set(["anywhere/file.md"]));
 
-        const findings = await runReindexAudit(["docs"]);
-        const leak = findings.find((f) => f.check === "scope_leak");
-        expect(leak).toBeUndefined();
-      }
+      const findings = await runReindexAudit(["docs"]);
+      const leak = findings.find((f) => f.check === "scope_leak");
+      expect(leak).toBeUndefined();
     });
   });
 
@@ -278,7 +294,7 @@ describe("runReindexAudit", () => {
       expect(divergence!.count).toBe(2); // difference: 3 - 1
     });
 
-    it("returns count_divergence with direction db_has_fewer when disk > DB", async () => {
+    it("does not report divergence when disk > DB (db_has_fewer is expected from content filtering)", async () => {
       mockGetIndexedItemIds.mockResolvedValue(new Set(["a.md"]));
       mockWalkSourceFiles.mockResolvedValue(
         new Set(["a.md", "b.md", "c.md", "d.md"]),
@@ -287,9 +303,7 @@ describe("runReindexAudit", () => {
       const findings = await runReindexAudit(["docs"]);
 
       const divergence = findings.find((f) => f.check === "count_divergence");
-      expect(divergence).toBeDefined();
-      expect(divergence!.direction).toBe("db_has_fewer");
-      expect(divergence!.count).toBe(3); // difference: 4 - 1
+      expect(divergence).toBeUndefined();
     });
 
     it("does not report divergence when counts match", async () => {
@@ -340,6 +354,33 @@ describe("runReindexAudit", () => {
       await runReindexAudit(["docs"]);
 
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("logs error when Slack webhook returns non-ok response", async () => {
+      mockGetConfig.mockReturnValue(
+        appConfig({ slackWebhookUrl: "https://hooks.slack.com/test" }),
+      );
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 403,
+        text: () => Promise.resolve("invalid_token"),
+      });
+      mockGetIndexedItemIds.mockResolvedValue(
+        new Set(["README.md", "gone.md"]),
+      );
+      mockWalkSourceFiles.mockResolvedValue(new Set(["README.md"]));
+
+      const consoleSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+
+      const findings = await runReindexAudit(["docs"]);
+
+      expect(findings).toBeInstanceOf(Array);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Slack webhook returned 403"),
+      );
+      consoleSpy.mockRestore();
     });
 
     it("does NOT throw when Slack fetch fails", async () => {
@@ -448,12 +489,11 @@ describe("runReindexAudit", () => {
       expect(docsStale!.count).toBe(1);
       expect(docsStale!.samples).toContain("old.md");
 
-      // code should have a count_divergence finding (db_has_fewer)
+      // code: disk > DB (db_has_fewer) is no longer reported — expected from content filtering
       const codeDivergence = findings.find(
         (f) => f.source === "code" && f.check === "count_divergence",
       );
-      expect(codeDivergence).toBeDefined();
-      expect(codeDivergence!.direction).toBe("db_has_fewer");
+      expect(codeDivergence).toBeUndefined();
     });
   });
 });

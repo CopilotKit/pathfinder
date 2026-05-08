@@ -32,6 +32,12 @@ export async function runReindexAudit(
         cfg.cloneDir,
         cfg.githubToken,
       );
+      if (diskFiles === null) {
+        console.warn(
+          `[reindex-audit] Source "${sourceConfig.name}" walk root not found, skipping audit`,
+        );
+        continue;
+      }
       const dbFiles = await getIndexedItemIds(sourceConfig.name);
 
       // Check 1 — Stale files: in DB but not on disk
@@ -59,16 +65,17 @@ export async function runReindexAudit(
         }
       }
 
-      // Check 3 — Count divergence
+      // Check 3 — Count divergence (db_has_more only; db_has_fewer is expected
+      // when the indexer filters low-semantic-value files like SVGs, base64, etc.)
       const dbCount = dbFiles.size;
       const diskCount = diskFiles.size;
-      if (dbCount !== diskCount) {
+      if (dbCount > diskCount) {
         findings.push({
           source: sourceConfig.name,
           check: "count_divergence",
-          count: Math.abs(dbCount - diskCount),
+          count: dbCount - diskCount,
           samples: [],
-          direction: dbCount > diskCount ? "db_has_more" : "db_has_fewer",
+          direction: "db_has_more",
         });
       }
     }
@@ -101,11 +108,16 @@ async function sendSlackAlert(
   });
   const text = `🔍 *Reindex Audit Alert*\n${lines.join("\n\n")}`;
   try {
-    await fetch(webhookUrl, {
+    const response = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
+    if (!response.ok) {
+      console.error(
+        `[reindex-audit] Slack webhook returned ${response.status}: ${await response.text().catch(() => "(no body)")}`,
+      );
+    }
   } catch (err) {
     console.error(
       "[reindex-audit] Failed to send Slack alert:",

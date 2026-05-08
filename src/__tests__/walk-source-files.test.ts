@@ -45,11 +45,11 @@ describe("walkSourceFiles", () => {
     const config = makeSourceConfig();
     const result = await walkSourceFiles(config, "/unused");
 
-    expect(result).toBeInstanceOf(Set);
-    expect(result.size).toBe(3);
-    expect(result.has("README.md")).toBe(true);
-    expect(result.has(path.join("docs", "guide.md"))).toBe(true);
-    expect(result.has(path.join("docs", "nested", "deep.md"))).toBe(true);
+    expect(result).not.toBeNull();
+    expect(result!.size).toBe(3);
+    expect(result!.has("README.md")).toBe(true);
+    expect(result!.has(path.join("docs", "guide.md"))).toBe(true);
+    expect(result!.has(path.join("docs", "nested", "deep.md"))).toBe(true);
   });
 
   it("excludes files that don't match file_patterns", async () => {
@@ -60,10 +60,11 @@ describe("walkSourceFiles", () => {
     const config = makeSourceConfig({ file_patterns: ["**/*.md"] });
     const result = await walkSourceFiles(config, "/unused");
 
-    expect(result.size).toBe(1);
-    expect(result.has("README.md")).toBe(true);
-    expect(result.has("index.ts")).toBe(false);
-    expect(result.has("styles.css")).toBe(false);
+    expect(result).not.toBeNull();
+    expect(result!.size).toBe(1);
+    expect(result!.has("README.md")).toBe(true);
+    expect(result!.has("index.ts")).toBe(false);
+    expect(result!.has("styles.css")).toBe(false);
   });
 
   it("excludes files in skip_dirs", async () => {
@@ -76,23 +77,23 @@ describe("walkSourceFiles", () => {
     const config = makeSourceConfig({ skip_dirs: ["vendor"] });
     const result = await walkSourceFiles(config, "/unused");
 
-    expect(result.size).toBe(1);
-    expect(result.has("README.md")).toBe(true);
-    expect(result.has(path.join("node_modules", "pkg", "README.md"))).toBe(
+    expect(result).not.toBeNull();
+    expect(result!.size).toBe(1);
+    expect(result!.has("README.md")).toBe(true);
+    expect(result!.has(path.join("node_modules", "pkg", "README.md"))).toBe(
       false,
     );
-    expect(result.has(path.join("vendor", "lib", "README.md"))).toBe(false);
-    expect(result.has(path.join(".git", "objects", "README.md"))).toBe(false);
+    expect(result!.has(path.join("vendor", "lib", "README.md"))).toBe(false);
+    expect(result!.has(path.join(".git", "objects", "README.md"))).toBe(false);
   });
 
-  it("returns empty set when directory doesn't exist", async () => {
+  it("returns null when directory doesn't exist", async () => {
     const config = makeSourceConfig({
       path: path.join(tmpDir, "nonexistent"),
     });
     const result = await walkSourceFiles(config, "/unused");
 
-    expect(result).toBeInstanceOf(Set);
-    expect(result.size).toBe(0);
+    expect(result).toBeNull();
   });
 
   it("respects max_file_size", async () => {
@@ -105,9 +106,10 @@ describe("walkSourceFiles", () => {
     const config = makeSourceConfig();
     const result = await walkSourceFiles(config, "/unused");
 
-    expect(result.size).toBe(1);
-    expect(result.has("small.md")).toBe(true);
-    expect(result.has("large.md")).toBe(false);
+    expect(result).not.toBeNull();
+    expect(result!.size).toBe(1);
+    expect(result!.has("small.md")).toBe(true);
+    expect(result!.has("large.md")).toBe(false);
   });
 
   it("respects custom max_file_size", async () => {
@@ -119,8 +121,9 @@ describe("walkSourceFiles", () => {
     const config = makeSourceConfig({ max_file_size: 300_000 });
     const result = await walkSourceFiles(config, "/unused");
 
-    expect(result.size).toBe(1);
-    expect(result.has("big.md")).toBe(true);
+    expect(result).not.toBeNull();
+    expect(result!.size).toBe(1);
+    expect(result!.has("big.md")).toBe(true);
   });
 
   it("handles git source path resolution", async () => {
@@ -145,9 +148,10 @@ describe("walkSourceFiles", () => {
     });
     const result = await walkSourceFiles(config, cloneDir);
 
-    expect(result.size).toBe(2);
+    expect(result).not.toBeNull();
+    expect(result!.size).toBe(2);
     // Paths should be relative to repoDir, not docsDir
-    expect(result.has(path.join("docs", "guide.md"))).toBe(true);
-    expect(result.has(path.join("docs", "api.md"))).toBe(true);
+    expect(result!.has(path.join("docs", "guide.md"))).toBe(true);
+    expect(result!.has(path.join("docs", "api.md"))).toBe(true);
   });
 });

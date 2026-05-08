@@ -108,7 +108,7 @@ export async function walkSourceFiles(
   sourceConfig: FileSourceConfig,
   cloneDir: string,
   _githubToken?: string,
-): Promise<Set<string>> {
+): Promise<Set<string> | null> {
   // Determine repo root directory
   const repoDir = sourceConfig.repo
     ? path.join(cloneDir, repoNameFromUrl(sourceConfig.repo))
@@ -120,7 +120,7 @@ export async function walkSourceFiles(
     : repoDir;
 
   if (!fs.existsSync(walkRoot)) {
-    return new Set();
+    return null;
   }
 
   const skipDirs = new Set([
@@ -135,7 +135,11 @@ export async function walkSourceFiles(
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      console.warn(
+        `[walkSourceFiles] Failed to read directory ${dir}:`,
+        err instanceof Error ? err.message : err,
+      );
       return;
     }
 
