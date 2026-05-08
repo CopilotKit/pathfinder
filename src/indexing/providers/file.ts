@@ -90,7 +90,22 @@ export class FileDataProvider implements DataProvider {
       console.warn(
         `${this.logPrefix} Walk root not found at ${walkRoot}, skipping`,
       );
-      return { items: [], removedIds: [], stateToken };
+      let removedIds: string[] = [];
+      try {
+        const indexedPaths = await getIndexedItemIds(this.config.name);
+        removedIds = [...indexedPaths];
+        if (removedIds.length > 0) {
+          console.log(
+            `${this.logPrefix} Walk root missing: ${removedIds.length} stale files to remove from index`,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `${this.logPrefix} Failed to check for stale files:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      return { items: [], removedIds, stateToken };
     }
 
     const allFiles = await this.walkFiles(walkRoot);
