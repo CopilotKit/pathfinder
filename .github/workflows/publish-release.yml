@@ -4,19 +4,17 @@ on:
     branches: [main]
   workflow_dispatch:
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
-    environment: npm
     permissions:
-      contents: write
-      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
+        # No cache — release builds must be hermetic
         with:
           node-version: 24
-          registry-url: "https://registry.npmjs.org"
       - run: npm ci
 
       - name: Verify CLI version matches package version
@@ -41,35 +39,66 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build and publish
+      - name: Build
         if: steps.check.outputs.published == 'false'
-        run: npm run build && npm publish --access public
+        run: npm run build
+
+      - name: Upload build artifacts
+        if: steps.check.outputs.published == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: .
+          include-hidden-files: true
+          retention-days: 1
+
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      published: ${{ steps.check.outputs.published }}
+
+  publish:
+    needs: build
+    if: needs.build.outputs.published == 'false'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish to npm
+        run: npm publish --access public
 
       - name: Ensure git tag exists
-        if: steps.check.outputs.published == 'false'
         run: |
-          TAG="v${{ steps.check.outputs.version }}"
+          TAG="v${{ needs.build.outputs.version }}"
           if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
             git tag "${TAG}"
             git push origin "${TAG}"
           fi
 
       - name: Create GitHub Release
-        if: steps.check.outputs.published == 'false'
         run: |
-          TAG="v${{ steps.check.outputs.version }}"
+          TAG="v${{ needs.build.outputs.version }}"
           gh release create "${TAG}" --generate-notes --title "${TAG}" --verify-tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Notify Slack on success
-        if: steps.check.outputs.published == 'false'
         run: |
-          VERSION="v${{ steps.check.outputs.version }}"
+          VERSION="v${{ needs.build.outputs.version }}"
           if [ -n "${{ secrets.SLACK_WEBHOOK }}" ]; then
             curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
               -H "Content-Type: application/json" \
-              -d "{\"text\":\"📦 *@copilotkit/pathfinder ${VERSION} published*\nnpm: https://www.npmjs.com/package/@copilotkit/pathfinder/v/${{ steps.check.outputs.version }}\nRelease: https://github.com/${{ github.repository }}/releases/tag/${VERSION}\"}" || true
+              -d "{\"text\":\"📦 *@copilotkit/pathfinder ${VERSION} published*\nnpm: https://www.npmjs.com/package/@copilotkit/pathfinder/v/${{ needs.build.outputs.version }}\nRelease: https://github.com/${{ github.repository }}/releases/tag/${VERSION}\"}" || true
           fi
 
       - name: Notify Slack on failure
