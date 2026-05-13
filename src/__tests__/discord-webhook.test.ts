@@ -10,6 +10,13 @@ vi.mock("discord-interactions", () => ({
   verifyKey: vi.fn(),
 }));
 
+// Mock recordWebhookDelivery
+const mockRecordWebhookDelivery = vi.fn().mockResolvedValue(undefined);
+vi.mock("../db/queries.js", () => ({
+  recordWebhookDelivery: (...args: unknown[]) =>
+    mockRecordWebhookDelivery(...args),
+}));
+
 // Mock config
 vi.mock("../config.js", () => ({
   getConfig: vi.fn().mockReturnValue({
@@ -179,5 +186,86 @@ describe("createDiscordWebhookHandler", () => {
 
     await handler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  // -- Webhook delivery tracking ----------------------------------------
+
+  describe("webhook delivery tracking", () => {
+    it("records 'ignored' delivery for PING interaction", async () => {
+      const { req, res } = mockReqRes({ type: 1 });
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "discord",
+          event_type: "PING",
+          decision: "ignored",
+          reason: "PING interaction",
+        }),
+      );
+    });
+
+    it("records 'ignored' delivery for unhandled interaction types", async () => {
+      const { req, res } = mockReqRes({ type: 2, data: { name: "test" } });
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "discord",
+          event_type: "interaction_type_2",
+          decision: "ignored",
+          reason: "unhandled interaction type: 2",
+        }),
+      );
+    });
+
+    it("records 'error' delivery for invalid signature", async () => {
+      (verifyKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+      const { req, res } = mockReqRes({ type: 1 });
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "discord",
+          decision: "error",
+          reason: "invalid signature",
+        }),
+      );
+    });
+
+    it("records 'error' delivery for malformed JSON", async () => {
+      (verifyKey as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+      const req = {
+        body: Buffer.from("not json"),
+        headers: {
+          "x-signature-ed25519": "sig",
+          "x-signature-timestamp": "12345",
+        },
+      } as any;
+      const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "discord",
+          decision: "error",
+          reason: "malformed JSON",
+        }),
+      );
+    });
+
+    it("includes payload_size in delivery records", async () => {
+      const { req, res } = mockReqRes({ type: 1 });
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload_size: expect.any(Number),
+        }),
+      );
+    });
+
+    it("does not fail webhook processing when tracking throws", async () => {
+      mockRecordWebhookDelivery.mockRejectedValueOnce(new Error("DB down"));
+      const { req, res } = mockReqRes({ type: 1 });
+      await handler(req, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ type: 1 });
+    });
   });
 });

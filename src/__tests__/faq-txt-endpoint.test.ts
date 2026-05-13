@@ -12,6 +12,7 @@ vi.mock("../db/queries.js", () => ({
   getIndexStats: vi.fn(),
   getAllChunksForLlms: vi.fn(),
   insertCollectedData: vi.fn(),
+  getWebhookDeliveryStats: vi.fn().mockResolvedValue(null),
 }));
 
 // Mock config so getServerConfig returns a stable set of FAQ sources.

@@ -102,6 +102,20 @@ CREATE TABLE IF NOT EXISTS query_log (
 
 CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_query_log_tool_name ON query_log (tool_name);
+
+-- Webhook delivery tracking
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id              SERIAL PRIMARY KEY,
+    source          TEXT NOT NULL,
+    event_type      TEXT,
+    repo            TEXT,
+    decision        TEXT NOT NULL,
+    reason          TEXT,
+    payload_size    INTEGER,
+    delivered_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_source ON webhook_deliveries (source);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_delivered_at ON webhook_deliveries (delivered_at);
 `;
 
   return coreSql;

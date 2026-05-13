@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import type { Request, Response } from "express";
 import { getConfig, getServerConfig } from "../config.js";
+import { recordWebhookDelivery } from "../db/queries.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -102,10 +103,17 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
     // The route MUST be configured with express.raw() so req.body is a
     // Buffer.  If it isn't, bail out — we cannot safely verify the HMAC.
     const rawBody = Buffer.isBuffer(req.body) ? req.body : null;
+    const payloadSize = rawBody?.length;
     if (!rawBody) {
       console.error(
         "[webhook] req.body is not a Buffer — ensure the route uses express.raw()",
       );
+      recordWebhookDelivery({
+        source: "github",
+        decision: "error",
+        reason: "req.body not a Buffer",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res
         .status(500)
         .json({ error: "Server misconfiguration: raw body not available" });
@@ -116,12 +124,24 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
       console.log(
         "[webhook] Rejecting request — webhook secret not configured",
       );
+      recordWebhookDelivery({
+        source: "github",
+        decision: "error",
+        reason: "webhook secret not configured",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res.status(403).json({ error: "Forbidden" });
       return;
     }
 
     const signature = req.headers["x-hub-signature-256"] as string | undefined;
     if (!verifySignature(rawBody, signature, cfg.githubWebhookSecret)) {
+      recordWebhookDelivery({
+        source: "github",
+        decision: "error",
+        reason: "invalid signature",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res.status(401).json({ error: "Invalid or missing webhook signature" });
       return;
     }
@@ -129,6 +149,13 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
     // -- Event routing -------------------------------------------------
     const event = req.headers["x-github-event"] as string | undefined;
     if (event !== "push") {
+      recordWebhookDelivery({
+        source: "github",
+        event_type: event ?? "unknown",
+        decision: "ignored",
+        reason: "not a push event",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res.status(200).json({ ignored: true, reason: "not a push event" });
       return;
     }
@@ -138,11 +165,26 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
     try {
       payload = JSON.parse(rawBody.toString("utf-8")) as PushPayload;
     } catch {
+      recordWebhookDelivery({
+        source: "github",
+        event_type: "push",
+        decision: "error",
+        reason: "malformed JSON",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res.status(400).json({ error: "Malformed JSON payload" });
       return;
     }
 
     if (!isDefaultBranchPush(payload)) {
+      recordWebhookDelivery({
+        source: "github",
+        event_type: "push",
+        repo: payload.repository.full_name,
+        decision: "ignored",
+        reason: "not the default branch",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res.status(200).json({ ignored: true, reason: "not the default branch" });
       return;
     }
@@ -159,6 +201,14 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
       console.log(
         `[webhook] Push to ${repoFullName} at ${sha.slice(0, 8)} — repo not in webhook config, ignoring`,
       );
+      recordWebhookDelivery({
+        source: "github",
+        event_type: "push",
+        repo: repoFullName,
+        decision: "ignored",
+        reason: "repo not in webhook config",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res
         .status(200)
         .json({ ignored: true, reason: "repo not in webhook config" });
@@ -181,6 +231,14 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
         `[webhook] Push to ${repoFullName} at ${sha.slice(0, 8)} — ` +
           `no path triggers matched, ignoring`,
       );
+      recordWebhookDelivery({
+        source: "github",
+        event_type: "push",
+        repo: repoFullName,
+        decision: "ignored",
+        reason: "no path triggers matched",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res
         .status(200)
         .json({ ignored: true, reason: "no path triggers matched" });
@@ -192,6 +250,13 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
         `(${payload.repository.default_branch}) at ${sha.slice(0, 8)} — queuing reindex`,
     );
 
+    recordWebhookDelivery({
+      source: "github",
+      event_type: "push",
+      repo: repoFullName,
+      decision: "queued",
+      payload_size: payloadSize,
+    }).catch(() => {});
     orchestrator.queueIncrementalReindex(repoUrl);
     res.status(200).json({ queued: true });
   };
