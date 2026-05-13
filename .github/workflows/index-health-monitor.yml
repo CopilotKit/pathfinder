@@ -51,10 +51,12 @@ jobs:
           declare -A INSTANCE_URLS
           INSTANCE_URLS[copilotkit-docs]="https://mcp.copilotkit.ai"
           INSTANCE_URLS[pathfinder-docs]="https://mcp.pathfinder.copilotkit.dev"
+          INSTANCE_URLS[aimock-docs]="https://mcp.aimock.copilotkit.dev" # TODO: verify domain
 
           declare -A CHUNK_FLOORS
           CHUNK_FLOORS[copilotkit-docs]=1000
           CHUNK_FLOORS[pathfinder-docs]=50
+          CHUNK_FLOORS[aimock-docs]=50
 
           # Source-to-repo mappings stored as "source:owner/repo:branch" entries
           COPILOTKIT_DOCS_SOURCES=(
@@ -65,6 +67,10 @@ jobs:
           )
           PATHFINDER_DOCS_SOURCES=(
             "pathfinder-docs:CopilotKit/pathfinder:main"
+          )
+          AIMOCK_DOCS_SOURCES=(
+            "docs:CopilotKit/aimock:main"
+            "code:CopilotKit/aimock:main"
           )
 
           # --- GitHub API: prefetch HEAD commits ---
@@ -212,7 +218,7 @@ jobs:
                     continue
                   fi
                   local age_hours=$(( (NOW - indexed_epoch) / 3600 ))
-                  if [ "$age_hours" -ge 6 ]; then
+                  if [ "$age_hours" -ge 25 ]; then
                     issues+=("commit drift: ${src_key} -- indexed ${indexed_commit}, HEAD is ${head_commit} (last indexed ${age_hours}h ago)")
                   fi
                 else
@@ -406,7 +412,7 @@ jobs:
 
           # --- Main ---
           # Prefetch HEAD commits for all unique repos (avoids subshell cache loss)
-          prefetch_head_commits "${COPILOTKIT_DOCS_SOURCES[@]}" "${PATHFINDER_DOCS_SOURCES[@]}"
+          prefetch_head_commits "${COPILOTKIT_DOCS_SOURCES[@]}" "${PATHFINDER_DOCS_SOURCES[@]}" "${AIMOCK_DOCS_SOURCES[@]}"
 
           process_instance "copilotkit-docs" \
             "${INSTANCE_URLS[copilotkit-docs]}" \
@@ -417,6 +423,11 @@ jobs:
             "${INSTANCE_URLS[pathfinder-docs]}" \
             "${CHUNK_FLOORS[pathfinder-docs]}" \
             "${PATHFINDER_DOCS_SOURCES[@]}"
+
+          process_instance "aimock-docs" \
+            "${INSTANCE_URLS[aimock-docs]}" \
+            "${CHUNK_FLOORS[aimock-docs]}" \
+            "${AIMOCK_DOCS_SOURCES[@]}"
 
           echo ""
           echo "=== Final state ==="

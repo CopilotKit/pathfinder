@@ -19,6 +19,7 @@ import {
   getIndexStats,
   getAllChunksForLlms,
   getFaqChunks,
+  getWebhookDeliveryStats,
 } from "./db/queries.js";
 import {
   getConfig,
@@ -421,7 +422,7 @@ export function classifyWebhookUnavailable(opts: {
 
 app.post(
   "/webhooks/github",
-  express.raw({ type: "application/json" }),
+  express.raw({ type: "application/json", limit: "25mb" }),
   // Runtime guard: assert req.body is a Buffer. If a future refactor moves
   // express.json() above this route, the guard fires a loud 500 instead of
   // silently 401-ing every webhook delivery.
@@ -468,7 +469,7 @@ app.post(
 // Slack webhook endpoint — also before express.json() for raw body signature verification
 app.post(
   "/webhooks/slack",
-  express.raw({ type: "application/json" }),
+  express.raw({ type: "application/json", limit: "25mb" }),
   assertWebhookRawBodyOrder("slack-webhook"),
   async (req: Request, res: Response) => {
     const handler = slackWebhookHandler;
@@ -491,7 +492,7 @@ app.post(
 // Discord webhook endpoint — also before express.json() for raw body signature verification
 app.post(
   "/webhooks/discord",
-  express.raw({ type: "application/json" }),
+  express.raw({ type: "application/json", limit: "25mb" }),
   assertWebhookRawBodyOrder("discord-webhook"),
   async (req: Request, res: Response) => {
     const handler = discordWebhookHandler;
@@ -2012,6 +2013,7 @@ app.post("/messages", ...sseHandlers.postHandler);
 
 export interface HealthRouteDeps {
   getIndexStats?: typeof getIndexStats;
+  getWebhookDeliveryStats?: typeof getWebhookDeliveryStats;
 }
 
 export function registerHealthRoute(
@@ -2019,6 +2021,8 @@ export function registerHealthRoute(
   deps: HealthRouteDeps = {},
 ): void {
   const _getIndexStats = deps.getIndexStats ?? getIndexStats;
+  const _getWebhookDeliveryStats =
+    deps.getWebhookDeliveryStats ?? getWebhookDeliveryStats;
 
   app.get("/health", async (_req: Request, res: Response) => {
     const uptime = Math.floor((Date.now() - startedAt.getTime()) / 1000);
@@ -2041,7 +2045,16 @@ export function registerHealthRoute(
     }
 
     try {
-      const stats = await _getIndexStats();
+      const [stats, deliveryStats] = await Promise.all([
+        _getIndexStats(),
+        _getWebhookDeliveryStats().catch((err) => {
+          console.error(
+            "[health] Failed to fetch webhook delivery stats:",
+            err,
+          );
+          return null;
+        }),
+      ]);
       res.json({
         status: "ok",
         server: getServerConfig().server.name,
@@ -2063,6 +2076,7 @@ export function registerHealthRoute(
             error: s.error_message ?? null,
           })),
         },
+        ...(deliveryStats ? { webhook_deliveries: deliveryStats } : {}),
       });
     } catch (err) {
       // Log the full error server-side for operators, but never surface
