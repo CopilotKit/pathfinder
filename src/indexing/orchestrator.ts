@@ -14,7 +14,11 @@ import { createEmbeddingProvider } from "./embeddings.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { getProvider } from "./providers/index.js";
 import { IndexingPipeline } from "./pipeline.js";
-import { getIndexState, upsertIndexState } from "../db/queries.js";
+import {
+  getIndexState,
+  upsertIndexState,
+  cleanupOldWebhookDeliveries,
+} from "../db/queries.js";
 import { cleanupOldQueryLogs } from "../db/analytics.js";
 import { isFileSourceConfig } from "../types.js";
 import type { IndexState, IndexStatus, SourceConfig } from "../types.js";
@@ -48,10 +52,22 @@ interface Job {
 export class IndexingOrchestrator {
   private queue: Job[] = [];
   private running = false;
-  private processing = false;
+  private draining = false;
 
   // Per-source mutex: prevents concurrent indexing of the same source
   private activeSources = new Set<string>();
+
+  // Per-repo mutex: prevents concurrent indexing of the same repo across jobs
+  private activeRepos = new Set<string>();
+
+  // Dedup keys for jobs currently being executed (not in queue but running)
+  private executingJobKeys = new Set<string>();
+
+  // Number of jobs currently executing
+  private activeJobCount = 0;
+
+  // Maximum number of concurrent indexing jobs
+  private maxConcurrent: number;
 
   // Track last nightly reindex date to prevent drift-based duplicate triggers
   private lastReindexDate: string | null = null;
@@ -59,8 +75,8 @@ export class IndexingOrchestrator {
   // Callback fired after each reindex job completes with affected source names
   onReindexComplete?: (sourceNames: string[]) => void;
 
-  constructor() {
-    // No-op — all setup happens lazily via getConfig()
+  constructor(options?: { maxConcurrent?: number }) {
+    this.maxConcurrent = options?.maxConcurrent ?? 3;
   }
 
   /**
@@ -238,10 +254,51 @@ export class IndexingOrchestrator {
   }
 
   /**
+   * Derive a dedup key for a job. Jobs with the same key are considered duplicates.
+   */
+  private jobDedupKey(job: Job): string {
+    if (job.type === "incremental-reindex") return `incremental:${job.repoUrl}`;
+    if (job.type === "source-reindex") return `source:${job.sourceName}`;
+    if (job.type === "full-reindex") return "full-reindex";
+    // full-reindex-local jobs are not deduped (they carry specific source lists)
+    return `local:${job.sources?.map((s) => s.name).join(",") ?? ""}`;
+  }
+
+  /**
+   * Check if a job is a duplicate of one already queued or currently executing.
+   */
+  private isDuplicateJob(job: Job): boolean {
+    const key = this.jobDedupKey(job);
+    if (this.executingJobKeys.has(key)) return true;
+    if (job.type === "full-reindex") {
+      return this.queue.some((j) => j.type === "full-reindex");
+    }
+    if (job.type === "incremental-reindex") {
+      return this.queue.some(
+        (j) => j.type === "incremental-reindex" && j.repoUrl === job.repoUrl,
+      );
+    }
+    if (job.type === "source-reindex") {
+      return this.queue.some(
+        (j) => j.type === "source-reindex" && j.sourceName === job.sourceName,
+      );
+    }
+    return false;
+  }
+
+  /**
    * Queue a full re-index of all sources. Returns immediately.
+   * Deduplicates: only one full-reindex can be queued or running at a time.
    */
   queueFullReindex(): void {
-    this.queue.push({ type: "full-reindex" });
+    const job: Job = { type: "full-reindex" };
+    if (this.isDuplicateJob(job)) {
+      console.log(
+        "[orchestrator] Full re-index already queued, skipping duplicate",
+      );
+      return;
+    }
+    this.queue.push(job);
     console.log("[orchestrator] Full re-index queued");
     this.drain().catch((err) => {
       console.error("[orchestrator] drain() failed:", err);
@@ -250,9 +307,17 @@ export class IndexingOrchestrator {
 
   /**
    * Queue an incremental re-index for a specific repo. Returns immediately.
+   * Deduplicates on (type, repoUrl): skips if the same repo is already queued or running.
    */
   queueIncrementalReindex(repoUrl: string): void {
-    this.queue.push({ type: "incremental-reindex", repoUrl });
+    const job: Job = { type: "incremental-reindex", repoUrl };
+    if (this.isDuplicateJob(job)) {
+      console.log(
+        `[orchestrator] Incremental re-index for ${repoUrl} already queued, skipping`,
+      );
+      return;
+    }
+    this.queue.push(job);
     console.log(`[orchestrator] Incremental re-index queued for ${repoUrl}`);
     this.drain().catch((err) => {
       console.error("[orchestrator] drain() failed:", err);
@@ -262,9 +327,17 @@ export class IndexingOrchestrator {
   /**
    * Queue a reindex for a single named source. Returns immediately.
    * Used by webhook handlers to trigger reindexing of specific sources.
+   * Deduplicates on (type, sourceName): skips if the same source is already queued or running.
    */
   queueSourceReindex(sourceName: string): void {
-    this.queue.push({ type: "source-reindex", sourceName });
+    const job: Job = { type: "source-reindex", sourceName };
+    if (this.isDuplicateJob(job)) {
+      console.log(
+        `[orchestrator] Source re-index for ${sourceName} already queued, skipping`,
+      );
+      return;
+    }
+    this.queue.push(job);
     console.log(`[orchestrator] Source re-index queued for ${sourceName}`);
     this.drain().catch((err) => {
       console.error("[orchestrator] drain() failed:", err);
@@ -315,6 +388,19 @@ export class IndexingOrchestrator {
             .catch((err) => {
               console.error("[analytics] Cleanup failed:", err);
             });
+
+          // Webhook delivery cleanup — 30-day retention
+          cleanupOldWebhookDeliveries(30)
+            .then((deleted) => {
+              if (deleted > 0) {
+                console.log(
+                  `[webhook-tracking] Cleaned up ${deleted} webhook_deliveries rows older than 30 days`,
+                );
+              }
+            })
+            .catch((err) => {
+              console.error("[webhook-tracking] Cleanup failed:", err);
+            });
         }
       }
     }, 60_000);
@@ -337,26 +423,132 @@ export class IndexingOrchestrator {
   }
 
   /**
-   * Process the job queue (max 1 concurrent job).
+   * Derive the repo URL(s) a job will touch, for concurrency coordination.
+   * Returns null for full-reindex (touches all repos — needs exclusive access)
+   * or for local/non-repo sources that don't have a repo URL.
+   */
+  private getJobRepoKey(job: Job): string | null {
+    if (job.type === "incremental-reindex") {
+      return job.repoUrl ?? null;
+    }
+    if (job.type === "source-reindex" && job.sourceName) {
+      const serverCfg = getServerConfig();
+      const source = serverCfg.sources.find((s) => s.name === job.sourceName);
+      if (source && isFileSourceConfig(source) && source.repo) {
+        return source.repo;
+      }
+      return null; // Non-repo source — no repo-level conflict
+    }
+    if (job.type === "full-reindex-local") {
+      return null; // Local sources only — no repo conflict
+    }
+    // full-reindex: return a sentinel meaning "all repos"
+    return "__all__";
+  }
+
+  /**
+   * Check if a job can run right now given active repo constraints.
+   */
+  private canRunJob(job: Job): boolean {
+    // If a full-reindex is active (sentinel "__all__" in activeRepos), block everything
+    if (this.activeRepos.has("__all__")) return false;
+
+    const repoKey = this.getJobRepoKey(job);
+
+    // full-reindex needs exclusive access — can only run when nothing else is active
+    if (repoKey === "__all__") {
+      return this.activeJobCount === 0;
+    }
+
+    // Jobs with a repo key can't run if that repo is already active
+    if (repoKey && this.activeRepos.has(repoKey)) return false;
+
+    return true;
+  }
+
+  /**
+   * Process the job queue with up to maxConcurrent parallel jobs.
+   * Jobs for the same repo are serialized; different repos run in parallel.
    */
   private async drain(): Promise<void> {
-    if (this.processing) return; // Already draining
-    this.processing = true;
+    if (this.draining) return; // Already draining
+    this.draining = true;
 
     try {
-      while (this.queue.length > 0) {
-        const job = this.queue.shift()!;
-        this.running = true;
+      do {
+        while (this.queue.length > 0) {
+          // Find runnable jobs (respecting concurrency + repo constraints)
+          const launched: Promise<void>[] = [];
 
-        try {
-          await this.executeJob(job);
-        } catch (err) {
-          console.error("[orchestrator] Job failed:", err);
+          for (
+            let i = 0;
+            i < this.queue.length && this.activeJobCount < this.maxConcurrent;
+          ) {
+            const job = this.queue[i];
+            if (this.canRunJob(job)) {
+              // Remove from queue
+              this.queue.splice(i, 1);
+
+              const repoKey = this.getJobRepoKey(job);
+              const dedupKey = this.jobDedupKey(job);
+              if (repoKey) this.activeRepos.add(repoKey);
+              this.executingJobKeys.add(dedupKey);
+              this.activeJobCount++;
+              this.running = true;
+
+              // Launch job concurrently
+              const jobPromise = this.executeJob(job)
+                .catch((err) => {
+                  console.error("[orchestrator] Job failed:", err);
+                })
+                .finally(() => {
+                  if (repoKey) this.activeRepos.delete(repoKey);
+                  this.executingJobKeys.delete(dedupKey);
+                  this.activeJobCount--;
+                  if (this.activeJobCount === 0) this.running = false;
+                });
+              launched.push(jobPromise);
+            } else {
+              i++; // Skip this job, try next
+            }
+          }
+
+          if (launched.length === 0) {
+            // No jobs could be launched — all remaining are blocked on repo conflicts.
+            // Wait for at least one active job to finish before retrying.
+            if (this.activeJobCount > 0) {
+              await new Promise<void>((resolve) => {
+                const check = setInterval(() => {
+                  if (this.activeJobCount < this.maxConcurrent) {
+                    clearInterval(check);
+                    resolve();
+                  }
+                }, 50);
+              });
+              continue; // Re-evaluate the queue
+            }
+            break; // Nothing active and nothing runnable — shouldn't happen, but bail safely
+          }
+
+          // Wait for at least one launched job to complete before scanning queue again
+          await Promise.race(launched);
         }
-      }
+
+        // Wait for all remaining active jobs to finish
+        if (this.activeJobCount > 0) {
+          await new Promise<void>((resolve) => {
+            const check = setInterval(() => {
+              if (this.activeJobCount === 0) {
+                clearInterval(check);
+                resolve();
+              }
+            }, 50);
+          });
+        }
+      } while (this.queue.length > 0); // Re-check: jobs may have been queued during final-wait
     } finally {
       this.running = false;
-      this.processing = false;
+      this.draining = false;
     }
   }
 

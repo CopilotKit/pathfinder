@@ -5,6 +5,7 @@
 import { verifyKey } from "discord-interactions";
 import type { Request, Response } from "express";
 import { getConfig } from "../config.js";
+import { recordWebhookDelivery } from "../db/queries.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -53,10 +54,17 @@ export function createDiscordWebhookHandler(
 
     // -- Raw body check ------------------------------------------------
     const rawBody = Buffer.isBuffer(req.body) ? req.body : null;
+    const payloadSize = rawBody?.length;
     if (!rawBody) {
       console.error(
         "[discord-webhook] req.body is not a Buffer — ensure the route uses express.raw()",
       );
+      recordWebhookDelivery({
+        source: "discord",
+        decision: "error",
+        reason: "req.body not a Buffer",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res
         .status(500)
         .json({ error: "Server misconfiguration: raw body not available" });
@@ -73,6 +81,12 @@ export function createDiscordWebhookHandler(
     if (
       !(await verifyDiscordSignature(rawBody, signature, timestamp, publicKey))
     ) {
+      recordWebhookDelivery({
+        source: "discord",
+        decision: "error",
+        reason: "invalid signature",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res.status(401).json({ error: "Invalid or missing Discord signature" });
       return;
     }
@@ -82,17 +96,37 @@ export function createDiscordWebhookHandler(
     try {
       interaction = JSON.parse(rawBody.toString("utf-8")) as DiscordInteraction;
     } catch {
+      recordWebhookDelivery({
+        source: "discord",
+        decision: "error",
+        reason: "malformed JSON",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res.status(400).json({ error: "Malformed JSON payload" });
       return;
     }
 
     // -- PING handling (type: 1) — required by Discord for URL verification
     if (interaction.type === 1) {
+      recordWebhookDelivery({
+        source: "discord",
+        event_type: "PING",
+        decision: "ignored",
+        reason: "PING interaction",
+        payload_size: payloadSize,
+      }).catch(() => {});
       res.status(200).json({ type: 1 });
       return;
     }
 
     // -- All other interaction types: acknowledge
+    recordWebhookDelivery({
+      source: "discord",
+      event_type: `interaction_type_${interaction.type}`,
+      decision: "ignored",
+      reason: `unhandled interaction type: ${interaction.type}`,
+      payload_size: payloadSize,
+    }).catch(() => {});
     res.status(200).json({
       ok: true,
       ignored: true,

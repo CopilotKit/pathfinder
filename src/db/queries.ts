@@ -435,6 +435,176 @@ export async function insertCollectedData(
 }
 
 // ---------------------------------------------------------------------------
+// Webhook delivery tracking
+// ---------------------------------------------------------------------------
+
+export interface WebhookDelivery {
+  id: number;
+  source: string;
+  event_type: string | null;
+  repo: string | null;
+  decision: string;
+  reason: string | null;
+  payload_size: number | null;
+  delivered_at: Date;
+}
+
+/**
+ * Record a webhook delivery. Fire-and-forget: catches all errors and logs
+ * them so webhook processing is never blocked by tracking failures.
+ */
+export async function recordWebhookDelivery(delivery: {
+  source: string;
+  event_type?: string;
+  repo?: string;
+  decision: string;
+  reason?: string;
+  payload_size?: number;
+}): Promise<void> {
+  try {
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO webhook_deliveries (source, event_type, repo, decision, reason, payload_size)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        delivery.source,
+        delivery.event_type ?? null,
+        delivery.repo ?? null,
+        delivery.decision,
+        delivery.reason ?? null,
+        delivery.payload_size ?? null,
+      ],
+    );
+  } catch (err) {
+    console.error("[webhook-tracking] Failed to record delivery:", err);
+  }
+}
+
+/**
+ * Fetch recent webhook deliveries, ordered by most recent first.
+ */
+export async function getRecentWebhookDeliveries(
+  limit: number = 50,
+): Promise<WebhookDelivery[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT id, source, event_type, repo, decision, reason, payload_size, delivered_at
+     FROM webhook_deliveries
+     ORDER BY delivered_at DESC
+     LIMIT $1`,
+    [limit],
+  );
+  return rows.map((r: Record<string, unknown>) => ({
+    id: r.id as number,
+    source: r.source as string,
+    event_type: (r.event_type as string) ?? null,
+    repo: (r.repo as string) ?? null,
+    decision: r.decision as string,
+    reason: (r.reason as string) ?? null,
+    payload_size: (r.payload_size as number) ?? null,
+    delivered_at: r.delivered_at as Date,
+  }));
+}
+
+/**
+ * Get webhook delivery stats for the last 24 hours, for the health endpoint.
+ */
+export async function getWebhookDeliveryStats(): Promise<{
+  total_24h: number;
+  by_decision: Record<string, number>;
+  last_delivery_at: string | null;
+  errors_24h: Array<{
+    source: string;
+    reason: string | null;
+    delivered_at: Date;
+  }>;
+}> {
+  const pool = getPool();
+
+  const [countsResult, lastResult, errorsResult] = await Promise.all([
+    pool.query(
+      `SELECT decision, count(*)::int AS count
+       FROM webhook_deliveries
+       WHERE delivered_at > NOW() - INTERVAL '24 hours'
+       GROUP BY decision`,
+    ),
+    pool.query(
+      `SELECT delivered_at FROM webhook_deliveries ORDER BY delivered_at DESC LIMIT 1`,
+    ),
+    pool.query(
+      `SELECT source, reason, delivered_at
+       FROM webhook_deliveries
+       WHERE decision = 'error' AND delivered_at > NOW() - INTERVAL '24 hours'
+       ORDER BY delivered_at DESC`,
+    ),
+  ]);
+
+  const byDecision: Record<string, number> = {};
+  let total = 0;
+  for (const row of countsResult.rows) {
+    byDecision[row.decision as string] = row.count as number;
+    total += row.count as number;
+  }
+
+  const lastRow = lastResult.rows[0];
+  const lastDeliveryAt = lastRow
+    ? (lastRow.delivered_at as Date).toISOString()
+    : null;
+
+  const errors = errorsResult.rows.map((r: Record<string, unknown>) => ({
+    source: r.source as string,
+    reason: (r.reason as string) ?? null,
+    delivered_at: r.delivered_at as Date,
+  }));
+
+  return {
+    total_24h: total,
+    by_decision: byDecision,
+    last_delivery_at: lastDeliveryAt,
+    errors_24h: errors,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Webhook delivery cleanup
+// ---------------------------------------------------------------------------
+
+/**
+ * Delete webhook_deliveries rows older than the specified number of days.
+ * Mirrors cleanupOldQueryLogs in analytics.ts — rolling retention window
+ * anchored to NOW().
+ *
+ * Returns the number of rows deleted.
+ */
+export async function cleanupOldWebhookDeliveries(
+  retentionDays: number,
+): Promise<number> {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    throw new Error(
+      `[webhook-tracking] cleanupOldWebhookDeliveries: invalid retentionDays=${retentionDays} (must be a positive finite number)`,
+    );
+  }
+  const pool = getPool();
+  try {
+    const result = await pool.query(
+      `DELETE FROM webhook_deliveries WHERE delivered_at <= NOW() - INTERVAL '1 day' * $1`,
+      [retentionDays],
+    );
+    const rowCount = result.rowCount ?? 0;
+    console.log(
+      `[webhook-tracking] cleanupOldWebhookDeliveries: deleted ${rowCount} rows older than ${retentionDays} days`,
+    );
+    return rowCount;
+  } catch (err) {
+    console.error(
+      `[webhook-tracking] cleanupOldWebhookDeliveries failed (retentionDays=${retentionDays})`,
+      err,
+    );
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Statistics
 // ---------------------------------------------------------------------------
 

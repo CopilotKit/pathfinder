@@ -6,6 +6,19 @@ import {
   type SlackReindexOrchestrator,
 } from "../webhooks/slack.js";
 
+// Mock types (to avoid zod dependency)
+vi.mock("../types.js", () => ({
+  isSlackSourceConfig: (s: Record<string, unknown>) => s.type === "slack",
+  isDiscordSourceConfig: (s: Record<string, unknown>) => s.type === "discord",
+}));
+
+// Mock recordWebhookDelivery
+const mockRecordWebhookDelivery = vi.fn().mockResolvedValue(undefined);
+vi.mock("../db/queries.js", () => ({
+  recordWebhookDelivery: (...args: unknown[]) =>
+    mockRecordWebhookDelivery(...args),
+}));
+
 // Mock config
 vi.mock("../config.js", () => ({
   getConfig: vi.fn().mockReturnValue({
@@ -236,5 +249,119 @@ describe("createSlackWebhookHandler", () => {
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ ignored: true }),
     );
+  });
+
+  // -- Webhook delivery tracking ----------------------------------------
+
+  describe("webhook delivery tracking", () => {
+    it("records 'queued' delivery on matching reaction", async () => {
+      const { req, res } = mockReqRes({
+        type: "event_callback",
+        event: {
+          type: "reaction_added",
+          reaction: "pathfinder",
+          item: { type: "message", channel: "C001", ts: "1234.5678" },
+        },
+      });
+
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "slack",
+          event_type: "reaction_added",
+          decision: "queued",
+        }),
+      );
+    });
+
+    it("records 'ignored' delivery for non-matching reaction", async () => {
+      const { req, res } = mockReqRes({
+        type: "event_callback",
+        event: {
+          type: "reaction_added",
+          reaction: "thumbsup",
+          item: { type: "message", channel: "C001", ts: "1234.5678" },
+        },
+      });
+
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "slack",
+          event_type: "reaction_added",
+          decision: "ignored",
+          reason: "no matching Slack source configured",
+        }),
+      );
+    });
+
+    it("records 'ignored' delivery for url_verification", async () => {
+      const { req, res } = mockReqRes({
+        type: "url_verification",
+        challenge: "abc123",
+      });
+      req.body = Buffer.from(
+        JSON.stringify({ type: "url_verification", challenge: "abc123" }),
+      );
+
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "slack",
+          event_type: "url_verification",
+          decision: "ignored",
+          reason: "url verification challenge",
+        }),
+      );
+    });
+
+    it("records 'ignored' delivery for unknown event types", async () => {
+      const { req, res } = mockReqRes({
+        type: "event_callback",
+        event: { type: "message" },
+      });
+
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "slack",
+          event_type: "message",
+          decision: "ignored",
+        }),
+      );
+    });
+
+    it("includes payload_size in delivery records", async () => {
+      const { req, res } = mockReqRes({
+        type: "event_callback",
+        event: {
+          type: "reaction_added",
+          reaction: "pathfinder",
+          item: { type: "message", channel: "C001", ts: "1234.5678" },
+        },
+      });
+
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload_size: expect.any(Number),
+        }),
+      );
+    });
+
+    it("does not fail webhook processing when tracking throws", async () => {
+      mockRecordWebhookDelivery.mockRejectedValueOnce(new Error("DB down"));
+      const { req, res } = mockReqRes({
+        type: "event_callback",
+        event: {
+          type: "reaction_added",
+          reaction: "pathfinder",
+          item: { type: "message", channel: "C001", ts: "1234.5678" },
+        },
+      });
+
+      await handler(req, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
   });
 });

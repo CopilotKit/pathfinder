@@ -14,6 +14,13 @@ vi.mock("../config.js", () => ({
   getServerConfig: (...args: unknown[]) => mockGetServerConfig(...args),
 }));
 
+// Mock recordWebhookDelivery
+const mockRecordWebhookDelivery = vi.fn().mockResolvedValue(undefined);
+vi.mock("../db/queries.js", () => ({
+  recordWebhookDelivery: (...args: unknown[]) =>
+    mockRecordWebhookDelivery(...args),
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -414,6 +421,120 @@ describe("GitHub webhook handler", () => {
       expect(orchestrator.queueIncrementalReindex).toHaveBeenCalledWith(
         "https://github.com/org/repo.git",
       );
+    });
+  });
+
+  // -- Webhook delivery tracking ----------------------------------------
+
+  describe("webhook delivery tracking", () => {
+    it("records 'queued' delivery on successful push", async () => {
+      const { req, res } = mockReqRes(makePushPayload());
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "github",
+          event_type: "push",
+          repo: "org/repo",
+          decision: "queued",
+        }),
+      );
+    });
+
+    it("records 'ignored' delivery for non-push events", async () => {
+      const { req, res } = mockReqRes(makePushPayload(), {
+        "x-github-event": "ping",
+      });
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "github",
+          event_type: "ping",
+          decision: "ignored",
+          reason: "not a push event",
+        }),
+      );
+    });
+
+    it("records 'ignored' delivery for non-default branch", async () => {
+      const payload = makePushPayload({ ref: "refs/heads/feature/my-branch" });
+      const { req, res } = mockReqRes(payload);
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "github",
+          decision: "ignored",
+          reason: "not the default branch",
+        }),
+      );
+    });
+
+    it("records 'ignored' delivery for repo not in config", async () => {
+      const payload = makePushPayload({
+        repository: {
+          clone_url: "https://github.com/other/repo.git",
+          default_branch: "main",
+          full_name: "other/repo",
+        },
+      });
+      const { req, res } = mockReqRes(payload);
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "github",
+          decision: "ignored",
+          reason: "repo not in webhook config",
+        }),
+      );
+    });
+
+    it("records 'ignored' delivery for no path triggers matched", async () => {
+      const payload = makePushPayload({
+        commits: [{ added: ["src/index.ts"], modified: [], removed: [] }],
+      });
+      const { req, res } = mockReqRes(payload);
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "github",
+          decision: "ignored",
+          reason: "no path triggers matched",
+        }),
+      );
+    });
+
+    it("records 'error' delivery for invalid signature", async () => {
+      const payload = makePushPayload();
+      const { req, res } = mockReqRes(payload, {
+        "x-hub-signature-256":
+          "sha256=0000000000000000000000000000000000000000000000000000000000000000",
+      });
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "github",
+          decision: "error",
+          reason: "invalid signature",
+        }),
+      );
+    });
+
+    it("includes payload_size in delivery records", async () => {
+      const { req, res } = mockReqRes(makePushPayload());
+      await handler(req, res);
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload_size: expect.any(Number),
+        }),
+      );
+    });
+
+    it("does not fail webhook processing when tracking throws", async () => {
+      mockRecordWebhookDelivery.mockRejectedValueOnce(new Error("DB down"));
+      const { req, res } = mockReqRes(makePushPayload());
+      await handler(req, res);
+      // Handler should still succeed
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ queued: true });
     });
   });
 });

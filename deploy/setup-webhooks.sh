@@ -16,42 +16,53 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-echo ""
-echo "=== mcp-docs — GitHub Webhook Setup ==="
-echo ""
-
 # ── Parse arguments ───────────────────────────────────────────
 
 CLI_REPOS=()
 CLI_URL=""
+CONFIG_FILE=""
 for arg in "$@"; do
     case "$arg" in
-        --repo=*) CLI_REPOS+=("${arg#--repo=}") ;;
-        --url=*)  CLI_URL="${arg#--url=}" ;;
+        --repo=*)   CLI_REPOS+=("${arg#--repo=}") ;;
+        --url=*)    CLI_URL="${arg#--url=}" ;;
+        --config=*) CONFIG_FILE="${arg#--config=}" ;;
         --help|-h)
-            echo "Usage: $0 [--repo=owner/repo ...] [--url=https://...]"
+            echo "Usage: $0 [--config=<yaml-file>] [--repo=owner/repo ...] [--url=https://...]"
             echo ""
             echo "Options:"
+            echo "  --config=FILE      Deploy YAML to read (default: mcp-docs.yaml)"
             echo "  --repo=OWNER/REPO  Repository to configure (repeatable)"
             echo "  --url=URL          Webhook delivery URL"
             echo ""
             echo "If --repo is not provided, repos are read from webhook.repo_sources"
-            echo "in mcp-docs.yaml. If --url is not provided, you will be prompted."
+            echo "in the config YAML. If --url is not provided, you will be prompted."
             exit 0
             ;;
     esac
 done
 
+# Default config file if not specified
+if [ -z "$CONFIG_FILE" ]; then
+    CONFIG_FILE="mcp-docs.yaml"
+fi
+
+INSTANCE_NAME="${CONFIG_FILE%.yaml}"
+echo ""
+echo "=== ${INSTANCE_NAME} — GitHub Webhook Setup ==="
+echo ""
+
 # ── Repos to configure ─────────────────────────────────────────
+
+REPOS=()
 
 if [ ${#CLI_REPOS[@]} -gt 0 ]; then
     REPOS=("${CLI_REPOS[@]}")
 else
-    # Try to read repos from mcp-docs.yaml webhook.repo_sources keys
-    if [ -f mcp-docs.yaml ] && command -v python3 &>/dev/null; then
+    # Try to read repos from config YAML webhook.repo_sources keys
+    if [ -f "$CONFIG_FILE" ] && command -v python3 &>/dev/null; then
         mapfile -t REPOS < <(python3 -c "
 import yaml, sys
-with open('mcp-docs.yaml') as f:
+with open('$CONFIG_FILE') as f:
     cfg = yaml.safe_load(f)
 for repo in cfg.get('webhook', {}).get('repo_sources', {}):
     print(repo)
@@ -59,7 +70,7 @@ for repo in cfg.get('webhook', {}).get('repo_sources', {}):
     fi
 
     if [ ${#REPOS[@]} -eq 0 ]; then
-        error "No repos found. Provide --repo=owner/repo or configure webhook.repo_sources in mcp-docs.yaml"
+        error "No repos found. Provide --repo=owner/repo or configure webhook.repo_sources in ${CONFIG_FILE}"
         exit 1
     fi
 fi
@@ -135,6 +146,7 @@ for REPO in "${REPOS[@]}"; do
             -f "config[url]=${WEBHOOK_URL}" \
             -f "config[content_type]=json" \
             -f "config[secret]=${WEBHOOK_SECRET}" \
+            -F "events[]=push" \
             -F "active=true" &>/dev/null; then
             printf "${GREEN}updated${NC} (hook #%s)\n" "$EXISTING_HOOK_ID"
             UPDATED=$((UPDATED + 1))
