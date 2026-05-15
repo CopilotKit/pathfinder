@@ -18,19 +18,25 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v4
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/configure-pages@1f0c5cde4bc74cd7e1254d0cb4de8d49e9068c7d # v4
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: docs
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
 
       - name: Notify Slack on failure
         if: failure()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
-          if [ -n "${{ secrets.SLACK_WEBHOOK }}" ]; then
-            curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -s -X POST "$SLACK_WEBHOOK" \
               -H "Content-Type: application/json" \
-              -d "{\"text\":\"❌ *Pathfinder GitHub Pages deploy failed*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}" || true
+              -d "{\"text\":\"❌ *Pathfinder GitHub Pages deploy failed*\n<https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}|View run>\"}" || true
           fi

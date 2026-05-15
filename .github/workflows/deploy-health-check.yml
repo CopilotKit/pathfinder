@@ -2,6 +2,7 @@ name: Production Health Check
 on:
   push:
     branches: [main]
+permissions: {}
 jobs:
   health-check:
     runs-on: ubuntu-latest
@@ -34,7 +35,9 @@ jobs:
           if [ -n "$SLACK_WEBHOOK" ]; then
             curl -s -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Pathfinder production health check FAILED after deploy\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}" || true
+              -d "{\"text\":\"Pathfinder production health check FAILED after deploy\n<https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}|View run>\"}" || true
           fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
