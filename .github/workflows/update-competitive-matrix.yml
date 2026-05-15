@@ -4,12 +4,19 @@ on:
     - cron: '0 9 * * 1'  # Monday 9am UTC
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   update:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
       - run: npm ci
@@ -20,6 +27,10 @@ jobs:
           if [ -n "$(git diff --name-only)" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
+      - name: Configure git credentials for push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
       - name: Create PR
         if: steps.changes.outputs.changed == 'true'
         id: pr
@@ -38,17 +49,20 @@ jobs:
           if [ -n "$SLACK_WEBHOOK" ]; then
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Competitive matrix updated — PR created\n<${{ steps.pr.outputs.url }}|View PR>\"}" || true
+              -d "{\"text\":\"Competitive matrix updated — PR created\n<${PR_URL_OUTPUT}|View PR>\"}" || true
           fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          PR_URL_OUTPUT: ${{ steps.pr.outputs.url }}
       - name: Notify Slack — failure
         if: failure()
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Competitive matrix scan failed\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\"}" || true
+              -d "{\"text\":\"Competitive matrix scan failed\n<https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}|View run>\"}" || true
           fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}

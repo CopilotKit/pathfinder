@@ -3,12 +3,17 @@ on:
   push:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Check for unreleased source changes
         id: unreleased
@@ -54,7 +59,10 @@ jobs:
           if [ -n "$SLACK_WEBHOOK" ]; then
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Unreleased changes on main — ${{ steps.unreleased.outputs.count }} commits since ${{ steps.unreleased.outputs.tag }}\n<https://github.com/${{ github.repository }}/compare/${{ steps.unreleased.outputs.tag }}...main|View compare>\"}" || true
+              -d "{\"text\":\"Unreleased changes on main — ${UNRELEASED_COUNT} commits since ${UNRELEASED_TAG}\n<https://github.com/${GH_REPOSITORY}/compare/${UNRELEASED_TAG}...main|View compare>\"}" || true
           fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          GH_REPOSITORY: ${{ github.repository }}
+          UNRELEASED_COUNT: ${{ steps.unreleased.outputs.count }}
+          UNRELEASED_TAG: ${{ steps.unreleased.outputs.tag }}
