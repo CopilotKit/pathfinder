@@ -9,6 +9,7 @@ permissions: {}
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       pull-requests: write
@@ -30,7 +31,7 @@ jobs:
       - name: Configure git credentials for push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        run: git config --local url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
       - name: Create PR
         if: steps.changes.outputs.changed == 'true'
         id: pr
@@ -47,9 +48,11 @@ jobs:
         if: steps.changes.outputs.changed == 'true'
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg url "$PR_URL_OUTPUT" \
+              '{text: "Competitive matrix updated — PR created\n<\($url)|View PR>"}')
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Competitive matrix updated — PR created\n<${PR_URL_OUTPUT}|View PR>\"}" || true
+              -d "$payload" || true
           fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
@@ -58,9 +61,11 @@ jobs:
         if: failure()
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg repo "$GH_REPOSITORY" --arg run "$GH_RUN_ID" \
+              '{text: "Competitive matrix scan failed\n<https://github.com/\($repo)/actions/runs/\($run)|View run>"}')
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Competitive matrix scan failed\n<https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}|View run>\"}" || true
+              -d "$payload" || true
           fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}

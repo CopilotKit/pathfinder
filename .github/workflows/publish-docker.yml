@@ -6,6 +6,7 @@ permissions: {}
 jobs:
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -36,9 +37,11 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg ref "$REF_NAME" \
+              '{text: "Docker image published: ghcr.io/copilotkit/pathfinder:\($ref)"}')
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Docker image published: ghcr.io/copilotkit/pathfinder:${REF_NAME}\"}" || true
+              -d "$payload" || true
           fi
       - name: Notify Slack — failure
         if: failure()
@@ -48,7 +51,9 @@ jobs:
           GH_RUN_ID: ${{ github.run_id }}
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg repo "$GH_REPOSITORY" --arg run "$GH_RUN_ID" \
+              '{text: "Docker publish failed\n<https://github.com/\($repo)/actions/runs/\($run)|View run>"}')
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Docker publish failed\n<https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}|View run>\"}" || true
+              -d "$payload" || true
           fi

@@ -14,6 +14,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -37,7 +38,9 @@ jobs:
           GH_RUN_ID: ${{ github.run_id }}
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg repo "$GH_REPOSITORY" --arg run "$GH_RUN_ID" \
+              '{text: "❌ *Pathfinder GitHub Pages deploy failed*\n<https://github.com/\($repo)/actions/runs/\($run)|View run>"}')
             curl -s -X POST "$SLACK_WEBHOOK" \
               -H "Content-Type: application/json" \
-              -d "{\"text\":\"❌ *Pathfinder GitHub Pages deploy failed*\n<https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}|View run>\"}" || true
+              -d "$payload" || true
           fi
