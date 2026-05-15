@@ -1,0 +1,12 @@
+rules:
+  dangerous-triggers:
+    ignore:
+      # Dependabot auto-merge: uses pull_request_target for write token.
+      # Does NOT checkout PR code. Actor-gated to dependabot[bot].
+      - dependabot-auto-merge.yml
+      # Dependabot major analysis: uses pull_request_target for PR comments.
+      # Does NOT checkout PR code. Actor-gated to dependabot[bot].
+      - dependabot-major-analysis.yml
+      # notify-pr.yml uses pull_request_target but only curls a Slack webhook.
+      # It has permissions: {} so no token is exposed.
+      - notify-pr.yml
