@@ -19,17 +19,7 @@ jobs:
           STATUS=$(curl -sf https://mcp.pathfinder.copilotkit.dev/health | jq -r '.status')
           echo "pathfinder-docs: $STATUS"
           [ "$STATUS" = "ok" ] || exit 1
-      - name: Notify Slack — success
-        if: success()
-        run: |
-          if [ -n "$SLACK_WEBHOOK" ]; then
-            curl -sf -X POST "$SLACK_WEBHOOK" \
-              -H 'Content-Type: application/json' \
-              -d '{"text":"Pathfinder production deploy healthy — both services OK"}' || true
-          fi
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-      - name: Notify Slack — failure
+      - name: Notify Slack — failure only
         if: failure()
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then

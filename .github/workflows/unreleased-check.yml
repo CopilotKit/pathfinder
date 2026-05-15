@@ -1,7 +1,8 @@
 name: Unreleased Changes Check
 on:
-  push:
-    branches: [main, master]
+  schedule:
+    - cron: "0 16 * * *" # Daily at 9 AM Pacific
+  workflow_dispatch: {}
 
 permissions:
   contents: read
