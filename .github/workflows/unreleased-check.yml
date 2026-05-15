@@ -10,6 +10,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -58,9 +59,11 @@ jobs:
         if: steps.unreleased.outputs.count
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg count "$UNRELEASED_COUNT" --arg tag "$UNRELEASED_TAG" --arg repo "$GH_REPOSITORY" \
+              '{text: "Unreleased changes on main — \($count) commits since \($tag)\n<https://github.com/\($repo)/compare/\($tag)...main|View compare>"}')
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Unreleased changes on main — ${UNRELEASED_COUNT} commits since ${UNRELEASED_TAG}\n<https://github.com/${GH_REPOSITORY}/compare/${UNRELEASED_TAG}...main|View compare>\"}" || true
+              -d "$payload" || true
           fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}

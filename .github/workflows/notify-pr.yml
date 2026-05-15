@@ -6,6 +6,7 @@ permissions: {}
 jobs:
   notify:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Notify Slack
         if: github.actor != 'github-actions[bot]'
@@ -17,7 +18,10 @@ jobs:
           PR_AUTHOR: ${{ github.actor }}
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg title "$PR_TITLE" --arg author "$PR_AUTHOR" \
+              --arg url "$PR_URL" --arg num "$PR_NUMBER" \
+              '{text: "New PR on pathfinder: *\($title)* by \($author)\n<\($url)|View PR #\($num)>"}')
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"New PR on pathfinder: *${PR_TITLE}* by ${PR_AUTHOR}\n<${PR_URL}|View PR #${PR_NUMBER}>\"}" || true
+              -d "$payload" || true
           fi

@@ -7,6 +7,7 @@ permissions: {}
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -63,6 +64,7 @@ jobs:
     needs: build
     if: needs.build.outputs.published == 'false'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: npm
     permissions:
       contents: write
@@ -79,6 +81,8 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Configure git credentials
         env:
@@ -112,9 +116,11 @@ jobs:
         run: |
           VERSION="v${RELEASE_VERSION}"
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg ver "$VERSION" --arg rel "$RELEASE_VERSION" --arg repo "$GH_REPOSITORY" \
+              '{text: "📦 *@copilotkit/pathfinder \($ver) published*\nnpm: https://www.npmjs.com/package/@copilotkit/pathfinder/v/\($rel)\nRelease: https://github.com/\($repo)/releases/tag/\($ver)"}')
             curl -s -X POST "$SLACK_WEBHOOK" \
               -H "Content-Type: application/json" \
-              -d "{\"text\":\"📦 *@copilotkit/pathfinder ${VERSION} published*\nnpm: https://www.npmjs.com/package/@copilotkit/pathfinder/v/${RELEASE_VERSION}\nRelease: https://github.com/${GH_REPOSITORY}/releases/tag/${VERSION}\"}" || true
+              -d "$payload" || true
           fi
 
       - name: Notify Slack on failure
@@ -125,7 +131,9 @@ jobs:
           GH_RUN_ID: ${{ github.run_id }}
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg repo "$GH_REPOSITORY" --arg run "$GH_RUN_ID" \
+              '{text: "❌ *Pathfinder release failed*\n<https://github.com/\($repo)/actions/runs/\($run)|View run>"}')
             curl -s -X POST "$SLACK_WEBHOOK" \
               -H "Content-Type: application/json" \
-              -d "{\"text\":\"❌ *Pathfinder release failed*\n<https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}|View run>\"}" || true
+              -d "$payload" || true
           fi

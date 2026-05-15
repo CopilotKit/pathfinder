@@ -6,6 +6,7 @@ permissions: {}
 jobs:
   health-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Wait for deploy
         run: sleep 120
@@ -23,9 +24,11 @@ jobs:
         if: failure()
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg repo "$GH_REPOSITORY" --arg run "$GH_RUN_ID" \
+              '{text: "Pathfinder production health check FAILED after deploy\n<https://github.com/\($repo)/actions/runs/\($run)|View run>"}')
             curl -s -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Pathfinder production health check FAILED after deploy\n<https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}|View run>\"}" || true
+              -d "$payload" || true
           fi
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
