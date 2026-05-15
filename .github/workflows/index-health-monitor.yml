@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Restore state from cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: /tmp/health-monitor-state.json
           key: index-health-state-
@@ -483,7 +483,7 @@ jobs:
           done < "$NOTIFY_FILE"
 
       - name: Save state to cache
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         if: always() && inputs.dry_run != 'true'
         with:
           path: /tmp/health-monitor-state.json
