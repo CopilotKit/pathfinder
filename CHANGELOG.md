@@ -1,5 +1,14 @@
 # @copilotkit/pathfinder
 
+## 1.13.3
+
+### Patch Changes
+
+- **Webhook Delivery Tracking**: `webhook_deliveries` DB table logs every GitHub push webhook receipt with payload size, source, and processing outcome. 30-day retention cleanup in nightly cycle.
+- **Queue Dedup & Concurrent Drain**: Reindex queue deduplicates redundant jobs for the same source. Concurrent drain allows parallel reindex of independent repos (max 3).
+- **Webhook Body Size Fix**: `express.raw()` limit raised from default 100KB to 25MB — large GitHub push payloads (monorepos with many commits) were silently rejected with 413.
+- **Audit Alert Dedup**: Reindex audit Slack alerts only fire on new or changed findings, preventing repeated alerts for the same stale data on every reindex cycle.
+
 ## 1.13.2
 
 ### Patch Changes
