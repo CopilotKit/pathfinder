@@ -448,7 +448,7 @@ jobs:
       - name: Send Slack notifications
         if: always() && inputs.dry_run != 'true'
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
         run: |
           set -euo pipefail
 
