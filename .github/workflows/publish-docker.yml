@@ -33,7 +33,7 @@ jobs:
       - name: Notify Slack — success
         if: success()
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
@@ -46,7 +46,7 @@ jobs:
       - name: Notify Slack — failure
         if: failure()
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
           GH_REPOSITORY: ${{ github.repository }}
           GH_RUN_ID: ${{ github.run_id }}
         run: |
