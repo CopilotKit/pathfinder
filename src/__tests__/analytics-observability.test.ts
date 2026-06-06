@@ -4,7 +4,11 @@ import { __setPoolForTesting, __resetPoolForTesting } from "../db/client.js";
 import {
   getAnalyticsSummary,
   getToolCounts,
+  getEmptyQueries,
   logQuery,
+  ALL_TIME_DAYS,
+  ROLLING_WINDOW_CAP_DAYS,
+  BROWSE_QUERY_TEXT,
 } from "../db/analytics.js";
 import { generatePostSchemaMigration } from "../db/schema.js";
 
@@ -263,5 +267,176 @@ describe("observability: request_source + low-confidence (PGlite integration)", 
     }>("SELECT session_id, request_source FROM query_log ORDER BY session_id");
     expect(rows.map((r) => r.session_id)).toEqual(["live-1", "live-2"]);
     expect(rows.map((r) => r.request_source)).toEqual(["analysis", "user"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// All-time window + range-mode per-day cap + browse-sentinel exclusion +
+// summary numeric coercion (PGlite integration).
+//
+// These exercise the dashboard-consistency fixes that need real SQL against a
+// dataset spanning > ROLLING_WINDOW_CAP_DAYS — a mock pool can't validate that
+// the lower-bound clause is genuinely omitted for the all-time sentinel.
+// ---------------------------------------------------------------------------
+
+/** ISO "YYYY-MM-DD" for a UTC day offset from today (negative = past). */
+function utcDayStringOffset(offsetDays: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Noon UTC of the given day offset — avoids any TZ edge ambiguity. */
+function utcNoonOfOffset(offsetDays: number): Date {
+  return new Date(`${utcDayStringOffset(offsetDays)}T12:00:00.000Z`);
+}
+
+async function seedAt(
+  db: PGlite,
+  createdAt: Date,
+  opts: SeedOpts = {},
+): Promise<void> {
+  await db.query(
+    `INSERT INTO query_log
+        (tool_name, query_text, result_count, top_score, latency_ms,
+         source_name, session_id, request_source, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      "search-docs",
+      opts.query_text ?? "q",
+      opts.result_count ?? 5,
+      opts.top_score === undefined ? 0.9 : opts.top_score,
+      42,
+      "docs",
+      "sess-1",
+      opts.request_source === undefined ? "user" : opts.request_source,
+      createdAt,
+    ],
+  );
+}
+
+describe("all-time window + dashboard consistency (PGlite integration)", () => {
+  let db: PGlite;
+
+  beforeAll(async () => {
+    db = new PGlite();
+    await db.waitReady;
+    await db.exec(extractQueryLogDdl());
+    __setPoolForTesting(poolFromPglite(db));
+  });
+
+  afterAll(async () => {
+    __resetPoolForTesting();
+    await db.close();
+  });
+
+  beforeEach(async () => {
+    await db.query("DELETE FROM query_log");
+  });
+
+  // -- Fix #1: "All time" truly spans all data (no 366-day clamp) ------------
+
+  it("all-time (days=ALL_TIME_DAYS) totals cover ALL rows, not just the 366-day cap", async () => {
+    // Three rows: today, ~200 days back (inside the cap), ~700 days back
+    // (WELL outside the 366-day rolling cap). Pre-fix, the LEAST(N,366)
+    // clamp dropped the 700-day row from every windowed card even though
+    // the user explicitly asked for "all time".
+    await seedAt(db, utcNoonOfOffset(0));
+    await seedAt(db, utcNoonOfOffset(-200));
+    await seedAt(db, utcNoonOfOffset(-700));
+
+    const result = await getAnalyticsSummary({}, ALL_TIME_DAYS);
+
+    // All three rows are inside an unbounded "all time" window.
+    expect(result.total_queries_window).toBe(3);
+    // Sanity: the all-time total equals the windowed total here (single source).
+    expect(result.total_queries).toBe(3);
+  });
+
+  it("all-time empty-result rate is computed over ALL rows (>366 days)", async () => {
+    // 1 hit + 1 empty inside the cap, 1 empty far outside it. Pre-fix the
+    // far-outside empty was invisible, skewing the rate denominator.
+    await seedAt(db, utcNoonOfOffset(0), { result_count: 5 });
+    await seedAt(db, utcNoonOfOffset(-100), { result_count: 0 });
+    await seedAt(db, utcNoonOfOffset(-700), { result_count: 0 });
+
+    const result = await getAnalyticsSummary({}, ALL_TIME_DAYS);
+
+    expect(result.total_queries_window).toBe(3);
+    expect(result.empty_result_count_window).toBe(2);
+    expect(result.empty_result_rate_window).toBeCloseTo(2 / 3);
+  });
+
+  it("a sub-all-time window (days=1000) still clamps to the 366-day cap", async () => {
+    // Regression guard: only the all-time sentinel uncaps. A large-but-finite
+    // window must still clamp so payload/score behavior is unchanged.
+    await seedAt(db, utcNoonOfOffset(-200)); // inside cap
+    await seedAt(db, utcNoonOfOffset(-700)); // outside cap
+
+    const result = await getAnalyticsSummary({}, 1000);
+
+    expect(result.total_queries_window).toBe(1);
+  });
+
+  // -- Fix #2: range-mode per-day series is capped --------------------------
+
+  it("range-mode per-day series is capped at ROLLING_WINDOW_CAP_DAYS (no payload bloat)", async () => {
+    // A range far wider than the cap must not emit one bar per day for the
+    // whole span. Pre-fix this produced (to-from) daily rows uncapped.
+    const from = utcNoonOfOffset(-3000);
+    const to = utcNoonOfOffset(0);
+    await seedAt(db, utcNoonOfOffset(-1));
+
+    const result = await getAnalyticsSummary({ from, to }, 7);
+
+    expect(result.queries_per_day_window.length).toBeLessThanOrEqual(
+      ROLLING_WINDOW_CAP_DAYS,
+    );
+  });
+
+  it("range-mode narrow span still emits one bar per day (cap doesn't shrink small ranges)", async () => {
+    const from = utcNoonOfOffset(-4);
+    const to = utcNoonOfOffset(0); // 5-day inclusive span
+    await seedAt(db, utcNoonOfOffset(-2));
+
+    const result = await getAnalyticsSummary({ from, to }, 7);
+
+    expect(result.queries_per_day_window).toHaveLength(5);
+  });
+
+  // -- Fix #3: <browse> sentinel excluded from empty-queries ----------------
+
+  it("getEmptyQueries excludes the <browse> sentinel", async () => {
+    // A browse call that returned zero FAQ entries logs query_text="<browse>"
+    // with result_count=0. It must NOT surface as a literal "<browse>" row in
+    // the empty-result dashboard.
+    await seedAt(db, utcNoonOfOffset(0), {
+      query_text: BROWSE_QUERY_TEXT,
+      result_count: 0,
+    });
+    await seedAt(db, utcNoonOfOffset(0), {
+      query_text: "real empty query",
+      result_count: 0,
+    });
+
+    const rows = await getEmptyQueries(7, 50);
+    const texts = rows.map((r) => r.query_text);
+
+    expect(texts).not.toContain(BROWSE_QUERY_TEXT);
+    expect(texts).toContain("real empty query");
+  });
+
+  // -- Fix #4: summary numeric fields are coerced (no NaN) ------------------
+
+  it("summary numeric rates are finite numbers (driver-typing coercion)", async () => {
+    await seedAt(db, utcNoonOfOffset(0), { result_count: 0 });
+    await seedAt(db, utcNoonOfOffset(0), { top_score: 0.3, result_count: 4 });
+
+    const result = await getAnalyticsSummary({}, 7);
+
+    expect(Number.isFinite(result.empty_result_rate_window)).toBe(true);
+    expect(Number.isFinite(result.low_confidence_rate_window)).toBe(true);
+    expect(Number.isFinite(result.avg_latency_ms_window)).toBe(true);
+    expect(Number.isFinite(result.total_queries_window)).toBe(true);
   });
 });

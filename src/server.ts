@@ -1026,23 +1026,17 @@ export function write429RateLimited(
 
 /**
  * Post-accept handler for the /mcp `onsessioninitialized` callback. Extracted
- * from the callback so we can (a) wrap the workspaceManager.ensureSession
- * call in a try/catch that ROLLS BACK the ipLimiter counter and tears down
- * transport state if ensureSession throws, and (b) test that rollback in
- * isolation without driving a full SDK lifecycle.
+ * from the callback so the "new session accepted" side effects (the connect
+ * log line + the pathfinder.session.created telemetry emit) can be unit-tested
+ * in isolation without driving a full SDK lifecycle.
  *
- * On ensureSession failure (ENOSPC, EACCES, corrupted workspace, DB error):
- *   - Log the failure with sid-prefix + ip so operators can diagnose.
- *   - Call ipLimiter.remove(sid) so the pre-increment doesn't leak and
- *     permanently count against this IP until TTL reap.
- *   - Delete transports[sid] / sessionLastActivity[sid] inline (same
- *     mid-init teardown reasoning as handleSessionInitRaceFallback).
- *   - Fire-and-forget transport.close() with Promise-wrapped error handling
- *     so async rejections land in console.error rather than
- *     unhandledRejection.
- *   - Do NOT emit a JSON-RPC error frame — the MCP SDK lifecycle constraint
- *     documented on handleSessionInitRaceFallback applies identically here
- *     (`transport.send()` would throw "Not connected").
+ * Workspaces are allocated LAZILY — this handler does NOT call
+ * `workspaceManager.ensureSession`; bash tool handlers allocate per-operation
+ * instead. There is therefore no ensureSession failure path and no rollback:
+ * the function unconditionally returns `true` (the caller treats `false` as
+ * "rejected", which this handler never produces). The transport/ipLimiter
+ * teardown for a stranded session lives on the caller's `transport.onclose`
+ * wiring and {@link rollbackSessionAfterConnectFailure}, not here.
  *
  * Exported for tests; production callers wire this up via the POST /mcp
  * onsessioninitialized callback.
@@ -1054,25 +1048,26 @@ export function handleSessionInitAccept(opts: {
   transports: Record<string, unknown>;
   sessionLastActivity: Record<string, number>;
   ipLimiter?: { remove: (sid: string) => void };
+  /**
+   * Accepted for call-site compatibility but no longer used by this handler:
+   * workspaces are allocated lazily by the bash tool handlers, not eagerly
+   * here. Retained so the production caller's options object (which wires the
+   * module-scope managers) doesn't need to change.
+   */
   workspaceManager?: { ensureSession: (sid: string) => void };
   /**
-   * Session state manager (bash tool per-session shell state). Optional so
-   * existing test fixtures keep working; the production caller always passes
-   * the module-scope instance. Rollback clears it alongside the ipLimiter
-   * counter so a subsequent ensureSession throw-path doesn't leak shell
-   * state if the accept handler ever starts registering state before the
-   * ensureSession call.
+   * Accepted for call-site compatibility but no longer used by this handler.
+   * It was previously cleared on the ensureSession rollback path, which no
+   * longer exists (lazy allocation). Per-session shell-state teardown happens
+   * on the caller's transport.onclose. Retained so existing call sites keep
+   * compiling.
    */
   sessionStateManager?: { cleanup: (sid: string) => void };
   /**
-   * Express response for the original /mcp init request. When provided AND
-   * headers haven't been sent yet, rollback writes a structured 503 body so
-   * the client sees a diagnostic error instead of a silent transport
-   * teardown. When res.headersSent is already true we can't write (the SDK
-   * may have begun streaming before the ensureSession throw — unlikely given
-   * the order — so we fall back to just closing the transport). Optional to
-   * preserve existing unit test call sites that don't care about the
-   * response shape.
+   * Accepted for call-site compatibility but no longer used by this handler.
+   * It previously carried the rollback 503 body; with no ensureSession
+   * failure path there is nothing to write here. Retained so existing call
+   * sites keep compiling.
    */
   res?: {
     headersSent: boolean;
@@ -1107,11 +1102,10 @@ export function handleSessionInitAccept(opts: {
     `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(tMap).length} active) [${ip}]`,
   );
 
-  // Telemetry — fire only after ensureSession succeeded so we don't
-  // emit on rolled-back sessions. Mirrors the SSE handler's after-accept
-  // gate. The client's own no-op handles disabled/unconfigured cases;
-  // isEnabled() avoids constructing the property bag on every connect
-  // when telemetry is off.
+  // Telemetry — emitted on every accepted session. Mirrors the SSE
+  // handler's after-accept gate. The client's own no-op handles
+  // disabled/unconfigured cases; isEnabled() avoids constructing the
+  // property bag on every connect when telemetry is off.
   if (p2pTelemetry?.isEnabled()) {
     p2pTelemetry.emit("pathfinder.session.created", {
       client_ip: ip,
@@ -2918,10 +2912,14 @@ export function parsePositiveIntParam(
   return n;
 }
 
-// Upper bound for the `days` query parameter. Kept at 100000 so the UI's
-// "All time" preset (which sends days=ALL_TIME_DAYS=99999 — see
-// docs/analytics.html) is comfortably under the cap. If you lower MAX_DAYS,
-// make sure it stays >= 99999 or the "All time" preset will 400.
+// Upper bound for the `days` query parameter. Kept above the all-time
+// sentinel so the UI's "All time" preset (which sends days=ALL_TIME_DAYS —
+// the canonical value, 99999, lives in db/analytics.ts and is mirrored by
+// docs/analytics.html ALL_TIME_DAYS) is admitted, not rejected. A request at
+// or above ALL_TIME_DAYS is treated by the DB layer as "no lower time bound"
+// (see buildDateWindow), so the totals span every row. If you lower MAX_DAYS,
+// keep it strictly above ALL_TIME_DAYS (99999) or the "All time" preset will
+// 400.
 //
 // Exported so tests can reference the constant directly instead of
 // hardcoding the numeric literal (keeps one source of truth).

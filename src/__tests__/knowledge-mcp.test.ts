@@ -18,6 +18,7 @@ import type {
 
 vi.mock("../db/queries.js", () => ({
   getFaqChunks: vi.fn(),
+  getFaqChunksByIds: vi.fn(),
   searchChunks: vi.fn(),
 }));
 vi.mock("../db/analytics.js", () => ({
@@ -29,9 +30,14 @@ vi.mock("../config.js", () => ({
 }));
 
 import { registerKnowledgeTool } from "../mcp/tools/knowledge.js";
-import { getFaqChunks, searchChunks } from "../db/queries.js";
+import {
+  getFaqChunks,
+  getFaqChunksByIds,
+  searchChunks,
+} from "../db/queries.js";
 
 const mockGetFaqChunks = vi.mocked(getFaqChunks);
+const mockGetFaqChunksByIds = vi.mocked(getFaqChunksByIds);
 const mockSearchChunks = vi.mocked(searchChunks);
 const mockEmbed = vi.fn();
 
@@ -251,8 +257,8 @@ describe("knowledge tool search mode (with query)", () => {
       .mockResolvedValueOnce([makeChunkResult({ id: 10, similarity: 0.95 })])
       .mockResolvedValueOnce([makeChunkResult({ id: 20, similarity: 0.85 })]);
 
-    // getFaqChunks returns FAQ metadata for cross-reference
-    mockGetFaqChunks.mockResolvedValueOnce([
+    // FAQ metadata is fetched by the EXACT vector-result ids for cross-reference
+    mockGetFaqChunksByIds.mockResolvedValueOnce([
       makeFaqResult({ id: 10, confidence: 0.9, title: "Matched FAQ" }),
       makeFaqResult({ id: 20, confidence: 0.8, title: "Another FAQ" }),
     ]);
@@ -270,20 +276,20 @@ describe("knowledge tool search mode (with query)", () => {
     expect(text).toContain("Q&A 2");
 
     expect(mockEmbed).toHaveBeenCalledWith("how to auth");
-    // searchChunks called once for each source
+    // searchChunks called once for each source. The per-source fetch OVER-fetches
+    // candidates (effectiveLimit * 2 = 40) so the confidence filter has a
+    // backfill pool — filtering before the final slice is what stops the tool
+    // returning fewer than `limit` results.
     expect(mockSearchChunks).toHaveBeenCalledTimes(2);
     expect(mockSearchChunks).toHaveBeenCalledWith(
       embedding,
-      20,
+      40,
       "slack-support",
     );
-    expect(mockSearchChunks).toHaveBeenCalledWith(embedding, 20, "discord-faq");
-    // getFaqChunks called with confidence=0, limit=100 (effectiveLimit*5)
-    expect(mockGetFaqChunks).toHaveBeenCalledWith(
-      ["slack-support", "discord-faq"],
-      0,
-      100,
-    );
+    expect(mockSearchChunks).toHaveBeenCalledWith(embedding, 40, "discord-faq");
+    // FAQ metadata fetched by the exact candidate ids, NOT a recency window.
+    expect(mockGetFaqChunksByIds).toHaveBeenCalledWith([10, 20]);
+    expect(mockGetFaqChunks).not.toHaveBeenCalled();
   });
 
   it("filters out search results whose FAQ confidence is below threshold", async () => {
@@ -295,7 +301,7 @@ describe("knowledge tool search mode (with query)", () => {
       ])
       .mockResolvedValueOnce([]);
 
-    mockGetFaqChunks.mockResolvedValueOnce([
+    mockGetFaqChunksByIds.mockResolvedValueOnce([
       makeFaqResult({ id: 10, confidence: 0.9, title: "High Confidence" }),
       makeFaqResult({ id: 11, confidence: 0.3, title: "Low Confidence" }),
     ]);
@@ -318,7 +324,7 @@ describe("knowledge tool search mode (with query)", () => {
       .mockResolvedValueOnce([]);
 
     // FAQ data does not include id=99
-    mockGetFaqChunks.mockResolvedValueOnce([
+    mockGetFaqChunksByIds.mockResolvedValueOnce([
       makeFaqResult({ id: 1, confidence: 0.9 }),
     ]);
 
@@ -339,7 +345,7 @@ describe("knowledge tool search mode (with query)", () => {
       .mockResolvedValueOnce([makeChunkResult({ id: 10, similarity: 0.7 })])
       .mockResolvedValueOnce([makeChunkResult({ id: 20, similarity: 0.95 })]);
 
-    mockGetFaqChunks.mockResolvedValueOnce([
+    mockGetFaqChunksByIds.mockResolvedValueOnce([
       makeFaqResult({ id: 10, confidence: 0.9, title: "Lower Sim" }),
       makeFaqResult({ id: 20, confidence: 0.9, title: "Higher Sim" }),
     ]);
@@ -359,26 +365,33 @@ describe("knowledge tool search mode (with query)", () => {
 
   it("respects custom limit in search mode", async () => {
     mockEmbed.mockResolvedValueOnce([0.1]);
-    mockSearchChunks.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
-    mockGetFaqChunks.mockResolvedValueOnce([]);
+    mockSearchChunks
+      .mockResolvedValueOnce([
+        makeChunkResult({ id: 30, similarity: 0.95 }),
+        makeChunkResult({ id: 31, similarity: 0.9 }),
+        makeChunkResult({ id: 32, similarity: 0.85 }),
+        makeChunkResult({ id: 33, similarity: 0.8 }),
+      ])
+      .mockResolvedValueOnce([]);
+    mockGetFaqChunksByIds.mockResolvedValueOnce([]);
 
     await client.callTool({
       name: "get-faq",
       arguments: { query: "test", limit: 3 },
     });
 
-    // searchChunks should use limit=3
+    // searchChunks OVER-fetches candidates: effectiveLimit (3) * 2 = 6, so the
+    // confidence filter has a backfill pool before the final slice to 3.
     expect(mockSearchChunks).toHaveBeenCalledWith(
       expect.anything(),
-      3,
+      6,
       "slack-support",
     );
-    // getFaqChunks should use limit=15 (3*5)
-    expect(mockGetFaqChunks).toHaveBeenCalledWith(
-      ["slack-support", "discord-faq"],
-      0,
-      15,
-    );
+    // FAQ metadata is fetched for ALL candidate ids (the lookup happens BEFORE
+    // the confidence filter + slice, which is what enables backfill), by exact
+    // id — no relevance-blind recency window.
+    expect(mockGetFaqChunksByIds).toHaveBeenCalledWith([30, 31, 32, 33]);
+    expect(mockGetFaqChunks).not.toHaveBeenCalled();
   });
 
   it("respects custom min_confidence in search mode", async () => {
@@ -387,7 +400,7 @@ describe("knowledge tool search mode (with query)", () => {
       .mockResolvedValueOnce([makeChunkResult({ id: 10, similarity: 0.9 })])
       .mockResolvedValueOnce([]);
 
-    mockGetFaqChunks.mockResolvedValueOnce([
+    mockGetFaqChunksByIds.mockResolvedValueOnce([
       makeFaqResult({ id: 10, confidence: 0.85, title: "Borderline" }),
     ]);
 

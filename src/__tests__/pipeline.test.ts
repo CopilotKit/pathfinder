@@ -3,17 +3,28 @@ import { IndexingPipeline } from "../indexing/pipeline.js";
 import type { ContentItem } from "../indexing/providers/types.js";
 import type { SourceConfig } from "../types.js";
 
-// Mock the dependencies
-vi.mock("../indexing/chunking/index.js", () => ({
-  getChunker: vi
-    .fn()
-    .mockReturnValue((content: string, _filePath: string, _config: unknown) => [
+// Mock the dependencies. The inner chunker is a vi.fn (hoisted so the vi.mock
+// factory can close over it) so tests can assert the full argument list — the
+// real ChunkerFn and call site pass a 4th arg, item.absolutePath, in addition
+// to content/filePath/config.
+const { mockChunkerFn } = vi.hoisted(() => ({
+  mockChunkerFn: vi.fn(
+    (
+      content: string,
+      _filePath: string,
+      _config: unknown,
+      _absolutePath?: string,
+    ) => [
       {
         content,
         title: "Test Title",
         chunkIndex: 0,
       },
-    ]),
+    ],
+  ),
+}));
+vi.mock("../indexing/chunking/index.js", () => ({
+  getChunker: vi.fn().mockReturnValue(mockChunkerFn),
 }));
 
 vi.mock("../indexing/embeddings.js", () => {
@@ -26,7 +37,7 @@ vi.mock("../indexing/embeddings.js", () => {
 });
 
 vi.mock("../db/queries.js", () => ({
-  upsertChunks: vi.fn().mockResolvedValue(undefined),
+  replaceChunksForFile: vi.fn().mockResolvedValue(undefined),
   deleteChunksByFile: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -34,7 +45,8 @@ vi.mock("../indexing/url-derivation.js", () => ({
   deriveUrl: () => "https://example.com/test",
 }));
 
-const { upsertChunks, deleteChunksByFile } = await import("../db/queries.js");
+const { replaceChunksForFile, deleteChunksByFile } =
+  await import("../db/queries.js");
 const { EmbeddingClient } = await import("../indexing/embeddings.js");
 
 const testConfig: SourceConfig = {
@@ -50,20 +62,31 @@ describe("IndexingPipeline", () => {
     const embeddingClient = new EmbeddingClient("key", "model", 1536);
     const pipeline = new IndexingPipeline(embeddingClient, testConfig);
 
+    mockChunkerFn.mockClear();
     const items: ContentItem[] = [
       {
         id: "docs/test.md",
+        absolutePath: "/abs/clone/docs/test.md",
         content: "# Hello\nSome content here",
       },
     ];
 
     await pipeline.indexItems(items, "abc123");
 
-    expect(deleteChunksByFile).toHaveBeenCalledWith(
+    // The chunker receives item.absolutePath as its 4th argument (some chunkers
+    // need the on-disk path, e.g. for language/extension-aware splitting).
+    expect(mockChunkerFn).toHaveBeenCalledWith(
+      "# Hello\nSome content here",
+      "docs/test.md",
+      testConfig,
+      "/abs/clone/docs/test.md",
+    );
+
+    // The delete+upsert is now a SINGLE atomic call so a failed upsert cannot
+    // leave the file's chunks deleted-but-not-replaced (data loss).
+    expect(replaceChunksForFile).toHaveBeenCalledWith(
       "test-source",
       "docs/test.md",
-    );
-    expect(upsertChunks).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
           source_name: "test-source",
@@ -74,23 +97,38 @@ describe("IndexingPipeline", () => {
     );
   });
 
-  it("skips items that produce zero chunks", async () => {
+  it("clears stale chunks for items that now produce zero chunks", async () => {
+    // A file that previously indexed N chunks but now yields zero (and is
+    // routed through `items`, not `removedIds`) must have its stale chunks
+    // cleared — NOT left in the index forever. The zero-chunk path calls
+    // replaceChunksForFile(name, id, []) (the delete-only transaction) instead
+    // of early-returning. Embedding is skipped (no chunks to embed).
     const { getChunker } = await import("../indexing/chunking/index.js");
     vi.mocked(getChunker).mockReturnValueOnce(() => []);
 
     const embeddingClient = new EmbeddingClient("key", "model", 1536);
     const pipeline = new IndexingPipeline(embeddingClient, testConfig);
 
-    vi.mocked(upsertChunks).mockClear();
+    vi.mocked(replaceChunksForFile).mockClear();
+    vi.mocked(embeddingClient.embedBatch).mockClear();
     await pipeline.indexItems([{ id: "empty.md", content: "" }], "abc");
-    expect(upsertChunks).not.toHaveBeenCalled();
+
+    // Delete-only call with an EMPTY chunk array clears any prior chunks.
+    expect(replaceChunksForFile).toHaveBeenCalledWith(
+      "test-source",
+      "empty.md",
+      [],
+    );
+    // No embedding round-trip when there are no chunks to embed.
+    expect(embeddingClient.embedBatch).not.toHaveBeenCalled();
   });
 
   it("removes items by ID", async () => {
     const embeddingClient = new EmbeddingClient("key", "model", 1536);
     const pipeline = new IndexingPipeline(embeddingClient, testConfig);
 
-    vi.mocked(deleteChunksByFile).mockClear();
+    vi.mocked(deleteChunksByFile).mockReset();
+    vi.mocked(deleteChunksByFile).mockResolvedValue(undefined);
     await pipeline.removeItems(["docs/old.md", "docs/deleted.md"]);
 
     expect(deleteChunksByFile).toHaveBeenCalledTimes(2);
@@ -104,11 +142,65 @@ describe("IndexingPipeline", () => {
     );
   });
 
+  it("continues removing remaining ids when one delete fails and reports the failed id", async () => {
+    const embeddingClient = new EmbeddingClient("key", "model", 1536);
+    const pipeline = new IndexingPipeline(embeddingClient, testConfig);
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(deleteChunksByFile).mockReset();
+    // First id fails; the batch must NOT abort — the remaining ids still run.
+    vi.mocked(deleteChunksByFile)
+      .mockRejectedValueOnce(new Error("delete boom"))
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+
+    // The failed id MUST be returned so the caller holds the state token back.
+    const { failedIds } = await pipeline.removeItems([
+      "docs/bad.md",
+      "docs/ok1.md",
+      "docs/ok2.md",
+    ]);
+    expect(failedIds).toEqual(["docs/bad.md"]);
+
+    expect(deleteChunksByFile).toHaveBeenCalledTimes(3);
+    expect(deleteChunksByFile).toHaveBeenCalledWith(
+      "test-source",
+      "docs/ok1.md",
+    );
+    expect(deleteChunksByFile).toHaveBeenCalledWith(
+      "test-source",
+      "docs/ok2.md",
+    );
+    // The failure was logged via the pipeline's logPrefix and the FULL error
+    // object (not just err.message) so the stack survives.
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "[pipeline:test-source] Failed to remove docs/bad.md",
+      ),
+      expect.any(Error),
+    );
+    errSpy.mockRestore();
+  });
+
+  it("reports an empty failedIds array when all removes succeed", async () => {
+    const embeddingClient = new EmbeddingClient("key", "model", 1536);
+    const pipeline = new IndexingPipeline(embeddingClient, testConfig);
+
+    vi.mocked(deleteChunksByFile).mockReset();
+    vi.mocked(deleteChunksByFile).mockResolvedValue(undefined);
+
+    const { failedIds } = await pipeline.removeItems([
+      "docs/a.md",
+      "docs/b.md",
+    ]);
+    expect(failedIds).toEqual([]);
+  });
+
   it("passes sourceUrl from ContentItem when provided", async () => {
     const embeddingClient = new EmbeddingClient("key", "model", 1536);
     const pipeline = new IndexingPipeline(embeddingClient, testConfig);
 
-    vi.mocked(upsertChunks).mockClear();
+    vi.mocked(replaceChunksForFile).mockClear();
     await pipeline.indexItems(
       [
         {
@@ -120,7 +212,9 @@ describe("IndexingPipeline", () => {
       "abc",
     );
 
-    expect(upsertChunks).toHaveBeenCalledWith(
+    expect(replaceChunksForFile).toHaveBeenCalledWith(
+      "test-source",
+      "docs/test.md",
       expect.arrayContaining([
         expect.objectContaining({
           source_url: "https://custom.url/test",
@@ -195,7 +289,7 @@ describe("IndexingPipeline", () => {
     const embeddingClient = new EmbeddingClient("key", "model", 1536);
     const pipeline = new IndexingPipeline(embeddingClient, testConfig);
 
-    vi.mocked(upsertChunks).mockClear();
+    vi.mocked(replaceChunksForFile).mockClear();
     await pipeline.indexItems(
       [
         {
@@ -210,7 +304,7 @@ describe("IndexingPipeline", () => {
       "abc",
     );
 
-    const upserted = vi.mocked(upsertChunks).mock.calls[0][0];
+    const upserted = vi.mocked(replaceChunksForFile).mock.calls[0][2];
     expect(upserted[0].metadata).toMatchObject({
       headingPath: ["Reference", "Hooks"],
       custom: "x",
@@ -244,5 +338,60 @@ describe("IndexingPipeline", () => {
     await expect(
       indexItem({ id: "docs/two.md", content: "irrelevant" }, "abc"),
     ).rejects.toThrow(/Embedding count mismatch for item docs\/two\.md/);
+  });
+
+  it("swallows a replaceChunksForFile failure per item, continues the batch, and reports the failed id", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(replaceChunksForFile).mockReset();
+    // First item's atomic replace throws; the loop must log + continue so the
+    // second item is still indexed.
+    vi.mocked(replaceChunksForFile)
+      .mockRejectedValueOnce(new Error("replace boom"))
+      .mockResolvedValueOnce(undefined);
+
+    const embeddingClient = new EmbeddingClient("key", "model", 1536);
+    const pipeline = new IndexingPipeline(embeddingClient, testConfig);
+
+    // The failed id is RETURNED (so the orchestrator holds the token back) and
+    // the successful item still indexes.
+    const { failedIds } = await pipeline.indexItems(
+      [
+        { id: "docs/bad.md", content: "a" },
+        { id: "docs/good.md", content: "b" },
+      ],
+      "abc",
+    );
+    expect(failedIds).toEqual(["docs/bad.md"]);
+
+    expect(replaceChunksForFile).toHaveBeenCalledTimes(2);
+    // The successful item still wrote its chunks.
+    expect(replaceChunksForFile).toHaveBeenCalledWith(
+      "test-source",
+      "docs/good.md",
+      expect.any(Array),
+    );
+    // The failure logs the FULL error object (not just err.message).
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to index docs/bad.md"),
+      expect.any(Error),
+    );
+    errSpy.mockRestore();
+    // Restore the default resolved behavior for any later tests.
+    vi.mocked(replaceChunksForFile).mockReset();
+    vi.mocked(replaceChunksForFile).mockResolvedValue(undefined);
+  });
+
+  it("reports an empty failedIds array when all items index successfully", async () => {
+    vi.mocked(replaceChunksForFile).mockReset();
+    vi.mocked(replaceChunksForFile).mockResolvedValue(undefined);
+
+    const embeddingClient = new EmbeddingClient("key", "model", 1536);
+    const pipeline = new IndexingPipeline(embeddingClient, testConfig);
+
+    const { failedIds } = await pipeline.indexItems(
+      [{ id: "docs/ok.md", content: "a" }],
+      "abc",
+    );
+    expect(failedIds).toEqual([]);
   });
 });

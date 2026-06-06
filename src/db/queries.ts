@@ -8,6 +8,23 @@ import type {
   IndexStatus,
 } from "../types.js";
 
+/**
+ * Coerce a DB-returned value to a finite JS number, defaulting to 0. Mirrors
+ * the `toFiniteNumber` discipline in analytics.ts (getAnalyticsSummary):
+ * node-postgres deserializes numeric/`count(*)::int` columns as STRINGS (and
+ * `Number()` of a non-numeric value such as "high" or undefined yields NaN),
+ * so trusting `as number` / a raw `Number()` risks a string or NaN leaking into
+ * similarity sort order, top_score, or the index-stats counts. The
+ * `Number.isFinite` guard maps any NaN (and ±Infinity) back to 0. (`Number()`
+ * also coerces "" and null to 0, which is the desired default here.) Replicated
+ * here rather than imported to avoid coupling queries.ts to an
+ * analytics-internal closure.
+ */
+function toFiniteNumber(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
@@ -73,7 +90,9 @@ export async function searchChunks(
     start_line: (r.start_line as number) ?? null,
     end_line: (r.end_line as number) ?? null,
     language: (r.language as string) ?? null,
-    similarity: parseFloat(r.similarity as string),
+    // Coerce to a finite number: a non-numeric similarity would Number() to
+    // NaN and corrupt the similarity sort order / top_score downstream.
+    similarity: toFiniteNumber(r.similarity),
   }));
 }
 
@@ -146,7 +165,9 @@ export async function textSearchChunks(
     start_line: (r.start_line as number) ?? null,
     end_line: (r.end_line as number) ?? null,
     language: (r.language as string) ?? null,
-    similarity: parseFloat(r.similarity as string),
+    // Coerce to a finite number: a non-numeric similarity would Number() to
+    // NaN and corrupt the similarity sort order / top_score downstream.
+    similarity: toFiniteNumber(r.similarity),
   }));
 }
 
@@ -159,8 +180,12 @@ export async function textSearchChunks(
  * This is faster than a single SQL query because each query uses its
  * respective index (HNSW for vector, GIN for tsvector).
  *
- * min_score filtering is applied to vector candidates BEFORE merging,
- * preserving the semantic quality floor per the spec.
+ * min_score gates ONLY the vector candidates, and does so BEFORE the RRF
+ * merge. It is a cosine-similarity floor, so it is meaningful only for the
+ * vector list; the keyword list has no comparable score. A hit that surfaces
+ * via keyword search but is NOT in the surviving vector set therefore enters
+ * the fused output UNGATED by min_score — min_score raises the semantic floor
+ * of the vector contribution, it does not filter keyword-only matches.
  */
 export async function hybridSearchChunks(
   embedding: number[],
@@ -179,7 +204,9 @@ export async function hybridSearchChunks(
     textSearchChunks(queryText, candidateLimit, sourceName, version),
   ]);
 
-  // Apply min_score filter to vector candidates before merging
+  // Apply min_score to the VECTOR candidates only, before merging. Keyword-only
+  // hits (present in keywordResults but not in the surviving vector set) are not
+  // score-gated here — they still enter the RRF merge below.
   const filteredVectorResults =
     minScore != null
       ? vectorResults.filter((r) => r.similarity >= minScore)
@@ -252,19 +279,11 @@ export function rrfMerge(
 // ---------------------------------------------------------------------------
 
 /**
- * Batch upsert chunks. Uses ON CONFLICT to update existing rows matched by
- * (source_name, file_path, chunk_index).
+ * SQL for inserting a single chunk row, updating in place on the
+ * (source_name, file_path, chunk_index) conflict. Shared by upsertChunks and
+ * replaceChunksForFile so the column list and tsv derivation stay in lockstep.
  */
-export async function upsertChunks(chunks: Chunk[]): Promise<void> {
-  if (chunks.length === 0) return;
-
-  const pool = getPool();
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const sql = `
+const INSERT_CHUNK_SQL = `
             INSERT INTO chunks
                 (source_name, source_url, title, content, embedding, repo_url,
                  file_path, start_line, end_line, language, chunk_index,
@@ -288,28 +307,90 @@ export async function upsertChunks(chunks: Chunk[]): Promise<void> {
                 tsv        = EXCLUDED.tsv
         `;
 
+/** Positional params for INSERT_CHUNK_SQL, in column order. */
+function chunkInsertParams(chunk: Chunk): unknown[] {
+  return [
+    chunk.source_name,
+    chunk.source_url ?? null,
+    chunk.title ?? null,
+    chunk.content,
+    pgvector.toSql(chunk.embedding),
+    chunk.repo_url,
+    chunk.file_path,
+    chunk.start_line ?? null,
+    chunk.end_line ?? null,
+    chunk.language ?? null,
+    chunk.chunk_index,
+    JSON.stringify(chunk.metadata ?? {}),
+    chunk.commit_sha ?? null,
+    chunk.version ?? null,
+  ];
+}
+
+/**
+ * Atomically replace all chunks for a (source_name, file_path) pair: delete the
+ * file's existing chunks and insert the new set on a SINGLE pooled client inside
+ * one BEGIN/COMMIT, rolling back on any error.
+ *
+ * This is the durable form of "delete old chunks, then upsert new ones". Running
+ * the DELETE and the INSERTs as separate awaits risks permanent data loss: if an
+ * INSERT throws after the DELETE has committed, the file is left with zero chunks
+ * (and the caller typically advances its index-state token, so the gap is never
+ * re-filled). Wrapping both in a transaction guarantees the pre-existing chunks
+ * survive intact when any insert fails.
+ *
+ * Passing an empty `chunks` array performs the delete only (used to drop a file
+ * that no longer produces any chunks).
+ */
+export async function replaceChunksForFile(
+  sourceName: string,
+  filePath: string,
+  chunks: Chunk[],
+): Promise<void> {
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "DELETE FROM chunks WHERE source_name = $1 AND file_path = $2",
+      [sourceName, filePath],
+    );
     for (const chunk of chunks) {
-      await client.query(sql, [
-        chunk.source_name,
-        chunk.source_url ?? null,
-        chunk.title ?? null,
-        chunk.content,
-        pgvector.toSql(chunk.embedding),
-        chunk.repo_url,
-        chunk.file_path,
-        chunk.start_line ?? null,
-        chunk.end_line ?? null,
-        chunk.language ?? null,
-        chunk.chunk_index,
-        JSON.stringify(chunk.metadata ?? {}),
-        chunk.commit_sha ?? null,
-        chunk.version ?? null,
-      ]);
+      await client.query(INSERT_CHUNK_SQL, chunkInsertParams(chunk));
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    // Swallow a ROLLBACK rejection (e.g. dead connection) so it can't mask the
+    // ORIGINAL error — that error is the real cause and must reach the caller.
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Batch upsert chunks. Uses ON CONFLICT to update existing rows matched by
+ * (source_name, file_path, chunk_index).
+ */
+export async function upsertChunks(chunks: Chunk[]): Promise<void> {
+  if (chunks.length === 0) return;
+
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    for (const chunk of chunks) {
+      await client.query(INSERT_CHUNK_SQL, chunkInsertParams(chunk));
     }
 
     await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK");
+    // Swallow a ROLLBACK rejection so it can't mask the original error.
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -542,8 +623,16 @@ export async function getWebhookDeliveryStats(): Promise<{
   const byDecision: Record<string, number> = {};
   let total = 0;
   for (const row of countsResult.rows) {
-    byDecision[row.decision as string] = row.count as number;
-    total += row.count as number;
+    // Coerce through toFiniteNumber: node-postgres deserializes count(*)::int as
+    // a STRING, and by_decision is declared Record<string, number> and
+    // serialized into the /health endpoint, so storing the raw string emits
+    // {"accept":"5"} — a user-facing type violation. Mirrors the toFiniteNumber
+    // discipline used by every sibling count site (getIndexStats, analytics.ts).
+    byDecision[row.decision as string] = toFiniteNumber(row.count);
+    // The total likewise coerces before accumulating: a driver returning the
+    // count as a string would make `0 + "5"` evaluate to "05" (string concat),
+    // corrupting the total.
+    total += toFiniteNumber(row.count);
   }
 
   const lastRow = lastResult.rows[0];
@@ -638,7 +727,11 @@ export async function getAllChunksForLlms(): Promise<
 /**
  * Fetch FAQ chunks filtered by source name and minimum confidence.
  * Confidence is stored in chunk metadata JSONB; this query extracts and filters it.
- * Results are ordered by source_name, then indexed_at DESC (most recent first).
+ * Results are ordered by indexed_at DESC, then id DESC — i.e. global recency
+ * across all queried sources. source_name deliberately does NOT lead the
+ * ordering: a leading source_name would let a global LIMIT be consumed entirely
+ * by the alphabetically-first source, starving more-recent rows from later
+ * sources.
  */
 export async function getFaqChunks(
   sourceNames: string[],
@@ -653,6 +746,14 @@ export async function getFaqChunks(
   const placeholders = sourceNames.map((_, i) => `$${i + 1}`).join(", ");
   const confidenceParam = sourceNames.length + 1;
 
+  // Guard BOTH confidence casts with jsonb_typeof so a row whose `confidence`
+  // KEY exists but holds non-numeric text (e.g. "high") degrades to 0.0 instead
+  // of raising `invalid input syntax for type double precision` and crashing the
+  // whole browse listing. `metadata ? 'confidence'` only checks key presence —
+  // it does NOT guarantee the value is a number — so the raw `::float` cast in
+  // the projection AND the WHERE comparison could each crash on a single bad
+  // row. Mirrors the CASE guard in getFaqChunksByIds. A degraded 0.0 row is
+  // correctly excluded by any positive minConfidence threshold.
   let sql = `
         SELECT
             id,
@@ -667,12 +768,20 @@ export async function getFaqChunks(
             language,
             0.0 AS similarity,
             metadata,
-            COALESCE((metadata->>'confidence')::float, 0.0) AS confidence
+            CASE
+              WHEN jsonb_typeof(metadata->'confidence') = 'number'
+              THEN (metadata->>'confidence')::float
+              ELSE 0.0
+            END AS confidence
         FROM chunks
         WHERE source_name IN (${placeholders})
           AND metadata ? 'confidence'
-          AND (metadata->>'confidence')::float >= $${confidenceParam}
-        ORDER BY source_name, indexed_at DESC
+          AND CASE
+                WHEN jsonb_typeof(metadata->'confidence') = 'number'
+                THEN (metadata->>'confidence')::float
+                ELSE 0.0
+              END >= $${confidenceParam}
+        ORDER BY indexed_at DESC, id DESC
     `;
 
   const params: unknown[] = [...sourceNames, minConfidence];
@@ -694,9 +803,87 @@ export async function getFaqChunks(
     start_line: (r.start_line as number) ?? null,
     end_line: (r.end_line as number) ?? null,
     language: (r.language as string) ?? null,
-    similarity: parseFloat(r.similarity as string),
+    // Coerce to a finite number: a non-numeric similarity string would Number()
+    // to NaN and corrupt sort order / top_score. Same guard as confidence below.
+    similarity: toFiniteNumber(r.similarity),
     metadata: (r.metadata as Record<string, unknown>) ?? {},
-    confidence: parseFloat(r.confidence as string) || 0.0,
+    // Coerce to a finite number for the same reason as similarity above:
+    // toFiniteNumber maps a non-numeric confidence string (Number(...)=NaN) back
+    // to 0, while null/'' already Number() to 0 — either way confidence stays a
+    // finite number so threshold comparisons / sort order are not corrupted.
+    confidence: toFiniteNumber(r.confidence),
+  }));
+}
+
+/**
+ * Fetch FAQ metadata (including extracted confidence) for an EXACT set of chunk
+ * ids. Unlike getFaqChunks, this does NOT order by indexed_at or apply a top-N
+ * window — the caller has already ranked the ids (e.g. by vector similarity) and
+ * needs the FAQ confidence/metadata for precisely those rows.
+ *
+ * This exists because cross-referencing similarity hits against an
+ * indexed_at-DESC top-N window silently drops a relevant hit whose id falls
+ * outside that recency window. Looking up by id keeps every ranked hit.
+ *
+ * Returns rows in arbitrary order; the caller re-associates them by id and
+ * applies its own confidence threshold. Empty input → no query, empty result.
+ */
+export async function getFaqChunksByIds(
+  ids: number[],
+): Promise<FaqChunkResult[]> {
+  if (ids.length === 0) return [];
+
+  const pool = getPool();
+  // Guard the confidence cast: getFaqChunksByIds looks up an EXACT id set with
+  // no `metadata ? 'confidence'` WHERE filter (unlike getFaqChunks), so a
+  // single row whose confidence is non-numeric text (e.g. "high") would raise
+  // `invalid input syntax for type double precision` and reject the WHOLE
+  // knowledge lookup. The jsonb_typeof check casts only genuine JSON numbers
+  // and degrades any malformed/missing value to 0.0 so one bad row can't crash
+  // the search.
+  const sql = `
+        SELECT
+            id,
+            source_name,
+            source_url,
+            title,
+            content,
+            repo_url,
+            file_path,
+            start_line,
+            end_line,
+            language,
+            0.0 AS similarity,
+            metadata,
+            CASE
+              WHEN jsonb_typeof(metadata->'confidence') = 'number'
+              THEN (metadata->>'confidence')::float
+              ELSE 0.0
+            END AS confidence
+        FROM chunks
+        WHERE id = ANY($1)
+    `;
+
+  const { rows } = await pool.query(sql, [ids]);
+  return rows.map((r: Record<string, unknown>) => ({
+    id: r.id as number,
+    source_name: r.source_name as string,
+    source_url: (r.source_url as string) ?? null,
+    title: (r.title as string) ?? null,
+    content: r.content as string,
+    repo_url: (r.repo_url as string) ?? null,
+    file_path: r.file_path as string,
+    start_line: (r.start_line as number) ?? null,
+    end_line: (r.end_line as number) ?? null,
+    language: (r.language as string) ?? null,
+    // Coerce to a finite number: a non-numeric similarity would Number() to NaN
+    // and corrupt sort order / top_score. Same guard as confidence below.
+    similarity: toFiniteNumber(r.similarity),
+    metadata: (r.metadata as Record<string, unknown>) ?? {},
+    // Coerce to a finite number for the same reason as similarity above: a
+    // null/non-numeric confidence would otherwise yield NaN and corrupt
+    // threshold comparisons / sort order.
+    confidence: toFiniteNumber(r.confidence),
   }));
 }
 
@@ -719,13 +906,18 @@ export async function getIndexStats(): Promise<IndexStats> {
     ),
   ]);
 
+  // Coerce the counts through toFiniteNumber: although each is `count(*)::int`
+  // in SQL, node-postgres deserializes integer/numeric columns as STRINGS, so
+  // `as number` / `?? 0` would let a string leak into totalChunks/indexedRepos
+  // (and `?? 0` only catches null/undefined, not a "0" string). Mirrors the
+  // same discipline in getAnalyticsSummary.
   return {
-    totalChunks: totalCount.rows[0]?.count ?? 0,
+    totalChunks: toFiniteNumber(totalCount.rows[0]?.count),
     bySource: bySource.rows.map((r: Record<string, unknown>) => ({
       source_name: r.source_name as string,
-      count: r.count as number,
+      count: toFiniteNumber(r.count),
     })),
-    indexedRepos: repoCount.rows[0]?.count ?? 0,
+    indexedRepos: toFiniteNumber(repoCount.rows[0]?.count),
     indexStates: states.rows.map((r: Record<string, unknown>) => ({
       source_type: r.source_type as string,
       source_key: r.source_key as string,

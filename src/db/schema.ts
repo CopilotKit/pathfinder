@@ -65,13 +65,19 @@ DROP TABLE IF EXISTS code_chunks CASCADE;
 }
 
 /**
- * Generate post-schema migration SQL for columns added after initial release.
+ * Generate post-schema migration SQL for objects added after initial release.
  * Safe to run repeatedly — uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
  *
- * Includes tsvector support for hybrid search (v1.8.0):
- * - Core DDL (column + populate + GIN index) works on both PostgreSQL and PGlite
- * - Trigger DDL is appended but applied separately via try-catch in initializeSchema
- *   because PGlite does not support PL/pgSQL triggers
+ * Returns ONLY core DDL that works on both PostgreSQL and PGlite:
+ * - tsvector support for hybrid search (v1.8.0): the `tsv` column, a one-time
+ *   populate of existing rows, and the GIN index.
+ * - The analytics `query_log` table (+ its indexes and the idempotent
+ *   `request_source` ADD COLUMN for back-compat).
+ * - The `webhook_deliveries` table (+ its indexes).
+ *
+ * The tsvector TRIGGER is NOT included here — it is returned separately by
+ * {@link generateTsvTriggerDdl} and applied in its own try-catch by
+ * initializeSchema, because PGlite does not support PL/pgSQL triggers.
  */
 export function generatePostSchemaMigration(): string {
   const coreSql = `

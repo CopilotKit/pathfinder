@@ -91,8 +91,10 @@ vi.mock("../indexing/embeddings.js", () => {
 vi.mock("../indexing/pipeline.js", () => {
   return {
     IndexingPipeline: class MockIndexingPipeline {
-      indexItems = vi.fn().mockResolvedValue(undefined);
-      removeItems = vi.fn().mockResolvedValue(undefined);
+      // indexItems/removeItems now return { failedIds } so the orchestrator can
+      // hold the state token back on per-item failure (C1).
+      indexItems = vi.fn().mockResolvedValue({ failedIds: [] });
+      removeItems = vi.fn().mockResolvedValue({ failedIds: [] });
     },
   };
 });

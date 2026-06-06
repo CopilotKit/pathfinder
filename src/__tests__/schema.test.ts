@@ -221,4 +221,27 @@ describe("generatePostSchemaMigration", () => {
       "CREATE INDEX IF NOT EXISTS idx_query_log_request_source ON query_log (request_source)",
     );
   });
+
+  it("creates the webhook_deliveries table and its indexes", () => {
+    // The JSDoc on generatePostSchemaMigration claims it also creates
+    // webhook_deliveries (alongside query_log) — lock that claim so the
+    // doc and the DDL stay in sync.
+    const sql = generatePostSchemaMigration();
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS webhook_deliveries");
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_source ON webhook_deliveries (source)",
+    );
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_delivered_at ON webhook_deliveries (delivered_at)",
+    );
+  });
+
+  it("does NOT append the tsvector trigger DDL (returned separately)", () => {
+    // generateTsvTriggerDdl() is the source of the trigger DDL; the
+    // post-schema migration returns only the core (PGlite-safe) SQL. The
+    // JSDoc must not claim the trigger is "appended" here.
+    const sql = generatePostSchemaMigration();
+    expect(sql).not.toContain("CREATE TRIGGER");
+    expect(sql).not.toContain("chunks_tsv_trigger");
+  });
 });

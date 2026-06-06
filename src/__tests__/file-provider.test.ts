@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { FileDataProvider } from "../indexing/providers/file.js";
+import {
+  FileDataProvider,
+  localFileHashInput,
+} from "../indexing/providers/file.js";
 import type { FileSourceConfig } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -594,6 +597,78 @@ describe("FileDataProvider", () => {
       expect(result.removedIds).toEqual(["docs/deleted.md"]);
     });
 
+    it("throws (rather than silently dropping deletions) when the deletion-detection diff fails", async () => {
+      // H1 regression: the changed-files diff (--name-only) succeeds, but the
+      // deletion-detection diff (--name-status) fails transiently. Previously
+      // its catch set removedFiles=[] and continued, so a transient git error
+      // masqueraded as "no deletions" while the caller still advanced the state
+      // token — leaving stale/deleted docs in the index forever. The failure
+      // must now be surfaced (thrown) so the orchestrator marks the run errored
+      // and holds the token for retry instead of advancing over undetected
+      // deletions.
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      const docsDir = path.join(repoDir, "docs");
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+      await fs.promises.mkdir(docsDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(docsDir, "updated.md"),
+        "# Updated",
+      );
+
+      mockGitInstance.revparse.mockResolvedValue("def456");
+      mockGitInstance.diff
+        .mockResolvedValueOnce("docs/updated.md\n") // --name-only succeeds
+        .mockRejectedValueOnce(new Error("name-status diff failed")); // --name-status fails
+
+      const provider = new FileDataProvider(makeGitConfig(), { cloneDir });
+      await expect(provider.incrementalAcquire("abc123")).rejects.toThrow(
+        /name-status diff failed|deletion detection/i,
+      );
+    });
+
+    it("does NOT remove a changed file that exists on disk but fails extractContent", async () => {
+      // A transient read/extraction failure (EACCES/EIO/parse error) on a file
+      // that still exists on disk must NOT be folded into removedIds (which the
+      // orchestrator DELETES, then advances the token over — permanent silent
+      // chunk loss, since a later incremental diff won't re-list an unchanged
+      // file). Mirror the fullAcquire 'does NOT remove files that exist on disk
+      // but fail extractContent' guarantee: surface the failure (throw) so the
+      // orchestrator holds the prior token for retry instead of deleting.
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      const docsDir = path.join(repoDir, "docs");
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+      await fs.promises.mkdir(docsDir, { recursive: true });
+      // The changed file EXISTS on disk so the fs.existsSync guard passes and we
+      // proceed to extractContent (which throws).
+      await fs.promises.writeFile(
+        path.join(docsDir, "updated.md"),
+        "# Updated",
+      );
+
+      mockGitInstance.revparse.mockResolvedValue("def456");
+      mockGitInstance.diff
+        .mockResolvedValueOnce("docs/updated.md\n") // --name-only
+        .mockResolvedValueOnce("M\tdocs/updated.md\n"); // --name-status (modified, not deleted)
+      mockExtractContent.mockRejectedValueOnce(
+        new Error("Transient I/O error"),
+      );
+
+      const provider = new FileDataProvider(makeGitConfig(), { cloneDir });
+
+      // The acquire must surface the failure (hold the token), not silently
+      // advance over a file whose chunks would be deleted.
+      await expect(provider.incrementalAcquire("abc123")).rejects.toThrow(
+        /read\/extraction failed|holding state token/i,
+      );
+
+      mockExtractContent.mockReset();
+      errorSpy.mockRestore();
+    });
+
     it("returns empty when no matching changes detected", async () => {
       const cloneDir = path.join(tmpDir, "clones");
       const repoDir = path.join(cloneDir, "repo");
@@ -753,6 +828,36 @@ describe("FileDataProvider", () => {
       expect(ids).toContain("docs/new-name.md");
     });
 
+    it("detects a removal even when no matching changes are listed (rename of a matched file to a non-matched extension)", async () => {
+      // Data-consistency hole: a commit whose ONLY matching-relevant change is a
+      // rename of a MATCHED file (docs/a.md, matched by **/*.md) to a NON-matched
+      // extension (docs/b.txt). `git diff --name-only` lists only the new
+      // non-matching path (docs/b.txt), so matchingChanged is empty. If the
+      // no-matching-changes short-circuit fires BEFORE deletion detection, the
+      // run returns removedIds: [] and advances the state token, stranding
+      // docs/a.md's chunks in the index forever. Deletion/rename detection must
+      // run first so docs/a.md's removal is reported.
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+
+      mockGitInstance.revparse.mockResolvedValue("def456");
+      mockGitInstance.diff
+        // --name-only lists only the new, non-matching path → matchingChanged empty
+        .mockResolvedValueOnce("docs/b.txt\n")
+        // --name-status records the rename of the matched .md to the .txt
+        .mockResolvedValueOnce("R100\tdocs/a.md\tdocs/b.txt\n");
+
+      const provider = new FileDataProvider(makeGitConfig(), { cloneDir });
+      const result = await provider.incrementalAcquire("abc123");
+
+      // The removal of the matched old path MUST be reported (not an empty
+      // early-return), and the token still advances since the removal is handled.
+      expect(result.removedIds).toContain("docs/a.md");
+      expect(result.items).toEqual([]);
+      expect(result.stateToken).toBe("def456");
+    });
+
     it("skips files that no longer exist on disk", async () => {
       const cloneDir = path.join(tmpDir, "clones");
       const repoDir = path.join(cloneDir, "repo");
@@ -768,6 +873,61 @@ describe("FileDataProvider", () => {
       const result = await provider.incrementalAcquire("abc123");
 
       expect(result.items).toEqual([]);
+    });
+
+    // ── path: "." (repo-root) scoping regression ───────────────────────────
+    // A source configured with `path: "."` walks the repo root. git-diff paths
+    // are repo-root-relative with NO leading "./", so a prefix of "./" (derived
+    // naively from the truthy "." path) filters out EVERY changed file —
+    // matchingChanged becomes empty, the incremental run indexes nothing, and
+    // the state token advances over real changes. "." (and "") must be treated
+    // as "no prefix" so repo-root changes are indexed. The deploy config's
+    // `code` and `ag-ui-code` sources both use `path: "."`, so this is the
+    // production trigger. Mirrors the guard already in reindex-audit.ts.
+
+    it("indexes a repo-root changed file when path is '.' (no leading ./)", async () => {
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+      // A changed file at the repo ROOT — no docs/ prefix.
+      await fs.promises.writeFile(
+        path.join(repoDir, "root-file.md"),
+        "# Root content",
+      );
+
+      mockGitInstance.revparse.mockResolvedValue("def456");
+      mockGitInstance.diff
+        .mockResolvedValueOnce("root-file.md\n") // --name-only (repo-root relative)
+        .mockResolvedValueOnce("M\troot-file.md\n"); // --name-status
+
+      const provider = new FileDataProvider(makeGitConfig({ path: "." }), {
+        cloneDir,
+      });
+      const result = await provider.incrementalAcquire("abc123");
+
+      expect(result.stateToken).toBe("def456");
+      expect(result.items.length).toBe(1);
+      expect(result.items[0].id).toBe("root-file.md");
+    });
+
+    it("detects a repo-root deletion when path is '.' (no leading ./)", async () => {
+      const cloneDir = path.join(tmpDir, "clones");
+      const repoDir = path.join(cloneDir, "repo");
+      await fs.promises.mkdir(path.join(repoDir, ".git"), { recursive: true });
+
+      mockGitInstance.revparse.mockResolvedValue("def456");
+      mockGitInstance.diff
+        .mockResolvedValueOnce("deleted-root.md\n") // --name-only
+        .mockResolvedValueOnce("D\tdeleted-root.md\n"); // --name-status
+
+      const provider = new FileDataProvider(makeGitConfig({ path: "." }), {
+        cloneDir,
+      });
+      const result = await provider.incrementalAcquire("abc123");
+
+      expect(result.stateToken).toBe("def456");
+      expect(result.items).toEqual([]);
+      expect(result.removedIds).toEqual(["deleted-root.md"]);
     });
   });
 
@@ -1009,5 +1169,51 @@ describe("FileDataProvider", () => {
       );
       warnSpy.mockRestore();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// localFileHashInput — pure hash-input construction for local change detection
+//
+// The local state token must detect content changes that preserve mtime
+// (cp -p, some git checkout/restore, rsync --times). The bug: an mtime-only
+// hash input leaves such edits undetected, so they are never re-indexed.
+// Including file size in the hash input fixes the common mtime-preserving
+// case (which almost always changes size). These tests pin path + mtime and
+// vary only size, isolating the size dimension the previous implementation
+// ignored.
+// ---------------------------------------------------------------------------
+
+describe("localFileHashInput", () => {
+  it("produces DIFFERENT input for same path + mtime but different size", () => {
+    // The mtime-preserving-edit scenario: identical path and mtime, the only
+    // difference is file size. An mtime-only hash input would collide here.
+    const a = localFileHashInput("docs/readme.md", 1_700_000_000_000, 100);
+    const b = localFileHashInput("docs/readme.md", 1_700_000_000_000, 200);
+    expect(a).not.toBe(b);
+  });
+
+  it("produces IDENTICAL input for same path + mtime + size", () => {
+    const a = localFileHashInput("docs/readme.md", 1_700_000_000_000, 100);
+    const b = localFileHashInput("docs/readme.md", 1_700_000_000_000, 100);
+    expect(a).toBe(b);
+  });
+
+  it("still produces DIFFERENT input when mtime changes (size equal)", () => {
+    const a = localFileHashInput("docs/readme.md", 1_700_000_000_000, 100);
+    const b = localFileHashInput("docs/readme.md", 1_700_000_000_001, 100);
+    expect(a).not.toBe(b);
+  });
+
+  it("produces DIFFERENT input for different paths", () => {
+    const a = localFileHashInput("docs/a.md", 1_700_000_000_000, 100);
+    const b = localFileHashInput("docs/b.md", 1_700_000_000_000, 100);
+    expect(a).not.toBe(b);
+  });
+
+  it("includes size in the serialized form (path:mtime:size)", () => {
+    expect(localFileHashInput("docs/readme.md", 42, 100)).toBe(
+      "docs/readme.md:42:100\n",
+    );
   });
 });
