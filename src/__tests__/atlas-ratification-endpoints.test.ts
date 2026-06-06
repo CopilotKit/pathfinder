@@ -316,45 +316,6 @@ describe("Atlas ratification endpoints", () => {
     });
   });
 
-  it("resolves slash-bearing canonical keys on the path-param approve route", async () => {
-    const canonicalKey = "github-pr:atlas:org/repo:42";
-    await upsertAtlasSeedCandidate({
-      canonicalKey,
-      sourceName: "atlas",
-      title: "Slash key path param",
-      content: "Candidate with a slash-bearing key via path param",
-      provenance: {},
-      evidence: [],
-    });
-    server = await startServer();
-
-    // Encode the ":" but leave the "/" LITERAL — this is exactly the shape that
-    // truncated the old ":canonicalKey" segment and made the route address the
-    // wrong (nonexistent) key. The wildcard route must reconstruct the full key.
-    const literalSlashPath = canonicalKey
-      .split("/")
-      .map((segment) => encodeURIComponent(segment))
-      .join("/");
-    const approved = await request(
-      server,
-      "POST",
-      `/api/atlas/candidates/${literalSlashPath}/approve`,
-      {
-        headers: {
-          Authorization: "Bearer secret",
-          "X-Atlas-Actor": "reviewer@example.test",
-        },
-      },
-    );
-
-    expect(approved.status).toBe(200);
-    expect(JSON.parse(approved.body).candidate).toMatchObject({
-      canonicalKey,
-      status: "approved",
-      approvedBy: "reviewer@example.test",
-    });
-  });
-
   it("approves without an orchestrator: logs loudly and reports reindexQueued:false", async () => {
     await upsertAtlasSeedCandidate({
       canonicalKey: "runtime:approve-no-orchestrator",
@@ -371,12 +332,13 @@ describe("Atlas ratification endpoints", () => {
     const approved = await request(
       server,
       "POST",
-      "/api/atlas/candidates/runtime%3Aapprove-no-orchestrator/approve",
+      "/api/atlas/candidates/approve",
       {
         headers: {
           Authorization: "Bearer secret",
           "X-Atlas-Actor": "reviewer@example.test",
         },
+        body: { canonicalKey: "runtime:approve-no-orchestrator" },
       },
     );
 
@@ -415,12 +377,13 @@ describe("Atlas ratification endpoints", () => {
     const approved = await request(
       server,
       "POST",
-      "/api/atlas/candidates/runtime%3Aapprove/approve",
+      "/api/atlas/candidates/approve",
       {
         headers: {
           Authorization: "Bearer secret",
           "X-Atlas-Actor": "reviewer@example.test",
         },
+        body: { canonicalKey: "runtime:approve" },
       },
     );
     expect(approved.status).toBe(200);
@@ -433,13 +396,13 @@ describe("Atlas ratification endpoints", () => {
     const rejected = await request(
       server,
       "POST",
-      "/api/atlas/candidates/runtime%3Areject/reject",
+      "/api/atlas/candidates/reject",
       {
         headers: {
           Authorization: "Bearer secret",
           "X-Atlas-Actor": "reviewer@example.test",
         },
-        body: { reason: "incorrect inference" },
+        body: { canonicalKey: "runtime:reject", reason: "incorrect inference" },
       },
     );
     expect(rejected.status).toBe(200);
@@ -469,12 +432,13 @@ describe("Atlas ratification endpoints", () => {
     const approved = await request(
       server,
       "POST",
-      "/api/atlas/candidates/runtime%3Aapprove-reindex/approve",
+      "/api/atlas/candidates/approve",
       {
         headers: {
           Authorization: "Bearer secret",
           "X-Atlas-Actor": "reviewer@example.test",
         },
+        body: { canonicalKey: "runtime:approve-reindex" },
       },
     );
 
@@ -505,13 +469,13 @@ describe("Atlas ratification endpoints", () => {
     await request(
       server,
       "POST",
-      "/api/atlas/candidates/runtime%3Arejected/reject",
+      "/api/atlas/candidates/reject",
       {
         headers: {
           Authorization: "Bearer secret",
           "X-Atlas-Actor": "reviewer",
         },
-        body: { reason: "bad evidence" },
+        body: { canonicalKey: "runtime:rejected", reason: "bad evidence" },
       },
     );
 

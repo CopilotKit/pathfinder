@@ -3147,22 +3147,6 @@ function atlasActor(req: Request): string {
   return header?.trim() || "atlas-admin";
 }
 
-function atlasCanonicalKey(req: Request): string {
-  // Canonical keys can contain "/" (e.g. "github-pr:atlas:owner/repo:42"). The
-  // route uses a wildcard param so a literal "/" no longer truncates the
-  // segment; the wildcard capture is NOT auto-decoded by Express, so callers
-  // encodeURIComponent the key and we decode it here. A bare ":canonicalKey"
-  // would only survive %2F-escaping (Express auto-decodes that), but would
-  // still 404 on a literal unescaped slash — the wildcard handles both.
-  const value = req.params.canonicalKey;
-  const raw = Array.isArray(value) ? (value.join("/") ?? "") : (value ?? "");
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
-
 function atlasCanonicalKeyFromBody(req: Request): string {
   const value = req.body?.canonicalKey;
   return typeof value === "string" ? value.trim() : "";
@@ -3282,26 +3266,10 @@ export function registerAtlasRatificationRoutes(app: express.Express): void {
   );
 
   app.post(
-    "/api/atlas/candidates/*canonicalKey/approve",
-    atlasRatificationAuth,
-    async (req: Request, res: Response) => {
-      await approveAtlasCandidate(atlasCanonicalKey(req), req, res);
-    },
-  );
-
-  app.post(
     "/api/atlas/candidates/reject",
     atlasRatificationAuth,
     async (req: Request, res: Response) => {
       await rejectAtlasCandidate(atlasCanonicalKeyFromBody(req), req, res);
-    },
-  );
-
-  app.post(
-    "/api/atlas/candidates/*canonicalKey/reject",
-    atlasRatificationAuth,
-    async (req: Request, res: Response) => {
-      await rejectAtlasCandidate(atlasCanonicalKey(req), req, res);
     },
   );
 }
