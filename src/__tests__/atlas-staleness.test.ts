@@ -1,4 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { __setPoolForTesting, __resetPoolForTesting } from "../db/client.js";
 import { generatePostSchemaMigration } from "../db/schema.js";
@@ -9,6 +18,7 @@ import {
   upsertAtlasCachePage,
   upsertAtlasSeedCandidate,
 } from "../db/atlas.js";
+import * as atlasDb from "../db/atlas.js";
 import { gardenAtlasCachePages } from "../indexing/atlas-gardener.js";
 
 const ATLAS_DDL_MARKER = "-- Atlas durable seed knowledge.";
@@ -154,5 +164,52 @@ describe("Atlas cache staleness and gardening", () => {
     );
     expect(rows[0]?.stale).toBe(true);
     expect(rows[0]?.error_message).toBe("generator unavailable");
+  });
+
+  describe("when error bookkeeping fails for one page", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("continues the batch and still returns a summary for the other pages", async () => {
+      await upsertAtlasCachePage({
+        pageKey: "runtime/a",
+        sourceName: "atlas",
+        title: "Page A",
+        content: "Old A",
+        contentHash: "hash-a",
+      });
+      await upsertAtlasCachePage({
+        pageKey: "runtime/b",
+        sourceName: "atlas",
+        title: "Page B",
+        content: "Old B",
+        contentHash: "hash-b",
+      });
+      await markAtlasCachePagesStaleForSources(["atlas"], "manual refresh");
+
+      // Simulate the bookkeeping write throwing for the first page only —
+      // e.g. the row was deleted/re-keyed concurrently
+      // (recordAtlasCachePageGenerationError throws "not found").
+      const spy = vi
+        .spyOn(atlasDb, "recordAtlasCachePageGenerationError")
+        .mockImplementationOnce(async () => {
+          throw new Error('Atlas cache page "runtime/a" not found');
+        });
+
+      // Both pages fail to generate, so both hit the catch block; the first
+      // page's bookkeeping throws. The batch must not abort.
+      const summary = await gardenAtlasCachePages({
+        sourceName: "atlas",
+        generatePage: async () => {
+          throw new Error("generator unavailable");
+        },
+      });
+
+      expect(summary).toEqual({ regenerated: 0, failed: 2 });
+      // The second page's bookkeeping should still have run.
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(spy).toHaveBeenLastCalledWith("runtime/b", "generator unavailable");
+    });
   });
 });

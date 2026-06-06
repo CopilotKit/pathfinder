@@ -71,10 +71,21 @@ export async function gardenAtlasCachePages(
       regenerated++;
     } catch (error) {
       failed++;
-      await recordAtlasCachePageGenerationError(
-        page.pageKey,
-        errorMessageFromUnknown(error),
+      console.error(
+        `[atlas-gardener] Failed to regenerate cache page "${page.pageKey}":`,
+        error,
       );
+      try {
+        await recordAtlasCachePageGenerationError(
+          page.pageKey,
+          errorMessageFromUnknown(error),
+        );
+      } catch (recordError) {
+        console.error(
+          `[atlas-gardener] Failed to record generation error for cache page "${page.pageKey}":`,
+          recordError,
+        );
+      }
     }
   }
 
