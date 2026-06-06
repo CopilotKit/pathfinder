@@ -33,6 +33,13 @@ vi.mock("../config.js", () => ({
         file_patterns: ["**/*.md"],
         chunk: {},
       },
+      {
+        name: "atlas",
+        type: "atlas",
+        seed_path: ".pathfinder/atlas/seed",
+        cache_namespace: "company-knowledge",
+        chunk: {},
+      },
     ],
     tools: [
       {
@@ -64,6 +71,10 @@ vi.mock("../config.js", () => ({
 vi.mock("../db/queries.js", () => ({
   getIndexState: vi.fn().mockResolvedValue(null),
   upsertIndexState: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../db/atlas.js", () => ({
+  markAtlasCachePagesStaleForSources: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("../indexing/embeddings.js", () => {
@@ -103,6 +114,8 @@ vi.mock("../indexing/providers/index.js", () => ({
 }));
 
 import { IndexingOrchestrator } from "../indexing/orchestrator.js";
+import { markAtlasCachePagesStaleForSources } from "../db/atlas.js";
+import { getProvider } from "../indexing/providers/index.js";
 
 describe("IndexingOrchestrator.queueSourceReindex", () => {
   let orchestrator: IndexingOrchestrator;
@@ -124,6 +137,76 @@ describe("IndexingOrchestrator.queueSourceReindex", () => {
       if (completeSpy.mock.calls.length > 0) break;
     }
 
+    expect(completeSpy).toHaveBeenCalledWith(["slack-support"]);
+  });
+
+  it("marks related Atlas cache pages stale after a source reindex", async () => {
+    orchestrator.queueSourceReindex("slack-support");
+
+    for (let i = 0; i < 50; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (vi.mocked(markAtlasCachePagesStaleForSources).mock.calls.length > 0) {
+        break;
+      }
+    }
+
+    expect(markAtlasCachePagesStaleForSources).toHaveBeenCalledWith(
+      ["slack-support"],
+      "source reindexed: slack-support",
+    );
+  });
+
+  it("does not mark Atlas cache pages stale after an Atlas self-reindex", async () => {
+    const completeSpy = vi.fn();
+    orchestrator.onReindexComplete = completeSpy;
+
+    orchestrator.queueSourceReindex("atlas");
+
+    for (let i = 0; i < 50; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (completeSpy.mock.calls.length > 0) break;
+    }
+
+    expect(completeSpy).toHaveBeenCalledWith(["atlas"]);
+    expect(markAtlasCachePagesStaleForSources).not.toHaveBeenCalled();
+  });
+
+  it("does not mark Atlas cache stale or complete reindex after failed indexing", async () => {
+    const completeSpy = vi.fn();
+    orchestrator.onReindexComplete = completeSpy;
+    vi.mocked(getProvider).mockReturnValueOnce(() => ({
+      fullAcquire: vi.fn().mockRejectedValue(new Error("provider failed")),
+      incrementalAcquire: vi
+        .fn()
+        .mockRejectedValue(new Error("provider failed")),
+      getCurrentStateToken: vi.fn().mockResolvedValue("test-token"),
+    }));
+
+    orchestrator.queueSourceReindex("slack-support");
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(markAtlasCachePagesStaleForSources).not.toHaveBeenCalled();
+    expect(completeSpy).not.toHaveBeenCalled();
+  });
+
+  it("still completes the reindex when Atlas cache invalidation throws", async () => {
+    const completeSpy = vi.fn();
+    orchestrator.onReindexComplete = completeSpy;
+    vi.mocked(markAtlasCachePagesStaleForSources).mockRejectedValueOnce(
+      new Error("transient DB error"),
+    );
+
+    orchestrator.queueSourceReindex("slack-support");
+
+    for (let i = 0; i < 50; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (completeSpy.mock.calls.length > 0) break;
+    }
+
+    // The Atlas cache invalidation failed, but the reindex itself succeeded,
+    // so onReindexComplete must still fire for the affected source.
+    expect(markAtlasCachePagesStaleForSources).toHaveBeenCalled();
     expect(completeSpy).toHaveBeenCalledWith(["slack-support"]);
   });
 

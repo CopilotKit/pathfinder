@@ -56,7 +56,7 @@ function makePushPayload(overrides: Record<string, unknown> = {}) {
 
 function mockReqRes(
   body: object | string,
-  headers: Record<string, string> = {},
+  headers: Record<string, string | string[]> = {},
   asBuffer = true,
 ) {
   const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
@@ -106,7 +106,10 @@ describe("GitHub webhook handler", () => {
       },
     });
 
-    orchestrator = { queueIncrementalReindex: vi.fn() };
+    orchestrator = {
+      queueIncrementalReindex: vi.fn(),
+      queueSourceReindex: vi.fn(),
+    };
     handler = createWebhookHandler(orchestrator);
   });
 
@@ -178,12 +181,150 @@ describe("GitHub webhook handler", () => {
       expect(res.status).toHaveBeenCalledWith(401);
     });
 
+    it("rejects malformed non-ASCII signatures without throwing", async () => {
+      const payload = makePushPayload();
+      const { req, res } = mockReqRes(payload, {
+        "x-hub-signature-256": `sha256=${"é".repeat(64)}`,
+      });
+
+      await expect(handler(req, res)).resolves.toEqual(
+        expect.objectContaining({ queuedReindex: false }),
+      );
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Invalid or missing webhook signature",
+        }),
+      );
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
+    });
+
     it("accepts a valid signature", async () => {
       const { req, res } = mockReqRes(makePushPayload());
+      const result = await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ queued: true });
+      expect(result).toEqual({
+        queuedReindex: true,
+        affectedSourceNames: ["docs-source"],
+      });
+      expect(orchestrator.queueIncrementalReindex).toHaveBeenCalledTimes(1);
+      expect(orchestrator.queueIncrementalReindex).toHaveBeenCalledWith(
+        "https://github.com/org/repo.git",
+      );
+      expect(orchestrator.queueSourceReindex).not.toHaveBeenCalled();
+    });
+
+    it("logs failed non-blocking delivery audit writes", async () => {
+      const auditError = new Error("audit db unavailable");
+      mockRecordWebhookDelivery.mockRejectedValueOnce(auditError);
+      const consoleErrorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      const { req, res } = mockReqRes(makePushPayload());
+
+      try {
+        await handler(req, res);
+        await Promise.resolve();
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith({ queued: true });
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          "[webhook] Failed to record GitHub delivery:",
+          auditError,
+        );
+      } finally {
+        consoleErrorSpy.mockRestore();
+      }
+    });
+
+    it("rejects duplicate signature headers before verification", async () => {
+      const payload = makePushPayload();
+      const buf = Buffer.from(JSON.stringify(payload));
+      const { req, res } = mockReqRes(payload, {
+        "x-hub-signature-256": [sign(buf), sign(buf)],
+      });
+
       await handler(req, res);
-      // Should not be 401 or 403
-      expect(res.status).not.toHaveBeenCalledWith(401);
-      expect(res.status).not.toHaveBeenCalledWith(403);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Duplicate GitHub webhook header",
+        }),
+      );
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
+    });
+
+    it("rejects runtime duplicate signature headers before verification", async () => {
+      const payload = makePushPayload();
+      const buf = Buffer.from(JSON.stringify(payload));
+      const signature = sign(buf);
+      const { req, res } = mockReqRes(payload, {
+        "x-hub-signature-256": `${signature}, ${signature}`,
+      });
+      req.rawHeaders = [
+        "X-Hub-Signature-256",
+        signature,
+        "x-hub-signature-256",
+        signature,
+        "X-GitHub-Event",
+        "push",
+      ];
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Duplicate GitHub webhook header",
+          header: "x-hub-signature-256",
+        }),
+      );
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
+    });
+
+    it("rejects duplicate event headers before routing", async () => {
+      const { req, res } = mockReqRes(makePushPayload(), {
+        "x-github-event": ["push", "pull_request"],
+      });
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Duplicate GitHub webhook header",
+        }),
+      );
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
+    });
+
+    it("rejects runtime duplicate event headers before routing", async () => {
+      const { req, res } = mockReqRes(makePushPayload(), {
+        "x-github-event": "push, pull_request",
+      });
+      req.rawHeaders = [
+        "X-Hub-Signature-256",
+        req.headers["x-hub-signature-256"],
+        "X-GitHub-Event",
+        "push",
+        "x-github-event",
+        "pull_request",
+      ];
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Duplicate GitHub webhook header",
+          header: "x-github-event",
+        }),
+      );
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
     });
   });
 
@@ -236,6 +377,57 @@ describe("GitHub webhook handler", () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ error: "Malformed JSON payload" }),
       );
+    });
+
+    it("rejects signed push payloads missing required repository fields", async () => {
+      const { req, res } = mockReqRes({
+        ref: "refs/heads/main",
+        after: "abc12345deadbeef",
+        repository: {
+          default_branch: "main",
+          full_name: "org/repo",
+        },
+        commits: [],
+      });
+
+      const result = await handler(req, res);
+
+      expect(result).toEqual(expect.objectContaining({ queuedReindex: false }));
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: "Malformed push payload" }),
+      );
+      expect(mockRecordWebhookDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "github",
+          event_type: "push",
+          decision: "error",
+          reason: "malformed push payload",
+        }),
+      );
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
+    });
+
+    it("rejects signed push payloads with malformed commits", async () => {
+      const { req, res } = mockReqRes({
+        ref: "refs/heads/main",
+        after: "abc12345deadbeef",
+        repository: {
+          clone_url: "https://github.com/org/repo.git",
+          default_branch: "main",
+          full_name: "org/repo",
+        },
+        commits: [{ added: "docs/guide.md", modified: [], removed: [] }],
+      });
+
+      const result = await handler(req, res);
+
+      expect(result).toEqual(expect.objectContaining({ queuedReindex: false }));
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: "Malformed push payload" }),
+      );
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
     });
   });
 
@@ -320,9 +512,13 @@ describe("GitHub webhook handler", () => {
   describe("path_triggers filtering", () => {
     it("queues reindex when committed files match path triggers", async () => {
       const { req, res } = mockReqRes(makePushPayload());
-      await handler(req, res);
+      const result = await handler(req, res);
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({ queued: true });
+      expect(result).toEqual({
+        queuedReindex: true,
+        affectedSourceNames: ["docs-source"],
+      });
       expect(orchestrator.queueIncrementalReindex).toHaveBeenCalledWith(
         "https://github.com/org/repo.git",
       );
@@ -339,7 +535,7 @@ describe("GitHub webhook handler", () => {
         ],
       });
       const { req, res } = mockReqRes(payload);
-      await handler(req, res);
+      const result = await handler(req, res);
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -347,7 +543,47 @@ describe("GitHub webhook handler", () => {
           reason: "no path triggers matched",
         }),
       );
+      expect(result).toEqual({
+        queuedReindex: false,
+        affectedSourceNames: [],
+      });
       expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
+    });
+
+    it("does not match path trigger prefixes across path segments", async () => {
+      mockGetServerConfig.mockReturnValue({
+        webhook: {
+          repo_sources: { "org/repo": ["docs-source", "api-source"] },
+          path_triggers: {
+            "docs-source": ["docs"],
+            "api-source": ["src/api"],
+          },
+        },
+      });
+      const payload = makePushPayload({
+        commits: [
+          {
+            added: ["docs-old/file.md"],
+            modified: ["src/apiary.ts"],
+            removed: [],
+          },
+        ],
+      });
+      const { req, res } = mockReqRes(payload);
+      const result = await handler(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ignored: true,
+          reason: "no path triggers matched",
+        }),
+      );
+      expect(result).toEqual({
+        queuedReindex: false,
+        affectedSourceNames: [],
+      });
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
+      expect(orchestrator.queueSourceReindex).not.toHaveBeenCalled();
     });
 
     it("queues reindex when source has no path triggers (match all)", async () => {
@@ -389,7 +625,7 @@ describe("GitHub webhook handler", () => {
       expect(res.json).toHaveBeenCalledWith({ queued: true });
     });
 
-    it("handles multiple sources for same repo, only one matching", async () => {
+    it("queues only the matching source when multiple path-filtered sources map to a repo", async () => {
       mockGetServerConfig.mockReturnValue({
         webhook: {
           repo_sources: { "org/repo": ["src-source", "docs-source"] },
@@ -403,10 +639,17 @@ describe("GitHub webhook handler", () => {
         commits: [{ added: ["docs/new.md"], modified: [], removed: [] }],
       });
       const { req, res } = mockReqRes(payload);
-      await handler(req, res);
+      const result = await handler(req, res);
       expect(res.json).toHaveBeenCalledWith({ queued: true });
-      // Should only call once even though there are two sources
-      expect(orchestrator.queueIncrementalReindex).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        queuedReindex: true,
+        affectedSourceNames: ["docs-source"],
+      });
+      expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
+      expect(orchestrator.queueSourceReindex).toHaveBeenCalledTimes(1);
+      expect(orchestrator.queueSourceReindex).toHaveBeenCalledWith(
+        "docs-source",
+      );
     });
   });
 

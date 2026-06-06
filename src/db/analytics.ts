@@ -71,6 +71,14 @@ export interface AnalyticsSummary {
   earliest_query_day: string | null;
 }
 
+export interface AtlasRetrievalMetrics {
+  atlas_queries_window: number;
+  atlas_successful_queries_window: number;
+  atlas_empty_queries_window: number;
+  atlas_retrieval_rate_window: number;
+  total_user_queries_window: number;
+}
+
 export interface TopQuery {
   query_text: string;
   tool_name: string;
@@ -95,6 +103,12 @@ export interface ToolCount {
 export interface AnalyticsFilter {
   tool_type?: string;
   source?: string;
+  /**
+   * Service-originated rows use the existing session_id column with a
+   * `service:` prefix. Analytics views exclude them by default so Atlas
+   * gardening/probe traffic does not inflate human/agent usage metrics.
+   */
+  include_service_traffic?: boolean;
   /**
    * Optional inclusive date range. When both `from` and `to` are set the
    * underlying queries filter on `created_at >= from AND created_at <= to`
@@ -189,15 +203,22 @@ function buildFilterClauses(
   if (filter.tool_type) {
     // Escape LIKE metacharacters in user input; declare the escape character
     // explicitly so `%` and `_` in the input match literally rather than as
-    // wildcards.
-    clauses.push(`tool_name LIKE $${idx} || '-%' ESCAPE '|'`);
-    params.push(escapeLikePattern(filter.tool_type));
-    idx++;
+    // wildcards. Exact tool names also count as their own tool type:
+    // `tool_name = 'atlas'` and `tool_name = 'atlas-search'` should both
+    // match `tool_type=atlas`, mirroring getToolCounts' split_part grouping.
+    clauses.push(
+      `(tool_name = $${idx} OR tool_name LIKE $${idx + 1} || '-%' ESCAPE '|')`,
+    );
+    params.push(filter.tool_type, escapeLikePattern(filter.tool_type));
+    idx += 2;
   }
   if (filter.source) {
     clauses.push(`source_name = $${idx}`);
     params.push(filter.source);
     idx++;
+  }
+  if (!filter.include_service_traffic) {
+    clauses.push(`(session_id IS NULL OR session_id NOT LIKE 'service:%')`);
   }
 
   return { clauses, params, nextIdx: idx };
@@ -762,6 +783,79 @@ export async function getToolCounts(
     tool_type: r.tool_type as string,
     count: r.count as number,
   }));
+}
+
+/**
+ * Get Atlas-specific retrieval health for the current window.
+ *
+ * Atlas traffic is identified through the existing analytics surface:
+ * an Atlas source is named `atlas` or `atlas-*`/`atlas:*`, and Atlas tools
+ * use `atlas`/`atlas-*`/`*-atlas` names. Ordinary search traffic contributes
+ * only to `total_user_queries_window`, never to the Atlas retrieval-rate
+ * denominator.
+ */
+export async function getAtlasRetrievalMetrics(
+  days: number = 7,
+  filter: AnalyticsFilter = {},
+): Promise<AtlasRetrievalMetrics> {
+  const pool = getPool();
+
+  const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
+  const dw = buildDateWindow(filter, days, nextIdx);
+  const redactedIdx = dw.nextIdx;
+  const baseClauses = [
+    ...dw.clauses,
+    "latency_ms >= 0",
+    `query_text != $${redactedIdx}`,
+  ];
+  const params = [...fp, ...dw.params, REDACTED_QUERY_TEXT];
+  const userWhere = whereAnd(baseClauses, fc);
+  const atlasWhere = whereAnd(
+    [
+      ...baseClauses,
+      `(
+        source_name = 'atlas'
+        OR source_name LIKE 'atlas-%'
+        OR source_name LIKE 'atlas:%'
+        OR tool_name = 'atlas'
+        OR tool_name LIKE 'atlas-%'
+        OR tool_name LIKE '%-atlas'
+      )`,
+    ],
+    fc,
+  );
+
+  const [atlasRes, totalUserRes] = await Promise.all([
+    pool.query(
+      `SELECT
+          count(*)::int AS total,
+          count(*) FILTER (WHERE result_count > 0)::int AS successful,
+          count(*) FILTER (WHERE result_count = 0)::int AS empty
+       FROM query_log
+       ${atlasWhere}`,
+      params,
+    ),
+    pool.query(
+      `SELECT count(*)::int AS total
+       FROM query_log
+       ${userWhere}`,
+      params,
+    ),
+  ]);
+
+  const atlas = atlasRes.rows[0] ?? {};
+  const atlasTotal = (atlas.total as number | undefined) ?? 0;
+  const successful = (atlas.successful as number | undefined) ?? 0;
+  const empty = (atlas.empty as number | undefined) ?? 0;
+  const totalUser = (totalUserRes.rows[0]?.total as number | undefined) ?? 0;
+
+  return {
+    atlas_queries_window: atlasTotal,
+    atlas_successful_queries_window: successful,
+    atlas_empty_queries_window: empty,
+    atlas_retrieval_rate_window: atlasTotal > 0 ? successful / atlasTotal : 0,
+    total_user_queries_window: totalUser,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -687,6 +687,107 @@ describe("config.ts", () => {
       const cfg = getServerConfig();
       expect(cfg.sources[0].type).toBe("slack");
     });
+
+    it("accepts an atlas source referenced by a search tool", async () => {
+      const { stringify } = require("yaml");
+      mockedExistsSync.mockImplementation((p: string) => {
+        if (p.includes("test.yaml")) return true;
+        return false;
+      });
+      mockedReadFileSync.mockReturnValue(
+        stringify({
+          server: { name: "test", version: "1.0" },
+          sources: [
+            {
+              name: "atlas",
+              type: "atlas",
+              seed_path: ".pathfinder/atlas/seed",
+              cache_namespace: "copilotkit",
+              chunk: { target_tokens: 800, overlap_tokens: 80 },
+            },
+          ],
+          tools: [
+            {
+              name: "atlas-search",
+              type: "search",
+              source: "atlas",
+              description: "Search Atlas knowledge.",
+              default_limit: 5,
+              max_limit: 20,
+              result_format: "raw",
+              search_mode: "hybrid",
+            },
+          ],
+          embedding: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            dimensions: 1536,
+          },
+          indexing: {
+            auto_reindex: true,
+            reindex_hour_utc: 4,
+            stale_threshold_hours: 24,
+          },
+        }),
+      );
+
+      const { getServerConfig } = await freshImport();
+      const cfg = getServerConfig();
+      expect(cfg.sources[0]).toMatchObject({
+        name: "atlas",
+        type: "atlas",
+        seed_path: ".pathfinder/atlas/seed",
+      });
+      expect(cfg.tools[0]).toMatchObject({
+        name: "atlas-search",
+        source: "atlas",
+      });
+    });
+
+    it("does not validate atlas seed_path as a local file source path", async () => {
+      const { stringify } = require("yaml");
+      mockedExistsSync.mockImplementation((p: string) => {
+        if (p.includes("test.yaml")) return true;
+        return false;
+      });
+      mockedReadFileSync.mockReturnValue(
+        stringify({
+          server: { name: "test", version: "1.0" },
+          sources: [
+            {
+              name: "atlas",
+              type: "atlas",
+              seed_path: "./missing-atlas-seed",
+              chunk: {},
+            },
+          ],
+          tools: [
+            {
+              name: "atlas-search",
+              type: "search",
+              source: "atlas",
+              description: "Search Atlas knowledge.",
+              default_limit: 5,
+              max_limit: 20,
+              result_format: "raw",
+            },
+          ],
+          embedding: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            dimensions: 1536,
+          },
+          indexing: {
+            auto_reindex: true,
+            reindex_hour_utc: 4,
+            stale_threshold_hours: 24,
+          },
+        }),
+      );
+
+      const { getServerConfig } = await freshImport();
+      expect(() => getServerConfig()).not.toThrow();
+    });
   });
 
   // ── Helper functions ─────────────────────────────────────────────────────

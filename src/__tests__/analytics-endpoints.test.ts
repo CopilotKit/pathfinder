@@ -113,6 +113,25 @@ describe("analyticsAuth middleware", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  it("returns 503 when root config read fails before auth options are built", () => {
+    mockGetConfigFn.mockImplementation(() => {
+      throw new Error("bad root config");
+    });
+    const res = mockRes();
+    const next = vi.fn();
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    analyticsAuth({ headers: {} } as never, res as never, next);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "misconfigured",
+      error_description: "Analytics config read failed",
+    });
+    expect(next).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
   it("auto-generates token, logs only a fingerprint, and requires auth", () => {
     mockGetAnalyticsConfigFn.mockReturnValue({
       enabled: true,

@@ -86,6 +86,19 @@ sources:
 #      target_tokens: 600
 #      overlap_tokens: 50
 
+# ── Atlas source (agent-facing codebase knowledge cache) ──
+# Seed knowledge is durable; generated Atlas pages are disposable Pathfinder cache.
+#  - name: atlas
+#    type: atlas
+#    seed_path: .pathfinder/atlas/seed
+#    cache_namespace: my-project
+#    repositories:
+#      - repo_url: https://github.com/your-org/your-repo.git
+#        refs: ["main"]
+#    chunk:
+#      target_tokens: 800
+#      overlap_tokens: 80
+
 # ── Slack source (requires SLACK_BOT_TOKEN + OPENAI_API_KEY) ──
 #  - name: community
 #    type: slack
@@ -120,6 +133,16 @@ tools:
   #    type: knowledge
   #    description: "Browse and search community Q&A"
   #    sources: [community]
+
+  # ── Atlas search tool ──
+  #  - name: atlas-search
+  #    type: search
+  #    description: "Search Atlas codebase knowledge."
+  #    source: atlas
+  #    default_limit: 5
+  #    max_limit: 20
+  #    result_format: raw
+  #    search_mode: hybrid
 
 # Required for search tools (omit for bash-only mode)
 embedding:

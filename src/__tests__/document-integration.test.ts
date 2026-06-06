@@ -27,6 +27,13 @@ describe("document type registration", () => {
     const chunker = getChunker("document");
     expect(chunker).toBeDefined();
   });
+
+  it("atlas type is registered in chunker registry", async () => {
+    const { getChunker } = await import("../indexing/chunking/index.js");
+    const { chunkMarkdown } = await import("../indexing/chunking/markdown.js");
+
+    expect(getChunker("atlas")).toBe(chunkMarkdown);
+  });
 });
 
 describe("backwards compatibility", () => {
