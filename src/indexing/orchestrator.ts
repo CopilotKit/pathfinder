@@ -20,7 +20,8 @@ import {
   cleanupOldWebhookDeliveries,
 } from "../db/queries.js";
 import { cleanupOldQueryLogs } from "../db/analytics.js";
-import { isFileSourceConfig } from "../types.js";
+import { markAtlasCachePagesStaleForSources } from "../db/atlas.js";
+import { isAtlasSourceConfig, isFileSourceConfig } from "../types.js";
 import type { IndexState, IndexStatus, SourceConfig } from "../types.js";
 import type { ProviderOptions } from "./providers/types.js";
 
@@ -570,12 +571,11 @@ export class IndexingOrchestrator {
     let affectedSourceNames: string[] = [];
 
     if (job.type === "full-reindex") {
-      await this.runFullReindex(
+      affectedSourceNames = await this.runFullReindex(
         embeddingProvider,
         config.cloneDir,
         config.githubToken,
       );
-      affectedSourceNames = serverCfg2.sources.map((s) => s.name);
     } else if (job.type === "full-reindex-local") {
       if (!job.sources || job.sources.length === 0) {
         console.warn(
@@ -584,13 +584,13 @@ export class IndexingOrchestrator {
         return;
       }
       for (const sourceConfig of job.sources) {
-        await this.indexSourceWithState(
+        const succeeded = await this.indexSourceWithState(
           sourceConfig,
           embeddingProvider,
           config.cloneDir,
         );
+        if (succeeded) affectedSourceNames.push(sourceConfig.name);
       }
-      affectedSourceNames = job.sources.map((s) => s.name);
     } else if (job.type === "incremental-reindex") {
       if (!job.repoUrl) {
         console.warn(
@@ -598,13 +598,12 @@ export class IndexingOrchestrator {
         );
         return;
       }
-      await this.runIncrementalReindex(
+      affectedSourceNames = await this.runIncrementalReindex(
         embeddingProvider,
         config.cloneDir,
         config.githubToken,
         job.repoUrl,
       );
-      affectedSourceNames = getSourcesByRepo(job.repoUrl).map((s) => s.name);
     } else if (job.type === "source-reindex") {
       if (!job.sourceName) {
         console.warn(
@@ -621,12 +620,29 @@ export class IndexingOrchestrator {
         );
         return;
       }
-      await this.indexSourceWithState(
+      const succeeded = await this.indexSourceWithState(
         sourceConfig,
         embeddingProvider,
         config.cloneDir,
       );
-      affectedSourceNames = [job.sourceName];
+      if (succeeded) affectedSourceNames = [job.sourceName];
+    }
+
+    const atlasSourceNames = new Set(
+      serverCfg2.sources.filter(isAtlasSourceConfig).map((source) => source.name),
+    );
+    const atlasCacheInvalidationSourceNames = affectedSourceNames.filter(
+      (sourceName) => !atlasSourceNames.has(sourceName),
+    );
+
+    if (
+      atlasCacheInvalidationSourceNames.length > 0 &&
+      atlasSourceNames.size > 0
+    ) {
+      await markAtlasCachePagesStaleForSources(
+        atlasCacheInvalidationSourceNames,
+        `source reindexed: ${atlasCacheInvalidationSourceNames.join(", ")}`,
+      );
     }
 
     if (affectedSourceNames.length > 0 && this.onReindexComplete) {
@@ -645,23 +661,26 @@ export class IndexingOrchestrator {
     embeddingProvider: EmbeddingProvider,
     cloneDir: string,
     githubToken?: string,
-  ): Promise<void> {
+  ): Promise<string[]> {
     console.log("[orchestrator] Starting full re-index");
 
     const serverCfg = getServerConfig();
     const indexableNames = getIndexableSourceNames();
+    const succeededSourceNames: string[] = [];
     for (const sourceConfig of serverCfg.sources.filter((s) =>
       indexableNames.has(s.name),
     )) {
-      await this.indexSourceWithState(
+      const succeeded = await this.indexSourceWithState(
         sourceConfig,
         embeddingProvider,
         cloneDir,
         githubToken,
       );
+      if (succeeded) succeededSourceNames.push(sourceConfig.name);
     }
 
     console.log("[orchestrator] Full re-index complete");
+    return succeededSourceNames;
   }
 
   /**
@@ -672,23 +691,26 @@ export class IndexingOrchestrator {
     cloneDir: string,
     githubToken: string | undefined,
     repoUrl: string,
-  ): Promise<void> {
+  ): Promise<string[]> {
     console.log(`[orchestrator] Starting incremental re-index for ${repoUrl}`);
 
     const indexableNames = getIndexableSourceNames();
     const sources = getSourcesByRepo(repoUrl).filter((s) =>
       indexableNames.has(s.name),
     );
+    const succeededSourceNames: string[] = [];
     for (const sourceConfig of sources) {
-      await this.indexSourceWithState(
+      const succeeded = await this.indexSourceWithState(
         sourceConfig,
         embeddingProvider,
         cloneDir,
         githubToken,
       );
+      if (succeeded) succeededSourceNames.push(sourceConfig.name);
     }
 
     console.log(`[orchestrator] Incremental re-index complete for ${repoUrl}`);
+    return succeededSourceNames;
   }
 
   /**
@@ -699,9 +721,9 @@ export class IndexingOrchestrator {
     embeddingProvider: EmbeddingProvider,
     cloneDir: string,
     githubToken?: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const lockKey = `${sourceConfig.type}:${sourceConfig.name}`;
-    await this.withSourceLock(lockKey, async () => {
+    return this.withSourceLock(lockKey, async () => {
       const providerOptions: ProviderOptions = {
         cloneDir,
         githubToken,
@@ -747,6 +769,7 @@ export class IndexingOrchestrator {
         console.log(
           `[orchestrator] Indexing complete for ${sourceConfig.name}`,
         );
+        return true;
       } catch (err) {
         console.error(
           `[orchestrator] Indexing failed for ${sourceConfig.name}:`,
@@ -765,27 +788,29 @@ export class IndexingOrchestrator {
             statusErr,
           );
         }
+        return false;
       }
-    });
+    }, false);
   }
 
   /**
    * Simple per-source mutex. If the source is already being indexed, skip.
    */
-  private async withSourceLock(
+  private async withSourceLock<T>(
     sourceKey: string,
-    fn: () => Promise<void>,
-  ): Promise<void> {
+    fn: () => Promise<T>,
+    skippedValue: T,
+  ): Promise<T> {
     if (this.activeSources.has(sourceKey)) {
       console.log(
         `[orchestrator] Skipping ${sourceKey} — already being indexed`,
       );
-      return;
+      return skippedValue;
     }
 
     this.activeSources.add(sourceKey);
     try {
-      await fn();
+      return await fn();
     } finally {
       this.activeSources.delete(sourceKey);
     }

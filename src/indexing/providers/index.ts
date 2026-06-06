@@ -59,3 +59,10 @@ registerProvider(
   "notion",
   (config, options) => new NotionDataProvider(config, options),
 );
+
+import { AtlasDataProvider } from "./atlas.js";
+
+registerProvider(
+  "atlas",
+  (config, options) => new AtlasDataProvider(config, options),
+);
