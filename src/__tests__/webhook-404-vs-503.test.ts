@@ -66,7 +66,10 @@ describe("classifyWebhookUnavailable (R3 #2)", () => {
     const { classifyWebhookUnavailable } = await import("../server.js");
     mockGetServerConfig.mockReturnValue({
       server: { name: "t", version: "0.0.0" },
-      sources: [{ name: "repo", type: "github" }],
+      sources: [{ name: "repo", type: "markdown" }],
+      webhook: {
+        repo_sources: { "org/repo": ["repo"] },
+      },
       tools: [],
     });
     const r = classifyWebhookUnavailable({ sourceType: "github" });

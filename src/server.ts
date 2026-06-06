@@ -39,7 +39,10 @@ import {
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 import { runReindexAudit } from "./indexing/reindex-audit.js";
 
-import { createWebhookHandler } from "./webhooks/github.js";
+import {
+  createWebhookHandler,
+  type GitHubWebhookResult,
+} from "./webhooks/github.js";
 import { createSlackWebhookHandler } from "./webhooks/slack.js";
 import { createDiscordWebhookHandler } from "./webhooks/discord.js";
 import { SessionStateManager } from "./mcp/tools/bash-session.js";
@@ -75,6 +78,11 @@ import {
   getToolCounts,
 } from "./db/analytics.js";
 import type { AnalyticsFilter } from "./db/analytics.js";
+import {
+  approveAtlasSeedEntry,
+  listPendingAtlasSeedCandidates,
+  rejectAtlasSeedEntry,
+} from "./db/atlas.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -187,8 +195,9 @@ export function assertWebhookRawBodyOrder(routeName: string): RequestHandler {
   };
 }
 
-let webhookHandler: ((req: Request, res: Response) => Promise<void>) | null =
-  null;
+let webhookHandler:
+  | ((req: Request, res: Response) => Promise<GitHubWebhookResult>)
+  | null = null;
 let slackWebhookHandler:
   | ((req: Request, res: Response) => Promise<void>)
   | null = null;
@@ -205,14 +214,6 @@ let telemetryFlushInterval: ReturnType<typeof setInterval> | undefined;
 // the URL/disabled flag is read after dotenv has loaded. Late-bound into
 // SSE handlers via getter; passed directly into handleSessionInitAccept.
 let p2pTelemetry: P2PTelemetry | undefined;
-
-// Pending webhook-triggered bash-refresh timers. Each webhook delivery
-// schedules a setTimeout to refresh bash instances after a brief delay
-// (post-reindex). Without tracking these handles, a shutdown() racing
-// with an in-flight webhook would leave the timers armed and keep the
-// Node event loop alive, delaying process exit. We add handles on
-// scheduling, remove them on fire, and clear the entire set on shutdown.
-const pendingBashRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
 
 /**
  * Rebuild bash instances for tools affected by the given sources.
@@ -325,6 +326,12 @@ export function __clearBashInstancesForTesting(): void {
   bashInstances.clear();
 }
 
+export function __setAtlasOrchestratorForTesting(
+  orchestrator: Pick<IndexingOrchestrator, "queueSourceReindex"> | null,
+): void {
+  orchestratorRef = orchestrator as IndexingOrchestrator | null;
+}
+
 /**
  * Test-only accessor to the rejected-sid marker Set so
  * `rollbackSessionAfterConnectFailure` regression tests can assert the
@@ -399,14 +406,16 @@ export function runStartupIndexAndBashRefresh(
 export function classifyWebhookUnavailable(opts: {
   sourceType: "github" | "slack" | "discord";
 }): { status: 404 | 503; body: { error: string; sourceType: string } } {
-  const configured = getServerConfig().sources.some(
-    (s) => s.type === opts.sourceType,
-  );
+  const serverCfg = getServerConfig();
+  const configured =
+    opts.sourceType === "github"
+      ? Object.keys(serverCfg.webhook?.repo_sources ?? {}).length > 0
+      : serverCfg.sources.some((s) => s.type === opts.sourceType);
   if (!configured) {
     return {
       status: 404,
       body: {
-        error: `${opts.sourceType} webhook not configured — no sources of type '${opts.sourceType}' in config`,
+        error: `${opts.sourceType} webhook not configured`,
         sourceType: opts.sourceType,
       },
     };
@@ -436,27 +445,6 @@ app.post(
     }
     try {
       await handler(req, res);
-      // Schedule bash refresh after webhook-triggered reindex. This path
-      // uses a delay heuristic rather than orchestrator.onReindexComplete
-      // because that callback only fires on scheduled/nightly reindex, not
-      // per-webhook — the webhook handler reindexes inline via the
-      // orchestrator's handler path without going through the completion
-      // callback. Unifying the two notification paths is a larger refactor.
-      const serverCfg = getServerConfig();
-      const bashTools = serverCfg.tools.filter((t) => t.type === "bash");
-      if (bashTools.length > 0) {
-        const REFRESH_DELAY_MS = 30_000;
-        // Track the timer handle so shutdown() can cancel any refresh
-        // still pending. The self-delete in the callback keeps the Set
-        // from accumulating stale handles after the timer fires.
-        const handle: ReturnType<typeof setTimeout> = setTimeout(() => {
-          pendingBashRefreshTimers.delete(handle);
-          refreshBashInstances(serverCfg.sources.map((s) => s.name)).catch(
-            (err) => console.error("[webhook] Bash refresh failed:", err),
-          );
-        }, REFRESH_DELAY_MS);
-        pendingBashRefreshTimers.add(handle);
-      }
     } catch (err) {
       console.error("[webhook] Handler error:", err);
       if (!res.headersSent) {
@@ -2451,13 +2439,22 @@ function getAnalyticsToken(): string | undefined {
 }
 
 /**
- * Analytics auth middleware — exported so tests can import and exercise the
- * real code instead of reimplementing the logic in test doubles.
+ * Shared bearer-token check used by analytics and Atlas admin endpoints.
+ * Atlas intentionally reuses the same configured token source without tying
+ * its availability to analytics.enabled.
  */
-export function analyticsAuth(
+function bearerTokenAuth(
   req: Request,
   res: Response,
   next: express.NextFunction,
+  opts: {
+    logPrefix: "analytics" | "atlas";
+    configReadFailureDescription: string;
+    requireAnalyticsEnabled: boolean;
+    disabledResponse?: { status: number; body: Record<string, string> };
+    tokenDescription: string;
+    invalidTokenDescription: string;
+  },
 ): void {
   // Mirror the getAnalyticsToken() pattern: a throw from the config read
   // (e.g. corrupt YAML on hot reload, env parse failure) would otherwise
@@ -2465,22 +2462,27 @@ export function analyticsAuth(
   // a 503 so callers see a stable error shape and operators get a
   // diagnostic log line.
   let analyticsCfg: ReturnType<typeof getAnalyticsConfig>;
+  let config: ReturnType<typeof getConfig>;
   try {
     analyticsCfg = getAnalyticsConfig();
+    config = getConfig();
   } catch (err) {
     console.error(
-      `[analytics] auth misconfigured: config read failed: ${formatErrorForLog(err)}`,
+      `[${opts.logPrefix}] auth misconfigured: config read failed: ${formatErrorForLog(err)}`,
     );
     res.status(503).json({
       error: "misconfigured",
-      error_description: "Analytics config read failed",
+      error_description: opts.configReadFailureDescription,
     });
     return;
   }
-  const config = getConfig();
 
-  if (!analyticsCfg?.enabled) {
-    res.status(404).json({ error: "Analytics not enabled" });
+  if (opts.requireAnalyticsEnabled && !analyticsCfg?.enabled) {
+    const disabled = opts.disabledResponse ?? {
+      status: 404,
+      body: { error: "Feature not enabled" },
+    };
+    res.status(disabled.status).json(disabled.body);
     return;
   }
 
@@ -2492,25 +2494,14 @@ export function analyticsAuth(
     return;
   }
 
-  // Message is conditional on nodeEnv so non-prod operators don't get a
-  // misleading "requires ANALYTICS_TOKEN in production" hint when the root
-  // cause is something else (e.g. a downstream config-read failure). The
-  // production copy still surfaces the concrete remediation step.
-  const prodTokenMsg =
-    "Analytics requires ANALYTICS_TOKEN in production (env var or analytics.token in config).";
-  const nonProdTokenMsg =
-    "Analytics token unavailable — check analytics config / logs.";
-  const tokenDescription =
-    config.nodeEnv === "production" ? prodTokenMsg : nonProdTokenMsg;
-
   let token: string | undefined;
   try {
     token = getAnalyticsToken();
   } catch (err) {
-    console.error(`[analytics] auth misconfigured: ${formatErrorForLog(err)}`);
+    console.error(`[${opts.logPrefix}] auth misconfigured: ${formatErrorForLog(err)}`);
     res.status(503).json({
       error: "misconfigured",
-      error_description: tokenDescription,
+      error_description: opts.tokenDescription,
     });
     return;
   }
@@ -2518,10 +2509,10 @@ export function analyticsAuth(
   if (!token) {
     // Should not happen — getAnalyticsToken auto-generates or throws.
     // Fail closed rather than silently bypassing auth.
-    console.error("[analytics] auth misconfigured: no token available");
+    console.error(`[${opts.logPrefix}] auth misconfigured: no token available`);
     res.status(503).json({
       error: "misconfigured",
-      error_description: tokenDescription,
+      error_description: opts.tokenDescription,
     });
     return;
   }
@@ -2558,19 +2549,97 @@ export function analyticsAuth(
   if (providedBuf.length !== tokenBuf.length) {
     res.status(403).json({
       error: "forbidden",
-      error_description: "Invalid analytics token",
+      error_description: opts.invalidTokenDescription,
     });
     return;
   }
   if (!timingSafeEqual(providedBuf, tokenBuf)) {
     res.status(403).json({
       error: "forbidden",
-      error_description: "Invalid analytics token",
+      error_description: opts.invalidTokenDescription,
     });
     return;
   }
 
   next();
+}
+
+/**
+ * Analytics auth middleware — exported so tests can import and exercise the
+ * real code instead of reimplementing the logic in test doubles.
+ */
+export function analyticsAuth(
+  req: Request,
+  res: Response,
+  next: express.NextFunction,
+): void {
+  // Message is conditional on nodeEnv so non-prod operators don't get a
+  // misleading "requires ANALYTICS_TOKEN in production" hint when the root
+  // cause is something else (e.g. a downstream config-read failure). The
+  // production copy still surfaces the concrete remediation step.
+  const prodTokenMsg =
+    "Analytics requires ANALYTICS_TOKEN in production (env var or analytics.token in config).";
+  const nonProdTokenMsg =
+    "Analytics token unavailable — check analytics config / logs.";
+  let tokenDescription: string;
+  try {
+    tokenDescription =
+      getConfig().nodeEnv === "production" ? prodTokenMsg : nonProdTokenMsg;
+  } catch (err) {
+    console.error(
+      `[analytics] auth misconfigured: config read failed: ${formatErrorForLog(err)}`,
+    );
+    res.status(503).json({
+      error: "misconfigured",
+      error_description: "Analytics config read failed",
+    });
+    return;
+  }
+
+  bearerTokenAuth(req, res, next, {
+    logPrefix: "analytics",
+    configReadFailureDescription: "Analytics config read failed",
+    requireAnalyticsEnabled: true,
+    disabledResponse: {
+      status: 404,
+      body: { error: "Analytics not enabled" },
+    },
+    tokenDescription,
+    invalidTokenDescription: "Invalid analytics token",
+  });
+}
+
+function atlasRatificationAuth(
+  req: Request,
+  res: Response,
+  next: express.NextFunction,
+): void {
+  const prodTokenMsg =
+    "Atlas ratification requires ANALYTICS_TOKEN in production (env var or analytics.token in config).";
+  const nonProdTokenMsg =
+    "Atlas ratification token unavailable — check analytics token config / logs.";
+  let tokenDescription: string;
+  try {
+    tokenDescription =
+      getConfig().nodeEnv === "production" ? prodTokenMsg : nonProdTokenMsg;
+  } catch (err) {
+    console.error(
+      `[atlas] auth misconfigured: config read failed: ${formatErrorForLog(err)}`,
+    );
+    res.status(503).json({
+      error: "misconfigured",
+      error_description: "Atlas ratification config read failed",
+    });
+    return;
+  }
+
+  bearerTokenAuth(req, res, next, {
+    logPrefix: "atlas",
+    configReadFailureDescription: "Atlas ratification config read failed",
+    requireAnalyticsEnabled: false,
+    tokenDescription,
+    invalidTokenDescription: "Invalid atlas ratification token",
+  });
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -3071,6 +3140,141 @@ export function registerAnalyticsRoutes(
 // (b) coupled mere module import (e.g. an unrelated re-export in a test
 // fixture) to mutating the module-level app.
 
+function atlasActor(req: Request): string {
+  const header = req.header("X-Atlas-Actor");
+  return header?.trim() || "atlas-admin";
+}
+
+function atlasCanonicalKey(req: Request): string {
+  const value = req.params.canonicalKey;
+  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
+}
+
+function atlasCanonicalKeyFromBody(req: Request): string {
+  const value = req.body?.canonicalKey;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function handleAtlasRatificationError(
+  res: Response,
+  action: "approve" | "reject",
+  err: unknown,
+): void {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("missing or not pending")) {
+    res.status(409).json({
+      error: `atlas_candidate_not_${action}able`,
+      error_description: message,
+    });
+    return;
+  }
+  console.error(`[atlas] Failed to ${action} seed candidate:`, err);
+  res.status(500).json({ error: `Failed to ${action} atlas candidate` });
+}
+
+async function approveAtlasCandidate(
+  canonicalKey: string,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!canonicalKey) {
+    res.status(400).json({
+      error: "atlas_candidate_key_required",
+      error_description: "canonicalKey is required",
+    });
+    return;
+  }
+
+  try {
+    const candidate = await approveAtlasSeedEntry(canonicalKey, atlasActor(req));
+    orchestratorRef?.queueSourceReindex(candidate.sourceName);
+    res.json({ candidate });
+  } catch (err) {
+    handleAtlasRatificationError(res, "approve", err);
+  }
+}
+
+async function rejectAtlasCandidate(
+  canonicalKey: string,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!canonicalKey) {
+    res.status(400).json({
+      error: "atlas_candidate_key_required",
+      error_description: "canonicalKey is required",
+    });
+    return;
+  }
+
+  const reason =
+    typeof req.body?.reason === "string" && req.body.reason.trim()
+      ? req.body.reason.trim()
+      : "rejected by reviewer";
+  try {
+    const candidate = await rejectAtlasSeedEntry(
+      canonicalKey,
+      atlasActor(req),
+      reason,
+    );
+    res.json({ candidate });
+  } catch (err) {
+    handleAtlasRatificationError(res, "reject", err);
+  }
+}
+
+export function registerAtlasRatificationRoutes(app: express.Express): void {
+  app.get(
+    "/api/atlas/candidates",
+    atlasRatificationAuth,
+    async (req: Request, res: Response) => {
+      const sourceName =
+        typeof req.query.source === "string" && req.query.source.trim()
+          ? req.query.source.trim()
+          : undefined;
+      try {
+        const candidates = await listPendingAtlasSeedCandidates({ sourceName });
+        res.json({ candidates });
+      } catch (err) {
+        console.error("[atlas] Failed to list seed candidates:", err);
+        res.status(500).json({ error: "Failed to list atlas candidates" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/atlas/candidates/approve",
+    atlasRatificationAuth,
+    async (req: Request, res: Response) => {
+      await approveAtlasCandidate(atlasCanonicalKeyFromBody(req), req, res);
+    },
+  );
+
+  app.post(
+    "/api/atlas/candidates/:canonicalKey/approve",
+    atlasRatificationAuth,
+    async (req: Request, res: Response) => {
+      await approveAtlasCandidate(atlasCanonicalKey(req), req, res);
+    },
+  );
+
+  app.post(
+    "/api/atlas/candidates/reject",
+    atlasRatificationAuth,
+    async (req: Request, res: Response) => {
+      await rejectAtlasCandidate(atlasCanonicalKeyFromBody(req), req, res);
+    },
+  );
+
+  app.post(
+    "/api/atlas/candidates/:canonicalKey/reject",
+    atlasRatificationAuth,
+    async (req: Request, res: Response) => {
+      await rejectAtlasCandidate(atlasCanonicalKey(req), req, res);
+    },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
@@ -3352,6 +3556,7 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
 
   // R4-19: explicit mount — the module-load side-effect was removed so this
   // is now the single call site for the production app.
+  registerAtlasRatificationRoutes(app);
   registerAnalyticsRoutes(app);
 
   const serverName = serverCfg.server.name;
@@ -3394,12 +3599,6 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
     if (sessionReaperInterval) {
       clearInterval(sessionReaperInterval);
       sessionReaperInterval = undefined;
-    }
-    // Cancel any webhook-triggered bash-refresh timers that haven't fired
-    // yet — otherwise they can hold the event loop open past shutdown.
-    if (pendingBashRefreshTimers.size > 0) {
-      for (const handle of pendingBashRefreshTimers) clearTimeout(handle);
-      pendingBashRefreshTimers.clear();
     }
     try {
       await bashTelemetry?.flush();
