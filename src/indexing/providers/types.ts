@@ -6,6 +6,12 @@ import type { SourceConfig } from "../../types.js";
 export interface ContentItem {
   /** Unique identifier within the source (file path, thread ID, page ID, etc.) */
   id: string;
+  /**
+   * Absolute filesystem path of the item's source file, when it has one.
+   * File-backed providers set this so chunkers can resolve sibling files
+   * (e.g. inlining MDX `@/snippets/*` imports). Non-file sources omit it.
+   */
+  absolutePath?: string;
   /** Raw content to be chunked */
   content: string;
   /** Human-readable title (optional — chunker may derive one) */

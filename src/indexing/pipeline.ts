@@ -49,14 +49,31 @@ export class IndexingPipeline {
     stateToken: string,
   ): Promise<void> {
     const chunker = getChunker(this.sourceConfig.type);
-    const chunkOutputs = chunker(item.content, item.id, this.sourceConfig);
+    const chunkOutputs = chunker(
+      item.content,
+      item.id,
+      this.sourceConfig,
+      item.absolutePath,
+    );
 
     if (chunkOutputs.length === 0) {
       return;
     }
 
-    const texts = chunkOutputs.map((c) => c.content);
+    // Embed the chunk's title + heading path alongside its content so that
+    // precise symbol/prop/heading queries retain their strongest anchor.
+    // Code chunks (which may lack a title/heading) fall back to content only.
+    const texts = chunkOutputs.map((c) =>
+      [c.title, c.headingPath?.join(" > "), c.content]
+        .filter(Boolean)
+        .join("\n"),
+    );
     const embeddings = await this.embeddingProvider.embedBatch(texts);
+    if (embeddings.length !== texts.length) {
+      throw new Error(
+        `Embedding count mismatch for item ${item.id}: expected ${texts.length}, got ${embeddings.length}`,
+      );
+    }
     const sourceUrl =
       item.sourceUrl ??
       (isFileSourceConfig(this.sourceConfig)
@@ -77,9 +94,12 @@ export class IndexingPipeline {
       end_line: chunk.endLine ?? null,
       language: chunk.language ?? null,
       chunk_index: chunk.chunkIndex,
+      // Spread item.metadata FIRST so the chunk-derived headingPath always
+      // wins: it is embedded into the vector above and is load-bearing for
+      // retrieval, so a provider's metadata.headingPath must not clobber it.
       metadata: {
-        ...(chunk.headingPath ? { headingPath: chunk.headingPath } : {}),
         ...(item.metadata ?? {}),
+        ...(chunk.headingPath ? { headingPath: chunk.headingPath } : {}),
       },
       commit_sha: stateToken,
       version: this.sourceConfig.version ?? null,

@@ -1,6 +1,7 @@
 // Recursive markdown/MDX splitter
 
 import { type ChunkOutput, type SourceConfig } from "../../types.js";
+import { inlineSnippetImports } from "./snippets.js";
 
 export interface MarkdownChunk {
   content: string;
@@ -321,12 +322,18 @@ function applyOverlap(chunks: string[], overlapChars: number): string[] {
  *
  * @param content - The full markdown/MDX file content
  * @param filePath - Path to the source file (used for metadata)
+ * @param config - Source configuration (chunk sizing, etc.)
+ * @param absoluteFilePath - Absolute filesystem path of the source file, when
+ *   available. Used to resolve and inline MDX `@/snippets/*` imports before
+ *   stripping. Falls back to `filePath` when that is itself absolute. When no
+ *   absolute path is available, snippet inlining is skipped.
  * @returns Array of MarkdownChunk objects
  */
 export function chunkMarkdown(
   content: string,
   filePath: string,
   config: SourceConfig,
+  absoluteFilePath?: string,
 ): ChunkOutput[] {
   if (!content || !content.trim()) {
     return [];
@@ -340,8 +347,15 @@ export function chunkMarkdown(
   // Parse frontmatter
   const { title: fmTitle, body } = parseFrontmatter(content);
 
+  // Inline MDX snippet imports (@/snippets/*) before stripping, so
+  // snippet-composed pages index with their real content instead of empty.
+  // Prefer an explicit absolute path; fall back to filePath when it is already
+  // absolute. inlineSnippetImports safely no-ops on non-absolute paths.
+  const snippetBasePath = absoluteFilePath ?? filePath;
+  const inlinedBody = inlineSnippetImports(body, snippetBasePath);
+
   // Strip MDX syntax
-  const cleanBody = stripMdx(body);
+  const cleanBody = stripMdx(inlinedBody);
 
   if (!cleanBody.trim()) {
     return [];
@@ -375,7 +389,11 @@ export function chunkMarkdown(
     const headingPath =
       pos >= 0 ? getHeadingPathAtPosition(cleanBody, pos) : [];
     if (pos >= 0) {
-      searchFrom = pos;
+      // Advance past the matched chunk. Using `pos` alone leaves the cursor at
+      // the start of this match, so when a later chunk has byte-identical text
+      // (repeated boilerplate / duplicate sections) the next indexOf re-finds
+      // THIS position and the later chunk inherits the wrong heading path.
+      searchFrom = pos + rawText.length;
     }
 
     chunks.push({

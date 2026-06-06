@@ -131,7 +131,7 @@ export class FileDataProvider implements DataProvider {
           this.config.type,
         );
         if (hasLowSemanticValue(content)) continue;
-        items.push({ id: relPath, content, metadata });
+        items.push({ id: relPath, absolutePath: absPath, content, metadata });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`${this.logPrefix} Failed to read ${relPath}: ${msg}`);
@@ -281,7 +281,7 @@ export class FileDataProvider implements DataProvider {
           skippedFiles.push(relPath);
           continue;
         }
-        items.push({ id: relPath, content, metadata });
+        items.push({ id: relPath, absolutePath: absPath, content, metadata });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`${this.logPrefix} Failed to read ${relPath}: ${msg}`);
