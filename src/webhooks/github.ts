@@ -176,7 +176,9 @@ function hasPathTriggers(
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
 }
 
 function isPushCommit(value: unknown): value is PushCommit {
@@ -277,11 +279,9 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
       req.rawHeaders,
     );
 
-    const duplicateHeader = [
-      signatureHeader,
-      eventHeader,
-      deliveryHeader,
-    ].find((header): header is DuplicateHeader => !header.ok);
+    const duplicateHeader = [signatureHeader, eventHeader, deliveryHeader].find(
+      (header): header is DuplicateHeader => !header.ok,
+    );
     if (duplicateHeader) {
       recordWebhookDelivery({
         source: "github",

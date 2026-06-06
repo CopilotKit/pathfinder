@@ -847,15 +847,13 @@ export async function getAtlasRetrievalMetrics(
   const atlasTotal = (atlas.total as number | undefined) ?? 0;
   const successful = (atlas.successful as number | undefined) ?? 0;
   const empty = (atlas.empty as number | undefined) ?? 0;
-  const totalUser =
-    (totalUserRes.rows[0]?.total as number | undefined) ?? 0;
+  const totalUser = (totalUserRes.rows[0]?.total as number | undefined) ?? 0;
 
   return {
     atlas_queries_window: atlasTotal,
     atlas_successful_queries_window: successful,
     atlas_empty_queries_window: empty,
-    atlas_retrieval_rate_window:
-      atlasTotal > 0 ? successful / atlasTotal : 0,
+    atlas_retrieval_rate_window: atlasTotal > 0 ? successful / atlasTotal : 0,
     total_user_queries_window: totalUser,
   };
 }

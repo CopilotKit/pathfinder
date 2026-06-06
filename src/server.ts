@@ -2498,7 +2498,9 @@ function bearerTokenAuth(
   try {
     token = getAnalyticsToken();
   } catch (err) {
-    console.error(`[${opts.logPrefix}] auth misconfigured: ${formatErrorForLog(err)}`);
+    console.error(
+      `[${opts.logPrefix}] auth misconfigured: ${formatErrorForLog(err)}`,
+    );
     res.status(503).json({
       error: "misconfigured",
       error_description: opts.tokenDescription,
@@ -3186,7 +3188,10 @@ async function approveAtlasCandidate(
   }
 
   try {
-    const candidate = await approveAtlasSeedEntry(canonicalKey, atlasActor(req));
+    const candidate = await approveAtlasSeedEntry(
+      canonicalKey,
+      atlasActor(req),
+    );
     orchestratorRef?.queueSourceReindex(candidate.sourceName);
     res.json({ candidate });
   } catch (err) {

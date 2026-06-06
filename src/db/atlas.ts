@@ -513,9 +513,7 @@ export async function clearAtlasCachePageStale(
     [
       input.pageKey,
       input.contentHash,
-      input.generatedSeedIds
-        ? JSON.stringify(input.generatedSeedIds)
-        : null,
+      input.generatedSeedIds ? JSON.stringify(input.generatedSeedIds) : null,
       JSON.stringify(cacheProvenance(input.content, input.provenance)),
       input.generatedAt ?? new Date(),
     ],

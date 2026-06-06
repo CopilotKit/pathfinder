@@ -629,7 +629,9 @@ export class IndexingOrchestrator {
     }
 
     const atlasSourceNames = new Set(
-      serverCfg2.sources.filter(isAtlasSourceConfig).map((source) => source.name),
+      serverCfg2.sources
+        .filter(isAtlasSourceConfig)
+        .map((source) => source.name),
     );
     const atlasCacheInvalidationSourceNames = affectedSourceNames.filter(
       (sourceName) => !atlasSourceNames.has(sourceName),
@@ -723,74 +725,81 @@ export class IndexingOrchestrator {
     githubToken?: string,
   ): Promise<boolean> {
     const lockKey = `${sourceConfig.type}:${sourceConfig.name}`;
-    return this.withSourceLock(lockKey, async () => {
-      const providerOptions: ProviderOptions = {
-        cloneDir,
-        githubToken,
-        slackBotToken: getConfig().slackBotToken,
-        discordBotToken: getConfig().discordBotToken,
-        notionToken: getConfig().notionToken,
-      };
-      const provider = getProvider(sourceConfig.type)(
-        sourceConfig,
-        providerOptions,
-      );
-      const pipeline = new IndexingPipeline(embeddingProvider, sourceConfig);
-
-      await this.setIndexStatus(
-        sourceConfig.type,
-        sourceConfig.name,
-        "indexing",
-      );
-
-      try {
-        const state = await getIndexState(sourceConfig.type, sourceConfig.name);
-        let result;
-        if (state?.last_commit_sha) {
-          result = await provider.incrementalAcquire(state.last_commit_sha);
-        } else {
-          result = await provider.fullAcquire();
-        }
-
-        if (result.removedIds.length > 0) {
-          await pipeline.removeItems(result.removedIds);
-        }
-        if (result.items.length > 0) {
-          await pipeline.indexItems(result.items, result.stateToken);
-        }
-
-        await upsertIndexState({
-          source_type: sourceConfig.type,
-          source_key: sourceConfig.name,
-          last_commit_sha: result.stateToken,
-          last_indexed_at: new Date(),
-          status: "idle",
-        });
-        console.log(
-          `[orchestrator] Indexing complete for ${sourceConfig.name}`,
+    return this.withSourceLock(
+      lockKey,
+      async () => {
+        const providerOptions: ProviderOptions = {
+          cloneDir,
+          githubToken,
+          slackBotToken: getConfig().slackBotToken,
+          discordBotToken: getConfig().discordBotToken,
+          notionToken: getConfig().notionToken,
+        };
+        const provider = getProvider(sourceConfig.type)(
+          sourceConfig,
+          providerOptions,
         );
-        return true;
-      } catch (err) {
-        console.error(
-          `[orchestrator] Indexing failed for ${sourceConfig.name}:`,
-          err,
+        const pipeline = new IndexingPipeline(embeddingProvider, sourceConfig);
+
+        await this.setIndexStatus(
+          sourceConfig.type,
+          sourceConfig.name,
+          "indexing",
         );
+
         try {
-          await this.setIndexStatus(
+          const state = await getIndexState(
             sourceConfig.type,
             sourceConfig.name,
-            "error",
-            err instanceof Error ? err.message : String(err),
           );
-        } catch (statusErr) {
+          let result;
+          if (state?.last_commit_sha) {
+            result = await provider.incrementalAcquire(state.last_commit_sha);
+          } else {
+            result = await provider.fullAcquire();
+          }
+
+          if (result.removedIds.length > 0) {
+            await pipeline.removeItems(result.removedIds);
+          }
+          if (result.items.length > 0) {
+            await pipeline.indexItems(result.items, result.stateToken);
+          }
+
+          await upsertIndexState({
+            source_type: sourceConfig.type,
+            source_key: sourceConfig.name,
+            last_commit_sha: result.stateToken,
+            last_indexed_at: new Date(),
+            status: "idle",
+          });
+          console.log(
+            `[orchestrator] Indexing complete for ${sourceConfig.name}`,
+          );
+          return true;
+        } catch (err) {
           console.error(
-            "[orchestrator] Failed to update index status:",
-            statusErr,
+            `[orchestrator] Indexing failed for ${sourceConfig.name}:`,
+            err,
           );
+          try {
+            await this.setIndexStatus(
+              sourceConfig.type,
+              sourceConfig.name,
+              "error",
+              err instanceof Error ? err.message : String(err),
+            );
+          } catch (statusErr) {
+            console.error(
+              "[orchestrator] Failed to update index status:",
+              statusErr,
+            );
+          }
+          return false;
         }
-        return false;
-      }
-    }, false);
+      },
+      false,
+    );
   }
 
   /**

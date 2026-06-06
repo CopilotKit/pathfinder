@@ -340,7 +340,9 @@ describe("atlas CLI", () => {
   it("honors CLI options and prints raw JSON when requested", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 0, result: {} }))
+      .mockResolvedValueOnce(
+        jsonResponse({ jsonrpc: "2.0", id: 0, result: {} }),
+      )
       .mockResolvedValueOnce(new Response(null, { status: 202 }))
       .mockResolvedValueOnce(
         jsonResponse({
@@ -410,7 +412,11 @@ describe("atlas CLI", () => {
     ["--limit", "-1", "limit must be a positive integer"],
     ["--limit", "0", "limit must be a positive integer"],
     ["--limit", "NaN", "limit must be a positive integer"],
-    ["--min-score", "not-a-score", "min-score must be a finite number in [0, 1]"],
+    [
+      "--min-score",
+      "not-a-score",
+      "min-score must be a finite number in [0, 1]",
+    ],
     ["--min-score", "0.5abc", "min-score must be a finite number in [0, 1]"],
     ["--min-score", "2", "min-score must be a finite number in [0, 1]"],
     ["--min-score", "-0.1", "min-score must be a finite number in [0, 1]"],
@@ -444,10 +450,9 @@ describe("atlas CLI", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        sseResponse(
-          'data:{"jsonrpc":"2.0","id":0,"result":{}}\n\n',
-          { sessionId: "session-1" },
-        ),
+        sseResponse('data:{"jsonrpc":"2.0","id":0,"result":{}}\n\n', {
+          sessionId: "session-1",
+        }),
       )
       .mockResolvedValueOnce(new Response(null, { status: 202 }))
       .mockResolvedValueOnce(

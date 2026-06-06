@@ -70,10 +70,7 @@ export class AtlasDataProvider implements DataProvider {
     changedOnOrBefore?: Date;
     repositories?: AtlasRepositoryFilter[];
   }): Promise<ContentItem[]> {
-    const entries = await listIndexableAtlasContent(
-      this.config.name,
-      query,
-    );
+    const entries = await listIndexableAtlasContent(this.config.name, query);
     return entries.map((entry) => {
       if (entry.kind === "seed") {
         return {

@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import express from "express";
 import http from "node:http";
 import { PGlite } from "@electric-sql/pglite";
@@ -103,7 +111,8 @@ function request(
       return;
     }
 
-    const body = opts.body === undefined ? undefined : JSON.stringify(opts.body);
+    const body =
+      opts.body === undefined ? undefined : JSON.stringify(opts.body);
     const req = http.request(
       {
         hostname: "127.0.0.1",
@@ -112,7 +121,9 @@ function request(
         method,
         headers: {
           ...(body ? { "Content-Type": "application/json" } : {}),
-          ...(body ? { "Content-Length": Buffer.byteLength(body).toString() } : {}),
+          ...(body
+            ? { "Content-Length": Buffer.byteLength(body).toString() }
+            : {}),
           ...opts.headers,
         },
       },
@@ -142,7 +153,9 @@ async function startServer(): Promise<http.Server> {
   return server;
 }
 
-async function closeServer(serverToClose: http.Server | undefined): Promise<void> {
+async function closeServer(
+  serverToClose: http.Server | undefined,
+): Promise<void> {
   if (!serverToClose || !serverToClose.listening) {
     return;
   }
@@ -282,13 +295,18 @@ describe("Atlas ratification endpoints", () => {
     });
     server = await startServer();
 
-    const approved = await request(server, "POST", "/api/atlas/candidates/approve", {
-      headers: {
-        Authorization: "Bearer secret",
-        "X-Atlas-Actor": "reviewer@example.test",
+    const approved = await request(
+      server,
+      "POST",
+      "/api/atlas/candidates/approve",
+      {
+        headers: {
+          Authorization: "Bearer secret",
+          "X-Atlas-Actor": "reviewer@example.test",
+        },
+        body: { canonicalKey },
       },
-      body: { canonicalKey },
-    });
+    );
 
     expect(approved.status).toBe(200);
     expect(JSON.parse(approved.body).candidate).toMatchObject({
@@ -407,13 +425,18 @@ describe("Atlas ratification endpoints", () => {
     await approveAtlasSeedEntry("runtime:approved", "reviewer");
     server = await startServer();
 
-    await request(server, "POST", "/api/atlas/candidates/runtime%3Arejected/reject", {
-      headers: {
-        Authorization: "Bearer secret",
-        "X-Atlas-Actor": "reviewer",
+    await request(
+      server,
+      "POST",
+      "/api/atlas/candidates/runtime%3Arejected/reject",
+      {
+        headers: {
+          Authorization: "Bearer secret",
+          "X-Atlas-Actor": "reviewer",
+        },
+        body: { reason: "bad evidence" },
       },
-      body: { reason: "bad evidence" },
-    });
+    );
 
     const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
     const result = await provider.fullAcquire();

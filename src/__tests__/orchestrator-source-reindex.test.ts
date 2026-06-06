@@ -176,7 +176,9 @@ describe("IndexingOrchestrator.queueSourceReindex", () => {
     orchestrator.onReindexComplete = completeSpy;
     vi.mocked(getProvider).mockReturnValueOnce(() => ({
       fullAcquire: vi.fn().mockRejectedValue(new Error("provider failed")),
-      incrementalAcquire: vi.fn().mockRejectedValue(new Error("provider failed")),
+      incrementalAcquire: vi
+        .fn()
+        .mockRejectedValue(new Error("provider failed")),
       getCurrentStateToken: vi.fn().mockResolvedValue("test-token"),
     }));
 

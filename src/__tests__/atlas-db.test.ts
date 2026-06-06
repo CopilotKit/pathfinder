@@ -387,14 +387,11 @@ describe("Atlas DB helpers", () => {
       ["stale", new Date("2026-01-02T00:00:00Z")],
     );
 
-    expect(await getAtlasStateToken("atlas")).toBe(
-      "2026-01-02T00:00:00.000Z",
-    );
+    expect(await getAtlasStateToken("atlas")).toBe("2026-01-02T00:00:00.000Z");
     expect(
-      await listRemovedAtlasContentIds(
-        "atlas",
-        { changedAfter: new Date("2026-01-01T12:00:00Z") },
-      ),
+      await listRemovedAtlasContentIds("atlas", {
+        changedAfter: new Date("2026-01-01T12:00:00Z"),
+      }),
     ).toEqual(["atlas-cache:stale"]);
   });
 
