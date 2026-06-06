@@ -37,6 +37,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "seed-index": "tsx scripts/seed-index.ts",
