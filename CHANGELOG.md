@@ -1,5 +1,13 @@
 # @copilotkit/pathfinder
 
+## 1.14.0
+
+### Minor Changes
+
+- **`atlas` CLI**: New first-party command-line client shipped as `bin.atlas`. `atlas search` queries a Pathfinder knowledge server and `atlas feedback` submits feedback on results, with hardened `tools/call` response handling.
+- **`prepublishOnly` Build Guard**: Added a `prepublishOnly` script so the published tarball always ships a fresh `dist/` (including `dist/atlas-cli.js`), preventing stale or missing build output from being released.
+- **Atlas Foundation**: Off-by-default codebase-knowledge layer — additive schema, ratification endpoints, gardener, and webhook PR ingestion. Disabled unless explicitly enabled, so existing deployments are unaffected.
+
 ## 1.13.3
 
 ### Patch Changes
