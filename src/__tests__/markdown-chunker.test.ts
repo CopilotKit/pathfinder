@@ -193,6 +193,53 @@ describe("chunkMarkdown", () => {
     expect(lastChunk.headingPath).toBeDefined();
   });
 
+  it("binds the correct heading path when identical text repeats under different headings", () => {
+    // Two sections contain a byte-identical paragraph, but the second
+    // occurrence lives under an additional (deeper) heading. Heading-path
+    // assignment locates each chunk by searching for its text in the source;
+    // if the search cursor is not advanced past a matched chunk, the second
+    // occurrence re-finds the FIRST position and inherits the WRONG heading
+    // path. Since the heading path is embedded into the retrieval vector, a
+    // mis-bind degrades search — so this must resolve to the deeper section.
+    const repeated = "Install the package then configure the client object. "
+      .repeat(2)
+      .trim();
+    const filler = "Another shared block of text that appears multiple times. "
+      .repeat(3)
+      .trim();
+    const content = [
+      "## Common",
+      "",
+      filler,
+      "",
+      "## Delta",
+      "",
+      repeated, // first occurrence: directly under Delta
+      "",
+      "#### Setup",
+      "",
+      filler,
+      "",
+      repeated, // second occurrence: under Delta -> Setup
+    ].join("\n");
+
+    const chunks = chunkMarkdown(
+      content,
+      "test.md",
+      mkConfig({ target_tokens: 100, overlap_tokens: 0 }),
+    );
+
+    // The last chunk whose body is the repeated paragraph is the one that
+    // physically lives under "#### Setup", so its heading path must include
+    // BOTH "Delta" and "Setup" — not just "Delta" (the first occurrence's
+    // shallower path).
+    const repeatedChunks = chunks.filter((c) => c.content.trim() === repeated);
+    expect(repeatedChunks.length).toBeGreaterThanOrEqual(1);
+    const setupChunk = repeatedChunks[repeatedChunks.length - 1];
+    expect(setupChunk.headingPath).toContain("Delta");
+    expect(setupChunk.headingPath).toContain("Setup");
+  });
+
   // ── Code block preservation ─────────────────────────────────────────
 
   it("does not split inside fenced code blocks", () => {

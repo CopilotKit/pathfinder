@@ -15,6 +15,10 @@ import {
   cleanupOldQueryLogs,
   REDACTED_QUERY_TEXT,
   P95_LATENCY_ROW_CAP,
+  LOW_CONFIDENCE_SCORE_THRESHOLD,
+  normalizeRequestSource,
+  DEFAULT_REQUEST_SOURCE,
+  REQUEST_SOURCE_VALUES,
 } from "../db/analytics.js";
 import type { QueryLogEntry } from "../db/analytics.js";
 
@@ -39,6 +43,7 @@ describe("logQuery", () => {
     latency_ms: 42,
     source_name: "docs",
     session_id: "sess-123",
+    request_source: "user",
   };
 
   it("inserts a row with all fields", async () => {
@@ -48,6 +53,7 @@ describe("logQuery", () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toContain("INSERT INTO query_log");
+    expect(sql).toContain("request_source");
     expect(params).toEqual([
       "search-docs",
       "how to install",
@@ -56,6 +62,7 @@ describe("logQuery", () => {
       42,
       "docs",
       "sess-123",
+      "user",
     ]);
   });
 
@@ -76,6 +83,7 @@ describe("logQuery", () => {
       baseEntry.latency_ms,
       baseEntry.source_name,
       baseEntry.session_id,
+      baseEntry.request_source,
     ]);
     // And pin the literal so the constant can never silently drift to a
     // different sentinel that downstream reads wouldn't recognize.
@@ -95,6 +103,45 @@ describe("logQuery", () => {
     expect(params[3]).toBeNull(); // top_score
     expect(params[5]).toBeNull(); // source_name
     expect(params[6]).toBeNull(); // session_id
+  });
+
+  it("persists the session_id passed on the entry (no longer hardcoded null)", async () => {
+    // Regression for the observability gap: session_id used to be dropped
+    // (always null in query_log). The writer must persist whatever the tool
+    // handler threads through from the MCP session context.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery({ ...baseEntry, session_id: "live-session-42" });
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[6]).toBe("live-session-42");
+  });
+
+  it("coerces an unknown request_source to the default ('user')", async () => {
+    // The column should only ever hold a known origin going forward. A bogus
+    // header value must not land verbatim — it normalizes to 'user'.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery({ ...baseEntry, request_source: "bogus-origin" });
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[7]).toBe("user");
+  });
+
+  it("coerces an absent request_source to the default ('user')", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const { request_source: _omit, ...noSource } = baseEntry;
+    void _omit;
+    await logQuery(noSource);
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[7]).toBe("user");
+  });
+
+  it("persists a synthetic request_source verbatim", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery({ ...baseEntry, request_source: "synthetic" });
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[7]).toBe("synthetic");
   });
 });
 
@@ -655,7 +702,8 @@ describe("getToolCounts", () => {
 
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toContain("split_part(tool_name");
-    expect(params).toEqual([7]);
+    // Default request-source filter appends "user" (real-users-by-default).
+    expect(params).toEqual([7, "user"]);
   });
 
   it("returns empty array when no queries exist", async () => {
@@ -1211,7 +1259,8 @@ describe("getToolCounts with from/to range", () => {
     expect(sql).toContain("created_at >=");
     expect(sql).toContain("created_at <=");
     expect(sql).not.toContain("NOW() - INTERVAL");
-    expect(params).toEqual([from, to]);
+    // Default request-source filter appends "user" after the range params.
+    expect(params).toEqual([from, to, "user"]);
   });
 
   it("falls back to UTC-calendar-day rolling window when no range filter provided", async () => {
@@ -1226,7 +1275,8 @@ describe("getToolCounts with from/to range", () => {
     expect(sql).toContain("(NOW() AT TIME ZONE 'UTC')::date");
     expect(sql).toContain("LEAST");
     expect(sql).not.toContain("NOW() - INTERVAL");
-    expect(params).toEqual([14]);
+    // Default request-source filter appends "user" after the days param.
+    expect(params).toEqual([14, "user"]);
   });
 });
 
@@ -1326,5 +1376,206 @@ describe("getTopQueries null avg_result_count", () => {
 
     expect(result[0].avg_result_count).toBe(0);
     expect(result[0].avg_top_score).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeRequestSource
+// ---------------------------------------------------------------------------
+
+describe("normalizeRequestSource", () => {
+  it("passes through the canonical values", () => {
+    for (const v of REQUEST_SOURCE_VALUES) {
+      expect(normalizeRequestSource(v)).toBe(v);
+    }
+  });
+
+  it("lower-cases and trims before matching", () => {
+    expect(normalizeRequestSource(" Synthetic ")).toBe("synthetic");
+    expect(normalizeRequestSource("ANALYSIS")).toBe("analysis");
+  });
+
+  it("falls back to the default for unknown/absent values", () => {
+    expect(normalizeRequestSource("robot")).toBe(DEFAULT_REQUEST_SOURCE);
+    expect(normalizeRequestSource("")).toBe(DEFAULT_REQUEST_SOURCE);
+    expect(normalizeRequestSource(undefined)).toBe(DEFAULT_REQUEST_SOURCE);
+    expect(normalizeRequestSource(null)).toBe(DEFAULT_REQUEST_SOURCE);
+  });
+
+  it("default is 'user'", () => {
+    expect(DEFAULT_REQUEST_SOURCE).toBe("user");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Low-confidence metric: result_count > 0 AND top_score < threshold
+// ---------------------------------------------------------------------------
+
+describe("getAnalyticsSummary low-confidence metric", () => {
+  function mockSummaryQueries(
+    summaryRow: Record<string, unknown> = {
+      total: 100,
+      empty: 5,
+      low_confidence: 12,
+      avg_latency: 50,
+    },
+  ) {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] }) // total
+      .mockResolvedValueOnce({ rows: [summaryRow] }) // windowed summary
+      .mockResolvedValueOnce({ rows: [] }) // latency rows
+      .mockResolvedValueOnce({ rows: [] }) // by source
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
+  }
+
+  it("surfaces low_confidence_count_window and rate from the summary subquery", async () => {
+    mockSummaryQueries();
+    const result = await getAnalyticsSummary({});
+
+    expect(result.low_confidence_count_window).toBe(12);
+    // 12 / 100
+    expect(result.low_confidence_rate_window).toBeCloseTo(0.12);
+  });
+
+  it("low_confidence_rate_window is 0 when the window has no rows", async () => {
+    mockSummaryQueries({
+      total: 0,
+      empty: 0,
+      low_confidence: 0,
+      avg_latency: 0,
+    });
+    const result = await getAnalyticsSummary({});
+
+    expect(result.low_confidence_count_window).toBe(0);
+    expect(result.low_confidence_rate_window).toBe(0);
+  });
+
+  it("counts low confidence as result_count > 0 AND top_score < threshold (NULL excluded)", async () => {
+    // The summary subquery must encode the exact predicate the brief calls
+    // for, and bind the threshold constant rather than inlining 0.5 so the
+    // module constant is the single source of truth. top_score IS NOT NULL is
+    // part of the FILTER so browse/keyword rows (no score) don't count.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Index 1 is the summary subquery.
+    const [sql, params] = mockQuery.mock.calls[1];
+    expect(sql).toMatch(/result_count > 0/);
+    expect(sql).toMatch(/top_score IS NOT NULL/);
+    expect(sql).toMatch(/top_score < \$\d+/);
+    expect(params).toContain(LOW_CONFIDENCE_SCORE_THRESHOLD);
+  });
+
+  it("threshold constant is 0.5 (matches the brief)", () => {
+    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(0.5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Request-source audience filtering (default = real users)
+// ---------------------------------------------------------------------------
+
+describe("getAnalyticsSummary request-source audience", () => {
+  function mockSummaryQueries() {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 500 }] }) // total
+      .mockResolvedValueOnce({
+        rows: [{ total: 100, empty: 5, low_confidence: 0, avg_latency: 50 }],
+      }) // windowed summary
+      .mockResolvedValueOnce({ rows: [] }) // latency rows
+      .mockResolvedValueOnce({ rows: [] }) // by source
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
+  }
+
+  it("defaults to real users: every windowed subquery includes (request_source = 'user' OR IS NULL)", async () => {
+    // No request_source on the filter → KPIs count real users only, but still
+    // include untagged historical rows (request_source IS NULL) so the
+    // back-compat guarantee holds.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    // Indexes 1..4 are the windowed subqueries (summary, latency, by-source,
+    // per-day). Each must carry the default request-source clause + bind "user".
+    for (let i = 1; i <= 4; i++) {
+      const [sql, params] = mockQuery.mock.calls[i];
+      expect(sql).toContain("request_source = $");
+      expect(sql).toContain("request_source IS NULL");
+      expect(params).toContain("user");
+    }
+  });
+
+  it("total_queries (index 0) is all-time and unaffected by the request-source default", async () => {
+    // The all-time total card counts every row regardless of origin — only the
+    // windowed cards default to real users.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("request_source");
+  });
+
+  it("request_source: 'all' applies NO request-source clause (every origin)", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({ request_source: "all" });
+
+    for (let i = 1; i <= 4; i++) {
+      const [sql] = mockQuery.mock.calls[i];
+      expect(sql).not.toContain("request_source");
+    }
+  });
+
+  it("request_source: 'synthetic' uses an exact-match clause (NULL excluded)", async () => {
+    mockSummaryQueries();
+    await getAnalyticsSummary({ request_source: "synthetic" });
+
+    for (let i = 1; i <= 4; i++) {
+      const [sql, params] = mockQuery.mock.calls[i];
+      expect(sql).toContain("request_source = $");
+      // Exact match only — NULL rows are real users, not synthetic.
+      expect(sql).not.toContain("request_source IS NULL");
+      expect(params).toContain("synthetic");
+    }
+  });
+});
+
+describe("request-source clause on top/empty/tool-count readers", () => {
+  it("getTopQueries defaults to real users (request_source = 'user' OR IS NULL)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50);
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("request_source = $");
+    expect(sql).toContain("request_source IS NULL");
+    expect(params).toContain("user");
+  });
+
+  it("getEmptyQueries defaults to real users", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getEmptyQueries(7, 50);
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("request_source = $");
+    expect(sql).toContain("request_source IS NULL");
+    expect(params).toContain("user");
+  });
+
+  it("getToolCounts honors request_source: 'analysis' as exact match", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolCounts(7, { request_source: "analysis" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("request_source = $");
+    expect(sql).not.toContain("request_source IS NULL");
+    expect(params).toContain("analysis");
+  });
+
+  it("getTopQueries with request_source: 'all' applies no request-source clause", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50, { request_source: "all" });
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain("request_source");
   });
 });
