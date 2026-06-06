@@ -43,3 +43,4 @@ import { chunkQa } from "./qa.js";
 registerChunker("slack", chunkQa);
 registerChunker("discord", chunkQa);
 registerChunker("notion", chunkMarkdown);
+registerChunker("atlas", chunkMarkdown);

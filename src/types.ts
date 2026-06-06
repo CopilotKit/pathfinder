@@ -152,12 +152,31 @@ export const NotionSourceConfigSchema = z.object({
   include_properties: z.boolean().optional().default(true),
 });
 
+export const AtlasSourceConfigSchema = z.object({
+  ...BaseSourceFields,
+  type: z.literal("atlas"),
+  seed_path: z.string().min(1).optional(),
+  cache_namespace: z.string().min(1).optional(),
+  path: z.undefined().optional(),
+  file_patterns: z.undefined().optional(),
+  repositories: z
+    .array(
+      z.object({
+        repo_url: z.string().url(),
+        refs: z.array(z.string().min(1)).optional(),
+        subsystems: z.array(z.string().min(1)).optional(),
+      }),
+    )
+    .optional(),
+});
+
 // Union: TypeScript infers the right shape based on `type`
 export const SourceConfigSchema = z.discriminatedUnion("type", [
   FileSourceConfigSchema,
   SlackSourceConfigSchema,
   DiscordSourceConfigSchema,
   NotionSourceConfigSchema,
+  AtlasSourceConfigSchema,
 ]);
 
 // ── Tool configuration schemas ────────────────────────────────────────────────
@@ -385,6 +404,13 @@ export const ServerConfigSchema = z
           path: ["tools"],
         });
       }
+      if (tool.type === "search" && !sourceNames.has(tool.source)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Tool "${tool.name}" references source "${tool.source}" which is not defined in sources.`,
+          path: ["tools"],
+        });
+      }
       if (tool.type === "bash") {
         for (const src of tool.sources) {
           if (!sourceNames.has(src)) {
@@ -439,6 +465,7 @@ export type SlackSourceConfig = z.infer<typeof SlackSourceConfigSchema>;
 export type DiscordChannelConfig = z.infer<typeof DiscordChannelConfigSchema>;
 export type DiscordSourceConfig = z.infer<typeof DiscordSourceConfigSchema>;
 export type NotionSourceConfig = z.infer<typeof NotionSourceConfigSchema>;
+export type AtlasSourceConfig = z.infer<typeof AtlasSourceConfigSchema>;
 export type SearchToolConfig = z.infer<typeof SearchToolConfigSchema>;
 export type BashToolConfig = z.infer<typeof BashToolConfigSchema>;
 export type CollectToolConfig = z.infer<typeof CollectToolConfigSchema>;
@@ -485,6 +512,12 @@ export function isNotionSourceConfig(
   config: SourceConfig,
 ): config is NotionSourceConfig {
   return config.type === "notion";
+}
+
+export function isAtlasSourceConfig(
+  config: SourceConfig,
+): config is AtlasSourceConfig {
+  return config.type === "atlas";
 }
 
 // ── Data types: unified chunk ─────────────────────────────────────────────────

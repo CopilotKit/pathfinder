@@ -116,6 +116,59 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_source ON webhook_deliveries (source);
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_delivered_at ON webhook_deliveries (delivered_at);
+
+-- Atlas durable seed knowledge. Seed rows are the reviewed source of truth for
+-- non-reconstructable architecture and rationale; derived pages remain cache.
+CREATE TABLE IF NOT EXISTS atlas_seed_entries (
+    id              SERIAL PRIMARY KEY,
+    canonical_key   TEXT NOT NULL,
+    source_name     TEXT NOT NULL,
+    repo_url        TEXT,
+    ref             TEXT,
+    subsystem       TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    title           TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    provenance     JSONB NOT NULL DEFAULT '{}',
+    evidence       JSONB NOT NULL DEFAULT '[]',
+    approved_by     TEXT,
+    approved_at     TIMESTAMPTZ,
+    rejected_by     TEXT,
+    rejected_at     TIMESTAMPTZ,
+    rejection_reason TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT atlas_seed_entries_canonical_key_uniq UNIQUE (canonical_key),
+    CONSTRAINT atlas_seed_entries_status_check CHECK (status IN ('pending', 'approved', 'rejected'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_atlas_seed_entries_status ON atlas_seed_entries (status);
+CREATE INDEX IF NOT EXISTS idx_atlas_seed_entries_source_name ON atlas_seed_entries (source_name);
+CREATE INDEX IF NOT EXISTS idx_atlas_seed_entries_repo_ref_subsystem ON atlas_seed_entries (repo_url, ref, subsystem);
+
+-- Atlas derived pages. These rows describe disposable generated pages whose
+-- retrieval projection is stored in chunks.
+CREATE TABLE IF NOT EXISTS atlas_cache_pages (
+    id              SERIAL PRIMARY KEY,
+    page_key        TEXT NOT NULL,
+    source_name     TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    stale          BOOLEAN NOT NULL DEFAULT FALSE,
+    stale_reason    TEXT,
+    generated_seed_ids JSONB NOT NULL DEFAULT '[]',
+    provenance      JSONB NOT NULL DEFAULT '{}',
+    generated_at    TIMESTAMPTZ,
+    error_at        TIMESTAMPTZ,
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT atlas_cache_pages_page_key_uniq UNIQUE (page_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_atlas_cache_pages_source_name ON atlas_cache_pages (source_name);
+CREATE INDEX IF NOT EXISTS idx_atlas_cache_pages_stale ON atlas_cache_pages (stale);
+CREATE INDEX IF NOT EXISTS idx_atlas_cache_pages_generated_at ON atlas_cache_pages (generated_at);
 `;
 
   return coreSql;

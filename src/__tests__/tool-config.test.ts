@@ -317,6 +317,28 @@ describe("ServerConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects search tool referencing undefined source", () => {
+    const config = {
+      ...minimalConfig,
+      tools: [
+        {
+          name: "search-docs",
+          type: "search",
+          description: "Search",
+          source: "missing-docs",
+          default_limit: 5,
+          max_limit: 20,
+          result_format: "docs",
+        },
+      ],
+    };
+    const result = ServerConfigSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toContain(
+      'Tool "search-docs" references source "missing-docs"',
+    );
+  });
+
   it("rejects bash tool referencing undefined source", () => {
     const config = {
       ...minimalConfig,
