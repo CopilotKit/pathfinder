@@ -217,6 +217,29 @@ describe("GitHub webhook handler", () => {
       expect(orchestrator.queueSourceReindex).not.toHaveBeenCalled();
     });
 
+    it("logs failed non-blocking delivery audit writes", async () => {
+      const auditError = new Error("audit db unavailable");
+      mockRecordWebhookDelivery.mockRejectedValueOnce(auditError);
+      const consoleErrorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      const { req, res } = mockReqRes(makePushPayload());
+
+      try {
+        await handler(req, res);
+        await Promise.resolve();
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith({ queued: true });
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          "[webhook] Failed to record GitHub delivery:",
+          auditError,
+        );
+      } finally {
+        consoleErrorSpy.mockRestore();
+      }
+    });
+
     it("rejects duplicate signature headers before verification", async () => {
       const payload = makePushPayload();
       const buf = Buffer.from(JSON.stringify(payload));
