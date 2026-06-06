@@ -129,7 +129,7 @@ describe("atlas CLI", () => {
       method: "tools/call",
       id: 1,
       params: {
-        name: "search",
+        name: "atlas-search",
         arguments: {
           query: "provider boundary",
         },
@@ -481,6 +481,91 @@ describe("atlas CLI", () => {
     expect(stderr).toBe("");
     expect(stdout).toContain("multiline SSE result");
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("skips empty SSE data frames without crashing", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        sseResponse('data:{"jsonrpc":"2.0","id":0,"result":{}}\n\n', {
+          sessionId: "session-1",
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(
+        sseResponse(
+          [
+            ": keepalive comment",
+            "data:",
+            "",
+            'data:{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"survived the keepalive"}]}}',
+            "",
+          ].join("\n"),
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const exitCode = await runAtlasCli(["search", "provider boundary"], {
+      stdout: (text) => {
+        stdout += text;
+      },
+      stderr: (text) => {
+        stderr += text;
+      },
+    });
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("survived the keepalive");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("defaults to the Atlas search tool configured in pathfinder.example.yaml", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            jsonrpc: "2.0",
+            id: 0,
+            result: { protocolVersion: "2025-03-26" },
+          },
+          { sessionId: "session-1" },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            content: [{ type: "text", text: "default tool result" }],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const exitCode = await runAtlasCli(["search", "provider boundary"], {
+      stdout: (text) => {
+        stdout += text;
+      },
+      stderr: (text) => {
+        stderr += text;
+      },
+    });
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+
+    const [, callRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(JSON.parse(callRequest.body as string)).toMatchObject({
+      method: "tools/call",
+      params: {
+        name: "atlas-search",
+      },
+    });
   });
 
   it("returns an existing-style error for missing search query", async () => {

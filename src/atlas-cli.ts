@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const DEFAULT_TOOL = "search";
+const DEFAULT_TOOL = "atlas-search";
 const DEFAULT_MCP_URL = "https://mcp.pathfinder.copilotkit.dev/mcp";
 const INTEGER_PATTERN = /^[1-9]\d*$/;
 const NUMBER_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
@@ -48,8 +48,20 @@ function parseSseMessages(text: string): JsonRpcMessage[] {
       return;
     }
 
-    messages.push(JSON.parse(dataLines.join("\n")) as JsonRpcMessage);
+    const data = dataLines.join("\n");
     dataLines = [];
+
+    // Skip keepalive / empty `data:` frames: an empty value yields `""`,
+    // which would otherwise crash on JSON.parse("").
+    if (data.trim() === "") {
+      return;
+    }
+
+    try {
+      messages.push(JSON.parse(data) as JsonRpcMessage);
+    } catch {
+      // Skip unparseable keepalive frames rather than crashing the search.
+    }
   };
 
   for (const rawLine of text.split(/\r?\n/)) {
