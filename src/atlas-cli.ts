@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_TOOL = "atlas-search";
+const DEFAULT_FEEDBACK_TOOL = "submit-feedback";
+const FEEDBACK_RATINGS = ["helpful", "not_helpful"] as const;
 const DEFAULT_MCP_URL = "https://mcp.pathfinder.copilotkit.dev/mcp";
 const INTEGER_PATTERN = /^[1-9]\d*$/;
 const NUMBER_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
@@ -25,9 +27,22 @@ interface SearchOptions {
   url?: string;
 }
 
+interface FeedbackOptions {
+  comment?: string;
+  for?: string;
+  json?: boolean;
+  rating?: string;
+  token?: string;
+  tool?: string;
+  url?: string;
+}
+
 interface JsonRpcMessage {
   jsonrpc?: string;
-  id?: number;
+  // JSON-RPC permits numeric, string, or null ids; a proxy may echo "1" for 1,
+  // and error frames may legitimately carry a null id. Match by coerced id and
+  // never let a strict numeric type discard a real response frame.
+  id?: number | string | null;
   result?: unknown;
   error?: {
     message?: string;
@@ -208,11 +223,43 @@ function buildToolArguments(
   return args;
 }
 
+export function buildFeedbackArguments(
+  query: string,
+  options: FeedbackOptions,
+): Record<string, unknown> {
+  const rating = options.rating;
+  if (
+    rating === undefined ||
+    !(FEEDBACK_RATINGS as readonly string[]).includes(rating)
+  ) {
+    throw new Error(`rating must be one of: ${FEEDBACK_RATINGS.join(", ")}`);
+  }
+
+  const comment = options.comment;
+  if (comment === undefined || comment.trim() === "") {
+    throw new Error("comment must not be empty");
+  }
+
+  // --for always resolves via its Commander default, so a missing value here
+  // means the default was dropped — fail loud rather than sending an undefined
+  // tool_name (symmetric with the --tool guard in feedback()/search()).
+  if (options.for === undefined) {
+    throw new Error("atlas: --for is required");
+  }
+
+  return {
+    tool_name: options.for,
+    query,
+    rating,
+    comment,
+  };
+}
+
 function printToolText(message: JsonRpcMessage, write: WriteFn): void {
   const result = message.result as
     | { content?: Array<{ type?: string; text?: string }> }
     | undefined;
-  const content = result?.content ?? [];
+  const content = Array.isArray(result?.content) ? result.content : [];
   const textItems = content
     .map((item) => item.text)
     .filter((text): text is string => typeof text === "string");
@@ -227,15 +274,20 @@ function printToolText(message: JsonRpcMessage, write: WriteFn): void {
   }
 }
 
-async function search(
-  query: string,
-  options: SearchOptions,
+interface CallToolOptions {
+  json?: boolean;
+  token?: string;
+  url?: string;
+}
+
+async function callTool(
+  toolName: string,
+  toolArguments: Record<string, unknown>,
+  options: CallToolOptions,
   write: WriteFn,
 ): Promise<void> {
   const url = options.url ?? process.env.ATLAS_MCP_URL ?? DEFAULT_MCP_URL;
   const token = options.token ?? process.env.ATLAS_TOKEN;
-  const tool = options.tool ?? DEFAULT_TOOL;
-  const toolArguments = buildToolArguments(query, options);
   let sessionId: string | undefined;
   const recordSessionId = (nextSessionId: string) => {
     sessionId = nextSessionId;
@@ -269,28 +321,60 @@ async function search(
       { onSessionId: recordSessionId, sessionId, token },
     );
 
+    const toolsCallRequestId = 1;
     const response = await mcpPost(
       url,
       {
         jsonrpc: "2.0",
         method: "tools/call",
-        id: 1,
+        id: toolsCallRequestId,
         params: {
-          name: tool,
+          name: toolName,
           arguments: toolArguments,
         },
       },
       { onSessionId: recordSessionId, sessionId, token },
     );
 
-    const message = response.messages.find((item) => item.result ?? item.error);
+    // Select the response frame with an exhaustive three-tier fallback:
+    //   1. the frame whose coerced id matches the request (a proxy echoing "1"
+    //      for 1 still matches) and which actually carries a result or error;
+    //   2. else an error frame whose id is null/omitted, surfacing a real
+    //      server error that legitimately dropped its id;
+    //   3. else a result frame whose id is null/omitted, tolerating an omitted
+    //      id on a sole result frame.
+    // Tiers 2 and 3 only consider id-less frames so a frame bearing a clearly
+    // different explicit id is never surfaced for this request.
+    // Only when none of these exist do we declare "no response".
+    const message =
+      response.messages.find(
+        (item) =>
+          String(item.id) === String(toolsCallRequestId) &&
+          ("result" in item || "error" in item),
+      ) ??
+      response.messages.find((item) => "error" in item && item.id == null) ??
+      response.messages.find((item) => "result" in item && item.id == null);
     if (!message) {
-      write(options.json ? "null\n" : "No response.\n");
-      return;
+      throw new Error("atlas: no response from server for tools/call");
     }
 
     if (message.error) {
       throw new Error(message.error.message ?? "MCP tool call failed");
+    }
+
+    const toolResult = message.result as
+      | { isError?: boolean; content?: Array<{ type?: string; text?: string }> }
+      | null
+      | undefined;
+    if (toolResult?.isError === true) {
+      const errorContent = Array.isArray(toolResult.content)
+        ? toolResult.content
+        : [];
+      const errorText = errorContent
+        .map((item) => item.text)
+        .filter((text): text is string => typeof text === "string")
+        .join("\n");
+      throw new Error(errorText || "MCP tool call reported an error");
     }
 
     if (options.json) {
@@ -302,6 +386,36 @@ async function search(
   } finally {
     await closeMcpSession(url, { sessionId, token });
   }
+}
+
+async function search(
+  query: string,
+  options: SearchOptions,
+  write: WriteFn,
+): Promise<void> {
+  // --tool always resolves via its Commander default, so a missing value here
+  // means the default was dropped — fail loud rather than silently re-default.
+  if (options.tool === undefined) {
+    throw new Error("atlas: --tool is required");
+  }
+  const toolArguments = buildToolArguments(query, options);
+
+  await callTool(options.tool, toolArguments, options, write);
+}
+
+async function feedback(
+  query: string,
+  options: FeedbackOptions,
+  write: WriteFn,
+): Promise<void> {
+  // --tool always resolves via its Commander default, so a missing value here
+  // means the default was dropped — fail loud rather than silently re-default.
+  if (options.tool === undefined) {
+    throw new Error("atlas: --tool is required");
+  }
+  const toolArguments = buildFeedbackArguments(query, options);
+
+  await callTool(options.tool, toolArguments, options, write);
 }
 
 export async function runAtlasCli(
@@ -334,6 +448,26 @@ export async function runAtlasCli(
     .option("--json", "Print the raw MCP JSON-RPC response")
     .action(async (query: string, options: SearchOptions) => {
       await search(query, options, writeOut);
+    });
+
+  program
+    .command("feedback")
+    .description(
+      "Submit Atlas retrieval feedback through a Pathfinder MCP endpoint",
+    )
+    .argument("<query>", "The query the feedback is about")
+    .requiredOption(
+      "--rating <rating>",
+      "Feedback rating (helpful or not_helpful)",
+    )
+    .requiredOption("--comment <text>", "Free-form feedback comment")
+    .option("--for <tool_name>", "Tool the feedback is about", DEFAULT_TOOL)
+    .option("--url <url>", "Pathfinder MCP URL")
+    .option("--token <token>", "Bearer token for the MCP endpoint")
+    .option("--tool <name>", "MCP tool name", DEFAULT_FEEDBACK_TOOL)
+    .option("--json", "Print the raw MCP JSON-RPC response")
+    .action(async (query: string, options: FeedbackOptions) => {
+      await feedback(query, options, writeOut);
     });
 
   try {
@@ -375,7 +509,14 @@ function resolveEntrypointPath(candidatePath: string): string {
 }
 
 if (isAtlasCliEntrypoint(import.meta.url, process.argv[1])) {
-  runAtlasCli().then((exitCode) => {
-    process.exitCode = exitCode;
-  });
+  runAtlasCli()
+    .then((exitCode) => {
+      process.exitCode = exitCode;
+    })
+    .catch((error) => {
+      process.stderr.write(
+        `error: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exitCode = 1;
+    });
 }
