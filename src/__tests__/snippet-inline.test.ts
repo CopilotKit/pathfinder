@@ -191,6 +191,42 @@ describe("inlineSnippetImports", () => {
     const result = inlineSnippetImports(hostContent, hostAbs);
     expect(result).toContain("A-body");
   });
+
+  it("removes ALL occurrences of a duplicated identical import line", () => {
+    const snippetBody = "## Dup Snippet\n\nInlined duplicate snippet body.";
+    // The SAME import line appears twice (a real hazard when pages are
+    // assembled/merged), separated by prose so each is captured identically and
+    // collapses to a single decl. First-occurrence string replace removes only
+    // one copy, leaving the other as a dangling import in the stripped output;
+    // the global removal must strip every copy.
+    const importLine = 'import Dup from "@/snippets/dup.mdx";';
+    const hostContent = [
+      "---",
+      "title: Host",
+      "---",
+      importLine,
+      "",
+      "Some prose between the two imports.",
+      "",
+      importLine,
+      "",
+      "<Dup />",
+      "",
+    ].join("\n");
+
+    const hostAbs = buildDocsTree(tmp, "guide.mdx", hostContent, {
+      "dup.mdx": snippetBody,
+    });
+
+    const result = inlineSnippetImports(hostContent, hostAbs);
+
+    expect(result).toContain("Inlined duplicate snippet body.");
+    // NEITHER import line may survive — not even the duplicate copy.
+    expect(result).not.toContain('from "@/snippets/dup.mdx"');
+    expect(result).not.toMatch(/^import Dup/m);
+    // The prose between the imports must be preserved.
+    expect(result).toContain("Some prose between the two imports.");
+  });
 });
 
 describe("chunkMarkdown with snippet inlining", () => {

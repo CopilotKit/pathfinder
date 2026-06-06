@@ -105,13 +105,24 @@ function resolveSpec(
   return null;
 }
 
-/** Parse single-line default-import declarations from MDX content. */
+/**
+ * Parse single-line default-import declarations from MDX content.
+ *
+ * De-duplicates by the raw matched line: an identical import line appearing
+ * more than once yields a single decl, so the snippet is resolved + inlined
+ * once. (Removal of the line itself is global — see removeAll — so every copy
+ * is stripped regardless of how many decls were parsed.)
+ */
 function parseImports(content: string): ImportDecl[] {
   const decls: ImportDecl[] = [];
+  const seenRaw = new Set<string>();
   let match: RegExpExecArray | null;
   IMPORT_RE.lastIndex = 0;
   while ((match = IMPORT_RE.exec(content)) !== null) {
-    decls.push({ name: match[1], spec: match[2], raw: match[0] });
+    const raw = match[0];
+    if (seenRaw.has(raw)) continue;
+    seenRaw.add(raw);
+    decls.push({ name: match[1], spec: match[2], raw });
   }
   return decls;
 }
@@ -119,6 +130,17 @@ function parseImports(content: string): ImportDecl[] {
 /** Escape a string for safe use inside a RegExp. */
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Remove EVERY occurrence of a literal import line from `content`.
+ *
+ * String#replace(string, …) only removes the first match, so a duplicated
+ * identical import line would leave a dangling import behind. Build a global
+ * regex from the escaped literal so all copies are stripped.
+ */
+function removeAll(content: string, literal: string): string {
+  return content.replace(new RegExp(escapeRegExp(literal), "g"), "");
 }
 
 /**
@@ -203,7 +225,7 @@ function inlineRecursive(
       // Drop the import + usage so cyclic refs don't leave dangling JSX, but
       // do not recurse again into the cycle.
       result = replaceUsages(result, decl.name, "");
-      result = result.replace(decl.raw, "");
+      result = removeAll(result, decl.raw);
       continue;
     }
 
@@ -227,9 +249,9 @@ function inlineRecursive(
     );
 
     // Inline the (recursively resolved) body wherever the component is used,
-    // then remove the now-unused import line.
+    // then remove the now-unused import line (all copies, not just the first).
     result = replaceUsages(result, decl.name, `\n\n${resolvedBody.trim()}\n\n`);
-    result = result.replace(decl.raw, "");
+    result = removeAll(result, decl.raw);
   }
 
   return result;
