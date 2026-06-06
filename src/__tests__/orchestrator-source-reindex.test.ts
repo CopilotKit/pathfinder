@@ -190,6 +190,26 @@ describe("IndexingOrchestrator.queueSourceReindex", () => {
     expect(completeSpy).not.toHaveBeenCalled();
   });
 
+  it("still completes the reindex when Atlas cache invalidation throws", async () => {
+    const completeSpy = vi.fn();
+    orchestrator.onReindexComplete = completeSpy;
+    vi.mocked(markAtlasCachePagesStaleForSources).mockRejectedValueOnce(
+      new Error("transient DB error"),
+    );
+
+    orchestrator.queueSourceReindex("slack-support");
+
+    for (let i = 0; i < 50; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (completeSpy.mock.calls.length > 0) break;
+    }
+
+    // The Atlas cache invalidation failed, but the reindex itself succeeded,
+    // so onReindexComplete must still fire for the affected source.
+    expect(markAtlasCachePagesStaleForSources).toHaveBeenCalled();
+    expect(completeSpy).toHaveBeenCalledWith(["slack-support"]);
+  });
+
   it("skips unknown source names gracefully", async () => {
     const completeSpy = vi.fn();
     orchestrator.onReindexComplete = completeSpy;

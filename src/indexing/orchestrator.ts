@@ -641,10 +641,19 @@ export class IndexingOrchestrator {
       atlasCacheInvalidationSourceNames.length > 0 &&
       atlasSourceNames.size > 0
     ) {
-      await markAtlasCachePagesStaleForSources(
-        atlasCacheInvalidationSourceNames,
-        `source reindexed: ${atlasCacheInvalidationSourceNames.join(", ")}`,
-      );
+      // Isolate Atlas cache invalidation: a transient failure here must not
+      // suppress onReindexComplete for a reindex that actually succeeded.
+      try {
+        await markAtlasCachePagesStaleForSources(
+          atlasCacheInvalidationSourceNames,
+          `source reindexed: ${atlasCacheInvalidationSourceNames.join(", ")}`,
+        );
+      } catch (err) {
+        console.error(
+          `[orchestrator] Failed to mark Atlas cache pages stale for ${atlasCacheInvalidationSourceNames.join(", ")}:`,
+          err,
+        );
+      }
     }
 
     if (affectedSourceNames.length > 0 && this.onReindexComplete) {
