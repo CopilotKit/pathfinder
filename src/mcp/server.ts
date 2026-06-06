@@ -23,6 +23,12 @@ export function createMcpServer(
   telemetry?: BashTelemetry,
   workspace?: WorkspaceManager,
   hooks?: { onToolCall?: () => void },
+  // Accessor for the per-session request-origin tag (user|synthetic|analysis)
+  // captured from the X-Pathfinder-Source header on the MCP init request.
+  // Threaded into the RAG tool handlers so each query_log row records who
+  // originated the traffic. Optional so existing callers/tests keep compiling;
+  // when absent the writer defaults the column to 'user'.
+  getRequestSource?: () => string | undefined,
 ): McpServer {
   const cfg = getConfig();
   const serverCfg = getServerConfig();
@@ -55,6 +61,8 @@ export function createMcpServer(
       case "search":
         registerSearchTool(server, getEmbeddingProvider(), tool, {
           onToolCall: hooks?.onToolCall,
+          getSessionId,
+          getRequestSource,
         });
         break;
       case "bash": {
@@ -92,6 +100,8 @@ export function createMcpServer(
       case "knowledge":
         registerKnowledgeTool(server, getEmbeddingProvider(), tool, {
           onToolCall: hooks?.onToolCall,
+          getSessionId,
+          getRequestSource,
         });
         break;
       default: {

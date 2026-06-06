@@ -28,6 +28,71 @@ export const REDACTED_QUERY_TEXT = "<redacted>";
  */
 export const P95_LATENCY_ROW_CAP = 100000;
 
+/**
+ * Score threshold below which a non-empty result set is considered
+ * "low confidence". A query that returned rows but whose best match scored
+ * under this value is surfaced separately so operators can spot content gaps
+ * that look like hits but aren't actually relevant. Exported so tool handlers,
+ * readers, and tests share a single source of truth.
+ *
+ * Predicate (matches the brief): `result_count > 0 AND top_score < 0.5`.
+ * `top_score IS NULL` (e.g. browse/keyword rows that never compute a cosine
+ * score) is intentionally NOT low-confidence — absence of a score is not a
+ * low score.
+ */
+export const LOW_CONFIDENCE_SCORE_THRESHOLD = 0.5;
+
+/**
+ * Canonical request-origin tags persisted on `query_log.request_source`.
+ * Sourced from the `X-Pathfinder-Source` request header on the MCP init
+ * request. Anything outside this set (including a missing header) is coerced
+ * to {@link DEFAULT_REQUEST_SOURCE} at the edge so the column only ever holds
+ * a known value going forward.
+ */
+export const REQUEST_SOURCE_VALUES = ["user", "synthetic", "analysis"] as const;
+export type RequestSource = (typeof REQUEST_SOURCE_VALUES)[number];
+
+/**
+ * HTTP header that carries the request-origin tag on the MCP init request.
+ * Lower-cased because Node/Express normalize header names to lower case on
+ * `req.headers`. Exported so the server-side capture site and tests share one
+ * literal.
+ */
+export const REQUEST_SOURCE_HEADER = "x-pathfinder-source";
+
+/**
+ * Default request source when the `X-Pathfinder-Source` header is absent or
+ * not one of {@link REQUEST_SOURCE_VALUES}. New traffic without an explicit
+ * tag is treated as a real user — the conservative choice that keeps the
+ * default KPIs (which exclude synthetic/analysis) honest.
+ */
+export const DEFAULT_REQUEST_SOURCE: RequestSource = "user";
+
+/**
+ * Request-source values that count as "real users" for the default analytics
+ * KPIs. Includes NULL (historical rows predating the column) via the SQL in
+ * {@link buildRequestSourceClause}. Synthetic/analysis traffic is excluded by
+ * default and only included when the caller explicitly asks for an
+ * all-sources view (see {@link AnalyticsFilter.request_source}).
+ */
+export const REAL_USER_REQUEST_SOURCES: readonly RequestSource[] = ["user"];
+
+/**
+ * Normalize an arbitrary `X-Pathfinder-Source` header value to a known
+ * {@link RequestSource}. Unknown/empty/missing values fall back to
+ * {@link DEFAULT_REQUEST_SOURCE}. Case-insensitive and whitespace-trimmed so
+ * `"Synthetic"` / `" analysis "` still tag correctly.
+ */
+export function normalizeRequestSource(
+  value: string | null | undefined,
+): RequestSource {
+  if (typeof value !== "string") return DEFAULT_REQUEST_SOURCE;
+  const v = value.trim().toLowerCase();
+  return (REQUEST_SOURCE_VALUES as readonly string[]).includes(v)
+    ? (v as RequestSource)
+    : DEFAULT_REQUEST_SOURCE;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -40,6 +105,13 @@ export interface QueryLogEntry {
   latency_ms: number;
   source_name: string | null;
   session_id: string | null;
+  /**
+   * Request-origin tag (user|synthetic|analysis) from X-Pathfinder-Source.
+   * Optional on the entry so existing call sites that don't tag still compile;
+   * the writer coerces an absent/unknown value to {@link DEFAULT_REQUEST_SOURCE}
+   * so the persisted column is always a known value for new rows.
+   */
+  request_source?: RequestSource | string | null;
 }
 
 export interface AnalyticsSummary {
@@ -47,6 +119,22 @@ export interface AnalyticsSummary {
   total_queries_window: number;
   empty_result_count_window: number;
   empty_result_rate_window: number;
+  /**
+   * Count of "low confidence" queries in the window: rows that returned at
+   * least one result but whose top_score fell below
+   * {@link LOW_CONFIDENCE_SCORE_THRESHOLD}. Computed over the SAME population
+   * as the other windowed cards (backfilled + redacted rows excluded, default
+   * request-source filter applied) so it's directly comparable to
+   * total_queries_window. Rows with a NULL top_score are NOT counted —
+   * absence of a score is not a low score.
+   */
+  low_confidence_count_window: number;
+  /**
+   * low_confidence_count_window / total_queries_window (0 when the window is
+   * empty). Surfaced alongside empty_result_rate_window so the dashboard can
+   * show "looks like a hit but isn't relevant" as its own signal.
+   */
+  low_confidence_rate_window: number;
   avg_latency_ms_window: number;
   p95_latency_ms_window: number;
   /**
@@ -110,6 +198,21 @@ export interface AnalyticsFilter {
    */
   include_service_traffic?: boolean;
   /**
+   * Request-origin filter for the analytics readers.
+   *
+   * - `undefined` (the default): restrict to REAL USER traffic —
+   *   `request_source IN ('user') OR request_source IS NULL`. This is what
+   *   makes the dashboard's KPIs default to real users while still counting
+   *   historical rows (NULL) that predate the column.
+   * - `"all"`: no request-source restriction — every row regardless of origin.
+   *   Use for the explicit "all sources" dashboard view.
+   * - a specific {@link RequestSource} (`"user"` | `"synthetic"` | `"analysis"`):
+   *   restrict to exactly that origin. `"user"` here ALSO includes NULL rows
+   *   (they're real users); `"synthetic"`/`"analysis"` match the literal value
+   *   only.
+   */
+  request_source?: RequestSource | "all";
+  /**
    * Optional inclusive date range. When both `from` and `to` are set the
    * underlying queries filter on `created_at >= from AND created_at <= to`
    * instead of the default `NOW() - INTERVAL '<days> days'` window.
@@ -139,10 +242,16 @@ export async function logQuery(
 ): Promise<void> {
   const pool = getPool();
   const text = logQueryText ? entry.query_text : REDACTED_QUERY_TEXT;
+  // Coerce the request source to a known value at the write boundary so the
+  // column only ever holds user|synthetic|analysis going forward (an absent or
+  // unrecognized tag becomes DEFAULT_REQUEST_SOURCE = 'user'). Historical rows
+  // written before this column existed stay NULL and are read back as real
+  // users by the analytics layer.
+  const requestSource = normalizeRequestSource(entry.request_source);
   try {
     await pool.query(
-      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, request_source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         entry.tool_name,
         text,
@@ -151,6 +260,7 @@ export async function logQuery(
         entry.latency_ms,
         entry.source_name,
         entry.session_id,
+        requestSource,
       ],
     );
   } catch (err) {
@@ -227,6 +337,53 @@ function buildFilterClauses(
 function whereAnd(baseClauses: string[], filterClauses: string[]): string {
   const all = [...baseClauses, ...filterClauses];
   return all.length > 0 ? "WHERE " + all.join(" AND ") : "";
+}
+
+/**
+ * Build the request-source WHERE fragment + params for a reader.
+ *
+ * Semantics (see {@link AnalyticsFilter.request_source}):
+ *  - `undefined` → default to real users:
+ *    `(request_source IN ('user') OR request_source IS NULL)`. NULL is folded
+ *    in so rows predating the column (which have no tag) still count as real
+ *    user traffic — this is the back-compat guarantee.
+ *  - `"all"` → no clause (every row, regardless of origin).
+ *  - `"user"` → same as the default (real users incl. NULL).
+ *  - `"synthetic"` | `"analysis"` → exact-match on the literal value
+ *    (`request_source = $N`); NULL rows are NOT synthetic/analysis so they're
+ *    excluded.
+ *
+ * Returns `{ clauses, params, nextIdx }` shaped like {@link buildFilterClauses}
+ * so callers can splice it into their base clauses + param list uniformly.
+ */
+function buildRequestSourceClause(
+  filter: AnalyticsFilter,
+  startIdx: number,
+): { clauses: string[]; params: unknown[]; nextIdx: number } {
+  const rs = filter.request_source;
+
+  if (rs === "all") {
+    return { clauses: [], params: [], nextIdx: startIdx };
+  }
+
+  // Default (undefined) and explicit "user" both mean real users, which
+  // includes the untagged historical rows (request_source IS NULL).
+  if (rs === undefined || rs === "user") {
+    return {
+      clauses: [`(request_source = $${startIdx} OR request_source IS NULL)`],
+      params: ["user"],
+      nextIdx: startIdx + 1,
+    };
+  }
+
+  // Specific non-user origin: exact literal match. NULL rows are real users,
+  // not synthetic/analysis, so the bare equality (which is NULL-rejecting in
+  // SQL three-valued logic) correctly excludes them.
+  return {
+    clauses: [`request_source = $${startIdx}`],
+    params: [rs],
+    nextIdx: startIdx + 1,
+  };
 }
 
 /**
@@ -437,21 +594,41 @@ export async function getAnalyticsSummary(
   // the divergence is deliberate.
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
-  const redactedIdx2 = dw2.nextIdx;
+  const rs2 = buildRequestSourceClause(filter, dw2.nextIdx);
+  const redactedIdx2 = rs2.nextIdx;
+  const lowConfIdx2 = redactedIdx2 + 1;
   const summaryBase = [
     ...dw2.clauses,
+    ...rs2.clauses,
     "latency_ms >= 0",
     `query_text != $${redactedIdx2}`,
   ];
   const summaryWhere = whereAnd(summaryBase, fc2);
+  // low_confidence shares this subquery (and therefore the exact same
+  // population as total/empty/avg_latency) via a FILTER, so the
+  // low_confidence_rate denominator lines up with total_queries_window. The
+  // threshold is bound, not inlined, so LOW_CONFIDENCE_SCORE_THRESHOLD stays
+  // the single source of truth. `top_score IS NOT NULL` is part of the FILTER
+  // so NULL-score rows (browse/keyword) never count as low confidence.
   const summaryRes = await pool.query(
     `SELECT
         count(*)::int AS total,
         count(*) FILTER (WHERE result_count = 0)::int AS empty,
+        count(*) FILTER (
+          WHERE result_count > 0
+            AND top_score IS NOT NULL
+            AND top_score < $${lowConfIdx2}
+        )::int AS low_confidence,
         COALESCE(avg(latency_ms)::int, 0) AS avg_latency
     FROM query_log
     ${summaryWhere}`,
-    [...fp2, ...dw2.params, REDACTED_QUERY_TEXT],
+    [
+      ...fp2,
+      ...dw2.params,
+      ...rs2.params,
+      REDACTED_QUERY_TEXT,
+      LOW_CONFIDENCE_SCORE_THRESHOLD,
+    ],
   );
 
   // Latencies for p95 (exclude backfilled rows where latency_ms < 0, AND
@@ -466,9 +643,11 @@ export async function getAnalyticsSummary(
   // reading is known to be sampled rather than exact.
   const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
   const dw3 = buildDateWindow(filter, days, n3);
-  const redactedIdxLatency = dw3.nextIdx;
+  const rs3 = buildRequestSourceClause(filter, dw3.nextIdx);
+  const redactedIdxLatency = rs3.nextIdx;
   const latencyBase = [
     ...dw3.clauses,
+    ...rs3.clauses,
     "latency_ms >= 0",
     `query_text != $${redactedIdxLatency}`,
   ];
@@ -481,7 +660,13 @@ export async function getAnalyticsSummary(
   // slice back to the cap for the actual p95 computation.
   const latencyRes = await pool.query(
     `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY random() LIMIT $${latencyLimitIdx}`,
-    [...fp3, ...dw3.params, REDACTED_QUERY_TEXT, P95_LATENCY_ROW_CAP + 1],
+    [
+      ...fp3,
+      ...dw3.params,
+      ...rs3.params,
+      REDACTED_QUERY_TEXT,
+      P95_LATENCY_ROW_CAP + 1,
+    ],
   );
   const p95Sampled = latencyRes.rows.length > P95_LATENCY_ROW_CAP;
   if (p95Sampled) {
@@ -494,9 +679,11 @@ export async function getAnalyticsSummary(
   // doughnut totals line up with summary + per-day.
   const { clauses: fc4, params: fp4, nextIdx: n4 } = buildFilterClauses(filter);
   const dw4 = buildDateWindow(filter, days, n4);
+  const rs4 = buildRequestSourceClause(filter, dw4.nextIdx);
   const sourceBase = [
     "source_name IS NOT NULL",
     ...dw4.clauses,
+    ...rs4.clauses,
     "latency_ms >= 0",
   ];
   const sourceWhere = whereAnd(sourceBase, fc4);
@@ -506,7 +693,7 @@ export async function getAnalyticsSummary(
     ${sourceWhere}
     GROUP BY source_name
     ORDER BY count DESC`,
-    [...fp4, ...dw4.params],
+    [...fp4, ...dw4.params, ...rs4.params],
   );
 
   // Per day (filtered). LEFT JOIN against generate_series so every day in
@@ -526,9 +713,11 @@ export async function getAnalyticsSummary(
   // zero-count days the gap-fill exists to surface.
   const { clauses: fc5, params: fp5, nextIdx: n5 } = buildFilterClauses(filter);
   const pdw = buildPerDayWindow(filter, days, n5);
-  const redactedIdx5 = pdw.nextIdx;
+  const rs5 = buildRequestSourceClause(filter, pdw.nextIdx);
+  const redactedIdx5 = rs5.nextIdx;
   const dayBase = [
     pdw.whereClause,
+    ...rs5.clauses,
     "latency_ms >= 0",
     `query_text != $${redactedIdx5}`,
   ];
@@ -553,7 +742,7 @@ export async function getAnalyticsSummary(
        GROUP BY day
      ) q ON q.day = d.day::date
      ORDER BY d.day`,
-    [...fp5, ...pdw.params, REDACTED_QUERY_TEXT],
+    [...fp5, ...pdw.params, ...rs5.params, REDACTED_QUERY_TEXT],
   );
 
   // Earliest query day (UNFILTERED — the UI uses this to label windows
@@ -577,6 +766,7 @@ export async function getAnalyticsSummary(
   const s = summaryRes.rows[0] ?? {};
   const totalWindow = s.total ?? 0;
   const emptyWindow = s.empty ?? 0;
+  const lowConfidenceWindow = s.low_confidence ?? 0;
   // Normalize undefined (truly missing) to null so consumers get a
   // consistent shape regardless of whether the DB returned an empty
   // row, a row with NULL, or no row at all.
@@ -595,6 +785,9 @@ export async function getAnalyticsSummary(
     total_queries_window: totalWindow,
     empty_result_count_window: emptyWindow,
     empty_result_rate_window: totalWindow > 0 ? emptyWindow / totalWindow : 0,
+    low_confidence_count_window: lowConfidenceWindow,
+    low_confidence_rate_window:
+      totalWindow > 0 ? lowConfidenceWindow / totalWindow : 0,
     avg_latency_ms_window: s.avg_latency ?? 0,
     p95_latency_ms_window: p95Latency,
     // Only set when the cap was actually hit so existing consumers (tests,
@@ -633,12 +826,14 @@ export async function getTopQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
+  const rs = buildRequestSourceClause(filter, dw.nextIdx);
   // Bind REDACTED_QUERY_TEXT rather than interpolating the literal so the
   // sentinel has a single source of truth (the module constant) and the
   // SQL stays shielded from the value.
-  const redactedIdx = dw.nextIdx;
+  const redactedIdx = rs.nextIdx;
   const baseClauses = [
     ...dw.clauses,
+    ...rs.clauses,
     `query_text != $${redactedIdx}`,
     "latency_ms >= 0",
   ];
@@ -657,7 +852,7 @@ export async function getTopQueries(
     HAVING bool_or(result_count > 0)
     ORDER BY count DESC
     LIMIT $${redactedIdx + 1}`,
-    [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],
+    [...fp, ...dw.params, ...rs.params, REDACTED_QUERY_TEXT, limit],
   );
 
   return rows.map((r: Record<string, unknown>) => {
@@ -694,12 +889,14 @@ export async function getEmptyQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
+  const rs = buildRequestSourceClause(filter, dw.nextIdx);
   // Same rationale as getTopQueries: bind the REDACTED_QUERY_TEXT sentinel
   // so the SQL literal isn't duplicated across reads.
-  const redactedIdx = dw.nextIdx;
+  const redactedIdx = rs.nextIdx;
   const baseClauses = [
     "result_count = 0",
     ...dw.clauses,
+    ...rs.clauses,
     `query_text != $${redactedIdx}`,
     "latency_ms >= 0",
   ];
@@ -717,7 +914,7 @@ export async function getEmptyQueries(
     GROUP BY query_text, tool_name, source_name
     ORDER BY count DESC
     LIMIT $${redactedIdx + 1}`,
-    [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],
+    [...fp, ...dw.params, ...rs.params, REDACTED_QUERY_TEXT, limit],
   );
 
   return rows.map((r: Record<string, unknown>) => ({
@@ -764,9 +961,13 @@ export async function getToolCounts(
     nextIdx,
   } = buildFilterClauses(sourceOnlyFilter);
   const dw = buildDateWindow(sourceOnlyFilter, days, nextIdx);
+  // request_source survives in `rest` (only tool_type is stripped above), so
+  // the tool-counts donut honors the same real-users-by-default behavior as
+  // every other windowed aggregate.
+  const rs = buildRequestSourceClause(sourceOnlyFilter, dw.nextIdx);
   // Exclude backfilled rows (latency_ms < 0) so tool counts match the
   // windowed aggregates used elsewhere (summary, latency, per-day).
-  const baseClauses = [...dw.clauses, "latency_ms >= 0"];
+  const baseClauses = [...dw.clauses, ...rs.clauses, "latency_ms >= 0"];
   const where = whereAnd(baseClauses, fc);
   const { rows } = await pool.query(
     `SELECT
@@ -776,7 +977,7 @@ export async function getToolCounts(
     ${where}
     GROUP BY tool_type
     ORDER BY count DESC`,
-    [...fp, ...dw.params],
+    [...fp, ...dw.params, ...rs.params],
   );
 
   return rows.map((r: Record<string, unknown>) => ({

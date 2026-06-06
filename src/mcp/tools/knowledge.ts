@@ -47,7 +47,14 @@ export function registerKnowledgeTool(
   server: McpServer,
   embeddingClient: EmbeddingProvider,
   toolConfig: KnowledgeToolConfig,
-  options?: { onToolCall?: () => void },
+  options?: {
+    onToolCall?: () => void;
+    // Per-session accessors resolved at call time — see registerSearchTool for
+    // the rationale. getSessionId persists session_id; getRequestSource
+    // persists the X-Pathfinder-Source origin tag on each query_log row.
+    getSessionId?: () => string | undefined;
+    getRequestSource?: () => string | undefined;
+  },
 ): void {
   const inputSchema = {
     query: z
@@ -101,7 +108,8 @@ export function registerKnowledgeTool(
               top_score: null,
               latency_ms: Date.now() - startMs,
               source_name: toolConfig.sources.join(","),
-              session_id: null,
+              session_id: options?.getSessionId?.() ?? null,
+              request_source: options?.getRequestSource?.() ?? null,
             },
             analyticsConfig?.log_queries ?? true,
           ).catch((err) => {
@@ -169,7 +177,8 @@ export function registerKnowledgeTool(
               top_score: topScore,
               latency_ms: Date.now() - startMs,
               source_name: toolConfig.sources.join(","),
-              session_id: null,
+              session_id: options?.getSessionId?.() ?? null,
+              request_source: options?.getRequestSource?.() ?? null,
             },
             analyticsConfig?.log_queries ?? true,
           ).catch((err) => {

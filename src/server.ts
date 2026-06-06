@@ -76,8 +76,11 @@ import {
   getTopQueries,
   getEmptyQueries,
   getToolCounts,
+  normalizeRequestSource,
+  REQUEST_SOURCE_HEADER,
+  REQUEST_SOURCE_VALUES,
 } from "./db/analytics.js";
-import type { AnalyticsFilter } from "./db/analytics.js";
+import type { AnalyticsFilter, RequestSource } from "./db/analytics.js";
 import {
   approveAtlasSeedEntry,
   listPendingAtlasSeedCandidates,
@@ -1491,6 +1494,26 @@ export async function handleExistingSessionRequest<TReq, TRes>(opts: {
   opts.sessionLastActivity[opts.sid] = now();
 }
 
+/**
+ * Read and normalize the request-origin tag from the X-Pathfinder-Source
+ * header. Captured ONCE at MCP-session init and closed over for the lifetime
+ * of the session (each session gets its own server + transport), so every
+ * tool call within that session records the origin its client declared.
+ *
+ * Express collapses duplicate headers to a comma-joined string and lower-cases
+ * the name; we hand whatever's present to normalizeRequestSource, which maps
+ * absent/unknown values to the default ('user'). An array-shaped value (only
+ * possible for set-cookie under Express) is defensively ignored.
+ *
+ * Exported for tests so the header→source mapping is verified without spinning
+ * up the full Express app.
+ */
+export function requestSourceFromHeaders(req: Request): RequestSource {
+  const raw = req.headers[REQUEST_SOURCE_HEADER];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return normalizeRequestSource(value);
+}
+
 app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
@@ -1795,6 +1818,11 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
           : ` (${total} active)`;
         console.log(`[mcp] Session ${sid.slice(0, 8)} closed${capInfo}`);
       };
+      // Capture the request-origin tag from the init request. Each session
+      // gets its own server instance, so closing over this constant tags every
+      // subsequent tool call in the session with the origin the client
+      // declared on initialize.
+      const requestSource = requestSourceFromHeaders(req);
       const server = createMcpServer(
         bashInstances,
         sessionStateManager,
@@ -1807,6 +1835,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
             if (sid) sessionHasBeenUsed[sid] = true;
           },
         },
+        () => requestSource,
       );
       // Z-1: server.connect(transport) can throw AFTER handleSessionInitAccept
       // committed maps + ipLimiter counter + ensureSession + onclose wiring.
@@ -1963,8 +1992,14 @@ const sseHandlers = createSseHandlers({
   getTotalSessionCount: () => getTotalSessionCount(transports, sseTransports),
   getMaxSessions: () => MAX_SESSIONS,
   sessionHasBeenUsed,
-  createMcpServer: () => {
+  createMcpServer: (req?: Request) => {
     let transportRef: SSEServerTransport | undefined;
+    // Capture the request-origin tag from the /sse init request (when the
+    // handler provides it) so every tool call in this SSE session records the
+    // declared origin. Defaults to 'user' when the header/req is absent.
+    const requestSource = req
+      ? requestSourceFromHeaders(req)
+      : normalizeRequestSource(undefined);
     // The handler creates the transport first, then calls createMcpServer()
     // and connect(transport). We need the sessionId late-bound so bash tools
     // can discover it via getSessionId().
@@ -1980,6 +2015,7 @@ const sseHandlers = createSseHandlers({
           if (sid) sessionHasBeenUsed[sid] = true;
         },
       },
+      () => requestSource,
     );
     // Intercept connect() so we can capture the transport reference for
     // the getSessionId closure above.
@@ -2689,7 +2725,15 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
     }
     return undefined;
   };
-  for (const name of ["from", "to", "tool_type", "source", "days", "limit"]) {
+  for (const name of [
+    "from",
+    "to",
+    "tool_type",
+    "source",
+    "request_source",
+    "days",
+    "limit",
+  ]) {
     const err = rejectArray(name);
     if (err) return err;
   }
@@ -2726,6 +2770,27 @@ export function parseAnalyticsFilter(req: Request): AnalyticsFilterParseResult {
       };
     }
     filter.source = req.query.source;
+  }
+
+  // request_source selects the analytics audience. Omitting it keeps the
+  // default (real users only — see AnalyticsFilter). Accepted values are the
+  // canonical origins plus the literal "all" for the unfiltered view. An
+  // unrecognized value is a client bug; reject with 400 rather than silently
+  // falling back so a typo doesn't quietly skew which audience the dashboard
+  // shows.
+  if (typeof req.query.request_source === "string") {
+    const allowed = [...REQUEST_SOURCE_VALUES, "all"];
+    if (!allowed.includes(req.query.request_source)) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: `request_source must be one of ${allowed.join(", ")}`,
+        },
+      };
+    }
+    filter.request_source = req.query.request_source as RequestSource | "all";
   }
 
   const fromRaw =
