@@ -14,10 +14,10 @@ sources:
   - name: docs
     type: markdown
     repo: https://github.com/CopilotKit/CopilotKit.git
-    path: docs/content/docs/
+    path: showcase/shell-docs/src/content/docs/
     base_url: https://docs.copilotkit.ai/
     url_derivation:
-      strip_prefix: "docs/content/docs/"
+      strip_prefix: "showcase/shell-docs/src/content/docs/"
       strip_suffix: ".mdx"
       strip_route_groups: true
       strip_index: true
@@ -45,6 +45,12 @@ sources:
       - "**/__tests__/**"
       - "**/*.test.*"
       - "**/*.spec.*"
+      # Demo/example apps and the docs site Next.js build are not library code
+      - "examples/**"
+      - "showcase/**"
+      - "**/.next/**"
+      # Generated type declarations duplicate the .ts sources they describe
+      - "**/*.d.ts"
     skip_dirs:
       - node_modules
       - dist
@@ -75,18 +81,40 @@ sources:
   - name: ag-ui-code
     type: code
     repo: https://github.com/ag-ui-protocol/ag-ui.git
-    path: sdks/typescript/packages/
+    # Walk from the repo root so the TS SDK, the Python adapters under
+    # integrations/, the Python SDK, and the JVM/multi-language community SDK
+    # are all reachable. file_patterns (matched against repo-root-relative
+    # paths) scope which subtrees actually get indexed.
+    path: "."
     file_patterns:
-      - "**/*.ts"
-      - "**/*.tsx"
-      - "**/*.js"
-      - "**/*.jsx"
+      # TypeScript SDK packages
+      - "sdks/typescript/packages/**/*.ts"
+      - "sdks/typescript/packages/**/*.tsx"
+      - "sdks/typescript/packages/**/*.js"
+      - "sdks/typescript/packages/**/*.jsx"
+      # Framework integrations (Python adapters + TS bindings)
+      - "integrations/**/*.py"
+      - "integrations/**/*.ts"
+      # Python SDK
+      - "sdks/python/**/*.py"
+      # Community SDK — JVM (Kotlin/Java) plus the other native ports that
+      # live under sdks/community/ (go, rust, dart, ruby)
+      - "sdks/community/**/*.kt"
+      - "sdks/community/**/*.java"
+      - "sdks/community/**/*.go"
+      - "sdks/community/**/*.rs"
+      - "sdks/community/**/*.dart"
+      - "sdks/community/**/*.rb"
     exclude_patterns:
       - "**/test/**"
       - "**/tests/**"
       - "**/__tests__/**"
       - "**/*.test.*"
       - "**/*.spec.*"
+      # Codegen output — protobuf codec + generated stubs dominate and add no
+      # hand-written signal
+      - "**/generated/**"
+      - "**/*.pb.*"
     skip_dirs:
       - node_modules
       - dist
@@ -100,35 +128,43 @@ sources:
 tools:
   - name: search-docs
     type: search
-    description: "Search the server's documentation to retrieve relevant information. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    description: "Search the CopilotKit product documentation (https://docs.copilotkit.ai) — guides, concepts, quickstarts, API reference, and how-tos for building with CopilotKit. Use this for CopilotKit usage and configuration questions. NOT for AG-UI protocol docs (use search-ag-ui-docs) and NOT for source code (use search-code). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: docs
     default_limit: 5
     max_limit: 20
     result_format: docs
+    search_mode: hybrid
+    min_score: 0.3
 
   - name: search-code
     type: search
-    description: "Search the server's indexed codebase to find relevant code snippets and implementations. Use this tool when you need to understand how something is implemented, find code examples, or locate specific functionality in the codebase. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    description: "Search the CopilotKit/CopilotKit source code (React UI, hooks, runtime, CSS, framework adapters) to understand how something is implemented or find code examples. Covers library/package source only — NOT example or showcase apps, NOT generated .d.ts type declarations, and NOT the AG-UI protocol SDK (use search-ag-ui-code for that). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: code
     default_limit: 10
     max_limit: 20
     result_format: code
+    search_mode: hybrid
+    min_score: 0.3
 
   - name: search-ag-ui-docs
     type: search
-    description: "Search the AG-UI protocol documentation to retrieve relevant information about the Agent-User Interaction protocol, events, types, and integration guides. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    description: "Search the AG-UI protocol documentation (https://docs.ag-ui.com) — the Agent-User Interaction protocol spec, event types, message schemas, and framework integration guides. Use this for protocol-level questions about AG-UI. NOT for CopilotKit product docs (use search-docs) and NOT for source code (use search-ag-ui-code). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: ag-ui-docs
     default_limit: 5
     max_limit: 20
     result_format: docs
+    search_mode: hybrid
+    min_score: 0.3
 
   - name: search-ag-ui-code
     type: search
-    description: "Search the AG-UI TypeScript SDK codebase to find relevant code snippets and implementations. Use this tool to understand AG-UI protocol types, events, encoders, and client implementations. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    description: "Search the AG-UI protocol SDK source code across languages — TypeScript SDK packages, the Python SDK and framework integration adapters (LangGraph, CrewAI, etc.), and the JVM/multi-language community SDK. Use this to understand AG-UI protocol types, events, encoders, and client/adapter implementations. This is AG-UI SDK code only — NOT CopilotKit React/CSS/hooks (use search-code) and NOT prose docs (use search-ag-ui-docs). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: ag-ui-code
     default_limit: 10
     max_limit: 20
     result_format: code
+    search_mode: hybrid
+    min_score: 0.3
 
   - name: explore-docs
     type: bash
@@ -194,9 +230,12 @@ webhook:
       - ag-ui-code
   path_triggers:
     docs:
-      - "docs/"
+      - "showcase/shell-docs/src/content/"
     code: []
     ag-ui-docs:
       - "docs/"
     ag-ui-code:
       - "sdks/typescript/packages/"
+      - "integrations/"
+      - "sdks/python/"
+      - "sdks/community/"

@@ -69,7 +69,16 @@ export function registerSearchTool(
   server: McpServer,
   embeddingClient: EmbeddingProvider,
   toolConfig: SearchToolConfig,
-  options?: { onToolCall?: () => void },
+  options?: {
+    onToolCall?: () => void;
+    // Per-session accessors resolved at call time (the MCP session id isn't
+    // known until the transport connects). getSessionId persists a real
+    // session_id on each query_log row; getRequestSource persists the
+    // X-Pathfinder-Source origin tag. Both optional so older callers/tests
+    // keep working — the analytics writer defaults a missing source to 'user'.
+    getSessionId?: () => string | undefined;
+    getRequestSource?: () => string | undefined;
+  },
 ): void {
   const inputSchema = {
     query: z.string().describe("The search query"),
@@ -166,7 +175,8 @@ export function registerSearchTool(
             top_score: topScore,
             latency_ms: latencyMs,
             source_name: toolConfig.source,
-            session_id: null,
+            session_id: options?.getSessionId?.() ?? null,
+            request_source: options?.getRequestSource?.() ?? null,
           },
           logQueries,
         ).catch((err) => {
