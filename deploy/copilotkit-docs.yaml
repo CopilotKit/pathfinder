@@ -72,8 +72,10 @@ sources:
       strip_route_groups: true
       strip_index: true
     file_patterns:
+      # .mdx only — the docs/ tree's two .md files (README.md, ag_ui.md) are a
+      # folder README and a raw spec, not rendered product pages, and keep their
+      # extension under a .mdx-only strip_suffix, deriving 404 URLs.
       - "**/*.mdx"
-      - "**/*.md"
     chunk:
       target_tokens: 600
       overlap_tokens: 50
