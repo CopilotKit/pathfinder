@@ -209,7 +209,10 @@ describe("Atlas cache staleness and gardening", () => {
       expect(summary).toEqual({ regenerated: 0, failed: 2 });
       // The second page's bookkeeping should still have run.
       expect(spy).toHaveBeenCalledTimes(2);
-      expect(spy).toHaveBeenLastCalledWith("runtime/b", "generator unavailable");
+      expect(spy).toHaveBeenLastCalledWith(
+        "runtime/b",
+        "generator unavailable",
+      );
     });
   });
 });

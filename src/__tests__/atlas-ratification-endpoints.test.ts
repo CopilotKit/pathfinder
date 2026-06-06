@@ -466,18 +466,13 @@ describe("Atlas ratification endpoints", () => {
     await approveAtlasSeedEntry("runtime:approved", "reviewer");
     server = await startServer();
 
-    await request(
-      server,
-      "POST",
-      "/api/atlas/candidates/reject",
-      {
-        headers: {
-          Authorization: "Bearer secret",
-          "X-Atlas-Actor": "reviewer",
-        },
-        body: { canonicalKey: "runtime:rejected", reason: "bad evidence" },
+    await request(server, "POST", "/api/atlas/candidates/reject", {
+      headers: {
+        Authorization: "Bearer secret",
+        "X-Atlas-Actor": "reviewer",
       },
-    );
+      body: { canonicalKey: "runtime:rejected", reason: "bad evidence" },
+    });
 
     const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
     const result = await provider.fullAcquire();
