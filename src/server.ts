@@ -3148,8 +3148,19 @@ function atlasActor(req: Request): string {
 }
 
 function atlasCanonicalKey(req: Request): string {
+  // Canonical keys can contain "/" (e.g. "github-pr:atlas:owner/repo:42"). The
+  // route uses a wildcard param so a literal "/" no longer truncates the
+  // segment; the wildcard capture is NOT auto-decoded by Express, so callers
+  // encodeURIComponent the key and we decode it here. A bare ":canonicalKey"
+  // would only survive %2F-escaping (Express auto-decodes that), but would
+  // still 404 on a literal unescaped slash — the wildcard handles both.
   const value = req.params.canonicalKey;
-  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
+  const raw = Array.isArray(value) ? (value.join("/") ?? "") : (value ?? "");
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function atlasCanonicalKeyFromBody(req: Request): string {
@@ -3192,8 +3203,23 @@ async function approveAtlasCandidate(
       canonicalKey,
       atlasActor(req),
     );
-    orchestratorRef?.queueSourceReindex(candidate.sourceName);
-    res.json({ candidate });
+    let reindexQueued = false;
+    if (orchestratorRef) {
+      orchestratorRef.queueSourceReindex(candidate.sourceName);
+      reindexQueued = true;
+    } else {
+      // The ratification routes mount unconditionally, but orchestratorRef is
+      // only wired when search/knowledge tools are enabled. With Atlas sources
+      // but no such tools, approval persists yet nothing drives a reindex — so
+      // make the gap loud and actionable rather than silently returning 200.
+      console.error(
+        `[atlas] Approved candidate "${canonicalKey}" (source "${candidate.sourceName}"): ` +
+          `approval persisted but reindex NOT queued — no indexing orchestrator is wired ` +
+          `(search/knowledge tools disabled). Approved content will NOT be indexed until a ` +
+          `reindex runs for source "${candidate.sourceName}".`,
+      );
+    }
+    res.json({ candidate, reindexQueued });
   } catch (err) {
     handleAtlasRatificationError(res, "approve", err);
   }
@@ -3256,7 +3282,7 @@ export function registerAtlasRatificationRoutes(app: express.Express): void {
   );
 
   app.post(
-    "/api/atlas/candidates/:canonicalKey/approve",
+    "/api/atlas/candidates/*canonicalKey/approve",
     atlasRatificationAuth,
     async (req: Request, res: Response) => {
       await approveAtlasCandidate(atlasCanonicalKey(req), req, res);
@@ -3272,7 +3298,7 @@ export function registerAtlasRatificationRoutes(app: express.Express): void {
   );
 
   app.post(
-    "/api/atlas/candidates/:canonicalKey/reject",
+    "/api/atlas/candidates/*canonicalKey/reject",
     atlasRatificationAuth,
     async (req: Request, res: Response) => {
       await rejectAtlasCandidate(atlasCanonicalKey(req), req, res);

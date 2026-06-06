@@ -316,6 +316,83 @@ describe("Atlas ratification endpoints", () => {
     });
   });
 
+  it("resolves slash-bearing canonical keys on the path-param approve route", async () => {
+    const canonicalKey = "github-pr:atlas:org/repo:42";
+    await upsertAtlasSeedCandidate({
+      canonicalKey,
+      sourceName: "atlas",
+      title: "Slash key path param",
+      content: "Candidate with a slash-bearing key via path param",
+      provenance: {},
+      evidence: [],
+    });
+    server = await startServer();
+
+    // Encode the ":" but leave the "/" LITERAL — this is exactly the shape that
+    // truncated the old ":canonicalKey" segment and made the route address the
+    // wrong (nonexistent) key. The wildcard route must reconstruct the full key.
+    const literalSlashPath = canonicalKey
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
+    const approved = await request(
+      server,
+      "POST",
+      `/api/atlas/candidates/${literalSlashPath}/approve`,
+      {
+        headers: {
+          Authorization: "Bearer secret",
+          "X-Atlas-Actor": "reviewer@example.test",
+        },
+      },
+    );
+
+    expect(approved.status).toBe(200);
+    expect(JSON.parse(approved.body).candidate).toMatchObject({
+      canonicalKey,
+      status: "approved",
+      approvedBy: "reviewer@example.test",
+    });
+  });
+
+  it("approves without an orchestrator: logs loudly and reports reindexQueued:false", async () => {
+    await upsertAtlasSeedCandidate({
+      canonicalKey: "runtime:approve-no-orchestrator",
+      sourceName: "atlas",
+      title: "Approve without orchestrator",
+      content: "Candidate approved while no orchestrator is wired",
+      provenance: {},
+      evidence: [],
+    });
+    __setAtlasOrchestratorForTesting(null);
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    server = await startServer();
+
+    const approved = await request(
+      server,
+      "POST",
+      "/api/atlas/candidates/runtime%3Aapprove-no-orchestrator/approve",
+      {
+        headers: {
+          Authorization: "Bearer secret",
+          "X-Atlas-Actor": "reviewer@example.test",
+        },
+      },
+    );
+
+    expect(approved.status).toBe(200);
+    const body = JSON.parse(approved.body);
+    expect(body.reindexQueued).toBe(false);
+    expect(body.candidate).toMatchObject({
+      canonicalKey: "runtime:approve-no-orchestrator",
+      status: "approved",
+    });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("reindex NOT queued"),
+    );
+    consoleSpy.mockRestore();
+  });
+
   it("approves and rejects candidates with the authenticated actor", async () => {
     await upsertAtlasSeedCandidate({
       canonicalKey: "runtime:approve",
