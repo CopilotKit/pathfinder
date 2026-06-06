@@ -29,6 +29,7 @@
   },
   "main": "dist/index.js",
   "bin": {
+    "atlas": "dist/atlas-cli.js",
     "pathfinder": "dist/cli.js"
   },
   "publishConfig": {
