@@ -741,8 +741,11 @@
       })();
 
       // --- Constants / helpers ---
-      // Upper bound used by the "All time" preset. Server-side MAX_DAYS must
-      // stay >= this value.
+      // Sentinel "days" value the "All time" preset sends. MUST match
+      // ALL_TIME_DAYS in src/db/analytics.ts (the canonical source) — the DB
+      // layer treats a window >= this value as "no lower time bound" so the
+      // totals span every row. Server-side MAX_DAYS stays strictly above this
+      // value so the preset is admitted rather than 400'd.
       var ALL_TIME_DAYS = 99999;
 
       // Dedicated error so load()'s catch block can distinguish auth failures
