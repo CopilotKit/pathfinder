@@ -9,12 +9,22 @@ const mockGetTopQueries = vi.fn();
 const mockGetEmptyQueries = vi.fn();
 const mockGetToolCounts = vi.fn();
 
-vi.mock("../db/analytics.js", () => ({
-  getAnalyticsSummary: (...args: unknown[]) => mockGetAnalyticsSummary(...args),
-  getTopQueries: (...args: unknown[]) => mockGetTopQueries(...args),
-  getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
-  getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
-}));
+// Pure request-source helpers are imported by server.ts (parseAnalyticsFilter
+// + requestSourceFromHeaders). They carry no DB dependency, so the mock
+// re-exports the real implementations via importOriginal rather than stubbing
+// them — otherwise server.ts blows up on `REQUEST_SOURCE_VALUES` being
+// undefined. The reader functions (getAnalyticsSummary etc.) stay mocked.
+vi.mock("../db/analytics.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../db/analytics.js")>();
+  return {
+    ...actual,
+    getAnalyticsSummary: (...args: unknown[]) =>
+      mockGetAnalyticsSummary(...args),
+    getTopQueries: (...args: unknown[]) => mockGetTopQueries(...args),
+    getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
+    getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
+  };
+});
 
 // Mock config — analyticsAuth now uses getAnalyticsConfig
 vi.mock("../config.js", () => ({
@@ -50,6 +60,7 @@ import { getAnalyticsConfig, getConfig } from "../config.js";
 import {
   analyticsAuth,
   parseAnalyticsFilter,
+  requestSourceFromHeaders,
   __resetAnalyticsTokenForTesting,
   MAX_DAYS,
 } from "../server.js";
@@ -521,6 +532,49 @@ describe("analyticsAuth middleware", () => {
 });
 
 // ---------------------------------------------------------------------------
+// requestSourceFromHeaders — X-Pathfinder-Source capture at MCP init
+// ---------------------------------------------------------------------------
+
+describe("requestSourceFromHeaders", () => {
+  function mkReq(headers: Record<string, unknown>): Request {
+    return { headers } as unknown as Request;
+  }
+
+  it("reads the X-Pathfinder-Source header (Express lower-cases it)", () => {
+    expect(
+      requestSourceFromHeaders(mkReq({ "x-pathfinder-source": "synthetic" })),
+    ).toBe("synthetic");
+    expect(
+      requestSourceFromHeaders(mkReq({ "x-pathfinder-source": "analysis" })),
+    ).toBe("analysis");
+  });
+
+  it("normalizes case/whitespace", () => {
+    expect(
+      requestSourceFromHeaders(mkReq({ "x-pathfinder-source": " User " })),
+    ).toBe("user");
+  });
+
+  it("defaults to 'user' when the header is absent", () => {
+    expect(requestSourceFromHeaders(mkReq({}))).toBe("user");
+  });
+
+  it("defaults to 'user' for an unrecognized value", () => {
+    expect(
+      requestSourceFromHeaders(mkReq({ "x-pathfinder-source": "crawler" })),
+    ).toBe("user");
+  });
+
+  it("handles an array-shaped header value defensively (takes first)", () => {
+    expect(
+      requestSourceFromHeaders(
+        mkReq({ "x-pathfinder-source": ["analysis", "user"] }),
+      ),
+    ).toBe("analysis");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // parseAnalyticsFilter — from/to validation
 // ---------------------------------------------------------------------------
 
@@ -742,6 +796,7 @@ describe("parseAnalyticsFilter from/to validation", () => {
     ["limit", { limit: ["10", "20"] }],
     ["tool_type", { tool_type: ["search", "collect"] }],
     ["source", { source: ["docs", "api"] }],
+    ["request_source", { request_source: ["user", "synthetic"] }],
   ])(
     "rejects array query param `%s` (Express multi-value) with 400",
     (_name, query) => {
@@ -753,6 +808,53 @@ describe("parseAnalyticsFilter from/to validation", () => {
       }
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // request_source audience parameter
+  // ---------------------------------------------------------------------------
+
+  it("omits request_source from the filter when the param is absent (default = real users downstream)", () => {
+    const result = parseAnalyticsFilter(mkReq({}) as Request);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.filter.request_source).toBeUndefined();
+    }
+  });
+
+  it.each(["user", "synthetic", "analysis", "all"])(
+    "accepts request_source=%s",
+    (value) => {
+      const result = parseAnalyticsFilter(
+        mkReq({ request_source: value }) as Request,
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.filter.request_source).toBe(value);
+      }
+    },
+  );
+
+  it("rejects an unknown request_source with 400 rather than silently defaulting", () => {
+    const result = parseAnalyticsFilter(
+      mkReq({ request_source: "robot" }) as Request,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBe("invalid_request");
+      expect(result.body.error_description).toMatch(/request_source/);
+    }
+  });
+
+  it("rejects empty request_source with 400", () => {
+    const result = parseAnalyticsFilter(
+      mkReq({ request_source: "" }) as Request,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // Range-width cap. The server caps from/to span at MAX_DAYS so a client

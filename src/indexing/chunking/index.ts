@@ -6,6 +6,7 @@ type ChunkerFn = (
   content: string,
   filePath: string,
   config: SourceConfig,
+  absoluteFilePath?: string,
 ) => ChunkOutput[];
 
 const registry = new Map<string, ChunkerFn>();

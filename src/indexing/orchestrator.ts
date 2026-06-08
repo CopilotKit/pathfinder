@@ -768,11 +768,46 @@ export class IndexingOrchestrator {
             result = await provider.fullAcquire();
           }
 
+          // Collect per-item failures from both the remove and index passes. A
+          // failed item/delete must NOT advance the state token past it: the
+          // pipeline swallows the individual error to keep the batch resilient,
+          // but if we then persist the new token the failed item falls behind it
+          // and is never re-processed (permanent silent loss). When anything
+          // failed we leave the prior token in place and mark the run errored so
+          // the next incremental run reprocesses the failed items.
+          const failedIds: string[] = [];
           if (result.removedIds.length > 0) {
-            await pipeline.removeItems(result.removedIds);
+            const { failedIds: removeFailed } = await pipeline.removeItems(
+              result.removedIds,
+            );
+            failedIds.push(...removeFailed);
           }
           if (result.items.length > 0) {
-            await pipeline.indexItems(result.items, result.stateToken);
+            const { failedIds: indexFailed } = await pipeline.indexItems(
+              result.items,
+              result.stateToken,
+            );
+            failedIds.push(...indexFailed);
+          }
+
+          if (failedIds.length > 0) {
+            // Do NOT advance last_commit_sha — setIndexStatus preserves the
+            // prior token, so the next incremental run re-diffs from where we
+            // were and reprocesses the items that failed this run. Return false
+            // so the caller treats this source as NOT successfully reindexed:
+            // it is excluded from affectedSourceNames, so onReindexComplete and
+            // the Atlas cache invalidation only fire for sources that fully
+            // succeeded.
+            console.error(
+              `[orchestrator] Indexing for ${sourceConfig.name} had ${failedIds.length} failed item(s); holding state token for retry: ${failedIds.slice(0, 10).join(", ")}${failedIds.length > 10 ? " …" : ""}`,
+            );
+            await this.setIndexStatus(
+              sourceConfig.type,
+              sourceConfig.name,
+              "error",
+              `${failedIds.length} item(s) failed to index/remove; state token held for retry`,
+            );
+            return false;
           }
 
           await upsertIndexState({

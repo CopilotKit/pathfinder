@@ -187,6 +187,7 @@ describe("generatePostSchemaMigration", () => {
       "latency_ms",
       "source_name",
       "session_id",
+      "request_source",
       "created_at",
     ]) {
       expect(sql).toContain(col);
@@ -201,5 +202,46 @@ describe("generatePostSchemaMigration", () => {
     expect(sql).toContain(
       "CREATE INDEX IF NOT EXISTS idx_query_log_tool_name ON query_log (tool_name)",
     );
+  });
+
+  it("adds request_source via idempotent ADD COLUMN IF NOT EXISTS for back-compat", () => {
+    // Installs whose query_log predates the request_source column must pick it
+    // up without a destructive migration. The ALTER ... ADD COLUMN IF NOT
+    // EXISTS is what makes re-running the post-schema migration safe on both
+    // fresh and existing databases.
+    const sql = generatePostSchemaMigration();
+    expect(sql).toContain(
+      "ALTER TABLE query_log ADD COLUMN IF NOT EXISTS request_source TEXT",
+    );
+  });
+
+  it("indexes request_source for audience-filtered analytics reads", () => {
+    const sql = generatePostSchemaMigration();
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_query_log_request_source ON query_log (request_source)",
+    );
+  });
+
+  it("creates the webhook_deliveries table and its indexes", () => {
+    // The JSDoc on generatePostSchemaMigration claims it also creates
+    // webhook_deliveries (alongside query_log) — lock that claim so the
+    // doc and the DDL stay in sync.
+    const sql = generatePostSchemaMigration();
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS webhook_deliveries");
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_source ON webhook_deliveries (source)",
+    );
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_delivered_at ON webhook_deliveries (delivered_at)",
+    );
+  });
+
+  it("does NOT append the tsvector trigger DDL (returned separately)", () => {
+    // generateTsvTriggerDdl() is the source of the trigger DDL; the
+    // post-schema migration returns only the core (PGlite-safe) SQL. The
+    // JSDoc must not claim the trigger is "appended" here.
+    const sql = generatePostSchemaMigration();
+    expect(sql).not.toContain("CREATE TRIGGER");
+    expect(sql).not.toContain("chunks_tsv_trigger");
   });
 });

@@ -13,6 +13,30 @@ import { getPool } from "./client.js";
 export const REDACTED_QUERY_TEXT = "<redacted>";
 
 /**
+ * Sentinel written to `query_log.query_text` by the knowledge-tool browse
+ * path (empty query → "return all FAQ entries above confidence"). It is a
+ * synthetic marker, NOT a real user search, so the empty-queries reader
+ * excludes it the same way it excludes {@link REDACTED_QUERY_TEXT} — an empty
+ * browse call should not surface as a literal `<browse>` row in the
+ * Empty-Result dashboard. The value MUST stay in sync with the literal logged
+ * in `src/mcp/tools/knowledge.ts`.
+ */
+export const BROWSE_QUERY_TEXT = "<browse>";
+
+/**
+ * Sentinel `days` value meaning "all time" — no lower time bound at all. The
+ * dashboard's "All time" preset sends this (docs/analytics.html
+ * ALL_TIME_DAYS) and the server's `days` parser admits it (server.ts
+ * MAX_DAYS=100000 stays above it). When a windowed reader is asked for a
+ * window `>= ALL_TIME_DAYS`, {@link buildDateWindow} OMITS the lower-bound
+ * `created_at >=` clause entirely instead of clamping to
+ * {@link ROLLING_WINDOW_CAP_DAYS}, so the summary/aggregate cards genuinely
+ * span every row — including history older than the rolling cap. Exported so
+ * the server-side comment and tests share one source of truth.
+ */
+export const ALL_TIME_DAYS = 99999;
+
+/**
  * Cap on the number of latency rows fetched for p95 computation. PGlite
  * doesn't support `percentile_cont`, so we pull latencies to JS and sort
  * them; on "All time" (days=99999) with a busy install this would be
@@ -28,6 +52,71 @@ export const REDACTED_QUERY_TEXT = "<redacted>";
  */
 export const P95_LATENCY_ROW_CAP = 100000;
 
+/**
+ * Score threshold below which a non-empty result set is considered
+ * "low confidence". A query that returned rows but whose best match scored
+ * under this value is surfaced separately so operators can spot content gaps
+ * that look like hits but aren't actually relevant. Exported so tool handlers,
+ * readers, and tests share a single source of truth.
+ *
+ * Predicate (matches the brief): `result_count > 0 AND top_score < 0.5`.
+ * `top_score IS NULL` (e.g. browse/keyword rows that never compute a cosine
+ * score) is intentionally NOT low-confidence — absence of a score is not a
+ * low score.
+ */
+export const LOW_CONFIDENCE_SCORE_THRESHOLD = 0.5;
+
+/**
+ * Canonical request-origin tags persisted on `query_log.request_source`.
+ * Sourced from the `X-Pathfinder-Source` request header on the MCP init
+ * request. Anything outside this set (including a missing header) is coerced
+ * to {@link DEFAULT_REQUEST_SOURCE} at the edge so the column only ever holds
+ * a known value going forward.
+ */
+export const REQUEST_SOURCE_VALUES = ["user", "synthetic", "analysis"] as const;
+export type RequestSource = (typeof REQUEST_SOURCE_VALUES)[number];
+
+/**
+ * HTTP header that carries the request-origin tag on the MCP init request.
+ * Lower-cased because Node/Express normalize header names to lower case on
+ * `req.headers`. Exported so the server-side capture site and tests share one
+ * literal.
+ */
+export const REQUEST_SOURCE_HEADER = "x-pathfinder-source";
+
+/**
+ * Default request source when the `X-Pathfinder-Source` header is absent or
+ * not one of {@link REQUEST_SOURCE_VALUES}. New traffic without an explicit
+ * tag is treated as a real user — the conservative choice that keeps the
+ * default KPIs (which exclude synthetic/analysis) honest.
+ */
+export const DEFAULT_REQUEST_SOURCE: RequestSource = "user";
+
+/**
+ * Request-source values that count as "real users" for the default analytics
+ * KPIs. Includes NULL (historical rows predating the column) via the SQL in
+ * {@link buildRequestSourceClause}. Synthetic/analysis traffic is excluded by
+ * default and only included when the caller explicitly asks for an
+ * all-sources view (see {@link AnalyticsFilter.request_source}).
+ */
+export const REAL_USER_REQUEST_SOURCES: readonly RequestSource[] = ["user"];
+
+/**
+ * Normalize an arbitrary `X-Pathfinder-Source` header value to a known
+ * {@link RequestSource}. Unknown/empty/missing values fall back to
+ * {@link DEFAULT_REQUEST_SOURCE}. Case-insensitive and whitespace-trimmed so
+ * `"Synthetic"` / `" analysis "` still tag correctly.
+ */
+export function normalizeRequestSource(
+  value: string | null | undefined,
+): RequestSource {
+  if (typeof value !== "string") return DEFAULT_REQUEST_SOURCE;
+  const v = value.trim().toLowerCase();
+  return (REQUEST_SOURCE_VALUES as readonly string[]).includes(v)
+    ? (v as RequestSource)
+    : DEFAULT_REQUEST_SOURCE;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -40,6 +129,13 @@ export interface QueryLogEntry {
   latency_ms: number;
   source_name: string | null;
   session_id: string | null;
+  /**
+   * Request-origin tag (user|synthetic|analysis) from X-Pathfinder-Source.
+   * Optional on the entry so existing call sites that don't tag still compile;
+   * the writer coerces an absent/unknown value to {@link DEFAULT_REQUEST_SOURCE}
+   * so the persisted column is always a known value for new rows.
+   */
+  request_source?: RequestSource | string | null;
 }
 
 export interface AnalyticsSummary {
@@ -47,6 +143,22 @@ export interface AnalyticsSummary {
   total_queries_window: number;
   empty_result_count_window: number;
   empty_result_rate_window: number;
+  /**
+   * Count of "low confidence" queries in the window: rows that returned at
+   * least one result but whose top_score fell below
+   * {@link LOW_CONFIDENCE_SCORE_THRESHOLD}. Computed over the SAME population
+   * as the other windowed cards (backfilled + redacted rows excluded, default
+   * request-source filter applied) so it's directly comparable to
+   * total_queries_window. Rows with a NULL top_score are NOT counted —
+   * absence of a score is not a low score.
+   */
+  low_confidence_count_window: number;
+  /**
+   * low_confidence_count_window / total_queries_window (0 when the window is
+   * empty). Surfaced alongside empty_result_rate_window so the dashboard can
+   * show "looks like a hit but isn't relevant" as its own signal.
+   */
+  low_confidence_rate_window: number;
   avg_latency_ms_window: number;
   p95_latency_ms_window: number;
   /**
@@ -110,9 +222,27 @@ export interface AnalyticsFilter {
    */
   include_service_traffic?: boolean;
   /**
+   * Request-origin filter for the analytics readers.
+   *
+   * - `undefined` (the default): restrict to REAL USER traffic —
+   *   `request_source IN ('user') OR request_source IS NULL`. This is what
+   *   makes the dashboard's KPIs default to real users while still counting
+   *   historical rows (NULL) that predate the column.
+   * - `"all"`: no request-source restriction — every row regardless of origin.
+   *   Use for the explicit "all sources" dashboard view.
+   * - a specific {@link RequestSource} (`"user"` | `"synthetic"` | `"analysis"`):
+   *   restrict to exactly that origin. `"user"` here ALSO includes NULL rows
+   *   (they're real users); `"synthetic"`/`"analysis"` match the literal value
+   *   only.
+   */
+  request_source?: RequestSource | "all";
+  /**
    * Optional inclusive date range. When both `from` and `to` are set the
    * underlying queries filter on `created_at >= from AND created_at <= to`
-   * instead of the default `NOW() - INTERVAL '<days> days'` window.
+   * instead of the default rolling window — a UTC-calendar-day-aligned
+   * `created_at >= (NOW() AT TIME ZONE 'UTC')::date - (LEAST(days, cap) - 1)`
+   * (see {@link buildDateWindow}), or no lower bound at all when
+   * `days >= ALL_TIME_DAYS`.
    *
    * Callers should ensure both are provided together. Endpoints reject
    * half-specified ranges, calendar-invalid dates (e.g. Feb 30),
@@ -139,10 +269,16 @@ export async function logQuery(
 ): Promise<void> {
   const pool = getPool();
   const text = logQueryText ? entry.query_text : REDACTED_QUERY_TEXT;
+  // Coerce the request source to a known value at the write boundary so the
+  // column only ever holds user|synthetic|analysis going forward (an absent or
+  // unrecognized tag becomes DEFAULT_REQUEST_SOURCE = 'user'). Historical rows
+  // written before this column existed stay NULL and are read back as real
+  // users by the analytics layer.
+  const requestSource = normalizeRequestSource(entry.request_source);
   try {
     await pool.query(
-      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, request_source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         entry.tool_name,
         text,
@@ -151,6 +287,7 @@ export async function logQuery(
         entry.latency_ms,
         entry.source_name,
         entry.session_id,
+        requestSource,
       ],
     );
   } catch (err) {
@@ -230,6 +367,53 @@ function whereAnd(baseClauses: string[], filterClauses: string[]): string {
 }
 
 /**
+ * Build the request-source WHERE fragment + params for a reader.
+ *
+ * Semantics (see {@link AnalyticsFilter.request_source}):
+ *  - `undefined` → default to real users:
+ *    `(request_source IN ('user') OR request_source IS NULL)`. NULL is folded
+ *    in so rows predating the column (which have no tag) still count as real
+ *    user traffic — this is the back-compat guarantee.
+ *  - `"all"` → no clause (every row, regardless of origin).
+ *  - `"user"` → same as the default (real users incl. NULL).
+ *  - `"synthetic"` | `"analysis"` → exact-match on the literal value
+ *    (`request_source = $N`); NULL rows are NOT synthetic/analysis so they're
+ *    excluded.
+ *
+ * Returns `{ clauses, params, nextIdx }` shaped like {@link buildFilterClauses}
+ * so callers can splice it into their base clauses + param list uniformly.
+ */
+function buildRequestSourceClause(
+  filter: AnalyticsFilter,
+  startIdx: number,
+): { clauses: string[]; params: unknown[]; nextIdx: number } {
+  const rs = filter.request_source;
+
+  if (rs === "all") {
+    return { clauses: [], params: [], nextIdx: startIdx };
+  }
+
+  // Default (undefined) and explicit "user" both mean real users, which
+  // includes the untagged historical rows (request_source IS NULL).
+  if (rs === undefined || rs === "user") {
+    return {
+      clauses: [`(request_source = $${startIdx} OR request_source IS NULL)`],
+      params: ["user"],
+      nextIdx: startIdx + 1,
+    };
+  }
+
+  // Specific non-user origin: exact literal match. NULL rows are real users,
+  // not synthetic/analysis, so the bare equality (which is NULL-rejecting in
+  // SQL three-valued logic) correctly excludes them.
+  return {
+    clauses: [`request_source = $${startIdx}`],
+    params: [rs],
+    nextIdx: startIdx + 1,
+  };
+}
+
+/**
  * Rolling-window cap, applied to every days-based windowed aggregate
  * (summary totals, latency, by-source, per-day, top/empty-queries, tool
  * counts). The per-day chart renders one bar per day so a year of bars is
@@ -237,9 +421,13 @@ function whereAnd(baseClauses: string[], filterClauses: string[]): string {
  * with no UI benefit. Other aggregates share the cap so `days=1000` on a
  * rolling window produces consistent results across every card on the
  * dashboard. Explicit from/to ranges are user-chosen bounds and pass
- * through uncapped.
+ * through uncapped (the per-day series width is still capped — see
+ * {@link buildPerDayWindow}). The all-time sentinel
+ * ({@link ALL_TIME_DAYS}) bypasses this cap for the summary/aggregate window
+ * entirely (no lower bound). Exported so the per-day cap and tests reference
+ * the same constant.
  */
-const ROLLING_WINDOW_CAP_DAYS = 366;
+export const ROLLING_WINDOW_CAP_DAYS = 366;
 
 /**
  * Build a date-window clause + params for the given filter, falling back to
@@ -247,6 +435,10 @@ const ROLLING_WINDOW_CAP_DAYS = 366;
  *
  * - When `filter.from` and `filter.to` are both set, returns
  *   `created_at >= $N AND created_at <= $N+1` with the two Date params.
+ * - When `days >= ALL_TIME_DAYS` (the "All time" sentinel) and no from/to is
+ *   set, returns NO clause and binds NO params — the window has no lower
+ *   bound, so the summary/aggregate cards span every row regardless of how
+ *   far back history goes (the rolling cap does not apply to "all time").
  * - Otherwise, returns a UTC-calendar-day-bounded rolling window:
  *   `created_at >= (NOW() AT TIME ZONE 'UTC')::date - (LEAST($N, 366) - 1)`
  *   with the `days` number param. Rolling mode semantics: "last N days"
@@ -277,6 +469,14 @@ function buildDateWindow(
       nextIdx: startIdx + 2,
     };
   }
+  // "All time": omit the lower bound entirely so the summary/aggregate cards
+  // cover every row, not just the last ROLLING_WINDOW_CAP_DAYS. No clause and
+  // no param are emitted, so the caller's other clauses (latency_ms >= 0,
+  // redacted filter, request-source) still apply unchanged and the `$`
+  // placeholder numbering carries on from startIdx untouched.
+  if (days >= ALL_TIME_DAYS) {
+    return { clauses: [], params: [], nextIdx: startIdx };
+  }
   // Rolling: UTC-calendar-day-aligned. LEAST caps the span at
   // ROLLING_WINDOW_CAP_DAYS so `days=huge` can't produce an unbounded
   // subtraction. `-1` gives an inclusive N-day window ending today
@@ -304,12 +504,20 @@ function buildDateWindow(
  * my summary card"; reusing buildDateWindow removes the whole class of bug.
  *
  * The SERIES is emitted separately as UTC-midnight calendar days so that the
- * LEFT JOIN renders one bar per day even when no rows were logged. Rolling
- * mode caps the series at ROLLING_WINDOW_CAP_DAYS (shared with
- * buildDateWindow) so a huge `days` value can't bloat the payload. Range
- * mode passes through uncapped (user explicitly chose bounds) and forces
- * UTC on the series ::date cast so a non-UTC session TimeZone GUC can't
- * shift the series one day earlier than intended.
+ * LEFT JOIN renders one bar per day even when no rows were logged. The series
+ * width is ALWAYS capped at ROLLING_WINDOW_CAP_DAYS so the payload can never
+ * exceed a year of daily bars:
+ *  - Rolling mode caps via `LEAST($days, cap)` (shared with buildDateWindow),
+ *    so sum-of-bars == total_queries_window exactly.
+ *  - Range mode caps the UPPER bound at `from + (cap - 1)` days; the summary
+ *    aggregate still spans the full user-chosen range, but the chart only
+ *    renders the first `cap` days of it (a multi-thousand-day range would
+ *    otherwise emit one JSON row per day — payload bloat / DoS).
+ *  - All-time mode (days >= ALL_TIME_DAYS) emits a literal `cap`-day series
+ *    ending today and binds NO placeholder (buildDateWindow returns no date
+ *    clause for all-time, so the inner aggregate counts every row).
+ * All three force UTC on the series ::date cast so a non-UTC session TimeZone
+ * GUC can't shift the series one day earlier than intended.
  *
  * `startIdx` is the next available `$` placeholder index; `nextIdx` is the
  * next index to use after this helper's params.
@@ -326,23 +534,46 @@ function buildPerDayWindow(
 } {
   // Inner WHERE is byte-identical to the summary window. For rolling mode
   // buildDateWindow binds $startIdx = days; for range mode it binds
-  // $startIdx = from and $startIdx+1 = to. The series below reuses those
-  // exact placeholders so the two sides can never drift apart.
+  // $startIdx = from and $startIdx+1 = to; for all-time it binds nothing.
+  // The series below reuses those exact placeholders so the two sides can
+  // never drift apart.
   const dw = buildDateWindow(filter, days, startIdx);
   const whereClause = dw.clauses.join(" AND ");
 
   if (filter.from && filter.to) {
+    // Range: lower bound is `($from AT TIME ZONE 'UTC')::date`; upper bound is
+    // capped at `lower + (cap - 1)` days via LEAST so the series width never
+    // exceeds ROLLING_WINDOW_CAP_DAYS even for an enormous range (the endpoint
+    // allows a from/to span up to MAX_DAYS, which would otherwise emit ~100k
+    // daily rows). The `AT TIME ZONE 'UTC'` forces the timestamptz to be
+    // interpreted in UTC before the ::date cast; without it, a non-UTC session
+    // TimeZone GUC (common on managed Postgres that inherit a regional
+    // default) coerces `'2026-04-15T00:00:00Z'::date` to the session-local day
+    // `2026-04-14`, shifting the series one day earlier than the caller
+    // intended. Combined with the UTC-normalized date_trunc in the inner
+    // aggregate (see getAnalyticsSummary), this keeps bars aligned regardless
+    // of TZ. The summary/aggregate WHERE (dw.clauses) still spans the FULL
+    // range — only the chart series is capped.
+    const fromDate = `($${startIdx}::timestamptz AT TIME ZONE 'UTC')::date`;
+    const toDate = `($${startIdx + 1}::timestamptz AT TIME ZONE 'UTC')::date`;
+    const cappedTo = `LEAST(${toDate}, ${fromDate} + (${ROLLING_WINDOW_CAP_DAYS} - 1))`;
     return {
-      // Range: `($from AT TIME ZONE 'UTC')::date .. ($to AT TIME ZONE
-      // 'UTC')::date`. The `AT TIME ZONE 'UTC'` forces the timestamptz to
-      // be interpreted in UTC before the ::date cast; without it, a
-      // non-UTC session TimeZone GUC (common on managed Postgres that
-      // inherit a regional default) coerces `'2026-04-15T00:00:00Z'::date`
-      // to the session-local day `2026-04-14`, shifting the series one
-      // day earlier than the caller intended. Combined with the UTC-
-      // normalized date_trunc in the inner aggregate (see
-      // getAnalyticsSummary), this keeps bars aligned regardless of TZ.
-      seriesExpr: `generate_series(($${startIdx}::timestamptz AT TIME ZONE 'UTC')::date, ($${startIdx + 1}::timestamptz AT TIME ZONE 'UTC')::date, '1 day'::interval)`,
+      seriesExpr: `generate_series(${fromDate}, ${cappedTo}, '1 day'::interval)`,
+      whereClause,
+      params: dw.params,
+      nextIdx: dw.nextIdx,
+    };
+  }
+
+  if (days >= ALL_TIME_DAYS) {
+    // All-time. buildDateWindow emitted no date clause (whereClause is ""),
+    // so the inner aggregate counts every row. The series is a literal
+    // cap-day window ending today — bounded so years of history don't bloat
+    // the chart — and binds no placeholder. Rows older than the cap are still
+    // counted by the summary cards (no lower bound there); they simply don't
+    // render as bars.
+    return {
+      seriesExpr: `generate_series((NOW() AT TIME ZONE 'UTC')::date - (${ROLLING_WINDOW_CAP_DAYS} - 1), (NOW() AT TIME ZONE 'UTC')::date, '1 day'::interval)`,
       whereClause,
       params: dw.params,
       nextIdx: dw.nextIdx,
@@ -374,9 +605,15 @@ function buildPerDayWindow(
  * PGlite does NOT support percentile_cont(), so we fetch all latencies
  * and compute the percentile in JS.
  *
- * Uses nearest-rank (index = floor(n * 0.95)), not linear interpolation —
- * results may differ by one sample from Postgres' `percentile_cont(0.95)`
- * query.
+ * Index = `floor(n * 0.95)`, clamped to the last element. This is NOT the
+ * standard nearest-rank method (`ceil(0.95 * n) - 1`): for small n the two
+ * differ, and `floor` skews toward the high end. Concretely, for n = 20
+ * `floor(20 * 0.95) = 19`, which selects the MAXIMUM sample (index 19),
+ * whereas nearest-rank would pick index 18. We keep this behavior
+ * deliberately — the dashboard has been calibrated against it and the
+ * difference is at most one sample — and the boundary is pinned by a test so
+ * the comment and behavior cannot drift. Either way, results may differ by
+ * one sample from Postgres' `percentile_cont(0.95)` (which interpolates).
  */
 function computeP95(latencies: number[]): number {
   if (latencies.length === 0) return 0;
@@ -437,21 +674,41 @@ export async function getAnalyticsSummary(
   // the divergence is deliberate.
   const { clauses: fc2, params: fp2, nextIdx: n2 } = buildFilterClauses(filter);
   const dw2 = buildDateWindow(filter, days, n2);
-  const redactedIdx2 = dw2.nextIdx;
+  const rs2 = buildRequestSourceClause(filter, dw2.nextIdx);
+  const redactedIdx2 = rs2.nextIdx;
+  const lowConfIdx2 = redactedIdx2 + 1;
   const summaryBase = [
     ...dw2.clauses,
+    ...rs2.clauses,
     "latency_ms >= 0",
     `query_text != $${redactedIdx2}`,
   ];
   const summaryWhere = whereAnd(summaryBase, fc2);
+  // low_confidence shares this subquery (and therefore the exact same
+  // population as total/empty/avg_latency) via a FILTER, so the
+  // low_confidence_rate denominator lines up with total_queries_window. The
+  // threshold is bound, not inlined, so LOW_CONFIDENCE_SCORE_THRESHOLD stays
+  // the single source of truth. `top_score IS NOT NULL` is part of the FILTER
+  // so NULL-score rows (browse/keyword) never count as low confidence.
   const summaryRes = await pool.query(
     `SELECT
         count(*)::int AS total,
         count(*) FILTER (WHERE result_count = 0)::int AS empty,
+        count(*) FILTER (
+          WHERE result_count > 0
+            AND top_score IS NOT NULL
+            AND top_score < $${lowConfIdx2}
+        )::int AS low_confidence,
         COALESCE(avg(latency_ms)::int, 0) AS avg_latency
     FROM query_log
     ${summaryWhere}`,
-    [...fp2, ...dw2.params, REDACTED_QUERY_TEXT],
+    [
+      ...fp2,
+      ...dw2.params,
+      ...rs2.params,
+      REDACTED_QUERY_TEXT,
+      LOW_CONFIDENCE_SCORE_THRESHOLD,
+    ],
   );
 
   // Latencies for p95 (exclude backfilled rows where latency_ms < 0, AND
@@ -466,9 +723,11 @@ export async function getAnalyticsSummary(
   // reading is known to be sampled rather than exact.
   const { clauses: fc3, params: fp3, nextIdx: n3 } = buildFilterClauses(filter);
   const dw3 = buildDateWindow(filter, days, n3);
-  const redactedIdxLatency = dw3.nextIdx;
+  const rs3 = buildRequestSourceClause(filter, dw3.nextIdx);
+  const redactedIdxLatency = rs3.nextIdx;
   const latencyBase = [
     ...dw3.clauses,
+    ...rs3.clauses,
     "latency_ms >= 0",
     `query_text != $${redactedIdxLatency}`,
   ];
@@ -481,7 +740,13 @@ export async function getAnalyticsSummary(
   // slice back to the cap for the actual p95 computation.
   const latencyRes = await pool.query(
     `SELECT latency_ms FROM query_log ${latencyWhere} ORDER BY random() LIMIT $${latencyLimitIdx}`,
-    [...fp3, ...dw3.params, REDACTED_QUERY_TEXT, P95_LATENCY_ROW_CAP + 1],
+    [
+      ...fp3,
+      ...dw3.params,
+      ...rs3.params,
+      REDACTED_QUERY_TEXT,
+      P95_LATENCY_ROW_CAP + 1,
+    ],
   );
   const p95Sampled = latencyRes.rows.length > P95_LATENCY_ROW_CAP;
   if (p95Sampled) {
@@ -494,9 +759,11 @@ export async function getAnalyticsSummary(
   // doughnut totals line up with summary + per-day.
   const { clauses: fc4, params: fp4, nextIdx: n4 } = buildFilterClauses(filter);
   const dw4 = buildDateWindow(filter, days, n4);
+  const rs4 = buildRequestSourceClause(filter, dw4.nextIdx);
   const sourceBase = [
     "source_name IS NOT NULL",
     ...dw4.clauses,
+    ...rs4.clauses,
     "latency_ms >= 0",
   ];
   const sourceWhere = whereAnd(sourceBase, fc4);
@@ -506,7 +773,7 @@ export async function getAnalyticsSummary(
     ${sourceWhere}
     GROUP BY source_name
     ORDER BY count DESC`,
-    [...fp4, ...dw4.params],
+    [...fp4, ...dw4.params, ...rs4.params],
   );
 
   // Per day (filtered). LEFT JOIN against generate_series so every day in
@@ -526,9 +793,14 @@ export async function getAnalyticsSummary(
   // zero-count days the gap-fill exists to surface.
   const { clauses: fc5, params: fp5, nextIdx: n5 } = buildFilterClauses(filter);
   const pdw = buildPerDayWindow(filter, days, n5);
-  const redactedIdx5 = pdw.nextIdx;
+  const rs5 = buildRequestSourceClause(filter, pdw.nextIdx);
+  const redactedIdx5 = rs5.nextIdx;
+  // pdw.whereClause is empty in all-time mode (buildDateWindow omits the date
+  // bound). Drop the empty fragment so whereAnd doesn't splice a dangling
+  // `AND` into the inner aggregate's WHERE.
   const dayBase = [
-    pdw.whereClause,
+    ...(pdw.whereClause ? [pdw.whereClause] : []),
+    ...rs5.clauses,
     "latency_ms >= 0",
     `query_text != $${redactedIdx5}`,
   ];
@@ -553,7 +825,7 @@ export async function getAnalyticsSummary(
        GROUP BY day
      ) q ON q.day = d.day::date
      ORDER BY d.day`,
-    [...fp5, ...pdw.params, REDACTED_QUERY_TEXT],
+    [...fp5, ...pdw.params, ...rs5.params, REDACTED_QUERY_TEXT],
   );
 
   // Earliest query day (UNFILTERED — the UI uses this to label windows
@@ -573,10 +845,26 @@ export async function getAnalyticsSummary(
     `SELECT min(created_at AT TIME ZONE 'UTC')::date::text AS earliest_day FROM query_log`,
   );
 
-  const totalQueries = totalRes.rows[0]?.count ?? 0;
+  // Coerce a DB numeric to a finite JS number, defaulting to 0. The summary
+  // columns are `::int`-cast in SQL, but PGlite and node-postgres disagree on
+  // whether integer/numeric columns deserialize as `number` or `string`
+  // (node-postgres returns `bigint`/`numeric` as strings). Trusting the driver
+  // typing risks a string leaking into total_queries_window or a NaN into the
+  // *_rate fields when the value is unexpectedly non-numeric. getTopQueries
+  // already guards its parseFloat results this way; mirror it here so the
+  // summary numerics stay consistent. Defensive given the `::int` casts —
+  // intentionally minimal.
+  const toFiniteNumber = (v: unknown): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const totalQueries = toFiniteNumber(totalRes.rows[0]?.count);
   const s = summaryRes.rows[0] ?? {};
-  const totalWindow = s.total ?? 0;
-  const emptyWindow = s.empty ?? 0;
+  const totalWindow = toFiniteNumber(s.total);
+  const emptyWindow = toFiniteNumber(s.empty);
+  const lowConfidenceWindow = toFiniteNumber(s.low_confidence);
+  const avgLatencyWindow = toFiniteNumber(s.avg_latency);
   // Normalize undefined (truly missing) to null so consumers get a
   // consistent shape regardless of whether the DB returned an empty
   // row, a row with NULL, or no row at all.
@@ -584,10 +872,14 @@ export async function getAnalyticsSummary(
     (earliestRes.rows[0]?.earliest_day as string | null | undefined) ?? null;
 
   // Compute p95 in application code. Slice back to the cap so the extra
-  // "overflow probe" row fetched above doesn't skew the sample size.
+  // "overflow probe" row fetched above doesn't skew the sample size. Coerce
+  // each latency through toFiniteNumber: node-postgres deserializes a numeric
+  // column as a STRING, so trusting `as number` here would leave computeP95
+  // sorting/returning strings (wrong/NaN p95). Mirrors the summary numerics
+  // above which already coerce defensively.
   const latencies = latencyRes.rows
     .slice(0, P95_LATENCY_ROW_CAP)
-    .map((r: Record<string, unknown>) => r.latency_ms as number);
+    .map((r: Record<string, unknown>) => toFiniteNumber(r.latency_ms));
   const p95Latency = computeP95(latencies);
 
   return {
@@ -595,7 +887,10 @@ export async function getAnalyticsSummary(
     total_queries_window: totalWindow,
     empty_result_count_window: emptyWindow,
     empty_result_rate_window: totalWindow > 0 ? emptyWindow / totalWindow : 0,
-    avg_latency_ms_window: s.avg_latency ?? 0,
+    low_confidence_count_window: lowConfidenceWindow,
+    low_confidence_rate_window:
+      totalWindow > 0 ? lowConfidenceWindow / totalWindow : 0,
+    avg_latency_ms_window: avgLatencyWindow,
     p95_latency_ms_window: p95Latency,
     // Only set when the cap was actually hit so existing consumers (tests,
     // older UI builds) can treat the absence of the flag as "exact".
@@ -633,12 +928,14 @@ export async function getTopQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
+  const rs = buildRequestSourceClause(filter, dw.nextIdx);
   // Bind REDACTED_QUERY_TEXT rather than interpolating the literal so the
   // sentinel has a single source of truth (the module constant) and the
   // SQL stays shielded from the value.
-  const redactedIdx = dw.nextIdx;
+  const redactedIdx = rs.nextIdx;
   const baseClauses = [
     ...dw.clauses,
+    ...rs.clauses,
     `query_text != $${redactedIdx}`,
     "latency_ms >= 0",
   ];
@@ -657,7 +954,7 @@ export async function getTopQueries(
     HAVING bool_or(result_count > 0)
     ORDER BY count DESC
     LIMIT $${redactedIdx + 1}`,
-    [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],
+    [...fp, ...dw.params, ...rs.params, REDACTED_QUERY_TEXT, limit],
   );
 
   return rows.map((r: Record<string, unknown>) => {
@@ -684,6 +981,13 @@ export async function getTopQueries(
  * Get queries that returned zero results. Grouped by
  * (query_text, tool_name, source_name); results with the same query text
  * but different tool/source appear separately.
+ *
+ * Both synthetic sentinels are excluded: REDACTED_QUERY_TEXT (log_queries:
+ * false) and BROWSE_QUERY_TEXT (the knowledge-tool browse path, which logs
+ * "<browse>" for an empty-query "return all FAQ entries" call). A browse call
+ * that happens to return zero entries is not a real "user searched and found
+ * nothing" gap, so surfacing a literal `<browse>` row in the Empty-Result
+ * dashboard would be misleading noise.
  */
 export async function getEmptyQueries(
   days: number = 7,
@@ -694,13 +998,19 @@ export async function getEmptyQueries(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
-  // Same rationale as getTopQueries: bind the REDACTED_QUERY_TEXT sentinel
-  // so the SQL literal isn't duplicated across reads.
-  const redactedIdx = dw.nextIdx;
+  const rs = buildRequestSourceClause(filter, dw.nextIdx);
+  // Same rationale as getTopQueries: bind the sentinels so the SQL literals
+  // aren't duplicated across reads. Both REDACTED_QUERY_TEXT and
+  // BROWSE_QUERY_TEXT are filtered out (see JSDoc).
+  const redactedIdx = rs.nextIdx;
+  const browseIdx = redactedIdx + 1;
+  const limitIdx = browseIdx + 1;
   const baseClauses = [
     "result_count = 0",
     ...dw.clauses,
+    ...rs.clauses,
     `query_text != $${redactedIdx}`,
+    `query_text != $${browseIdx}`,
     "latency_ms >= 0",
   ];
   const where = whereAnd(baseClauses, fc);
@@ -716,8 +1026,15 @@ export async function getEmptyQueries(
     ${where}
     GROUP BY query_text, tool_name, source_name
     ORDER BY count DESC
-    LIMIT $${redactedIdx + 1}`,
-    [...fp, ...dw.params, REDACTED_QUERY_TEXT, limit],
+    LIMIT $${limitIdx}`,
+    [
+      ...fp,
+      ...dw.params,
+      ...rs.params,
+      REDACTED_QUERY_TEXT,
+      BROWSE_QUERY_TEXT,
+      limit,
+    ],
   );
 
   return rows.map((r: Record<string, unknown>) => ({
@@ -764,9 +1081,13 @@ export async function getToolCounts(
     nextIdx,
   } = buildFilterClauses(sourceOnlyFilter);
   const dw = buildDateWindow(sourceOnlyFilter, days, nextIdx);
+  // request_source survives in `rest` (only tool_type is stripped above), so
+  // the tool-counts donut honors the same real-users-by-default behavior as
+  // every other windowed aggregate.
+  const rs = buildRequestSourceClause(sourceOnlyFilter, dw.nextIdx);
   // Exclude backfilled rows (latency_ms < 0) so tool counts match the
   // windowed aggregates used elsewhere (summary, latency, per-day).
-  const baseClauses = [...dw.clauses, "latency_ms >= 0"];
+  const baseClauses = [...dw.clauses, ...rs.clauses, "latency_ms >= 0"];
   const where = whereAnd(baseClauses, fc);
   const { rows } = await pool.query(
     `SELECT
@@ -776,7 +1097,7 @@ export async function getToolCounts(
     ${where}
     GROUP BY tool_type
     ORDER BY count DESC`,
-    [...fp, ...dw.params],
+    [...fp, ...dw.params, ...rs.params],
   );
 
   return rows.map((r: Record<string, unknown>) => ({

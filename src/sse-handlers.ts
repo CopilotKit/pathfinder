@@ -66,7 +66,13 @@ export interface SseHandlerDeps {
     | IpSessionLimiter
     | undefined
     | (() => IpSessionLimiter | undefined);
-  createMcpServer: () => McpServer;
+  /**
+   * Factory for a per-session MCP server. Receives the originating GET /sse
+   * request so the factory can read per-session request context (e.g. the
+   * X-Pathfinder-Source origin tag) off `req.headers`. The param is optional
+   * to stay backward-compatible with callers/tests that ignore the request.
+   */
+  createMcpServer: (req?: Request) => McpServer;
   /**
    * Workspace manager. Accepts either a direct instance or a getter to support
    * late binding in server.ts. Uses the structural `WorkspaceManagerLike`
@@ -346,8 +352,9 @@ export function createSseHandlers(deps: SseHandlerDeps): {
 
       // Attach a per-session MCP server. createMcpServer().connect() calls
       // transport.start() internally which writes SSE headers + the
-      // "endpoint" event to the response stream.
-      const server = createMcpServer();
+      // "endpoint" event to the response stream. Pass `req` so the factory can
+      // read the X-Pathfinder-Source origin tag off the init request headers.
+      const server = createMcpServer(req);
       await server.connect(transport);
 
       console.log(

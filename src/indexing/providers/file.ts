@@ -36,6 +36,29 @@ function authenticatedUrl(repoUrl: string, githubToken?: string): string {
   return repoUrl;
 }
 
+/**
+ * Build the per-file contribution to a local source's state token.
+ *
+ * The token folds path + mtime + size together so that change detection
+ * triggers a re-index when *either* mtime *or* size changes. Including size
+ * (in addition to mtime) catches content edits that preserve mtime — e.g.
+ * `cp -p`, some `git checkout`/restore, and `rsync --times` — which an
+ * mtime-only token would silently miss, leaving stale content indexed.
+ *
+ * Remaining limitation: a content change that preserves *both* mtime *and*
+ * size (an in-place edit of equal length) is still undetected by this token.
+ * Hashing file content would close that gap but would require reading every
+ * file on each scan; size is the minimal correct improvement that avoids that
+ * cost.
+ */
+export function localFileHashInput(
+  relPath: string,
+  mtimeMs: number,
+  size: number,
+): string {
+  return `${relPath}:${mtimeMs}:${size}\n`;
+}
+
 export class FileDataProvider implements DataProvider {
   private config: FileSourceConfig;
   private options: ProviderOptions;
@@ -131,7 +154,7 @@ export class FileDataProvider implements DataProvider {
           this.config.type,
         );
         if (hasLowSemanticValue(content)) continue;
-        items.push({ id: relPath, content, metadata });
+        items.push({ id: relPath, absolutePath: absPath, content, metadata });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`${this.logPrefix} Failed to read ${relPath}: ${msg}`);
@@ -207,9 +230,14 @@ export class FileDataProvider implements DataProvider {
       .split("\n")
       .map((f) => f.trim())
       .filter((f) => f.length > 0);
-    const pathPrefix = this.config.path
-      ? this.config.path.replace(/\/$/, "") + "/"
-      : "";
+    // Treat "." (and "") as "no prefix": a repo-root source walks from the
+    // repo root, and git-diff paths are repo-root-relative with NO leading
+    // "./". Deriving a "./" prefix from the truthy "." would filter out EVERY
+    // changed/deleted/renamed path, silently indexing nothing while advancing
+    // the state token. Mirrors the `path !== "."` guard in reindex-audit.ts.
+    const normPath =
+      this.config.path && this.config.path !== "." ? this.config.path : "";
+    const pathPrefix = normPath ? normPath.replace(/\/$/, "") + "/" : "";
     const scopedChanged = pathPrefix
       ? changedFiles.filter((f) => f.startsWith(pathPrefix))
       : changedFiles;
@@ -217,16 +245,13 @@ export class FileDataProvider implements DataProvider {
       .filter((f) => !f.split("/").some((seg) => this.skipDirs.has(seg)))
       .filter((f) => matchesPatterns(f, this.config));
 
-    if (matchingChanged.length === 0) {
-      console.log(`${this.logPrefix} No matching changes detected`);
-      return { items: [], removedIds: [], stateToken: headSha };
-    }
-
-    console.log(
-      `${this.logPrefix} Incremental acquire: ${matchingChanged.length} changed files`,
-    );
-
-    // Find deleted files
+    // Find deleted/renamed files. This MUST run even when matchingChanged is
+    // empty: a commit whose only matching-relevant change is a rename of a
+    // MATCHED file to a NON-matched extension (e.g. `docs/a.md` → `docs/b.txt`)
+    // produces an empty `--name-only` match set (only the non-matching new path
+    // is listed) yet still removes `docs/a.md` from the index. Detecting
+    // removals before the no-matching-changes short-circuit upholds the "never
+    // silently advance the state token past a removal" guarantee below.
     let removedFiles: string[] = [];
     try {
       const diffStatusOutput = await git.diff([
@@ -252,25 +277,66 @@ export class FileDataProvider implements DataProvider {
         .filter((f) => matchesPatterns(f, this.config));
       removedFiles = [...deletedFiles, ...renamedOldPaths];
     } catch (err) {
-      console.warn(
-        `${this.logPrefix} git diff --name-status failed, skipping deletion detection:`,
-        err instanceof Error ? err.message : err,
+      // Deletion detection failed. Do NOT swallow it as `removedFiles = []`:
+      // the changed-files diff already succeeded, so the caller would advance
+      // the state token while silently leaving stale/deleted docs in the index
+      // forever (a transient git error masquerading as "no deletions"). Throw
+      // so the orchestrator marks the run errored and holds the prior token —
+      // the next incremental run re-diffs from the same point and re-detects
+      // the deletions. (The changed-files diff failing earlier legitimately
+      // falls back to fullAcquire, which does its own DB-vs-disk deletion
+      // detection; this branch is specifically the case where we KNOW there
+      // were changes but can't tell which were deletions.)
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `${this.logPrefix} git diff --name-status (deletion detection) failed:`,
+        err,
       );
+      throw new Error(`${this.logPrefix} deletion detection failed: ${msg}`);
     }
+
+    if (matchingChanged.length === 0) {
+      // Genuine no-op only when there is also nothing to remove. When a rename
+      // out of the matched set leaves removals (removedFiles.length > 0), we
+      // must still process those deletions while advancing the token, rather
+      // than short-circuiting with removedIds: [] (which would strand the
+      // renamed-away file's chunks in the index forever).
+      if (removedFiles.length === 0) {
+        console.log(`${this.logPrefix} No matching changes detected`);
+        return { items: [], removedIds: [], stateToken: headSha };
+      }
+      return { items: [], removedIds: removedFiles, stateToken: headSha };
+    }
+
+    console.log(
+      `${this.logPrefix} Incremental acquire: ${matchingChanged.length} changed files`,
+    );
 
     // Read changed (non-deleted) files
     const filesToRead = matchingChanged.filter(
       (f) => !removedFiles.includes(f),
     );
     const items: ContentItem[] = [];
-    const skippedFiles: string[] = [];
+    // Files that should legitimately leave the index: size-exceeded and
+    // low-semantic-value content no longer belongs in the index, so it is safe
+    // (and correct) to fold these into removedIds.
+    const removedForContent: string[] = [];
+    // Read/extraction FAILURES on files that still exist on disk. These must NOT
+    // be deleted and must NOT let the state token advance over them — a
+    // transient EACCES/EIO/ENOMEM or an extractor parse error is not an
+    // intentional removal. Mirror the deletion-detection precedent above: throw
+    // after the loop so the orchestrator marks the run errored and holds the
+    // prior token, and the next incremental run re-diffs and retries the file.
+    // (Asymmetric-by-design with fullAcquire, which computes stale files from
+    // disk presence rather than post-extraction items for the same reason.)
+    const readFailures: string[] = [];
     for (const relPath of filesToRead) {
       const absPath = path.join(repoDir, relPath);
       if (!fs.existsSync(absPath)) continue;
       try {
         const stat = await fs.promises.stat(absPath);
         if (stat.size > this.maxFileSize) {
-          skippedFiles.push(relPath);
+          removedForContent.push(relPath);
           continue;
         }
         const { content, metadata } = await extractContent(
@@ -278,20 +344,31 @@ export class FileDataProvider implements DataProvider {
           this.config.type,
         );
         if (hasLowSemanticValue(content)) {
-          skippedFiles.push(relPath);
+          removedForContent.push(relPath);
           continue;
         }
-        items.push({ id: relPath, content, metadata });
+        items.push({ id: relPath, absolutePath: absPath, content, metadata });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`${this.logPrefix} Failed to read ${relPath}: ${msg}`);
-        skippedFiles.push(relPath);
+        readFailures.push(relPath);
       }
+    }
+
+    if (readFailures.length > 0) {
+      // Do NOT delete these files' chunks and do NOT advance the token: the
+      // files still exist on disk and only failed to read/extract this run. A
+      // later incremental diff won't re-list an unchanged file, so deleting now
+      // would permanently lose their chunks. Throw to hold the prior token for
+      // retry (matches the deletion-detection branch above).
+      throw new Error(
+        `${this.logPrefix} read/extraction failed for ${readFailures.length} changed file(s); holding state token for retry: ${readFailures.join(", ")}`,
+      );
     }
 
     return {
       items,
-      removedIds: [...removedFiles, ...skippedFiles],
+      removedIds: [...removedFiles, ...removedForContent],
       stateToken: headSha,
     };
   }
@@ -425,9 +502,31 @@ export class FileDataProvider implements DataProvider {
     for (const f of files.sort()) {
       try {
         const stat = await fs.promises.stat(f);
-        hash.update(`${path.relative(walkRoot, f)}:${stat.mtimeMs}\n`);
-      } catch {
-        // File may have been deleted between walk and hash; skip it
+        // Fold path + mtime + size so a re-index triggers when either mtime
+        // or size changes. Including size catches mtime-preserving edits
+        // (cp -p, git checkout/restore, rsync --times); a same-mtime,
+        // same-size edit is the remaining undetected case. See
+        // localFileHashInput for the full rationale.
+        hash.update(
+          localFileHashInput(
+            path.relative(walkRoot, f),
+            stat.mtimeMs,
+            stat.size,
+          ),
+        );
+      } catch (err) {
+        // ENOENT is the documented delete-after-walk race (the file vanished
+        // between walkFiles and this stat) — skip it silently. Any other error
+        // (EACCES, EIO, …) is a systemic stat failure that would silently skew
+        // the change-detection hash, so surface it via console.warn rather than
+        // swallowing it blind.
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== "ENOENT") {
+          console.warn(
+            `${this.logPrefix} Unable to stat ${f} while hashing:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
     }
     return `local-${hash.digest("hex").slice(0, 12)}`;

@@ -65,13 +65,19 @@ DROP TABLE IF EXISTS code_chunks CASCADE;
 }
 
 /**
- * Generate post-schema migration SQL for columns added after initial release.
+ * Generate post-schema migration SQL for objects added after initial release.
  * Safe to run repeatedly — uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
  *
- * Includes tsvector support for hybrid search (v1.8.0):
- * - Core DDL (column + populate + GIN index) works on both PostgreSQL and PGlite
- * - Trigger DDL is appended but applied separately via try-catch in initializeSchema
- *   because PGlite does not support PL/pgSQL triggers
+ * Returns ONLY core DDL that works on both PostgreSQL and PGlite:
+ * - tsvector support for hybrid search (v1.8.0): the `tsv` column, a one-time
+ *   populate of existing rows, and the GIN index.
+ * - The analytics `query_log` table (+ its indexes and the idempotent
+ *   `request_source` ADD COLUMN for back-compat).
+ * - The `webhook_deliveries` table (+ its indexes).
+ *
+ * The tsvector TRIGGER is NOT included here — it is returned separately by
+ * {@link generateTsvTriggerDdl} and applied in its own try-catch by
+ * initializeSchema, because PGlite does not support PL/pgSQL triggers.
  */
 export function generatePostSchemaMigration(): string {
   const coreSql = `
@@ -88,6 +94,12 @@ UPDATE chunks SET tsv = to_tsvector('english', content) WHERE tsv IS NULL;
 CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
 
 -- Analytics: query_log table for tracking tool usage
+--
+-- request_source tags the ORIGIN of the request (user|synthetic|analysis),
+-- derived from the X-Pathfinder-Source header on the MCP init request. It is
+-- distinct from source_name, which is the DATA source the tool queried (e.g.
+-- "docs"). Nullable so historical rows written before this column existed read
+-- back as NULL; analytics treats NULL as a real user (see db/analytics.ts).
 CREATE TABLE IF NOT EXISTS query_log (
     id              SERIAL PRIMARY KEY,
     tool_name       TEXT NOT NULL,
@@ -97,11 +109,18 @@ CREATE TABLE IF NOT EXISTS query_log (
     latency_ms      INTEGER NOT NULL,
     source_name     TEXT,
     session_id      TEXT,
+    request_source  TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_query_log_tool_name ON query_log (tool_name);
+
+-- request_source added after query_log shipped — ADD COLUMN IF NOT EXISTS keeps
+-- the migration idempotent and back-compatible for installs whose query_log
+-- predates the column. The CREATE TABLE above carries it for fresh installs.
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS request_source TEXT;
+CREATE INDEX IF NOT EXISTS idx_query_log_request_source ON query_log (request_source);
 
 -- Webhook delivery tracking
 CREATE TABLE IF NOT EXISTS webhook_deliveries (

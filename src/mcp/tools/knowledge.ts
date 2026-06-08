@@ -6,7 +6,11 @@ import type {
   FaqChunkResult,
   ChunkResult,
 } from "../../types.js";
-import { getFaqChunks, searchChunks } from "../../db/queries.js";
+import {
+  getFaqChunks,
+  getFaqChunksByIds,
+  searchChunks,
+} from "../../db/queries.js";
 import { logQuery } from "../../db/analytics.js";
 import { getAnalyticsConfig } from "../../config.js";
 
@@ -21,7 +25,7 @@ export function formatFaqResults(results: FaqChunkResult[]): string {
       [
         `Q&A ${i + 1}`,
         `QUESTION: ${r.title || "(untitled)"}`,
-        `ANSWER: ${extractAnswer(r.content)}`,
+        `ANSWER: ${extractAnswer(r.content, r.source_url || r.file_path)}`,
         `SOURCE: ${r.source_url || r.file_path}`,
         `CONFIDENCE: ${r.confidence.toFixed(2)}`,
       ].join("\n"),
@@ -30,12 +34,25 @@ export function formatFaqResults(results: FaqChunkResult[]): string {
 }
 
 /**
- * Extract the answer portion from Q&A content format "Q: ...\n\nA: ..."
+ * Extract the answer portion from Q&A content format "Q: ...\n\nA: ...".
+ *
+ * Also handles content that begins directly with the answer delimiter
+ * ("A: ..." with no preceding Q line / newline). When no delimiter is present
+ * at all, falls back to returning the full content (which may include the raw
+ * "Q:" text) and emits a `console.warn` so the leak is visible at the default
+ * log level (debug is suppressed in production). `chunkId` (a file_path or
+ * source_url) is included in the warning so the offending row is locatable.
  */
-function extractAnswer(content: string): string {
-  const match = content.match(/\nA:\s*([\s\S]*)/);
+function extractAnswer(content: string, chunkId?: string): string {
+  // Prefer a delimiter on its own line ("...\nA: ..."), but also accept a
+  // leading "A:" at the very start of the content (no preceding newline).
+  const match = content.match(/(?:^|\n)A:\s*([\s\S]*)/);
   if (match) return match[1].trim();
-  // Fallback: return full content
+  // Fallback: no answer delimiter found — return the full blob (leaks the Q:
+  // text + delimiters) and warn so we can spot malformed Q&A content.
+  console.warn(
+    `[knowledge] extractAnswer: no "A:" delimiter found${chunkId ? ` for ${chunkId}` : ""}; returning full content (len=${content.length})`,
+  );
   return content;
 }
 
@@ -47,7 +64,14 @@ export function registerKnowledgeTool(
   server: McpServer,
   embeddingClient: EmbeddingProvider,
   toolConfig: KnowledgeToolConfig,
-  options?: { onToolCall?: () => void },
+  options?: {
+    onToolCall?: () => void;
+    // Per-session accessors resolved at call time — see registerSearchTool for
+    // the rationale. getSessionId persists session_id; getRequestSource
+    // persists the X-Pathfinder-Source origin tag on each query_log row.
+    getSessionId?: () => string | undefined;
+    getRequestSource?: () => string | undefined;
+  },
 ): void {
   const inputSchema = {
     query: z
@@ -84,7 +108,10 @@ export function registerKnowledgeTool(
 
       try {
         if (!query || query.trim() === "") {
-          // Browse mode: return all FAQ entries above confidence
+          // Browse mode: return the most-recent N FAQ entries above confidence
+          // (effectiveLimit caps the listing — getFaqChunks orders by
+          // indexed_at DESC and applies the LIMIT, so this is NOT "all" above
+          // confidence when more than `limit` qualify).
           const chunks = await getFaqChunks(
             toolConfig.sources,
             effectiveConfidence,
@@ -101,7 +128,8 @@ export function registerKnowledgeTool(
               top_score: null,
               latency_ms: Date.now() - startMs,
               source_name: toolConfig.sources.join(","),
-              session_id: null,
+              session_id: options?.getSessionId?.() ?? null,
+              request_source: options?.getRequestSource?.() ?? null,
             },
             analyticsConfig?.log_queries ?? true,
           ).catch((err) => {
@@ -119,41 +147,57 @@ export function registerKnowledgeTool(
           // Search mode: embed query, search each source, merge, filter by confidence
           const embedding = await embeddingClient.embed(query);
 
+          // Over-fetch candidates per source so the confidence filter has a
+          // backfill pool. Fetching only `effectiveLimit` and slicing the top-N
+          // BEFORE filtering by confidence dropped below-confidence top-N hits
+          // with nothing to replace them, returning fewer than `limit` results
+          // even when more-confident hits existed just past the window. Pulling
+          // `effectiveLimit * 2` (mirrors candidateLimit = limit*2 in
+          // hybridSearchChunks), filtering, THEN slicing to `effectiveLimit`
+          // reaches `limit` whenever enough qualifying FAQ entries exist.
+          const candidateLimit = effectiveLimit * 2;
+
           // Search each source independently and merge
           const allResults: ChunkResult[] = [];
           for (const sourceName of toolConfig.sources) {
             const results = await searchChunks(
               embedding,
-              effectiveLimit,
+              candidateLimit,
               sourceName,
             );
             allResults.push(...results);
           }
 
-          // Sort by similarity descending, take top N
+          // Sort the full candidate pool by similarity descending.
           allResults.sort((a, b) => b.similarity - a.similarity);
-          const topResults = allResults.slice(0, effectiveLimit);
 
-          // Now get FAQ chunks (with confidence) for the same sources to cross-reference
-          // Use a very low confidence threshold (0) to get all, then filter
-          const faqChunks = await getFaqChunks(
-            toolConfig.sources,
-            0,
-            effectiveLimit * 5,
-          );
+          // Fetch FAQ metadata (with confidence) for EXACTLY the candidate ids.
+          // Looking up by id (vs an indexed_at-DESC top-N window) keeps every
+          // ranked hit so a relevant high-similarity hit is never dropped just
+          // because it falls outside a recency window. Skip the round-trip when
+          // there are no candidates to look up.
+          const faqChunks =
+            allResults.length > 0
+              ? await getFaqChunksByIds(allResults.map((r) => r.id))
+              : [];
           const faqById = new Map(faqChunks.map((c) => [c.id, c]));
 
-          // Merge: keep search results that have FAQ metadata and meet confidence threshold
-          const mergedResults: FaqChunkResult[] = [];
-          for (const result of topResults) {
+          // Merge: keep candidates that have FAQ metadata and meet the
+          // confidence threshold (preserving similarity order), THEN slice to
+          // `effectiveLimit`. Filtering before the slice is what lets a
+          // below-confidence top-N hit be backfilled by a more-confident
+          // deeper hit instead of leaving the result set short.
+          const qualifying: FaqChunkResult[] = [];
+          for (const result of allResults) {
             const faqChunk = faqById.get(result.id);
             if (faqChunk && faqChunk.confidence >= effectiveConfidence) {
-              mergedResults.push({
+              qualifying.push({
                 ...faqChunk,
                 similarity: result.similarity,
               });
             }
           }
+          const mergedResults = qualifying.slice(0, effectiveLimit);
 
           // Fire-and-forget analytics logging
           const analyticsConfig = getAnalyticsConfig();
@@ -169,7 +213,8 @@ export function registerKnowledgeTool(
               top_score: topScore,
               latency_ms: Date.now() - startMs,
               source_name: toolConfig.sources.join(","),
-              session_id: null,
+              session_id: options?.getSessionId?.() ?? null,
+              request_source: options?.getRequestSource?.() ?? null,
             },
             analyticsConfig?.log_queries ?? true,
           ).catch((err) => {

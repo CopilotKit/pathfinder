@@ -97,7 +97,18 @@ interface SeedRow {
   latency_ms: number;
   source_name: string;
   session_id: string | null;
+  request_source: string | null;
   created_at: Date;
+}
+
+// Request-origin mix: mostly real users, a slice of synthetic/analysis traffic
+// plus some untagged (null) rows to mimic historical data predating the column.
+function pickRequestSource(): string | null {
+  const r = Math.random();
+  if (r < 0.7) return "user";
+  if (r < 0.82) return "synthetic";
+  if (r < 0.9) return "analysis";
+  return null; // untagged historical row
 }
 
 function generateRow(): SeedRow {
@@ -115,6 +126,7 @@ function generateRow(): SeedRow {
     latency_ms: randomInt(50, 500),
     source_name: pick(SOURCE_NAMES),
     session_id: Math.random() < 0.6 ? `sess_${randomInt(1000, 9999)}` : null,
+    request_source: pickRequestSource(),
     created_at: randomTimestamp(),
   };
 }
@@ -139,8 +151,8 @@ async function main() {
 
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, request_source, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         row.tool_name,
         row.query_text,
@@ -149,6 +161,7 @@ async function main() {
         row.latency_ms,
         row.source_name,
         row.session_id,
+        row.request_source,
         row.created_at,
       ],
     );

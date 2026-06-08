@@ -37,7 +37,11 @@ function makeFileSourceConfig(
     };
 }
 
-// Code source config — matches the real pathfinder.yaml code source patterns
+// Code source config — mirrors the real deploy/copilotkit-docs.yaml `code`
+// source patterns (file_patterns + exclude_patterns). Keep in sync with that
+// file: the excludes drop the v1 packages, every flavor of test file, the
+// demo/example and showcase apps, the Next.js build output, and generated
+// .d.ts declarations.
 const codeConfig = makeFileSourceConfig(
     ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.py'],
     [
@@ -48,10 +52,16 @@ const codeConfig = makeFileSourceConfig(
         '**/__tests__/**',
         '**/*.test.*',
         '**/*.spec.*',
+        'examples/**',
+        'showcase/**',
+        '**/.next/**',
+        '**/*.d.ts',
     ],
 );
 
-// Docs source config — only *.mdx, no excludes
+// Docs source config — mirrors the real `docs` source: only *.mdx, no excludes.
+// (The source path is showcase/shell-docs/src/content/docs/, so derived paths
+// live under that tree.)
 const docsConfig = makeFileSourceConfig(['**/*.mdx']);
 
 console.log('=== Path Filter Tests ===\n');
@@ -79,17 +89,27 @@ assert(!matchesPatterns('packages/v2/runtime/src/runtime.spec.ts', codeConfig), 
 assert(!matchesPatterns('packages/v2/runtime/src/runtime.test.tsx', codeConfig), '*.test.tsx excluded');
 assert(!matchesPatterns('examples/with-agno/tests/test_agent.py', codeConfig), 'Python test dir excluded');
 
+// --- demo/example, showcase, build output, and generated decls excluded ---
+console.log('\n--- examples/showcase/.next/.d.ts exclusion ---');
+assert(!matchesPatterns('examples/with-agno/src/agent.py', codeConfig), 'examples/ src excluded');
+assert(!matchesPatterns('examples/coagents-research-canvas/ui/src/page.tsx', codeConfig), 'examples/ deep path excluded');
+assert(!matchesPatterns('showcase/shell-docs/src/lib/util.ts', codeConfig), 'showcase/ excluded');
+assert(!matchesPatterns('packages/v2/react/.next/server/app/page.js', codeConfig), '**/.next/** build output excluded');
+assert(!matchesPatterns('packages/v2/runtime/dist/index.d.ts', codeConfig), '**/*.d.ts generated decls excluded');
+assert(!matchesPatterns('packages/v2/runtime/src/types.d.ts', codeConfig), '.d.ts excluded even alongside sources');
+
 // --- non-test files included ---
 console.log('\n--- non-test files included ---');
 assert(matchesPatterns('packages/v2/runtime/src/runtime.ts', codeConfig), 'normal src file included');
-assert(matchesPatterns('examples/with-agno/src/agent.py', codeConfig), 'example src file included');
+assert(matchesPatterns('packages/shared/src/utils.ts', codeConfig), 'library package src included');
 assert(matchesPatterns('src/index.ts', codeConfig), 'root src file included');
 
 // --- docs (*.mdx only) ---
+// Paths reflect the current docs source tree: showcase/shell-docs/src/content/docs/
 console.log('\n--- docs (*.mdx only) ---');
-assert(matchesPatterns('docs/content/docs/(root)/quickstart.mdx', docsConfig), 'docs included');
-assert(matchesPatterns('docs/content/docs/reference/v1/hooks.mdx', docsConfig), 'v1 docs included (no code excludes on docs)');
-assert(!matchesPatterns('docs/content/docs/reference/v1/hooks.ts', docsConfig), 'ts file not matched by docs config');
+assert(matchesPatterns('showcase/shell-docs/src/content/docs/(root)/quickstart.mdx', docsConfig), 'docs included');
+assert(matchesPatterns('showcase/shell-docs/src/content/docs/reference/hooks.mdx', docsConfig), 'nested docs included (no code excludes on docs)');
+assert(!matchesPatterns('showcase/shell-docs/src/content/docs/reference/hooks.ts', docsConfig), 'ts file not matched by docs config');
 
 // --- edge cases ---
 console.log('\n--- edge cases ---');
