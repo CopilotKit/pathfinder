@@ -425,7 +425,9 @@ describe("Atlas ratification endpoints", () => {
     });
     const queueSourceReindex = vi.fn();
     __setAtlasOrchestratorForTesting({
+      queueFullReindex: vi.fn(),
       queueSourceReindex,
+      queueIncrementalReindex: vi.fn(),
     });
     server = await startServer();
 

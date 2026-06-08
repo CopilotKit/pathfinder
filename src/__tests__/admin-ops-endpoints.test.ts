@@ -29,7 +29,7 @@ vi.mock("../config.js", async (importOriginal) => {
     // Source validation for the reindex op reads getServerConfig().sources.
     getServerConfig: vi.fn(() => ({
       server: { name: "test-server" },
-      sources: [{ type: "github", name: "code", repo: "https://x/y" }],
+      sources: [{ type: "code", name: "code", repo: "https://x/y" }],
       tools: [],
     })),
   };
@@ -166,7 +166,7 @@ describe("admin ops control surface", () => {
       queueFullReindex,
       queueSourceReindex,
       queueIncrementalReindex,
-    } as never);
+    });
     server = await startServer();
 
     const res = await request(server, "POST", "/admin/reindex", {
@@ -186,7 +186,7 @@ describe("admin ops control surface", () => {
       queueFullReindex: vi.fn(),
       queueSourceReindex,
       queueIncrementalReindex: vi.fn(),
-    } as never);
+    });
     server = await startServer();
 
     const res = await request(server, "POST", "/admin/reindex", {
@@ -203,17 +203,75 @@ describe("admin ops control surface", () => {
       queueFullReindex: vi.fn(),
       queueSourceReindex: vi.fn(),
       queueIncrementalReindex,
-    } as never);
+    });
+    server = await startServer();
+
+    // Use the repo configured in the getServerConfig mock above.
+    const res = await request(server, "POST", "/admin/reindex", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+      body: { scope: "repo", repo: "https://x/y" },
+    });
+    expect(res.status).toBe(202);
+    expect(queueIncrementalReindex).toHaveBeenCalledWith("https://x/y");
+  });
+
+  it("returns 400 unknown_source when reindex scope=source names an unconfigured source", async () => {
+    const queueSourceReindex = vi.fn();
+    __setAtlasOrchestratorForTesting({
+      queueFullReindex: vi.fn(),
+      queueSourceReindex,
+      queueIncrementalReindex: vi.fn(),
+    });
+    server = await startServer();
+
+    const res = await request(server, "POST", "/admin/reindex", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+      body: { scope: "source", source: "does-not-exist" },
+    });
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body)).toMatchObject({ error: "unknown_source" });
+    expect(queueSourceReindex).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 unknown_repo when reindex scope=repo names an unconfigured repo", async () => {
+    const queueIncrementalReindex = vi.fn();
+    __setAtlasOrchestratorForTesting({
+      queueFullReindex: vi.fn(),
+      queueSourceReindex: vi.fn(),
+      queueIncrementalReindex,
+    });
     server = await startServer();
 
     const res = await request(server, "POST", "/admin/reindex", {
       headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
       body: { scope: "repo", repo: "https://github.com/foo/bar" },
     });
-    expect(res.status).toBe(202);
-    expect(queueIncrementalReindex).toHaveBeenCalledWith(
-      "https://github.com/foo/bar",
-    );
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body)).toMatchObject({ error: "unknown_repo" });
+    expect(queueIncrementalReindex).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 admin_op_failed without leaking err.message when an op handler throws", async () => {
+    // Force the reindex handler to throw by injecting an orchestrator whose
+    // queueFullReindex throws with a sensitive-looking message.
+    __setAtlasOrchestratorForTesting({
+      queueFullReindex: () => {
+        throw new Error("postgres://secret:pw@db:5432/leak");
+      },
+      queueSourceReindex: vi.fn(),
+      queueIncrementalReindex: vi.fn(),
+    });
+    server = await startServer();
+
+    const res = await request(server, "POST", "/admin/reindex", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+      body: { scope: "full" },
+    });
+    expect(res.status).toBe(500);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe("admin_op_failed");
+    expect(res.body).not.toContain("postgres://");
+    expect(res.body).not.toContain("secret");
   });
 
   it("returns 400 on a malformed reindex body (missing scope)", async () => {
@@ -248,17 +306,28 @@ describe("admin ops control surface", () => {
     expect(res.status).toBe(404);
   });
 
-  it("index-stats returns per-source index state shape", async () => {
-    server = await startServer();
+  it("index-stats returns 503 index_unavailable without leaking DB detail when getIndexStats throws", async () => {
+    // Deterministically exercise the failure path by injecting a getIndexStats
+    // that throws with a sensitive-looking message. The response must be the
+    // sanitized shape and must not echo the underlying error.
+    const app = express();
+    app.use(express.json());
+    registerAdminOpsRoutes(app, {
+      getIndexStats: async () => {
+        throw new Error("postgres://secret:pw@db:5432/internal");
+      },
+    });
+    server = app.listen(0);
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+
     const res = await request(server, "POST", "/admin/index-stats", {
       headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
       body: {},
-      // getIndexStats hits the DB; inject a fake via the registry deps below.
     });
-    // index-stats uses an injectable getIndexStats; default impl reaches the
-    // DB which is unavailable here, so it returns 503. The shape assertions
-    // are exercised by the injected-deps variant below.
-    expect([200, 503]).toContain(res.status);
+    expect(res.status).toBe(503);
+    expect(JSON.parse(res.body)).toEqual({ error: "index_unavailable" });
+    expect(res.body).not.toContain("postgres://");
+    expect(res.body).not.toContain("secret");
   });
 
   it("index-stats returns the expected shape with injected stats", async () => {
