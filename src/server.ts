@@ -456,9 +456,15 @@ app.post(
     try {
       await handler(req, res);
     } catch (err) {
-      console.error("[webhook] Handler error:", err);
+      // Emit a correlation ID in BOTH the log and the response so a failed
+      // delivery is greppable (mirrors the /analytics sendFile path).
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
+      console.error(`[webhook] Handler error cid=${correlationId}:`, err);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Internal webhook handler error" });
+        res.status(500).json({
+          error: "Internal webhook handler error",
+          correlation_id: correlationId,
+        });
       }
     }
   },
@@ -479,9 +485,13 @@ app.post(
     try {
       await handler(req, res);
     } catch (err) {
-      console.error("[slack-webhook] Handler error:", err);
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
+      console.error(`[slack-webhook] Handler error cid=${correlationId}:`, err);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Internal webhook handler error" });
+        res.status(500).json({
+          error: "Internal webhook handler error",
+          correlation_id: correlationId,
+        });
       }
     }
   },
@@ -502,9 +512,16 @@ app.post(
     try {
       await handler(req, res);
     } catch (err) {
-      console.error("[discord-webhook] Handler error:", err);
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
+      console.error(
+        `[discord-webhook] Handler error cid=${correlationId}:`,
+        err,
+      );
       if (!res.headersSent) {
-        res.status(500).json({ error: "Internal webhook handler error" });
+        res.status(500).json({
+          error: "Internal webhook handler error",
+          correlation_id: correlationId,
+        });
       }
     }
   },
