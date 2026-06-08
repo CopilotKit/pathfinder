@@ -2585,15 +2585,15 @@ function bearerTokenAuth(
   // JavaScript. The value of timingSafeEqual is protecting the BYTES of
   // the secret once the lengths match, which this structure preserves.
   if (providedBuf.length !== tokenBuf.length) {
-    res.status(403).json({
-      error: "forbidden",
+    res.status(401).json({
+      error: "unauthorized",
       error_description: opts.invalidTokenDescription,
     });
     return;
   }
   if (!timingSafeEqual(providedBuf, tokenBuf)) {
-    res.status(403).json({
-      error: "forbidden",
+    res.status(401).json({
+      error: "unauthorized",
       error_description: opts.invalidTokenDescription,
     });
     return;
