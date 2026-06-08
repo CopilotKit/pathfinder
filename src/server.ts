@@ -3338,6 +3338,354 @@ export function registerAtlasRatificationRoutes(app: express.Express): void {
 }
 
 // ---------------------------------------------------------------------------
+// Admin ops control surface — POST /admin/:op (+ index-stats read op)
+//
+// A remotely-triggerable, authenticated control plane for operational tasks
+// that previously required DB surgery + a redeploy (e.g. forcing a reindex).
+// Deliberately built as an OPERATION REGISTRY rather than a set of one-off
+// routes so that future ops are a single registration line.
+//
+// ----------------------------------------------------------------------
+// HOW TO REGISTER A NEW OP
+// ----------------------------------------------------------------------
+// 1. Pick a kebab-case op name (it becomes the URL segment: POST /admin/<op>).
+// 2. Add one entry to `buildAdminOpRegistry()` below:
+//
+//      "config-reload": async (_req, _body) => {
+//        reloadServerConfig();              // call the existing impl
+//        return { status: 200, body: { reloaded: true } };
+//      },
+//
+// 3. Return an `AdminOpResult` — `{ status, body }`. Validate inputs inside
+//    the handler and return `{ status: 400, body: { error, ... } }` on bad
+//    input; the dispatcher turns any thrown error into a 500.
+// 4. Reuse EXISTING logic (orchestrator methods, DB queries, config helpers)
+//    — do not duplicate it here. The registry is plumbing, not business logic.
+//
+// Documented extension points (intentionally NOT implemented yet — register
+// them here when the need is real, following the recipe above):
+//   - `config-reload`           — hot-reload server/source config from disk.
+//   - `setting-set`             — flip a runtime setting (e.g. search_mode).
+//   - `reembed`                 — re-embed existing chunks without re-crawl.
+//   - `atlas-cache-invalidate`  — drop the Atlas page cache.
+//   - `smoke`                   — run a self-check / readiness probe.
+//
+// Auth: bearer token from PATHFINDER_ADMIN_TOKEN, constant-time compared.
+// FAIL-CLOSED: when the env var is unset/empty the routes return 503
+// (disabled) so the feature can be merged/deployed safely before the secret
+// is provisioned. 401 on a missing/invalid token once the token is set.
+// ---------------------------------------------------------------------------
+
+/**
+ * Uniform result shape every admin op returns. The dispatcher writes
+ * `res.status(status).json(body)`. Keep ops side-effecting + returning this
+ * envelope rather than touching `res` directly, so the dispatcher owns the
+ * single response-writing path (and its error handling).
+ */
+export interface AdminOpResult {
+  status: number;
+  body: unknown;
+}
+
+/** A registered admin op: validates `body`, performs the action, returns a result. */
+export type AdminOp = (req: Request, body: unknown) => Promise<AdminOpResult>;
+
+/**
+ * Injectable boundaries for the admin ops routes so tests can exercise the
+ * real handlers without a live DB. Mirrors the `deps` pattern used by
+ * registerAnalyticsRoutes / registerHealthRoute.
+ */
+export interface AdminOpsRouteDeps {
+  getIndexStats?: typeof getIndexStats;
+}
+
+function readAdminToken(): string | undefined {
+  const token = process.env.PATHFINDER_ADMIN_TOKEN?.trim();
+  return token ? token : undefined;
+}
+
+/**
+ * Bearer auth for the admin ops surface. Fail-closed: 503 when no token is
+ * configured (feature disabled), 401 on a missing/invalid token when enabled.
+ * Constant-time comparison mirrors `bearerTokenAuth` — length-guarded before
+ * timingSafeEqual (which throws on length mismatch).
+ */
+function adminOpsAuth(req: Request, res: Response, next: express.NextFunction): void {
+  const token = readAdminToken();
+  if (!token) {
+    // Fail-closed: the secret hasn't been provisioned, so the control surface
+    // is OFF. 503 (not 401) tells operators the routes exist but are disabled
+    // pending PATHFINDER_ADMIN_TOKEN — safe to deploy before the secret lands.
+    res.status(503).json({
+      error: "admin_ops_disabled",
+      error_description:
+        "Admin ops disabled — set PATHFINDER_ADMIN_TOKEN to enable.",
+    });
+    return;
+  }
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    res.status(401).json({
+      error: "unauthorized",
+      error_description:
+        "Missing or invalid Authorization header. Use: Bearer <token>",
+    });
+    return;
+  }
+
+  const providedBuf = Buffer.from(authHeader.slice(7), "utf8");
+  const tokenBuf = Buffer.from(token, "utf8");
+  // crypto.timingSafeEqual REQUIRES equal-length buffers — guard first so a
+  // length mismatch returns 401 instead of throwing an unhandled 500. A
+  // length oracle here is not a meaningful leak (see bearerTokenAuth note).
+  if (
+    providedBuf.length !== tokenBuf.length ||
+    !timingSafeEqual(providedBuf, tokenBuf)
+  ) {
+    res.status(401).json({
+      error: "unauthorized",
+      error_description: "Invalid admin token",
+    });
+    return;
+  }
+
+  next();
+}
+
+/**
+ * Validate + dispatch the `reindex` op against the live orchestrator.
+ *
+ * Body shapes:
+ *   { "scope": "full" }                    → queueFullReindex()
+ *   { "scope": "source", "source": "<n>" } → queueSourceReindex(name)
+ *   { "scope": "repo",   "repo": "<url>" } → queueIncrementalReindex(url)
+ *
+ * All three orchestrator methods are fire-and-forget (return void, dedupe
+ * internally), so we return 202 Accepted with `{ queued: <what> }`.
+ */
+async function adminReindexOp(
+  _req: Request,
+  body: unknown,
+): Promise<AdminOpResult> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const scope = b.scope;
+
+  if (scope !== "full" && scope !== "source" && scope !== "repo") {
+    return {
+      status: 400,
+      body: {
+        error: "invalid_request",
+        error_description: 'scope must be one of "full", "source", "repo"',
+      },
+    };
+  }
+
+  // orchestratorRef is only wired when search/knowledge tools are enabled. If
+  // it's absent, make the gap loud + actionable rather than silently 202-ing.
+  if (!orchestratorRef) {
+    console.error(
+      "[admin-ops] reindex requested but NO orchestrator is wired " +
+        "(search/knowledge tools disabled) — nothing was queued.",
+    );
+    return {
+      status: 503,
+      body: {
+        error: "orchestrator_unavailable",
+        error_description:
+          "No indexing orchestrator is wired (search/knowledge tools disabled).",
+      },
+    };
+  }
+
+  if (scope === "full") {
+    orchestratorRef.queueFullReindex();
+    return { status: 202, body: { queued: "full" } };
+  }
+
+  if (scope === "source") {
+    const source = typeof b.source === "string" ? b.source.trim() : "";
+    if (!source) {
+      return {
+        status: 400,
+        body: {
+          error: "invalid_request",
+          error_description: 'source is required when scope is "source"',
+        },
+      };
+    }
+    orchestratorRef.queueSourceReindex(source);
+    return { status: 202, body: { queued: { source } } };
+  }
+
+  // scope === "repo"
+  const repo = typeof b.repo === "string" ? b.repo.trim() : "";
+  if (!repo) {
+    return {
+      status: 400,
+      body: {
+        error: "invalid_request",
+        error_description: 'repo is required when scope is "repo"',
+      },
+    };
+  }
+  orchestratorRef.queueIncrementalReindex(repo);
+  return { status: 202, body: { queued: { repo } } };
+}
+
+/**
+ * Best-effort Slack notification for an admin op invocation. Reuses the same
+ * SLACK_WEBHOOK_URL the reindex-audit notifier uses. Swallows failures but
+ * logs them loudly — a notifier outage must never fail the op.
+ */
+async function notifyAdminOpToSlack(op: string, summary: string): Promise<void> {
+  let webhookUrl = "";
+  try {
+    webhookUrl = getConfig().slackWebhookUrl;
+  } catch {
+    // getConfig can throw on a misconfigured environment; the op itself
+    // already succeeded, so don't surface this as an op failure.
+    return;
+  }
+  if (!webhookUrl) return;
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: `🛠️ *Pathfinder admin op* — \`${op}\`: ${summary}`,
+      }),
+    });
+    if (!response.ok) {
+      console.error(
+        `[admin-ops] Slack webhook returned ${response.status}: ${await response
+          .text()
+          .catch(() => "(no body)")}`,
+      );
+    }
+  } catch (err) {
+    console.error("[admin-ops] Slack notify failed:", formatErrorForLog(err));
+  }
+}
+
+/**
+ * Build the op registry. `deps` lets tests inject the DB boundary for the
+ * read ops without a live database.
+ */
+function buildAdminOpRegistry(
+  deps: AdminOpsRouteDeps,
+): Record<string, AdminOp> {
+  const _getIndexStats = deps.getIndexStats ?? getIndexStats;
+
+  return {
+    // Mutating op — queue an indexing job. Fires a best-effort Slack notice.
+    reindex: async (req, body) => {
+      const result = await adminReindexOp(req, body);
+      if (result.status === 202) {
+        notifyAdminOpToSlack(
+          "reindex",
+          JSON.stringify((result.body as { queued: unknown }).queued),
+        ).catch((err) => {
+          console.error(
+            "[admin-ops] Slack notify (reindex) failed:",
+            formatErrorForLog(err),
+          );
+        });
+      }
+      return result;
+    },
+
+    // Read op — per-source index state. Reuses the SAME getIndexStats() the
+    // /health route uses (and the SAME projection) so the shape stays in sync.
+    "index-stats": async () => {
+      try {
+        const stats = await _getIndexStats();
+        return {
+          status: 200,
+          body: {
+            total_chunks: stats.totalChunks,
+            by_source: stats.bySource,
+            indexed_repos: stats.indexedRepos,
+            sources: stats.indexStates.map((s) => ({
+              type: s.source_type,
+              key: s.source_key,
+              status: s.status,
+              last_indexed: s.last_indexed_at,
+              commit: s.last_commit_sha?.slice(0, 8) ?? null,
+              error: s.error_message ?? null,
+            })),
+          },
+        };
+      } catch (err) {
+        // /health intentionally hides err.message (DB URLs can leak); the
+        // admin surface is authenticated, but mirror the sanitized shape.
+        console.error("[admin-ops] index-stats failed:", err);
+        return {
+          status: 503,
+          body: { error: "index_unavailable" },
+        };
+      }
+    },
+  };
+}
+
+/**
+ * Register the admin ops control surface. `POST /admin/:op` dispatches through
+ * the registry; unknown ops → 404. A `GET /admin/index-stats` alias is mounted
+ * for the read op so it can be polled with a plain GET.
+ */
+export function registerAdminOpsRoutes(
+  app: express.Express,
+  deps: AdminOpsRouteDeps = {},
+): void {
+  const registry = buildAdminOpRegistry(deps);
+
+  const dispatch = async (req: Request, res: Response): Promise<void> => {
+    const op = typeof req.params.op === "string" ? req.params.op : "";
+    const handler = registry[op];
+    if (!handler) {
+      res.status(404).json({
+        error: "unknown_op",
+        error_description: `Unknown admin op "${op}".`,
+        available_ops: Object.keys(registry),
+      });
+      return;
+    }
+
+    const body = req.body ?? {};
+    // Audit log: op, args summary, client IP, timestamp. Mirrors the file's
+    // bracket-prefixed console style. The body is summarized (not dumped) to
+    // keep the log line bounded; reindex bodies are tiny but a future op might
+    // carry a larger payload.
+    const ip = clientIp(req, isTrustingProxy());
+    console.log(
+      `[admin-ops] ${new Date().toISOString()} op="${op}" ip=${ip} args=${JSON.stringify(
+        body,
+      ).slice(0, 500)}`,
+    );
+
+    try {
+      const result = await handler(req, body);
+      res.status(result.status).json(result.body);
+    } catch (err) {
+      console.error(`[admin-ops] op "${op}" threw:`, formatErrorForLog(err));
+      res.status(500).json({
+        error: "admin_op_failed",
+        error_description: `Admin op "${op}" failed.`,
+      });
+    }
+  };
+
+  app.post("/admin/:op", adminOpsAuth, dispatch);
+  // Convenience GET alias for the read-only index-stats op so it can be polled
+  // without a request body. Mutating ops stay POST-only.
+  app.get("/admin/index-stats", adminOpsAuth, (req, res) => {
+    req.params.op = "index-stats";
+    return dispatch(req, res);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
@@ -3620,6 +3968,7 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
   // is now the single call site for the production app.
   registerAtlasRatificationRoutes(app);
   registerAnalyticsRoutes(app);
+  registerAdminOpsRoutes(app);
 
   const serverName = serverCfg.server.name;
   const server = app.listen(port, () => {
