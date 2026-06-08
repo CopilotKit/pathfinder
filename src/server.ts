@@ -3292,6 +3292,11 @@ async function approveAtlasCandidate(
   let reindexQueued = false;
   if (orchestratorRef) {
     try {
+      // This synchronous try/catch only traps errors because
+      // queueSourceReindex is synchronous (returns void; the real impl
+      // swallows its own async drain rejection). If it were ever made
+      // async/Promise-returning, this would need `await` inside the try or
+      // the rejection would escape unhandled.
       orchestratorRef.queueSourceReindex(candidate.sourceName);
       reindexQueued = true;
     } catch (err) {

@@ -494,9 +494,9 @@ describe("Atlas ratification endpoints", () => {
     expect(consoleSpy).toHaveBeenCalled();
     consoleSpy.mockRestore();
 
-    // The approval must be durably persisted — a follow-up read sees it
-    // approved, and re-approving now yields 409 (not pending) rather than
-    // succeeding, proving the first approval committed.
+    // The approval must be durably persisted — verified here by its absence
+    // from the pending list (the candidate no longer awaits review). The
+    // 409-on-re-approve behavior is covered by a separate test.
     const pending = await listPendingAtlasSeedCandidates();
     expect(pending.map((row) => row.canonicalKey)).not.toContain(
       "runtime:approve-queue-throws",
