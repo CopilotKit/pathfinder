@@ -3501,6 +3501,17 @@ function adminOpsAuth(
  *
  * All three orchestrator methods are fire-and-forget (return void, dedupe
  * internally), so we return 202 Accepted with `{ queued: <what> }`.
+ *
+ * Non-202 outcomes:
+ *   - 400 invalid_request — scope missing/unknown, or source/repo missing for
+ *     a scoped reindex.
+ *   - 400 unknown_source / unknown_repo — a scoped target that doesn't match
+ *     any configured source/repo (a typo fails loud rather than silently
+ *     no-op-ing in the orchestrator drain).
+ *   - 503 orchestrator_unavailable — no indexing orchestrator is wired
+ *     (search/knowledge tools disabled).
+ *   - 503 config_unavailable — getServerConfig() threw on a misconfigured
+ *     environment while validating a scoped target.
  */
 async function adminReindexOp(
   _req: Request,
@@ -3666,10 +3677,15 @@ function buildAdminOpRegistry(
       if (result.status === 202) {
         // notifyAdminOpToSlack swallows all its own errors and never rejects,
         // so this is fire-and-forget; `void` marks the intentional non-await.
-        void notifyAdminOpToSlack(
-          "reindex",
-          JSON.stringify((result.body as { queued: unknown }).queued),
-        );
+        // Guard the `queued` extraction so a future op whose 202 body lacks it
+        // can't emit `undefined` into the Slack message.
+        const queued =
+          result.body &&
+          typeof result.body === "object" &&
+          "queued" in result.body
+            ? (result.body as { queued: unknown }).queued
+            : result.body;
+        void notifyAdminOpToSlack("reindex", JSON.stringify(queued));
       }
       return result;
     },
