@@ -3410,7 +3410,11 @@ function readAdminToken(): string | undefined {
  * Constant-time comparison mirrors `bearerTokenAuth` — length-guarded before
  * timingSafeEqual (which throws on length mismatch).
  */
-function adminOpsAuth(req: Request, res: Response, next: express.NextFunction): void {
+function adminOpsAuth(
+  req: Request,
+  res: Response,
+  next: express.NextFunction,
+): void {
   const token = readAdminToken();
   if (!token) {
     // Fail-closed: the secret hasn't been provisioned, so the control surface
@@ -3538,7 +3542,10 @@ async function adminReindexOp(
  * SLACK_WEBHOOK_URL the reindex-audit notifier uses. Swallows failures but
  * logs them loudly — a notifier outage must never fail the op.
  */
-async function notifyAdminOpToSlack(op: string, summary: string): Promise<void> {
+async function notifyAdminOpToSlack(
+  op: string,
+  summary: string,
+): Promise<void> {
   let webhookUrl = "";
   try {
     webhookUrl = getConfig().slackWebhookUrl;
