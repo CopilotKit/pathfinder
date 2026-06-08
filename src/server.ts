@@ -34,7 +34,9 @@ import {
 import {
   isSlackSourceConfig,
   isDiscordSourceConfig,
+  isFileSourceConfig,
   type FaqChunkResult,
+  type ServerConfig,
 } from "./types.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 import { runReindexAudit } from "./indexing/reindex-audit.js";
@@ -330,7 +332,10 @@ export function __clearBashInstancesForTesting(): void {
 }
 
 export function __setAtlasOrchestratorForTesting(
-  orchestrator: Pick<IndexingOrchestrator, "queueSourceReindex"> | null,
+  orchestrator: Pick<
+    IndexingOrchestrator,
+    "queueFullReindex" | "queueSourceReindex" | "queueIncrementalReindex"
+  > | null,
 ): void {
   orchestratorRef = orchestrator as IndexingOrchestrator | null;
 }
@@ -3507,6 +3512,27 @@ async function adminReindexOp(
     return { status: 202, body: { queued: "full" } };
   }
 
+  // For scoped reindexes we validate the target against the configured
+  // sources so a typo fails loud (400) rather than 202-ing then silently
+  // no-op-ing in the orchestrator drain. getServerConfig() can throw on a
+  // misconfigured environment — treat that as 503, never 202.
+  let configuredSources: ServerConfig["sources"];
+  try {
+    configuredSources = getServerConfig().sources;
+  } catch (err) {
+    console.error(
+      "[admin-ops] reindex config read failed:",
+      formatErrorForLog(err),
+    );
+    return {
+      status: 503,
+      body: {
+        error: "config_unavailable",
+        error_description: "Server configuration is unavailable.",
+      },
+    };
+  }
+
   if (scope === "source") {
     const source = typeof b.source === "string" ? b.source.trim() : "";
     if (!source) {
@@ -3515,6 +3541,15 @@ async function adminReindexOp(
         body: {
           error: "invalid_request",
           error_description: 'source is required when scope is "source"',
+        },
+      };
+    }
+    if (!configuredSources.some((s) => s.name === source)) {
+      return {
+        status: 400,
+        body: {
+          error: "unknown_source",
+          error_description: `No configured source named '${source}'`,
         },
       };
     }
@@ -3530,6 +3565,17 @@ async function adminReindexOp(
       body: {
         error: "invalid_request",
         error_description: 'repo is required when scope is "repo"',
+      },
+    };
+  }
+  if (
+    !configuredSources.some((s) => isFileSourceConfig(s) && s.repo === repo)
+  ) {
+    return {
+      status: 400,
+      body: {
+        error: "unknown_repo",
+        error_description: `No configured source with repo '${repo}'`,
       },
     };
   }
@@ -3589,15 +3635,12 @@ function buildAdminOpRegistry(
     reindex: async (req, body) => {
       const result = await adminReindexOp(req, body);
       if (result.status === 202) {
-        notifyAdminOpToSlack(
+        // notifyAdminOpToSlack swallows all its own errors and never rejects,
+        // so this is fire-and-forget; `void` marks the intentional non-await.
+        void notifyAdminOpToSlack(
           "reindex",
           JSON.stringify((result.body as { queued: unknown }).queued),
-        ).catch((err) => {
-          console.error(
-            "[admin-ops] Slack notify (reindex) failed:",
-            formatErrorForLog(err),
-          );
-        });
+        );
       }
       return result;
     },
@@ -3626,7 +3669,10 @@ function buildAdminOpRegistry(
       } catch (err) {
         // /health intentionally hides err.message (DB URLs can leak); the
         // admin surface is authenticated, but mirror the sanitized shape.
-        console.error("[admin-ops] index-stats failed:", err);
+        console.error(
+          "[admin-ops] index-stats failed:",
+          formatErrorForLog(err),
+        );
         return {
           status: 503,
           body: { error: "index_unavailable" },
