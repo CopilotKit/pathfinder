@@ -244,7 +244,7 @@ describe("analyticsAuth middleware", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("returns 403 when token does not match", () => {
+  it("returns 401 when token does not match", () => {
     mockGetAnalyticsConfigFn.mockReturnValue({
       enabled: true,
       log_queries: true,
@@ -260,11 +260,11 @@ describe("analyticsAuth middleware", () => {
       next,
     );
 
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("returns 403 when same-length token differs by one char (exercises timing-safe path)", () => {
+  it("returns 401 when same-length token differs by one char (exercises timing-safe path)", () => {
     // With different-length tokens the short-circuit path in analyticsAuth
     // rejects before timingSafeEqual runs. Using a same-length 'secrit'
     // ensures timingSafeEqual is actually invoked — exercising the real
@@ -284,7 +284,7 @@ describe("analyticsAuth middleware", () => {
       next,
     );
 
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -362,7 +362,7 @@ describe("analyticsAuth middleware", () => {
       next,
     );
 
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(401);
   });
 
   it("skips token check in development mode ONLY from localhost", () => {

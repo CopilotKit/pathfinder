@@ -89,21 +89,21 @@ describe("analyticsAuth length-check early return (R4-18)", () => {
     await new Promise<void>((r) => server.close(() => r()));
   });
 
-  it("returns 403 for a token of DIFFERENT length without throwing", async () => {
+  it("returns 401 for a token of DIFFERENT length without throwing", async () => {
     const res = await httpGet(server, "/api/analytics/summary", {
       Authorization: "Bearer x", // 1 char vs 18-char correct token
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     const body = JSON.parse(res.body) as { error: string };
-    expect(body.error).toBe("forbidden");
+    expect(body.error).toBe("unauthorized");
   });
 
-  it("returns 403 for a token of SAME length that differs byte-wise", async () => {
+  it("returns 401 for a token of SAME length that differs byte-wise", async () => {
     // "correct-token-1234" is 18 chars; "zzzzzzzzzzzzzzzzzz" is also 18.
     const res = await httpGet(server, "/api/analytics/summary", {
       Authorization: "Bearer zzzzzzzzzzzzzzzzzz",
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it("accepts the correct token", async () => {

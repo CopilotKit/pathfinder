@@ -302,7 +302,7 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(body.queries_today).toBe(5);
     });
 
-    it("returns 403 with an invalid token", async () => {
+    it("returns 401 with an invalid token", async () => {
       mockGetAnalyticsConfigFn.mockReturnValue({
         enabled: true,
         log_queries: true,
@@ -315,9 +315,9 @@ describe("Analytics server routes (HTTP-level)", () => {
         Authorization: "Bearer wrong-token",
       });
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(401);
       const body = JSON.parse(res.body);
-      expect(body.error).toBe("forbidden");
+      expect(body.error).toBe("unauthorized");
       expect(body.error_description).toBe("Invalid analytics token");
     });
 

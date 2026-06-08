@@ -25,6 +25,19 @@ export interface AtlasSeedEntry {
   updatedAt: Date;
 }
 
+export class AtlasSeedNotPendingError extends Error {
+  readonly code = "ATLAS_SEED_NOT_PENDING" as const;
+  constructor(
+    public readonly canonicalKey: string,
+    public readonly action: "approve" | "reject",
+  ) {
+    super(
+      `Cannot ${action} atlas seed entry "${canonicalKey}" because it is missing or not pending`,
+    );
+    this.name = "AtlasSeedNotPendingError";
+  }
+}
+
 export interface UpsertAtlasSeedCandidateInput {
   canonicalKey: string;
   sourceName: string;
@@ -346,9 +359,7 @@ export async function approveAtlasSeedEntry(
     [canonicalKey, actor],
   );
   if (rows[0]) return mapSeedRow(rows[0] as Record<string, unknown>);
-  throw new Error(
-    `Cannot approve atlas seed entry "${canonicalKey}" because it is missing or not pending`,
-  );
+  throw new AtlasSeedNotPendingError(canonicalKey, "approve");
 }
 
 export async function rejectAtlasSeedEntry(
@@ -372,9 +383,7 @@ export async function rejectAtlasSeedEntry(
     [canonicalKey, actor, reason],
   );
   if (rows[0]) return mapSeedRow(rows[0] as Record<string, unknown>);
-  throw new Error(
-    `Cannot reject atlas seed entry "${canonicalKey}" because it is missing or not pending`,
-  );
+  throw new AtlasSeedNotPendingError(canonicalKey, "reject");
 }
 
 export async function listPendingAtlasSeedCandidates(filter?: {

@@ -425,7 +425,9 @@ describe("Atlas ratification endpoints", () => {
     });
     const queueSourceReindex = vi.fn();
     __setAtlasOrchestratorForTesting({
+      queueFullReindex: vi.fn(),
       queueSourceReindex,
+      queueIncrementalReindex: vi.fn(),
     });
     server = await startServer();
 
@@ -445,6 +447,53 @@ describe("Atlas ratification endpoints", () => {
     expect(approved.status).toBe(200);
     expect(queueSourceReindex).toHaveBeenCalledWith("atlas");
   });
+
+  it("returns 409 when approving a candidate that is missing or not pending", async () => {
+    server = await startServer();
+
+    const approved = await request(
+      server,
+      "POST",
+      "/api/atlas/candidates/approve",
+      {
+        headers: {
+          Authorization: "Bearer secret",
+          "X-Atlas-Actor": "reviewer@example.test",
+        },
+        body: { canonicalKey: "runtime:does-not-exist" },
+      },
+    );
+
+    expect(approved.status).toBe(409);
+    expect(JSON.parse(approved.body)).toMatchObject({
+      error: "atlas_candidate_not_approveable",
+    });
+  });
+
+  it("returns 409 when rejecting a candidate that is missing or not pending", async () => {
+    server = await startServer();
+
+    const rejected = await request(
+      server,
+      "POST",
+      "/api/atlas/candidates/reject",
+      {
+        headers: {
+          Authorization: "Bearer secret",
+          "X-Atlas-Actor": "reviewer@example.test",
+        },
+        body: { canonicalKey: "runtime:does-not-exist", reason: "no such key" },
+      },
+    );
+
+    expect(rejected.status).toBe(409);
+    expect(JSON.parse(rejected.body)).toMatchObject({
+      error: "atlas_candidate_not_rejectable",
+    });
+  });
+
+  // Note: reject action yields "atlas_candidate_not_rejectable" (no extra
+  // vowel) because the suffix is `${action}able` and action="reject".
 
   it("keeps rejected candidates out of provider acquisition", async () => {
     await upsertAtlasSeedCandidate({
