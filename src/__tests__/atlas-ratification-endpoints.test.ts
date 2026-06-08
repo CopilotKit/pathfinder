@@ -14,6 +14,7 @@ import { __setPoolForTesting, __resetPoolForTesting } from "../db/client.js";
 import { generatePostSchemaMigration } from "../db/schema.js";
 import {
   approveAtlasSeedEntry,
+  listPendingAtlasSeedCandidates,
   upsertAtlasSeedCandidate,
 } from "../db/atlas.js";
 import { AtlasDataProvider } from "../indexing/providers/atlas.js";
@@ -446,6 +447,60 @@ describe("Atlas ratification endpoints", () => {
 
     expect(approved.status).toBe(200);
     expect(queueSourceReindex).toHaveBeenCalledWith("atlas");
+  });
+
+  it("reports reindexQueued:false (NOT 500) when the queue enqueue throws after a durable approval", async () => {
+    await upsertAtlasSeedCandidate({
+      canonicalKey: "runtime:approve-queue-throws",
+      sourceName: "atlas",
+      title: "Approve while queue throws",
+      content: "Candidate approved while the reindex enqueue throws",
+      provenance: {},
+      evidence: [],
+    });
+    const queueSourceReindex = vi.fn(() => {
+      throw new Error("queue is on fire");
+    });
+    __setAtlasOrchestratorForTesting({
+      queueFullReindex: vi.fn(),
+      queueSourceReindex,
+      queueIncrementalReindex: vi.fn(),
+    });
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    server = await startServer();
+
+    const approved = await request(
+      server,
+      "POST",
+      "/api/atlas/candidates/approve",
+      {
+        headers: {
+          Authorization: "Bearer secret",
+          "X-Atlas-Actor": "reviewer@example.test",
+        },
+        body: { canonicalKey: "runtime:approve-queue-throws" },
+      },
+    );
+
+    // A reindex-enqueue hiccup must NOT report a committed approval as a failure.
+    expect(approved.status).toBe(200);
+    const body = JSON.parse(approved.body);
+    expect(body.reindexQueued).toBe(false);
+    expect(body.candidate).toMatchObject({
+      canonicalKey: "runtime:approve-queue-throws",
+      status: "approved",
+    });
+    expect(queueSourceReindex).toHaveBeenCalledWith("atlas");
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+
+    // The approval must be durably persisted — verified here by its absence
+    // from the pending list (the candidate no longer awaits review). The
+    // 409-on-re-approve behavior is covered by a separate test.
+    const pending = await listPendingAtlasSeedCandidates();
+    expect(pending.map((row) => row.canonicalKey)).not.toContain(
+      "runtime:approve-queue-throws",
+    );
   });
 
   it("returns 409 when approving a candidate that is missing or not pending", async () => {

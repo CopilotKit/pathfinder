@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { __setPoolForTesting, __resetPoolForTesting } from "../db/client.js";
 import { generatePostSchemaMigration } from "../db/schema.js";
@@ -13,6 +21,7 @@ import {
   rejectAtlasSeedEntry,
   upsertAtlasCachePage,
   upsertAtlasSeedCandidate,
+  __testing,
 } from "../db/atlas.js";
 
 const ATLAS_DDL_MARKER = "-- Atlas durable seed knowledge.";
@@ -455,5 +464,56 @@ describe("Atlas DB helpers", () => {
       "atlas-seed:rejected",
       "atlas-cache:runtime/empty",
     ]);
+  });
+});
+
+describe("Atlas row-mapper robustness", () => {
+  it("throws a context-bearing error (not a bare SyntaxError) for a malformed JSON seed column", () => {
+    expect(() =>
+      __testing.mapSeedRow({
+        id: 42,
+        canonical_key: "runtime:why",
+        source_name: "atlas",
+        status: "approved",
+        title: "Runtime why",
+        content: "body",
+        provenance: "{not valid json",
+        evidence: "[]",
+      }),
+    ).toThrowError(/provenance of seed row id=42 key=runtime:why/);
+  });
+
+  it("attributes a malformed cache JSON column to its row identity", () => {
+    expect(() =>
+      __testing.mapCacheRow({
+        id: 7,
+        page_key: "runtime/overview",
+        source_name: "atlas",
+        title: "Runtime overview",
+        content_hash: "hash-1",
+        stale: false,
+        generated_seed_ids: "[1, 2,",
+        provenance: "{}",
+      }),
+    ).toThrowError(
+      /generated_seed_ids of cache row id=7 key=runtime\/overview/,
+    );
+  });
+
+  it("returns null and warns for an invalid timestamp instead of yielding Invalid Date", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = __testing.toDate("not-a-date", "approved_at of seed row 5");
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("invalid timestamp"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("passes through valid timestamps unchanged", () => {
+    const iso = "2026-01-01T00:00:00.000Z";
+    const result = __testing.toDate(iso);
+    expect(result).toBeInstanceOf(Date);
+    expect(result?.toISOString()).toBe(iso);
   });
 });

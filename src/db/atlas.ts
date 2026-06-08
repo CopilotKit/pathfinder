@@ -120,35 +120,59 @@ export type AtlasIndexableContent =
       cachePage: AtlasCachePage;
     };
 
-function parseJsonObject(value: unknown): Record<string, unknown> {
+// Parse a JSON string column with row-attributed context. A single malformed
+// `provenance`/`evidence`/`generated_seed_ids` blob would otherwise throw a
+// bare SyntaxError with no row identity and — because the list queries map
+// every row — poison the WHOLE list query into an opaque 500 that hides all
+// the valid rows. `ctx` names the column + offending row so the failure is
+// actionable.
+function parseJsonString<T>(value: string, ctx: string): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to parse JSON for ${ctx}: ${detail}`);
+  }
+}
+
+function parseJsonObject(value: unknown, ctx: string): Record<string, unknown> {
   if (value == null) return {};
   if (typeof value === "string") {
-    return JSON.parse(value) as Record<string, unknown>;
+    return parseJsonString<Record<string, unknown>>(value, ctx);
   }
   return value as Record<string, unknown>;
 }
 
-function parseJsonArray(value: unknown): unknown[] {
+function parseJsonArray(value: unknown, ctx: string): unknown[] {
   if (value == null) return [];
   if (typeof value === "string") {
-    return JSON.parse(value) as unknown[];
+    return parseJsonString<unknown[]>(value, ctx);
   }
   return value as unknown[];
 }
 
-function parseNumberArray(value: unknown): number[] {
-  return parseJsonArray(value).filter(
+function parseNumberArray(value: unknown, ctx: string): number[] {
+  return parseJsonArray(value, ctx).filter(
     (item): item is number => typeof item === "number",
   );
 }
 
-function toDate(value: unknown): Date | null {
+function toDate(value: unknown, ctx?: string): Date | null {
   if (value == null) return null;
   if (value instanceof Date) return value;
-  return new Date(value as string);
+  const d = new Date(value as string);
+  if (isNaN(d.getTime())) {
+    console.warn(
+      `[atlas] Ignoring invalid timestamp${ctx ? ` for ${ctx}` : ""}: ` +
+        `${JSON.stringify(value)}`,
+    );
+    return null;
+  }
+  return d;
 }
 
 function mapSeedRow(row: Record<string, unknown>): AtlasSeedEntry {
+  const ctx = `seed row id=${row.id} key=${String(row.canonical_key)}`;
   return {
     id: Number(row.id),
     canonicalKey: row.canonical_key as string,
@@ -159,20 +183,21 @@ function mapSeedRow(row: Record<string, unknown>): AtlasSeedEntry {
     status: row.status as AtlasSeedStatus,
     title: row.title as string,
     content: row.content as string,
-    provenance: parseJsonObject(row.provenance),
-    evidence: parseJsonArray(row.evidence),
+    provenance: parseJsonObject(row.provenance, `provenance of ${ctx}`),
+    evidence: parseJsonArray(row.evidence, `evidence of ${ctx}`),
     approvedBy: (row.approved_by as string | null) ?? null,
-    approvedAt: toDate(row.approved_at),
+    approvedAt: toDate(row.approved_at, `approved_at of ${ctx}`),
     rejectedBy: (row.rejected_by as string | null) ?? null,
-    rejectedAt: toDate(row.rejected_at),
+    rejectedAt: toDate(row.rejected_at, `rejected_at of ${ctx}`),
     rejectionReason: (row.rejection_reason as string | null) ?? null,
-    createdAt: toDate(row.created_at) ?? new Date(0),
-    updatedAt: toDate(row.updated_at) ?? new Date(0),
+    createdAt: toDate(row.created_at, `created_at of ${ctx}`) ?? new Date(0),
+    updatedAt: toDate(row.updated_at, `updated_at of ${ctx}`) ?? new Date(0),
   };
 }
 
 function mapCacheRow(row: Record<string, unknown>): AtlasCachePage {
-  const rawProvenance = parseJsonObject(row.provenance);
+  const ctx = `cache row id=${row.id} key=${String(row.page_key)}`;
+  const rawProvenance = parseJsonObject(row.provenance, `provenance of ${ctx}`);
   const { [CACHE_CONTENT_KEY]: contentValue, ...provenance } = rawProvenance;
   return {
     id: Number(row.id),
@@ -183,13 +208,16 @@ function mapCacheRow(row: Record<string, unknown>): AtlasCachePage {
     contentHash: row.content_hash as string,
     stale: Boolean(row.stale),
     staleReason: (row.stale_reason as string | null) ?? null,
-    generatedSeedIds: parseNumberArray(row.generated_seed_ids),
+    generatedSeedIds: parseNumberArray(
+      row.generated_seed_ids,
+      `generated_seed_ids of ${ctx}`,
+    ),
     provenance,
-    generatedAt: toDate(row.generated_at),
-    errorAt: toDate(row.error_at),
+    generatedAt: toDate(row.generated_at, `generated_at of ${ctx}`),
+    errorAt: toDate(row.error_at, `error_at of ${ctx}`),
     errorMessage: (row.error_message as string | null) ?? null,
-    createdAt: toDate(row.created_at) ?? new Date(0),
-    updatedAt: toDate(row.updated_at) ?? new Date(0),
+    createdAt: toDate(row.created_at, `created_at of ${ctx}`) ?? new Date(0),
+    updatedAt: toDate(row.updated_at, `updated_at of ${ctx}`) ?? new Date(0),
   };
 }
 
@@ -772,10 +800,20 @@ export async function getAtlasStateToken(
     seedResult.rows[0]?.state_token,
     cacheResult.rows[0]?.state_token,
   ]
-    .map((value) => toDate(value))
+    .map((value) => toDate(value, "atlas state token"))
     .filter((value): value is Date => value !== null);
   if (values.length === 0) return null;
   return new Date(
     Math.max(...values.map((value) => value.getTime())),
   ).toISOString();
 }
+
+// Test-only exports of the otherwise-private row mappers and timestamp parser.
+// These are pure functions; exporting them lets us unit-test the robustness
+// paths (malformed JSON → context-bearing error, invalid timestamp → null)
+// directly without contriving a backing store that can hold malformed columns.
+export const __testing = {
+  mapSeedRow,
+  mapCacheRow,
+  toDate,
+};

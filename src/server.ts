@@ -89,6 +89,7 @@ import {
   rejectAtlasSeedEntry,
   AtlasSeedNotPendingError,
 } from "./db/atlas.js";
+import type { AtlasSeedEntry } from "./db/atlas.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -455,9 +456,15 @@ app.post(
     try {
       await handler(req, res);
     } catch (err) {
-      console.error("[webhook] Handler error:", err);
+      // Emit a correlation ID in BOTH the log and the response so a failed
+      // delivery is greppable (mirrors the /analytics sendFile path).
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
+      console.error(`[webhook] Handler error cid=${correlationId}:`, err);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Internal webhook handler error" });
+        res.status(500).json({
+          error: "Internal webhook handler error",
+          correlation_id: correlationId,
+        });
       }
     }
   },
@@ -478,9 +485,13 @@ app.post(
     try {
       await handler(req, res);
     } catch (err) {
-      console.error("[slack-webhook] Handler error:", err);
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
+      console.error(`[slack-webhook] Handler error cid=${correlationId}:`, err);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Internal webhook handler error" });
+        res.status(500).json({
+          error: "Internal webhook handler error",
+          correlation_id: correlationId,
+        });
       }
     }
   },
@@ -501,9 +512,16 @@ app.post(
     try {
       await handler(req, res);
     } catch (err) {
-      console.error("[discord-webhook] Handler error:", err);
+      const correlationId = randomUUID().replace(/-/g, "").slice(0, 12);
+      console.error(
+        `[discord-webhook] Handler error cid=${correlationId}:`,
+        err,
+      );
       if (!res.headersSent) {
-        res.status(500).json({ error: "Internal webhook handler error" });
+        res.status(500).json({
+          error: "Internal webhook handler error",
+          correlation_id: correlationId,
+        });
       }
     }
   },
@@ -3256,31 +3274,55 @@ async function approveAtlasCandidate(
     return;
   }
 
+  // The DB write and the reindex enqueue are split into two phases on purpose.
+  // Only DB-write failures (and pre-write validation) flow through
+  // handleAtlasRatificationError → 409/500. Once the approval is durably
+  // persisted, a reindex-enqueue hiccup must NEVER report the committed
+  // approval as a failure — otherwise the reviewer retries, hits
+  // AtlasSeedNotPendingError (already approved), and gets a confusing 409.
+  let candidate: AtlasSeedEntry;
   try {
-    const candidate = await approveAtlasSeedEntry(
-      canonicalKey,
-      atlasActor(req),
-    );
-    let reindexQueued = false;
-    if (orchestratorRef) {
-      orchestratorRef.queueSourceReindex(candidate.sourceName);
-      reindexQueued = true;
-    } else {
-      // The ratification routes mount unconditionally, but orchestratorRef is
-      // only wired when search/knowledge tools are enabled. With Atlas sources
-      // but no such tools, approval persists yet nothing drives a reindex — so
-      // make the gap loud and actionable rather than silently returning 200.
-      console.error(
-        `[atlas] Approved candidate "${canonicalKey}" (source "${candidate.sourceName}"): ` +
-          `approval persisted but reindex NOT queued — no indexing orchestrator is wired ` +
-          `(search/knowledge tools disabled). Approved content will NOT be indexed until a ` +
-          `reindex runs for source "${candidate.sourceName}".`,
-      );
-    }
-    res.json({ candidate, reindexQueued });
+    candidate = await approveAtlasSeedEntry(canonicalKey, atlasActor(req));
   } catch (err) {
     handleAtlasRatificationError(res, "approve", err);
+    return;
   }
+
+  // Phase 2: best-effort reindex enqueue, AFTER the approval is committed.
+  let reindexQueued = false;
+  if (orchestratorRef) {
+    try {
+      // This synchronous try/catch only traps errors because
+      // queueSourceReindex is synchronous (returns void; the real impl
+      // swallows its own async drain rejection). If it were ever made
+      // async/Promise-returning, this would need `await` inside the try or
+      // the rejection would escape unhandled.
+      orchestratorRef.queueSourceReindex(candidate.sourceName);
+      reindexQueued = true;
+    } catch (err) {
+      // Approval is already durable; a queue failure must NOT 500. Mirror the
+      // no-orchestrator branch's contract: 200 + reindexQueued:false, with a
+      // loud log so the missed reindex is greppable and actionable.
+      console.error(
+        `[atlas] Approved candidate "${canonicalKey}" (source "${candidate.sourceName}"): ` +
+          `approval persisted but reindex enqueue FAILED — approved content will NOT be ` +
+          `indexed until a reindex runs for source "${candidate.sourceName}".`,
+        err,
+      );
+    }
+  } else {
+    // The ratification routes mount unconditionally, but orchestratorRef is
+    // only wired when search/knowledge tools are enabled. With Atlas sources
+    // but no such tools, approval persists yet nothing drives a reindex — so
+    // make the gap loud and actionable rather than silently returning 200.
+    console.error(
+      `[atlas] Approved candidate "${canonicalKey}" (source "${candidate.sourceName}"): ` +
+        `approval persisted but reindex NOT queued — no indexing orchestrator is wired ` +
+        `(search/knowledge tools disabled). Approved content will NOT be indexed until a ` +
+        `reindex runs for source "${candidate.sourceName}".`,
+    );
+  }
+  res.json({ candidate, reindexQueued });
 }
 
 async function rejectAtlasCandidate(
@@ -3464,6 +3506,17 @@ function adminOpsAuth(
  *
  * All three orchestrator methods are fire-and-forget (return void, dedupe
  * internally), so we return 202 Accepted with `{ queued: <what> }`.
+ *
+ * Non-202 outcomes:
+ *   - 400 invalid_request — scope missing/unknown, or source/repo missing for
+ *     a scoped reindex.
+ *   - 400 unknown_source / unknown_repo — a scoped target that doesn't match
+ *     any configured source/repo (a typo fails loud rather than silently
+ *     no-op-ing in the orchestrator drain).
+ *   - 503 orchestrator_unavailable — no indexing orchestrator is wired
+ *     (search/knowledge tools disabled).
+ *   - 503 config_unavailable — getServerConfig() threw on a misconfigured
+ *     environment while validating a scoped target.
  */
 async function adminReindexOp(
   _req: Request,
@@ -3629,10 +3682,15 @@ function buildAdminOpRegistry(
       if (result.status === 202) {
         // notifyAdminOpToSlack swallows all its own errors and never rejects,
         // so this is fire-and-forget; `void` marks the intentional non-await.
-        void notifyAdminOpToSlack(
-          "reindex",
-          JSON.stringify((result.body as { queued: unknown }).queued),
-        );
+        // Guard the `queued` extraction so a future op whose 202 body lacks it
+        // can't emit `undefined` into the Slack message.
+        const queued =
+          result.body &&
+          typeof result.body === "object" &&
+          "queued" in result.body
+            ? (result.body as { queued: unknown }).queued
+            : result.body;
+        void notifyAdminOpToSlack("reindex", JSON.stringify(queued));
       }
       return result;
     },
