@@ -413,7 +413,7 @@ server {
             <tr><td><code>NODE_ENV</code></td><td>No</td><td><code>development</code></td><td>Set to <code>production</code> for deployed instances</td></tr>
             <tr><td><code>LOG_LEVEL</code></td><td>No</td><td><code>info</code></td><td>Logging verbosity (debug, info, warn, error)</td></tr>
             <tr><td><code>CLONE_DIR</code></td><td>No</td><td><code>/tmp/mcp-repos</code></td><td>Directory for git repo clones</td></tr>
-            <tr><td><code>ANALYTICS_TOKEN</code></td><td>When analytics enabled</td><td>-</td><td>Bearer token for authenticating <code>/api/analytics/*</code> endpoints</td></tr>
+            <tr><td><code>ANALYTICS_TOKEN</code></td><td>For privileged surfaces</td><td>-</td><td>Shared admin-access bearer token for all privileged surfaces — analytics (<code>/api/analytics/*</code>), Atlas ratification (<code>/api/atlas/*</code>), and admin ops (<code>/admin/*</code>). See <a href="#admin-control-surface">Admin control surface</a>.</td></tr>
         </tbody>
     </table>
 
@@ -447,6 +447,43 @@ server {
     <p><strong>GitHub:</strong> Set your GitHub webhook's Payload URL to <code>https://your-domain/webhooks/github</code>.</p>
     <p><strong>Slack:</strong> Set your Slack app's Event Subscriptions Request URL to <code>https://your-domain/webhooks/slack</code>.</p>
     <p><strong>Discord:</strong> Set your Discord application's Interactions Endpoint URL to <code>https://your-domain/webhooks/discord</code>.</p>
+
+    <h2 id="admin-control-surface">Admin control surface</h2>
+
+    <p>Pathfinder exposes an authenticated control plane for operational tasks that would otherwise require database surgery and a redeploy — forcing a reindex, inspecting index state, and so on.</p>
+
+    <h3 id="admin-auth">Authentication</h3>
+    <p>All privileged surfaces — analytics (<code>/api/analytics/*</code>), Atlas ratification (<code>/api/atlas/*</code>), and admin ops (<code>/admin/*</code>) — share <strong>one</strong> admin-access bearer token: the <code>ANALYTICS_TOKEN</code> environment variable. Authenticate every request with an <code>Authorization: Bearer $ANALYTICS_TOKEN</code> header.</p>
+    <ul>
+        <li><strong>401 Unauthorized</strong> — the token is missing or does not match.</li>
+        <li><strong>503 Service Unavailable</strong> — no token is configured. These surfaces fail closed: with no <code>ANALYTICS_TOKEN</code> set, they reject every request rather than running unauthenticated.</li>
+    </ul>
+
+    <h3 id="admin-reindex">Force a reindex — <code>POST /admin/reindex</code></h3>
+    <p>Queues an indexing job and returns <strong>202 Accepted</strong>. The body selects the scope:</p>
+    <ul>
+        <li><code>{ "scope": "full" }</code> — reindex every configured source.</li>
+        <li><code>{ "scope": "source", "source": "&lt;configured-source-name&gt;" }</code> — reindex a single named source.</li>
+        <li><code>{ "scope": "repo", "repo": "&lt;configured-repo-url&gt;" }</code> — incrementally reindex a single git-backed source by repo URL.</li>
+    </ul>
+    <p>An unknown source name or repo URL returns <strong>400 Bad Request</strong> so a typo fails loud instead of silently no-op-ing.</p>
+
+    <div class="code-block"><span class="cmd">$</span> curl -X POST https://your-domain/admin/reindex \
+  -H <span class="value">"Authorization: Bearer $ANALYTICS_TOKEN"</span> \
+  -H <span class="value">"Content-Type: application/json"</span> \
+  -d <span class="value">'{"scope":"source","source":"my-docs"}'</span></div>
+
+    <h3 id="admin-index-stats">Inspect index state — <code>GET /admin/index-stats</code></h3>
+    <p>Returns <strong>200 OK</strong> with current index statistics (a <code>POST /admin/index-stats</code> alias is also accepted):</p>
+    <div class="code-block"><span class="cmd">$</span> curl https://your-domain/admin/index-stats \
+  -H <span class="value">"Authorization: Bearer $ANALYTICS_TOKEN"</span></div>
+    <p>The response body has the shape:</p>
+    <div class="code-block">{
+  <span class="key">"total_chunks"</span>: <span class="value">1280</span>,
+  <span class="key">"by_source"</span>: { <span class="key">"my-docs"</span>: <span class="value">1280</span> },
+  <span class="key">"indexed_repos"</span>: [<span class="value">"https://github.com/acme/docs"</span>],
+  <span class="key">"sources"</span>: [ <span class="comment">/* per-source type, key, status, last_indexed, commit, error */</span> ]
+}</div>
 
     <h2>Volume Mounts</h2>
 
