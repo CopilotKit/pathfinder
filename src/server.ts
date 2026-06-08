@@ -89,6 +89,7 @@ import {
   rejectAtlasSeedEntry,
   AtlasSeedNotPendingError,
 } from "./db/atlas.js";
+import type { AtlasSeedEntry } from "./db/atlas.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -3256,31 +3257,50 @@ async function approveAtlasCandidate(
     return;
   }
 
+  // The DB write and the reindex enqueue are split into two phases on purpose.
+  // Only DB-write failures (and pre-write validation) flow through
+  // handleAtlasRatificationError → 409/500. Once the approval is durably
+  // persisted, a reindex-enqueue hiccup must NEVER report the committed
+  // approval as a failure — otherwise the reviewer retries, hits
+  // AtlasSeedNotPendingError (already approved), and gets a confusing 409.
+  let candidate: AtlasSeedEntry;
   try {
-    const candidate = await approveAtlasSeedEntry(
-      canonicalKey,
-      atlasActor(req),
-    );
-    let reindexQueued = false;
-    if (orchestratorRef) {
-      orchestratorRef.queueSourceReindex(candidate.sourceName);
-      reindexQueued = true;
-    } else {
-      // The ratification routes mount unconditionally, but orchestratorRef is
-      // only wired when search/knowledge tools are enabled. With Atlas sources
-      // but no such tools, approval persists yet nothing drives a reindex — so
-      // make the gap loud and actionable rather than silently returning 200.
-      console.error(
-        `[atlas] Approved candidate "${canonicalKey}" (source "${candidate.sourceName}"): ` +
-          `approval persisted but reindex NOT queued — no indexing orchestrator is wired ` +
-          `(search/knowledge tools disabled). Approved content will NOT be indexed until a ` +
-          `reindex runs for source "${candidate.sourceName}".`,
-      );
-    }
-    res.json({ candidate, reindexQueued });
+    candidate = await approveAtlasSeedEntry(canonicalKey, atlasActor(req));
   } catch (err) {
     handleAtlasRatificationError(res, "approve", err);
+    return;
   }
+
+  // Phase 2: best-effort reindex enqueue, AFTER the approval is committed.
+  let reindexQueued = false;
+  if (orchestratorRef) {
+    try {
+      orchestratorRef.queueSourceReindex(candidate.sourceName);
+      reindexQueued = true;
+    } catch (err) {
+      // Approval is already durable; a queue failure must NOT 500. Mirror the
+      // no-orchestrator branch's contract: 200 + reindexQueued:false, with a
+      // loud log so the missed reindex is greppable and actionable.
+      console.error(
+        `[atlas] Approved candidate "${canonicalKey}" (source "${candidate.sourceName}"): ` +
+          `approval persisted but reindex enqueue FAILED — approved content will NOT be ` +
+          `indexed until a reindex runs for source "${candidate.sourceName}".`,
+        err,
+      );
+    }
+  } else {
+    // The ratification routes mount unconditionally, but orchestratorRef is
+    // only wired when search/knowledge tools are enabled. With Atlas sources
+    // but no such tools, approval persists yet nothing drives a reindex — so
+    // make the gap loud and actionable rather than silently returning 200.
+    console.error(
+      `[atlas] Approved candidate "${canonicalKey}" (source "${candidate.sourceName}"): ` +
+        `approval persisted but reindex NOT queued — no indexing orchestrator is wired ` +
+        `(search/knowledge tools disabled). Approved content will NOT be indexed until a ` +
+        `reindex runs for source "${candidate.sourceName}".`,
+    );
+  }
+  res.json({ candidate, reindexQueued });
 }
 
 async function rejectAtlasCandidate(
