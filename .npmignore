@@ -1,6 +1,6 @@
 # Source (dist/ is the published artifact)
 src/
-tsconfig.json
+tsconfig*.json
 
 # Tests and fixtures
 **/__tests__/
