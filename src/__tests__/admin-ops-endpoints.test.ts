@@ -26,6 +26,16 @@ vi.mock("../config.js", async (importOriginal) => {
       packageVersion: "test",
       slackWebhookUrl: "",
     })),
+    // Admin ops now reuse the shared admin-access bearer token
+    // (ANALYTICS_TOKEN) via bearerTokenAuth. Mock getAnalyticsConfig so the
+    // shared auth resolves a token. requireAnalyticsEnabled is false for the
+    // admin surface, so the `enabled` flag does not gate access.
+    getAnalyticsConfig: vi.fn(() => ({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: ADMIN_TOKEN,
+    })),
     // Source validation for the reindex op reads getServerConfig().sources.
     getServerConfig: vi.fn(() => ({
       server: { name: "test-server" },
@@ -35,12 +45,16 @@ vi.mock("../config.js", async (importOriginal) => {
   };
 });
 
+import { getAnalyticsConfig } from "../config.js";
+import type { IndexStats } from "../db/queries.js";
 import {
   __setAtlasOrchestratorForTesting,
+  __resetAnalyticsTokenForTesting,
   registerAdminOpsRoutes,
 } from "../server.js";
 
 const ADMIN_TOKEN = "test-admin-token-1234567890";
+const mockGetAnalyticsConfig = vi.mocked(getAnalyticsConfig);
 
 function request(
   server: http.Server,
@@ -105,10 +119,20 @@ async function closeServer(s: http.Server | undefined): Promise<void> {
 
 describe("admin ops control surface", () => {
   let server: http.Server | undefined;
-  const prevToken = process.env.PATHFINDER_ADMIN_TOKEN;
+  const prevAnalyticsTokenEnv = process.env.ANALYTICS_TOKEN;
 
   beforeEach(() => {
-    process.env.PATHFINDER_ADMIN_TOKEN = ADMIN_TOKEN;
+    // The shared admin-access token resolves from analytics config (or the
+    // ANALYTICS_TOKEN env var). Clear the env so the mocked config is the
+    // sole token source and reset the cached auto-generated token.
+    delete process.env.ANALYTICS_TOKEN;
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+      token: ADMIN_TOKEN,
+    });
+    __resetAnalyticsTokenForTesting();
     __setAtlasOrchestratorForTesting(null);
   });
 
@@ -116,23 +140,21 @@ describe("admin ops control surface", () => {
     await closeServer(server);
     server = undefined;
     __setAtlasOrchestratorForTesting(null);
-    if (prevToken === undefined) delete process.env.PATHFINDER_ADMIN_TOKEN;
-    else process.env.PATHFINDER_ADMIN_TOKEN = prevToken;
+    __resetAnalyticsTokenForTesting();
+    if (prevAnalyticsTokenEnv === undefined) delete process.env.ANALYTICS_TOKEN;
+    else process.env.ANALYTICS_TOKEN = prevAnalyticsTokenEnv;
     vi.restoreAllMocks();
   });
 
-  it("returns 503 (fail-closed) when PATHFINDER_ADMIN_TOKEN is unset", async () => {
-    delete process.env.PATHFINDER_ADMIN_TOKEN;
-    server = await startServer();
-    const res = await request(server, "POST", "/admin/index-stats", {
-      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
-      body: {},
+  it("returns 503 (fail-closed) when no admin-access token is configured", async () => {
+    // No analytics.token, no ANALYTICS_TOKEN env, analytics not enabled → the
+    // shared auth cannot resolve a token and fails closed with 503.
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: false,
+      log_queries: false,
+      retention_days: 90,
     });
-    expect(res.status).toBe(503);
-  });
-
-  it("returns 503 (fail-closed) when PATHFINDER_ADMIN_TOKEN is empty", async () => {
-    process.env.PATHFINDER_ADMIN_TOKEN = "";
+    __resetAnalyticsTokenForTesting();
     server = await startServer();
     const res = await request(server, "POST", "/admin/index-stats", {
       headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
@@ -288,7 +310,7 @@ describe("admin ops control surface", () => {
       queueFullReindex: vi.fn(),
       queueSourceReindex: vi.fn(),
       queueIncrementalReindex: vi.fn(),
-    } as never);
+    });
     server = await startServer();
     const res = await request(server, "POST", "/admin/reindex", {
       headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
@@ -333,22 +355,23 @@ describe("admin ops control surface", () => {
   it("index-stats returns the expected shape with injected stats", async () => {
     const app = express();
     app.use(express.json());
+    const stats: IndexStats = {
+      totalChunks: 42,
+      bySource: [{ source_name: "code", count: 42 }],
+      indexedRepos: 1,
+      indexStates: [
+        {
+          source_type: "github",
+          source_key: "code",
+          status: "idle",
+          last_indexed_at: new Date("2026-01-01T00:00:00.000Z"),
+          last_commit_sha: "abcdef1234567890",
+          error_message: null,
+        },
+      ],
+    };
     registerAdminOpsRoutes(app, {
-      getIndexStats: async () => ({
-        totalChunks: 42,
-        bySource: [{ source_name: "code", count: 42 }],
-        indexedRepos: 1,
-        indexStates: [
-          {
-            source_type: "github",
-            source_key: "code",
-            status: "indexed",
-            last_indexed_at: "2026-01-01T00:00:00.000Z",
-            last_commit_sha: "abcdef1234567890",
-            error_message: null,
-          },
-        ] as never,
-      }),
+      getIndexStats: async () => stats,
     });
     server = app.listen(0);
     await new Promise<void>((resolve) => server!.once("listening", resolve));
@@ -364,7 +387,7 @@ describe("admin ops control surface", () => {
       {
         type: "github",
         key: "code",
-        status: "indexed",
+        status: "idle",
         last_indexed: "2026-01-01T00:00:00.000Z",
         commit: "abcdef12",
         error: null,

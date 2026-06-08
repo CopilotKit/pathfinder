@@ -2484,7 +2484,7 @@ function bearerTokenAuth(
   res: Response,
   next: express.NextFunction,
   opts: {
-    logPrefix: "analytics" | "atlas";
+    logPrefix: "analytics" | "atlas" | "admin-ops";
     configReadFailureDescription: string;
     requireAnalyticsEnabled: boolean;
     disabledResponse?: { status: number; body: Record<string, string> };
@@ -3408,62 +3408,45 @@ export interface AdminOpsRouteDeps {
   getIndexStats?: typeof getIndexStats;
 }
 
-function readAdminToken(): string | undefined {
-  const token = process.env.PATHFINDER_ADMIN_TOKEN?.trim();
-  return token ? token : undefined;
-}
-
 /**
- * Bearer auth for the admin ops surface. Fail-closed: 503 when no token is
- * configured (feature disabled), 401 on a missing/invalid token when enabled.
- * Constant-time comparison mirrors `bearerTokenAuth` — length-guarded before
- * timingSafeEqual (which throws on length mismatch).
+ * Bearer auth for the admin ops surface. Reuses the shared admin-access
+ * bearer token (`ANALYTICS_TOKEN`) via `bearerTokenAuth`, mirroring
+ * `atlasRatificationAuth` — one credential gates analytics, Atlas
+ * ratification, AND admin ops. Decoupled from analytics.enabled
+ * (`requireAnalyticsEnabled: false`): 503 when no token is configured,
+ * 401 on a missing/invalid token, and honors the dev-localhost bypass.
  */
 function adminOpsAuth(
   req: Request,
   res: Response,
   next: express.NextFunction,
 ): void {
-  const token = readAdminToken();
-  if (!token) {
-    // Fail-closed: the secret hasn't been provisioned, so the control surface
-    // is OFF. 503 (not 401) tells operators the routes exist but are disabled
-    // pending PATHFINDER_ADMIN_TOKEN — safe to deploy before the secret lands.
+  const prodTokenMsg =
+    "Admin ops require ANALYTICS_TOKEN in production (env var or analytics.token in config).";
+  const nonProdTokenMsg =
+    "Admin ops token unavailable — check analytics token config / logs.";
+  let tokenDescription: string;
+  try {
+    tokenDescription =
+      getConfig().nodeEnv === "production" ? prodTokenMsg : nonProdTokenMsg;
+  } catch (err) {
+    console.error(
+      `[admin-ops] auth misconfigured: config read failed: ${formatErrorForLog(err)}`,
+    );
     res.status(503).json({
-      error: "admin_ops_disabled",
-      error_description:
-        "Admin ops disabled — set PATHFINDER_ADMIN_TOKEN to enable.",
+      error: "misconfigured",
+      error_description: "Admin ops config read failed",
     });
     return;
   }
 
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    res.status(401).json({
-      error: "unauthorized",
-      error_description:
-        "Missing or invalid Authorization header. Use: Bearer <token>",
-    });
-    return;
-  }
-
-  const providedBuf = Buffer.from(authHeader.slice(7), "utf8");
-  const tokenBuf = Buffer.from(token, "utf8");
-  // crypto.timingSafeEqual REQUIRES equal-length buffers — guard first so a
-  // length mismatch returns 401 instead of throwing an unhandled 500. A
-  // length oracle here is not a meaningful leak (see bearerTokenAuth note).
-  if (
-    providedBuf.length !== tokenBuf.length ||
-    !timingSafeEqual(providedBuf, tokenBuf)
-  ) {
-    res.status(401).json({
-      error: "unauthorized",
-      error_description: "Invalid admin token",
-    });
-    return;
-  }
-
-  next();
+  bearerTokenAuth(req, res, next, {
+    logPrefix: "admin-ops",
+    configReadFailureDescription: "Admin ops config read failed",
+    requireAnalyticsEnabled: false,
+    tokenDescription,
+    invalidTokenDescription: "Invalid admin token",
+  });
 }
 
 /**
