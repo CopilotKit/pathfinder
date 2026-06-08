@@ -87,6 +87,7 @@ import {
   approveAtlasSeedEntry,
   listPendingAtlasSeedCandidates,
   rejectAtlasSeedEntry,
+  AtlasSeedNotPendingError,
 } from "./db/atlas.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -3226,7 +3227,10 @@ function handleAtlasRatificationError(
   err: unknown,
 ): void {
   const message = err instanceof Error ? err.message : String(err);
-  if (message.includes("missing or not pending")) {
+  if (
+    err instanceof AtlasSeedNotPendingError ||
+    (err as { code?: string })?.code === "ATLAS_SEED_NOT_PENDING"
+  ) {
     res.status(409).json({
       error: `atlas_candidate_not_${action}able`,
       error_description: message,
