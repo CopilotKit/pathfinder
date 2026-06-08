@@ -2475,9 +2475,11 @@ function getAnalyticsToken(): string | undefined {
 }
 
 /**
- * Shared bearer-token check used by analytics and Atlas admin endpoints.
- * Atlas intentionally reuses the same configured token source without tying
- * its availability to analytics.enabled.
+ * Shared bearer-token check for every privileged surface — analytics, Atlas
+ * ratification, AND admin ops. All three reuse the one admin-access bearer
+ * token (`ANALYTICS_TOKEN`); Atlas and admin ops intentionally reuse the same
+ * configured token source without tying availability to analytics.enabled
+ * (`requireAnalyticsEnabled: false`). A wrong token → 401 (RFC 7235).
  */
 function bearerTokenAuth(
   req: Request,
@@ -3379,10 +3381,13 @@ export function registerAtlasRatificationRoutes(app: express.Express): void {
 //   - `atlas-cache-invalidate`  — drop the Atlas page cache.
 //   - `smoke`                   — run a self-check / readiness probe.
 //
-// Auth: bearer token from PATHFINDER_ADMIN_TOKEN, constant-time compared.
-// FAIL-CLOSED: when the env var is unset/empty the routes return 503
-// (disabled) so the feature can be merged/deployed safely before the secret
-// is provisioned. 401 on a missing/invalid token once the token is set.
+// Auth: the shared admin-access bearer token (`ANALYTICS_TOKEN`) — the SAME
+// credential that gates analytics and Atlas ratification. One "admin access"
+// secret governs all three privileged surfaces; no separate admin token is
+// provisioned. FAIL-CLOSED: when no token is configured the routes return 503
+// (misconfigured); 401 on a missing/invalid token. Decoupled from
+// analytics.enabled, and honors the same dev-localhost bypass as the other
+// privileged surfaces (production is unaffected under trust_proxy).
 // ---------------------------------------------------------------------------
 
 /**
