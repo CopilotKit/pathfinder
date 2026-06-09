@@ -24,10 +24,14 @@ export class AtlasDataProvider implements DataProvider {
   }
 
   async fullAcquire(): Promise<AcquisitionResult> {
+    // The state token is microsecond high-water TEXT (or the epoch fallback as
+    // microsecond text when the source is empty). It flows straight into the
+    // SQL bound as a `$N::timestamptz` text param — never wrapped in a JS Date,
+    // which would truncate the microseconds.
     const stateToken =
-      (await this.getCurrentStateToken()) ?? new Date(0).toISOString();
+      (await this.getCurrentStateToken()) ?? "1970-01-01T00:00:00.000000Z";
     const query = {
-      changedOnOrBefore: new Date(stateToken),
+      changedOnOrBefore: stateToken,
       repositories: this.repositoryFilters(),
     };
     const [items, removedIds] = await Promise.all([
@@ -42,10 +46,39 @@ export class AtlasDataProvider implements DataProvider {
   }
 
   async incrementalAcquire(lastStateToken: string): Promise<AcquisitionResult> {
-    const stateToken = (await this.getCurrentStateToken()) ?? lastStateToken;
+    // Fail loud on a malformed checkpoint BEFORE any other branch. An
+    // empty/undefined lastStateToken is the legitimate first-run "from the
+    // beginning" signal (no `changedAfter` lower bound); anything else must be a
+    // real microsecond timestamp, or the `$N::timestamptz` bind would either
+    // throw deep in Postgres with no source context or — worse — silently
+    // coerce garbage. Validating here (not after the null-token early return
+    // below) ensures a corrupt checkpoint surfaces even when the source is empty
+    // — otherwise garbage would silently pass through and re-persist on every
+    // run of an empty source.
+    const changedAfter = this.parseLowerBound(lastStateToken);
+    const currentStateToken = await this.getCurrentStateToken();
+    // A null current token means the high-water read found no rows (source
+    // empty or unreadable). Falling back to lastStateToken would build the
+    // window `changedAfter: T AND changedOnOrBefore: T` (i.e. `> T AND <= T`),
+    // which matches nothing — a silent no-op that masks the case where the
+    // state-token query failed to see rows it should have. Skip the pass
+    // LOUDLY instead of issuing a guaranteed-empty query, and keep the caller's
+    // (now-validated) checkpoint unchanged so the next run retries from the same
+    // point.
+    if (currentStateToken === null) {
+      console.warn(
+        `[atlas] Skipping incremental acquire for source "${this.config.name}": ` +
+          `the current state token was null (source empty or unreadable). ` +
+          `Carrying lastStateToken forward without running an empty window.`,
+      );
+      return { items: [], removedIds: [], stateToken: lastStateToken };
+    }
+    // currentStateToken is proven non-null by the early return above — bind the
+    // raw microsecond text directly (no dead `? ... : undefined` ternary, no
+    // `new Date()` wrap that would truncate the microseconds).
     const query = {
-      changedAfter: lastStateToken ? new Date(lastStateToken) : undefined,
-      changedOnOrBefore: stateToken ? new Date(stateToken) : undefined,
+      changedAfter,
+      changedOnOrBefore: currentStateToken,
       repositories: this.repositoryFilters(),
     };
     const [items, removedIds] = await Promise.all([
@@ -55,8 +88,37 @@ export class AtlasDataProvider implements DataProvider {
     return {
       items,
       removedIds,
-      stateToken,
+      stateToken: currentStateToken,
     };
+  }
+
+  // The exact fixed-width microsecond shape getAtlasStateToken emits via
+  // `to_char(... 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` — 6 fractional digits and a
+  // trailing Z. A bare `new Date(...)` probe is far looser than Postgres
+  // `::timestamptz`: "2026" or "Jan 5 2026" parse in JS but bind with
+  // different / locale-dependent semantics, defeating the fail-loud intent. We
+  // require this precise token so anything that did NOT come from our own
+  // state-token writer fails loud here instead of silently binding a different
+  // instant.
+  private static readonly STATE_TOKEN_PATTERN =
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+  // Validate the persisted checkpoint before it reaches the SQL bind. Empty or
+  // undefined means "first run, no lower bound"; any non-empty value must be the
+  // exact microsecond state-token shape. We keep the raw microsecond text (the
+  // regex is only a validity gate — we never reformat it) so the `> $token`
+  // bound runs at full precision.
+  private parseLowerBound(lastStateToken: string): string | undefined {
+    if (!lastStateToken) return undefined;
+    if (!AtlasDataProvider.STATE_TOKEN_PATTERN.test(lastStateToken)) {
+      throw new Error(
+        `[atlas] Refusing incremental acquire for source "${this.config.name}": ` +
+          `lastStateToken is not a valid microsecond state token ` +
+          `(expected YYYY-MM-DDTHH:MM:SS.ffffffZ): ` +
+          `${JSON.stringify(lastStateToken)}`,
+      );
+    }
+    return lastStateToken;
   }
 
   async getCurrentStateToken(): Promise<string | null> {
@@ -66,8 +128,8 @@ export class AtlasDataProvider implements DataProvider {
   }
 
   private async acquireItems(query: {
-    changedAfter?: Date;
-    changedOnOrBefore?: Date;
+    changedAfter?: string;
+    changedOnOrBefore?: string;
     repositories?: AtlasRepositoryFilter[];
   }): Promise<ContentItem[]> {
     const entries = await listIndexableAtlasContent(this.config.name, query);

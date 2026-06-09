@@ -179,7 +179,7 @@ describe("AtlasDataProvider", () => {
 
     const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
     const stateToken = await provider.getCurrentStateToken();
-    expect(stateToken).toBe("2026-01-01T00:00:00.000Z");
+    expect(stateToken).toBe("2026-01-01T00:00:00.000000Z");
 
     await upsertAtlasSeedCandidate({
       canonicalKey: "new",
@@ -305,14 +305,14 @@ describe("AtlasDataProvider", () => {
 
     const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
     const result = await provider.incrementalAcquire(
-      "2025-12-31T00:00:00.000Z",
+      "2025-12-31T00:00:00.000000Z",
     );
 
     expect(result.items.map((item) => item.id)).toEqual([
       "atlas-seed:included",
       "atlas-seed:future",
     ]);
-    expect(result.stateToken).toBe("2026-01-02T00:00:00.000Z");
+    expect(result.stateToken).toBe("2026-01-02T00:00:00.000000Z");
   });
 
   it("bounds incremental acquisition to the token captured before listing rows", async () => {
@@ -331,8 +331,8 @@ describe("AtlasDataProvider", () => {
     );
 
     const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
-    const capturedToken = "2026-01-01T00:00:00.000Z";
-    const lateToken = "2026-01-02T00:00:00.000Z";
+    const capturedToken = "2026-01-01T00:00:00.000000Z";
+    const lateToken = "2026-01-02T00:00:00.000000Z";
     const stateTokenSpy = vi
       .spyOn(atlasDb, "getAtlasStateToken")
       .mockImplementation(async () => {
@@ -354,7 +354,7 @@ describe("AtlasDataProvider", () => {
 
     try {
       const result = await provider.incrementalAcquire(
-        "2025-12-31T00:00:00.000Z",
+        "2025-12-31T00:00:00.000000Z",
       );
 
       expect(stateTokenSpy).toHaveBeenCalledTimes(1);
@@ -388,7 +388,7 @@ describe("AtlasDataProvider", () => {
 
     const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
     const stateToken = await provider.getCurrentStateToken();
-    expect(stateToken).toBe("2026-01-01T00:00:00.000Z");
+    expect(stateToken).toBe("2026-01-01T00:00:00.000000Z");
 
     await markAtlasCachePageStale("runtime/overview", "seed changed");
     await db.query(
@@ -396,12 +396,14 @@ describe("AtlasDataProvider", () => {
       ["runtime/overview", new Date("2026-01-02T00:00:00Z")],
     );
 
-    expect(await getAtlasStateToken("atlas")).toBe("2026-01-02T00:00:00.000Z");
+    expect(await getAtlasStateToken("atlas")).toBe(
+      "2026-01-02T00:00:00.000000Z",
+    );
 
     const result = await provider.incrementalAcquire(stateToken ?? "");
     expect(result.items).toEqual([]);
     expect(result.removedIds).toEqual(["atlas-cache:runtime/overview"]);
-    expect(result.stateToken).toBe("2026-01-02T00:00:00.000Z");
+    expect(result.stateToken).toBe("2026-01-02T00:00:00.000000Z");
   });
 
   it("incrementally removes rejected seeds and empty cache pages", async () => {
@@ -433,7 +435,7 @@ describe("AtlasDataProvider", () => {
 
     const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
     const result = await provider.incrementalAcquire(
-      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000000Z",
     );
 
     expect(result.items).toEqual([]);
@@ -441,12 +443,154 @@ describe("AtlasDataProvider", () => {
       "atlas-seed:seed-to-reject",
       "atlas-cache:runtime/empty",
     ]);
-    expect(result.stateToken).toBe("2026-01-03T00:00:00.000Z");
+    expect(result.stateToken).toBe("2026-01-03T00:00:00.000000Z");
   });
 
   it("provider registry resolves type atlas", () => {
     const factory = getProvider("atlas");
     const provider = factory(atlasConfig, { cloneDir: "/tmp" });
     expect(provider).toBeInstanceOf(AtlasDataProvider);
+  });
+
+  it("skips loudly when the current state token is null instead of running an empty window", async () => {
+    // A null current token means the high-water read saw no rows (source empty
+    // or unreadable). Carrying lastStateToken forward would build the window
+    // `> T AND <= T`, which matches nothing — a silent no-op that masks a
+    // possibly-failed high-water read. The pass must be skipped LOUDLY and the
+    // guaranteed-empty acquire queries must NOT run.
+    const stateTokenSpy = vi
+      .spyOn(atlasDb, "getAtlasStateToken")
+      .mockResolvedValue(null);
+    const listSpy = vi.spyOn(atlasDb, "listIndexableAtlasContent");
+    const removedSpy = vi.spyOn(atlasDb, "listRemovedAtlasContentIds");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
+      const lastToken = "2026-01-01T00:00:00.000000Z";
+      const result = await provider.incrementalAcquire(lastToken);
+
+      expect(result).toEqual({
+        items: [],
+        removedIds: [],
+        stateToken: lastToken,
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("state token was null"),
+      );
+      // Positive control: the state-token read MUST have fired. Without this a
+      // broken ESM-binding interception (so the real impl ran instead of the
+      // mock) would make the `.not.toHaveBeenCalled()` assertions below pass
+      // vacuously and hide the regression.
+      expect(stateTokenSpy).toHaveBeenCalled();
+      // The empty-window acquire queries must never be issued.
+      expect(listSpy).not.toHaveBeenCalled();
+      expect(removedSpy).not.toHaveBeenCalled();
+    } finally {
+      stateTokenSpy.mockRestore();
+      listSpy.mockRestore();
+      removedSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("fails loud on a non-empty but unparseable lastStateToken instead of binding garbage", async () => {
+    // A garbage checkpoint must never reach the `$N::timestamptz` bind. The
+    // guard throws a context-bearing error (source name + offending token)
+    // BEFORE any acquire query runs, so a corrupted checkpoint surfaces as a
+    // loud failure rather than an Invalid-Date coercion or a Postgres parse
+    // error with no source attribution.
+    await upsertAtlasSeedCandidate({
+      canonicalKey: "present",
+      sourceName: "atlas",
+      title: "Present",
+      content: "Present content",
+      provenance: {},
+      evidence: [],
+    });
+    await approveAtlasSeedEntry("present", "reviewer");
+
+    const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
+    await expect(
+      provider.incrementalAcquire("not-a-timestamp"),
+    ).rejects.toThrow(/lastStateToken is not a valid microsecond state token/);
+    await expect(
+      provider.incrementalAcquire("not-a-timestamp"),
+    ).rejects.toThrow(/"atlas"/);
+  });
+
+  it("fails loud on a JS-parseable but non-microsecond-format lastStateToken", async () => {
+    // Strings like "2026" or "Jan 5 2026" satisfy `new Date(...)` but bind into
+    // `$N::timestamptz` with different / locale-dependent semantics than the
+    // fixed-width microsecond token getAtlasStateToken emits. The guard must
+    // require the EXACT emitted shape so these loose values fail loud (with the
+    // source name + offending token) instead of silently binding a different
+    // instant.
+    await upsertAtlasSeedCandidate({
+      canonicalKey: "present",
+      sourceName: "atlas",
+      title: "Present",
+      content: "Present content",
+      provenance: {},
+      evidence: [],
+    });
+    await approveAtlasSeedEntry("present", "reviewer");
+
+    const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
+    await expect(provider.incrementalAcquire("2026")).rejects.toThrow(
+      /lastStateToken is not a valid microsecond state token/,
+    );
+    await expect(provider.incrementalAcquire("2026")).rejects.toThrow(
+      /"atlas"/,
+    );
+    await expect(provider.incrementalAcquire("Jan 5 2026")).rejects.toThrow(
+      /lastStateToken is not a valid microsecond state token/,
+    );
+  });
+
+  it("fails loud on a corrupt lastStateToken even when the source is empty", async () => {
+    // When the current state token is null (source empty/unreadable) the method
+    // returns early. A corrupt checkpoint must STILL fail loud in that path,
+    // otherwise garbage silently passes through and re-persists on every run of
+    // an empty source. Validation runs BEFORE the null-token early return.
+    const stateTokenSpy = vi
+      .spyOn(atlasDb, "getAtlasStateToken")
+      .mockResolvedValue(null);
+    try {
+      const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
+      await expect(
+        provider.incrementalAcquire("not-a-timestamp"),
+      ).rejects.toThrow(
+        /lastStateToken is not a valid microsecond state token/,
+      );
+      await expect(
+        provider.incrementalAcquire("not-a-timestamp"),
+      ).rejects.toThrow(/"atlas"/);
+    } finally {
+      stateTokenSpy.mockRestore();
+    }
+  });
+
+  it("treats an empty lastStateToken as a first-run lower bound (no changedAfter)", async () => {
+    // An empty checkpoint is the legitimate first-run signal: index everything
+    // up to the current high-water mark with no `changedAfter` lower bound.
+    await upsertAtlasSeedCandidate({
+      canonicalKey: "first",
+      sourceName: "atlas",
+      title: "First",
+      content: "First content",
+      provenance: {},
+      evidence: [],
+    });
+    await approveAtlasSeedEntry("first", "reviewer");
+    await db.query(
+      "UPDATE atlas_seed_entries SET updated_at = $2 WHERE canonical_key = $1",
+      ["first", new Date("2026-01-01T00:00:00Z")],
+    );
+
+    const provider = new AtlasDataProvider(atlasConfig, { cloneDir: "/tmp" });
+    const result = await provider.incrementalAcquire("");
+    expect(result.items.map((item) => item.id)).toEqual(["atlas-seed:first"]);
+    expect(result.stateToken).toBe("2026-01-01T00:00:00.000000Z");
   });
 });
