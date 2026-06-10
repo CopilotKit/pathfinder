@@ -104,9 +104,12 @@ yet.
 
 > **Incremental ramp (org discipline).** Do NOT launch the full fleet on the
 > first run. Start with ONE shard of ~4 units, run Step 2 as a `--dry-run`,
-> confirm the fragments parse, then ramp the shards up. (Serverless dry-runs
-> fail fast at 5 consecutive rag-probe failures — keep a serverless ramp at ≤4
-> fragments or stub the search route.) See "Smoke-ramp" below.
+> confirm the fragments parse, then ramp the shards up. The normal path runs
+> the dry-run against a reachable Pathfinder server (bearer-gated
+> `GET /api/search` + `ANALYTICS_TOKEN`), which imposes no fragment cap; only
+> a serverless ramp — no reachable server — needs to stay at ≤4 fragments or
+> stub the search route, because serverless dry-runs fail fast at 5
+> consecutive rag-probe failures. See "Smoke-ramp" below.
 
 ---
 
@@ -267,20 +270,32 @@ Requires `--token`/`ANALYTICS_TOKEN`. Queues a (scoped) reindex via
 embeds them, and writes pgvector. `--scope source --source atlas` reindexes only
 the Atlas source.
 
+> **Prerequisite:** the scoped example above requires a `type: atlas` source
+> block to already exist in the server's loaded deploy config
+> (`deploy/copilotkit-docs.yaml`) — `POST /admin/reindex` 400s
+> `unknown_source` for any source name not in the loaded config. Add the
+> source block before running this step (a commented example of the shape
+> lives in `pathfinder.example.yaml`). The source block on its own is
+> harmless: without the `atlas-search` tool (Step 7) nothing serves the
+> indexed rows.
+
 ---
 
 ## Step 7 (LAST, DEFERRED) — Wire Atlas on in production
 
 Wire-on is the **deferred final step**, done only **after an approved corpus
-exists** (i.e. after Steps 1-6 have produced approved, indexed rows). It is
-**YAML-only**: add a `type: atlas` source block and an `atlas-search` tool
-(`type: search`, `search_mode: "hybrid"`, `source: "atlas"`) to
-`deploy/copilotkit-docs.yaml` (and a commented example to
-`pathfinder.example.yaml`). The `AtlasSourceConfigSchema` already exists in the
-server, so nothing in `src/` changes — flipping the YAML on is the whole job.
+exists** (i.e. after Steps 1-6 have produced approved, indexed rows). Note the
+`type: atlas` **source block** is NOT part of this step — it is a Step-6
+prerequisite (see above). What remains here is **YAML-only**: add the
+`atlas-search` tool (`type: search`, `search_mode: "hybrid"`,
+`source: "atlas"`) to `deploy/copilotkit-docs.yaml`. (Commented examples of
+both the source block and the tool already exist in
+`pathfinder.example.yaml`.) The `AtlasSourceConfigSchema` already exists in
+the server, so nothing in `src/` changes — flipping the tool YAML on is the
+whole job.
 
-Do NOT wire Atlas on before an approved corpus exists; an `atlas` source over an
-empty/unapproved corpus serves nothing useful.
+Do NOT wire Atlas on before an approved corpus exists; an `atlas-search` tool
+over an empty/unapproved corpus serves nothing useful.
 
 ---
 
@@ -315,6 +330,12 @@ error before any fragment is read. It then reads + parses every fragment against
 canonicalize`) **before** the rag-dedup gate. A malformed fragment fails loud at
 that read step with a Zod error.
 
+The normal smoke path points at a live server: the live Pathfinder server
+exposes the route the gate probes — a bearer-gated `GET /api/search` doing
+lexical search over the indexed corpus — so a smoke run with a reachable
+server and `ANALYTICS_TOKEN` set round-trips every probe for real and has no
+fragment cap.
+
 If you have no live Pathfinder server, the dry-run **aborts** once the
 rag-dedup gate (`dedupAgainstRagCorpus`) sees **5 consecutive** failed `search`
 probes: each per-candidate probe failure is caught, logged, and passed through,
@@ -328,10 +349,5 @@ for the whole run. Two ways to smoke under that constraint:
 - point `--url` at a **stub** server that answers `GET /api/search` (an empty
   hit list is fine), which exercises the rag-dedup round-trip for real and
   works at any corpus size.
-
-Do **not** point a smoke run at the live production Pathfinder server yet: it
-does not expose `/api/search` (an open S20 item), so every probe 404s — and
-404s count as probe failures, tripping the same 5-consecutive fail-fast.
-Live-server smoke becomes possible only once the S20 search route lands.
 
 Clean up the throwaway `/tmp/atlas-smoke/` after — never commit a run directory.
