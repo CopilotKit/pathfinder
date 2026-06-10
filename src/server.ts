@@ -3252,6 +3252,16 @@ function handleAtlasRatificationError(
     (err as { code?: string })?.code === "ATLAS_SEED_NOT_PENDING"
   ) {
     res.status(409).json({
+      // LOCKSTEP: this template MUST stay byte-identical to the client-side
+      // detection in AtlasHttpClient (src/atlas/client.ts), which substring-
+      // matches the 409 body for `atlas_candidate_not_${action}able` to
+      // swallow the idempotent not-pending case. For action="approve" it
+      // yields "atlas_candidate_not_approveable" — "approveable" (sic), not
+      // dictionary "approvable" — but both sides derive it mechanically from
+      // `${action}able`, so the wire is consistent. Do NOT "fix" the spelling
+      // on one side only: change both in lockstep or not at all, or the
+      // client stops recognizing not-pending 409s and throws instead of
+      // no-opping.
       error: `atlas_candidate_not_${action}able`,
       error_description: message,
     });
