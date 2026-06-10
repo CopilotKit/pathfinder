@@ -27,9 +27,9 @@
 // downstream upsert is idempotent pending-only (§5), and because we never drop,
 // a re-run can only re-annotate — it cannot lose work.
 //
-// Open item: `GET /api/search` is NOT an existing live route on the server
-// today — the runtime probe target is a plan open item, to be wired/confirmed
-// before the first live harvest run (see client.ts / S20).
+// `GET /api/search` is LIVE on the server: lexical tsvector search over the
+// indexed chunks table, mounted alongside the atlas ratification routes and
+// authenticated with the same bearer (see src/server.ts / client.ts).
 
 import type { AtlasHttpClient, SearchHit } from "../atlas/client.js";
 import { RAG_CORPUS_OVERLAP_REF_PREFIX } from "../atlas/canonicalize.js";
@@ -83,8 +83,8 @@ const MAX_PROBE_TEXT_CHARS = 2048;
 // keeps every script inside the same ~8 KB request-line budget (6 KB value +
 // path/params/headroom). Deliberately fixed HERE rather than by excluding 4xx
 // from the failure streak — 4xx-exclusion would defeat the fail-fast's
-// protection against a missing/misrouted `/api/search` route (see the header
-// open item). Exported for the byte-bound test.
+// protection against a missing/misrouted `/api/search` route (see the
+// header). Exported for the byte-bound test.
 export const MAX_PROBE_TEXT_ENCODED_BYTES = 6144;
 
 // The EXACT length of the wire-encoded query VALUE `client.search` produces:
@@ -335,6 +335,9 @@ function containment(a: Set<string>, b: Set<string>): number {
 // Normalize to lowercase alphanumeric tokens; drop empties. Cheap, dependency-
 // free, and good enough to catch verbatim/near-verbatim re-indexing (the gate
 // only needs to separate "basically the same passage" from "different prose").
+// Scope limitation: tokens are [a-z0-9] runs, so non-Latin prose (e.g. CJK)
+// yields an EMPTY token set and such candidates always skip the gate at the
+// MIN_CANDIDATE_TOKENS floor — a missed overlap annotation, never a lost row.
 function tokenSet(text: string): Set<string> {
   return new Set(
     text

@@ -6,11 +6,9 @@
 //   POST /api/atlas/candidates/approve  → approve (X-Atlas-Actor attribution; live)
 //   POST /api/atlas/candidates/reject   → reject  (X-Atlas-Actor attribution; live)
 //   POST /admin/reindex                 → queue a (scoped) reindex (live)
-//   GET  /api/search                    → RAG-corpus probe for rag-dedup. NOT an
-//                                         existing live route on the server today
-//                                         — the runtime probe target is a plan
-//                                         open item, to be wired/confirmed before
-//                                         the first live harvest run.
+//   GET  /api/search                    → RAG-corpus probe for rag-dedup (live;
+//                                         lexical tsvector search over the
+//                                         indexed chunks — src/server.ts)
 //
 // Every request carries the bearer ANALYTICS_TOKEN (the same token the
 // ratification routes authenticate with — see src/server.ts). Approving or
@@ -60,8 +58,13 @@ export interface ReindexScope {
 }
 
 export interface SearchQuery {
+  // Must be non-empty after trim — the server 400s `atlas_search_text_required`.
   text: string;
+  // Optional filter; empty/whitespace counts as ABSENT (the module's
+  // empty-is-absent rule, same as listCandidates). Unknown source → `hits: []`.
   source?: string;
+  // Server default 50; valid range is an integer 1-200 (non-integer or
+  // out-of-range values 400 per the server's parseLimitOrError convention).
   limit?: number;
 }
 
@@ -81,7 +84,10 @@ export class AtlasHttpClient {
   // GET /api/atlas/candidates[?source=<name>]
   // `source` is an OPTIONAL filter and `""` counts as ABSENT (the module's
   // empty-is-absent rule): `{ source: "" }` lists ALL candidates, exactly like
-  // omitting it. Pass undefined or a non-empty source name to filter.
+  // omitting it. Pass undefined or a non-empty source name to filter. Note a
+  // whitespace-only source (e.g. " ") is truthy and IS sent on the wire, but
+  // the server trims it to absent — same outcome as omitting it, different
+  // mechanism.
   async listCandidates(opts?: {
     source?: string;
   }): Promise<PendingCandidate[]> {
@@ -141,10 +147,10 @@ export class AtlasHttpClient {
 
   // GET /api/search — probe the RAG corpus for overlap with a candidate. Used
   // by the rag-dedup stage (S21) to find verbatim/near-verbatim matches against
-  // already-indexed content. NOTE: this route does not exist on the server yet
-  // (see the header) — the probe target must be wired/confirmed before live
-  // runs, which is exactly why a wrong-shaped 200 below fails LOUD instead of
-  // quietly disabling rag-dedup.
+  // already-indexed content. The route is LIVE on the server (lexical tsvector
+  // search over the chunks table, mounted with the ratification routes —
+  // src/server.ts); a wrong-shaped 200 below still fails LOUD rather than
+  // quietly disabling rag-dedup, guarding against misrouted proxies/drift.
   async search(query: SearchQuery): Promise<SearchHit[]> {
     const params = new URLSearchParams({ text: query.text });
     if (query.source) params.set("source", query.source);
