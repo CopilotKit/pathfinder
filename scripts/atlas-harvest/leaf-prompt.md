@@ -49,10 +49,15 @@ STEPS
      - For episodic ONLY: use the LLM distill path (`distillEpisodicWindow`) to
        turn the window into the fragment, then HARD-SET the episodic invariants:
        `needsReview: true`, `validation_status: "unverified"`,
-       `provenance_class: "derived"`.
+       `provenance_class: "derived"`, `confidence: "low"` (clamped — a stronger
+       distiller signal is an unsafe escalation), and `sensitivity` floored at
+       `"internal"` (preserve any stronger distiller signal — e.g. `"secret"`/
+       `"proprietary"` stays; only absent/weaker values become `"internal"`).
 
   4. WRITE exactly ONE file: `<FRAGMENTS_DIR>/<Fragment id>.json` containing the
-     single `CandidateFragment` object (pretty-printed JSON). Do NOT write more
+     single `CandidateFragment` object (pretty-printed JSON). Create it
+     EXCLUSIVELY — if the file already exists, STOP and report BLOCKED (stem
+     collision); never overwrite. Do NOT write more
      than one fragment per leaf. EXCEPTION: a single Notion page that records
      multiple ratified decisions splits into one fragment PER decision — in that
      case write `<Fragment id>-1.json`, `-2.json`, … (still one page = one leaf).
@@ -65,7 +70,7 @@ STEPS
      - evidence[] (kind-discriminated — see below),
      - validationTargets[] (symbols/paths the validation gate will grep).
 
-  6. DO NOT touch the DB, DO NOT call scripts/atlas-harvest.ts, DO NOT read other
+  6. DO NOT touch the DB, DO NOT call the `atlas harvest` driver, DO NOT read other
      leaves' fragments. Your only output is the one JSON file.
 
 REPORT
@@ -189,7 +194,10 @@ These are the exact adapter input shapes (from `src/atlas/adapters/*.ts`).
 }
 ```
 
-**episodic** (`EpisodicWindowUnit`) — distill via the LLM, then hard-set the invariants:
+**episodic** (`EpisodicWindowUnit`) — distill via the LLM, then hard-set the
+invariants (`needsReview: true`, `validation_status: "unverified"`,
+`provenance_class: "derived"`, `confidence: "low"` clamped, `sensitivity`
+floored at `"internal"` preserving any stronger signal):
 ```jsonc
 { "convPath": "<session jsonl path or link>", "date": "2026-06-07", "text": "<raw transcript window>", "subsystem": "<optional hint>" }
 ```
