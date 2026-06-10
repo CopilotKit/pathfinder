@@ -1,6 +1,6 @@
 // Harvest-driver CLI integration tests (plan S18 / §4 data-flow).
 //
-// S18 is the DRIVER slot: `scripts/atlas-harvest.ts` is the SINGLE assembly
+// S18 is the DRIVER slot: `src/atlas/harvest-cli.ts` is the SINGLE assembly
 // point for the leaf-adapter registry AND the in-process pipeline that turns a
 // run directory of CandidateFragment JSON files into `pending` atlas_seed_entries
 // rows. This suite drives the exported `runHarvest(opts)` directly (no
@@ -78,7 +78,7 @@ import {
   formatCliError,
   runAtlasHarvestCli,
   type RunHarvestDeps,
-} from "../../scripts/atlas-harvest.js";
+} from "../atlas/harvest-cli.js";
 
 // The sync MODULE is mocked file-wide: the sync-summary CLI test below asserts
 // only the driver's output plumbing — sync's own enactment semantics live in
