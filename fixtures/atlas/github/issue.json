@@ -1,0 +1,23 @@
+{
+  "kind": "issue",
+  "sourceName": "atlas",
+  "repo": {
+    "fullName": "CopilotKit/copilotkit",
+    "cloneUrl": "https://github.com/CopilotKit/copilotkit.git",
+    "defaultBranch": "main"
+  },
+  "issue": {
+    "number": 1290,
+    "title": "Retry logic is duplicated across provider adapters",
+    "body": "## Problem\n\nEach provider adapter reimplements its own retry loop, so a change to the backoff policy has to be made in five places and they have already drifted apart.\n\n## Why it matters\n\nInconsistent retries cause flaky behavior under provider rate limits, and the drift means some providers retry on errors that others treat as fatal.\n\n## Proposed direction\n\nCentralize retry in a single bridge layer that every provider call passes through.\n\n<!-- bot: triaged -->",
+    "htmlUrl": "https://github.com/CopilotKit/copilotkit/issues/1290",
+    "author": "reporter",
+    "state": "closed"
+  },
+  "linkedIssues": [
+    "https://github.com/CopilotKit/copilotkit/pull/1337"
+  ],
+  "reviewThreads": [
+    "Confirmed this is the root cause of the rate-limit flakiness we saw last week."
+  ]
+}

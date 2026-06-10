@@ -1,0 +1,41 @@
+{
+  "version": "1",
+  "categories": [
+    {
+      "id": "agentic-chat",
+      "name": "Agentic Chat",
+      "pills": [
+        { "id": "agentic-chat", "name": "Agentic Chat", "status": "green" },
+        {
+          "id": "agentic-chat-stream",
+          "name": "Streaming responses",
+          "status": "green"
+        }
+      ]
+    },
+    {
+      "id": "generative-ui",
+      "name": "Generative UI",
+      "pills": [
+        { "id": "gen-ui", "name": "Generative UI", "status": "green" },
+        {
+          "id": "gen-ui-interrupt",
+          "name": "Generative UI Interrupt",
+          "status": "quarantined"
+        }
+      ]
+    },
+    {
+      "id": "human-in-the-loop",
+      "name": "Human in the Loop",
+      "pills": [
+        { "id": "hitl", "name": "Human in the Loop", "status": "green" },
+        {
+          "id": "shared-state-experimental",
+          "name": "Shared State (experimental)",
+          "status": "not_supported"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+# Showcase integration manifest (fixture).
+# Models showcase/<integration>/manifest.yaml: the integration's identity plus
+# the feature-registry pills it declares support for.
+integration: langgraph-python
+name: LangGraph (Python)
+repo_url: https://github.com/CopilotKit/CopilotKit
+description: >-
+  Reference north-star integration: LangGraph agents driven over AG-UI with the
+  CopilotKit React runtime.
+features:
+  - agentic-chat
+  - agentic-chat-stream
+  - gen-ui
+  - gen-ui-interrupt
+  - hitl

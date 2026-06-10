@@ -1,0 +1,20 @@
+{
+  "url": "https://linear.app/copilotkit/document/runtime-engine-ownership-boundary-aXbY9",
+  "title": "Runtime engine ownership boundary: who owns SSE vs Intelligence routing",
+  "subsystem": "cpk-runtime",
+  "problem": "Two runtime engines (CopilotSseRuntime and CopilotIntelligenceRuntime) both touch agent-run routing, and it was unclear which one owns the decision of where a run is dispatched. PRs kept adding routing branches to whichever engine the author touched first, so routing logic drifted across both.",
+  "why": "We decided the v2 CopilotRuntime shim owns engine SELECTION and the engines own EXECUTION only. The shim is the single place that decides SSE vs Intelligence; neither engine may re-route to the other. This keeps the routing decision in one auditable place and lets each engine stay a leaf that only executes the run it was handed.",
+  "nonGoals": [
+    "We are NOT merging the two engines into one — they have genuinely different transport concerns.",
+    "We are NOT exposing engine selection to public callers; the public CopilotRuntime stays a thin compat shim."
+  ],
+  "citedFiles": [
+    "packages/runtime/src/v2/runtime/core/runtime.ts:348",
+    "packages/runtime/src/v2/runtime/engines/sse-runtime.ts",
+    "packages/runtime/src/v2/runtime/engines/intelligence-runtime.ts"
+  ],
+  "notionCrossLink": "https://www.notion.so/copilotkit/Runtime-Engine-Ownership-ADR-7f3c1d",
+  "area": "Runtime",
+  "updatedAt": "2026-05-20",
+  "knowledgeType": "ownership"
+}

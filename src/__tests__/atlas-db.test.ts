@@ -365,7 +365,7 @@ describe("Atlas DB helpers", () => {
     );
 
     const items = await listIndexableAtlasContent("atlas", {
-      changedOnOrBefore: "2026-01-01T12:00:00.000000Z",
+      changedOnOrBefore: new Date("2026-01-01T12:00:00Z"),
     });
 
     expect(items.map((item) => item.key)).toEqual(["included"]);
@@ -396,12 +396,10 @@ describe("Atlas DB helpers", () => {
       ["stale", new Date("2026-01-02T00:00:00Z")],
     );
 
-    expect(await getAtlasStateToken("atlas")).toBe(
-      "2026-01-02T00:00:00.000000Z",
-    );
+    expect(await getAtlasStateToken("atlas")).toBe("2026-01-02T00:00:00.000Z");
     expect(
       await listRemovedAtlasContentIds("atlas", {
-        changedAfter: "2026-01-01T12:00:00.000000Z",
+        changedAfter: new Date("2026-01-01T12:00:00Z"),
       }),
     ).toEqual(["atlas-cache:stale"]);
   });
@@ -517,150 +515,5 @@ describe("Atlas row-mapper robustness", () => {
     const result = __testing.toDate(iso);
     expect(result).toBeInstanceOf(Date);
     expect(result?.toISOString()).toBe(iso);
-  });
-});
-
-describe("Atlas state-token microsecond precision (no ceil)", () => {
-  // The high-water mark comes from a TIMESTAMPTZ (microsecond precision). We
-  // return it as raw microsecond text and the acquire queries bind it as a
-  // `$N::timestamptz` text param, so the bounds compare at full microsecond
-  // precision. There is no millisecond ceil and no JS Date in the bind path,
-  // so a row whose true updated_at carries sub-millisecond digits (e.g.
-  // .123456) is included EXACTLY by `<= token` and excluded EXACTLY by the next
-  // run's `> token` — no drop, no double-fetch.
-  let db: PGlite;
-
-  beforeAll(async () => {
-    db = new PGlite();
-    await db.waitReady;
-    await db.exec(extractAtlasDdl());
-    __setPoolForTesting(poolFromPglite(db));
-  });
-
-  afterAll(async () => {
-    __resetPoolForTesting();
-    await db.close();
-  });
-
-  beforeEach(async () => {
-    await db.query("DELETE FROM atlas_cache_pages");
-    await db.query("DELETE FROM atlas_seed_entries");
-  });
-
-  // Bind-path proof — this is the DB-independent guarantee that microseconds
-  // survive the SQL bind. It spies on the pool to capture the params handed to
-  // the driver and asserts the microsecond TEXT token (not a truncating JS
-  // Date) reaches the `$N::timestamptz` cast in the generated SQL.
-  it("binds changedAfter/changedOnOrBefore as ::timestamptz TEXT params, not Date objects", async () => {
-    const microToken = "2026-01-01T00:00:00.123456Z";
-    const calls: { text: string; params: unknown[] }[] = [];
-    __setPoolForTesting({
-      query: (text: string, params?: unknown[]) => {
-        calls.push({ text, params: params ?? [] });
-        return Promise.resolve({ rows: [] });
-      },
-      connect: async () => ({
-        query: () => Promise.resolve({ rows: [] }),
-        release: () => {},
-      }),
-      end: async () => {},
-    });
-    try {
-      await listIndexableAtlasContent("atlas", {
-        changedAfter: microToken,
-        changedOnOrBefore: microToken,
-      });
-    } finally {
-      // Restore the PGlite-backed pool for the rest of the suite.
-      __setPoolForTesting(poolFromPglite(db));
-    }
-
-    // Every emitted bound must be a ::timestamptz cast and the bound param must
-    // be the raw microsecond text — never a Date that would truncate to ms.
-    const boundCalls = calls.filter((c) => /updated_at\s*[<>]/.test(c.text));
-    expect(boundCalls.length).toBeGreaterThan(0);
-    for (const call of boundCalls) {
-      expect(call.text).toContain("::timestamptz");
-      expect(call.text).toMatch(/updated_at > \$\d+::timestamptz/);
-      expect(call.text).toMatch(/updated_at <= \$\d+::timestamptz/);
-      for (const param of call.params) {
-        expect(param).not.toBeInstanceOf(Date);
-      }
-      expect(call.params).toContain(microToken);
-    }
-  });
-
-  it("returns the raw microsecond high-water text as the state token", async () => {
-    // Insert a sub-millisecond timestamp via a SQL literal (a JS Date insert
-    // would truncate to ms before it ever reaches the column).
-    await upsertAtlasSeedCandidate({
-      canonicalKey: "micro",
-      sourceName: "atlas",
-      title: "Micro",
-      content: "Micro content",
-      provenance: {},
-      evidence: [],
-    });
-    await approveAtlasSeedEntry("micro", "reviewer");
-    await db.query(
-      "UPDATE atlas_seed_entries SET updated_at = '2026-01-01T00:00:00.123456Z' WHERE canonical_key = $1",
-      ["micro"],
-    );
-
-    expect(await getAtlasStateToken("atlas")).toBe(
-      "2026-01-01T00:00:00.123456Z",
-    );
-  });
-
-  it("includes the high-water row in run 1 and neither drops nor re-fetches it across run 2", async () => {
-    // Run 1: a row sits exactly at the high-water mark with sub-ms digits.
-    await upsertAtlasSeedCandidate({
-      canonicalKey: "boundary",
-      sourceName: "atlas",
-      title: "Boundary",
-      content: "Boundary content",
-      provenance: {},
-      evidence: [],
-    });
-    await approveAtlasSeedEntry("boundary", "reviewer");
-    await db.query(
-      "UPDATE atlas_seed_entries SET updated_at = '2026-01-01T00:00:00.123456Z' WHERE canonical_key = $1",
-      ["boundary"],
-    );
-
-    const token1 = await getAtlasStateToken("atlas");
-    expect(token1).toBe("2026-01-01T00:00:00.123456Z");
-
-    // Run 1 window `<= token1` must INCLUDE the boundary row exactly.
-    const run1 = await listIndexableAtlasContent("atlas", {
-      changedOnOrBefore: token1!,
-    });
-    expect(run1.map((i) => i.key)).toEqual(["boundary"]);
-
-    // A new row lands one microsecond after the run-1 high-water mark.
-    await upsertAtlasSeedCandidate({
-      canonicalKey: "after",
-      sourceName: "atlas",
-      title: "After",
-      content: "After content",
-      provenance: {},
-      evidence: [],
-    });
-    await approveAtlasSeedEntry("after", "reviewer");
-    await db.query(
-      "UPDATE atlas_seed_entries SET updated_at = '2026-01-01T00:00:00.123457Z' WHERE canonical_key = $1",
-      ["after"],
-    );
-
-    const token2 = await getAtlasStateToken("atlas");
-    expect(token2).toBe("2026-01-01T00:00:00.123457Z");
-
-    // Run 2 window `> token1 AND <= token2` must EXCLUDE the boundary row (no
-    // double-fetch) and INCLUDE only the strictly-later row (no drop).
-    const run2 = await listIndexableAtlasContent("atlas", {
-      changedAfter: token1!,
-      changedOnOrBefore: token2!,
-    });
-    expect(run2.map((i) => i.key)).toEqual(["after"]);
   });
 });

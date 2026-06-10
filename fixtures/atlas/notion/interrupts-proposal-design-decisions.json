@@ -1,0 +1,26 @@
+{
+  "url": "https://www.notion.so/copilotkit/Interrupts-Proposal-Design-Decisions-Reasoning",
+  "title": "Interrupts Proposal — Design Decisions & Reasoning",
+  "subsystem": "agui-protocol",
+  "repo_url": "https://github.com/ag-ui-protocol/ag-ui",
+  "ref": "main",
+  "date": "2026-04-18",
+  "sections": [
+    {
+      "heading": "Context",
+      "body": "This proposal records the ratified design decisions for the AG-UI interrupts feature. Each decision below is final and was reviewed by the protocol working group. Evidence: ag-ui PR #1746, issue #1732."
+    },
+    {
+      "heading": "Decision 1: Resume keying",
+      "body": "A resume is linked to its interrupt via interruptId rather than parentRunId. parentRunId is a branching primitive (it expresses run lineage / forking); reusing it for resume would conflate 'continue this interrupted run' with 'branch from this run', breaking both semantics. interruptId is therefore the resume handle. Rejected alternative: link resume via parentRunId (rejected for the conflation above). Evidence: ag-ui PR #1746."
+    },
+    {
+      "heading": "Decision 2: Interrupt terminality",
+      "body": "An interrupt terminates the current run lifecycle; resumption is a NEW run, not a continuation of the interrupted one. The client verify state machine enforces this — events after a terminal interrupt belong to the next run. Rejected alternative: keep the interrupted run open and append resume events to it (rejected: breaks the verify state machine). Evidence: ag-ui issue #1732."
+    },
+    {
+      "heading": "Decision 3: Interrupt payload shape",
+      "body": "The interrupt payload carries a typed reason discriminator plus an opaque resume token; it does NOT inline the full run state. Inlining state was rejected because it couples the wire format to the run-state schema and bloats the event. Evidence: ag-ui PR #1746, issue #1753."
+    }
+  ]
+}

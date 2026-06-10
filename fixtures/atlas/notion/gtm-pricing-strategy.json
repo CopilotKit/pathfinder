@@ -1,0 +1,16 @@
+{
+  "url": "https://www.notion.so/copilotkit/GTM-Enterprise-Pricing-Strategy-Acme",
+  "title": "GTM: Enterprise Pricing Strategy — Acme Corp Deal",
+  "subsystem": "gtm-pricing",
+  "date": "2026-05-20",
+  "sections": [
+    {
+      "heading": "Context",
+      "body": "Internal go-to-market notes for the Acme Corp enterprise expansion. Confidential — do not index into any customer-facing or all-staff corpus."
+    },
+    {
+      "heading": "Decision: Enterprise discount floor",
+      "body": "For the Acme Corp contract we set an enterprise discount floor of 22% off list ARR, contingent on a 3-year commit and a $480k annual contract value. The named customer (Acme Corp), their negotiated pricing, and the deal terms are customer-identifying revenue data. Rejected alternative: month-to-month pricing (rejected: erodes ARR predictability)."
+    }
+  ]
+}
