@@ -4,6 +4,11 @@
     "noEmit": true,
     "rootDir": null
   },
-  "include": ["scripts/gap-analysis/**/*"],
+  "include": [
+    "scripts/gap-analysis/**/*",
+    "scripts/atlas-harvest.ts",
+    "src/__tests__/atlas-harvest-cli.test.ts",
+    "src/__tests__/atlas-validate-checkout.test.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }
