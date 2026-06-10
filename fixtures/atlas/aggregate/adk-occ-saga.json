@@ -1,0 +1,124 @@
+{
+  "_comment": "ADK-OCC saga (spec §6.3): ag-ui issue #1732 -> PR #1746 -> issue #1753 -> issue #1754, all about the agui-adk subsystem. These four pre-fusion CandidateFragments must aggregate into ONE higher-order fragment carrying all four sources as fused_from evidence, with the most-restrictive sensitivity (internal, because #1732 is public but the rest are internal). This is the pre-fusion form of worked row §12.1 (derived:agui-adk:occ-concurrency-handling).",
+  "fragments": [
+    {
+      "sourcetype": "github-issue",
+      "subsystem": "agui-adk",
+      "claimSlugHint": "occ-concurrency-handling",
+      "source_name": "github-issue",
+      "repo_url": "https://github.com/ag-ui-protocol/ag-ui",
+      "ref": "1732",
+      "title": "ADK agent-run state suffers lost-update bugs under concurrent writes",
+      "content": "Concurrent mutations of ADK agent-run state clobber each other, producing lost updates. The root cause is an unguarded read-modify-write on shared run state. This issue is the origin of the optimistic-concurrency-control decision for ADK run-state.",
+      "provenance": {
+        "source": "github-issue",
+        "url": "https://github.com/ag-ui-protocol/ag-ui/issues/1732",
+        "date": "2026-05-12",
+        "classification": {
+          "sensitivity": "public",
+          "knowledge_type": "root-cause",
+          "audience": "all-staff",
+          "validation_status": "unverified",
+          "confidence": "high",
+          "provenance_class": "primary",
+          "freshness": { "as_of": "2026-05-12", "re_verify_by": "2026-09-12" }
+        }
+      },
+      "evidence": [
+        { "kind": "linked_issue", "url": "issues/1732" },
+        { "kind": "thread", "body": "root-cause narrative in #1732" }
+      ],
+      "needsReview": false,
+      "validationTargets": []
+    },
+    {
+      "sourcetype": "github-pr",
+      "subsystem": "agui-adk",
+      "claimSlugHint": "occ-concurrency-handling",
+      "source_name": "github-pr",
+      "repo_url": "https://github.com/ag-ui-protocol/ag-ui",
+      "ref": "1746",
+      "title": "Adopt optimistic concurrency control for ADK agent-run state writes",
+      "content": "ADK run-state writes are now version-checked: a concurrent mutation detects a version conflict and retries rather than holding a lock, trading a small retry cost for deadlock-freedom. Callers must tolerate a retried apply because writes are idempotent.",
+      "provenance": {
+        "source": "github-pr",
+        "url": "https://github.com/ag-ui-protocol/ag-ui/pull/1746",
+        "date": "2026-05-14",
+        "classification": {
+          "sensitivity": "internal",
+          "knowledge_type": "architecture",
+          "audience": "engineering",
+          "validation_status": "source-verified",
+          "confidence": "high",
+          "provenance_class": "primary",
+          "freshness": { "as_of": "2026-05-14", "re_verify_by": "2026-09-14" }
+        }
+      },
+      "evidence": [
+        { "kind": "changed_file", "path": "integrations/google-adk/src/run-state.ts" },
+        { "kind": "linked_issue", "url": "issues/1732" }
+      ],
+      "needsReview": false,
+      "validationTargets": ["integrations/google-adk/src/run-state.ts"]
+    },
+    {
+      "sourcetype": "github-issue",
+      "subsystem": "agui-adk",
+      "claimSlugHint": "occ-concurrency-handling",
+      "source_name": "github-issue",
+      "repo_url": "https://github.com/ag-ui-protocol/ag-ui",
+      "ref": "1753",
+      "title": "Document that ADK run-state writes are version-checked and idempotent",
+      "content": "Follow-up to the OCC adoption: the public-facing behavior is that ADK run-state writes are version-checked and idempotent, so integrators should expect a retried apply under contention rather than an error.",
+      "provenance": {
+        "source": "github-issue",
+        "url": "https://github.com/ag-ui-protocol/ag-ui/issues/1753",
+        "date": "2026-05-18",
+        "classification": {
+          "sensitivity": "internal",
+          "knowledge_type": "architecture",
+          "audience": "all-staff",
+          "validation_status": "unverified",
+          "confidence": "medium",
+          "provenance_class": "derived",
+          "freshness": { "as_of": "2026-05-18", "re_verify_by": "2026-09-18" }
+        }
+      },
+      "evidence": [
+        { "kind": "linked_issue", "url": "issues/1753" }
+      ],
+      "needsReview": false,
+      "validationTargets": []
+    },
+    {
+      "sourcetype": "github-issue",
+      "subsystem": "agui-adk",
+      "claimSlugHint": "occ-concurrency-handling",
+      "source_name": "github-issue",
+      "repo_url": "https://github.com/ag-ui-protocol/ag-ui",
+      "ref": "1754",
+      "title": "Reuse the OCC retry shape for ADK tool-call state",
+      "content": "A second site (tool-call state) hits the same lost-update class; #1754 notes it is the 'same OCC shape' as run-state and should reuse the version-check-and-retry approach rather than inventing a new locking scheme.",
+      "provenance": {
+        "source": "github-issue",
+        "url": "https://github.com/ag-ui-protocol/ag-ui/issues/1754",
+        "date": "2026-05-20",
+        "classification": {
+          "sensitivity": "internal",
+          "knowledge_type": "architecture",
+          "audience": "engineering",
+          "validation_status": "unverified",
+          "confidence": "medium",
+          "provenance_class": "derived",
+          "freshness": { "as_of": "2026-05-20", "re_verify_by": "2026-09-20" }
+        }
+      },
+      "evidence": [
+        { "kind": "linked_issue", "url": "issues/1754" },
+        { "kind": "thread", "body": "#1754 notes 'same OCC shape'" }
+      ],
+      "needsReview": false,
+      "validationTargets": []
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "url": "https://linear.app/copilotkit/project/atlas-seed-harvest-9kQp",
+  "title": "Atlas seed harvest pipeline",
+  "problem": "Company knowledge is scattered across PRs, Notion, Linear and memory with no single retrievable corpus.",
+  "why": "Build a classification-tagged, validation-gated extraction pipeline that mines every signal-bearing source into reviewable pending seed candidates."
+}

@@ -7,6 +7,7 @@ import {
   isAtlasCliEntrypoint,
   runAtlasCli,
 } from "../atlas-cli.js";
+import { runAtlasHarvestCli } from "../atlas/harvest-cli.js";
 
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 
@@ -1312,5 +1313,158 @@ describe("atlas CLI", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("atlas CLI — harvest verb (driver mount)", () => {
+  // The harvest driver (src/atlas/harvest-cli.ts) mounts as the `atlas harvest`
+  // subcommand: the remaining argv is forwarded verbatim to
+  // `runAtlasHarvestCli`, so `atlas harvest run --run-id ...` behaves exactly
+  // like the old standalone driver invocation (exit codes, stderr via
+  // formatCliError). These tests reach the harvest machinery through a cheap
+  // observable — its own commander/validation error text surfacing through the
+  // atlas binary — with no DB or network.
+  let stdout = "";
+  let stderr = "";
+  const io = {
+    stdout: (text: string) => {
+      stdout += text;
+    },
+    stderr: (text: string) => {
+      stderr += text;
+    },
+  };
+
+  afterEach(() => {
+    stdout = "";
+    stderr = "";
+  });
+
+  it("lists the harvest verb in the top-level help", async () => {
+    const exitCode = await runAtlasCli(["--help"], io);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("harvest");
+  });
+
+  it("forwards argv to the harvest driver — its missing --run-id error surfaces through atlas", async () => {
+    const exitCode = await runAtlasCli(["harvest", "run"], io);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("--run-id");
+  });
+
+  it("forwards option values intact — a parsed --run-id reaches the run command's own validation", async () => {
+    const exitCode = await runAtlasCli(
+      ["harvest", "run", "--run-id", "run-x"],
+      io,
+    );
+
+    // --run-id parsed by the harvest driver (its commander requiredOption is
+    // satisfied), so the failure is the NEXT gate: runCommand's own --checkout
+    // requirement, proving the forwarded argv ordering survived the mount.
+    expect(exitCode).toBe(1);
+    expect(stderr).not.toContain("--run-id <id>");
+    expect(stderr).toContain("--checkout");
+  });
+
+  describe("mount fidelity — mounted tail matches the standalone driver byte-for-byte", () => {
+    // Parity harness: the SAME argv tail is fed to the mounted form
+    // (`atlas harvest <tail>`) and to the standalone driver
+    // (`runAtlasHarvestCli(<tail>)`); exit code, stdout, and stderr must all
+    // be identical. This pins the mount contract: nothing in atlas-cli may
+    // consume or reorder ANY token of the tail — including a LEADING `--`,
+    // which a commander variadic `[args...]` would otherwise eat.
+    async function runBoth(tail: string[]) {
+      let mountedOut = "";
+      let mountedErr = "";
+      const mountedExit = await runAtlasCli(["harvest", ...tail], {
+        stdout: (text: string) => {
+          mountedOut += text;
+        },
+        stderr: (text: string) => {
+          mountedErr += text;
+        },
+      });
+
+      let standaloneOut = "";
+      let standaloneErr = "";
+      const standaloneExit = await runAtlasHarvestCli(tail, {
+        stdout: (text: string) => {
+          standaloneOut += text;
+        },
+        stderr: (text: string) => {
+          standaloneErr += text;
+        },
+      });
+
+      expect(mountedExit).toBe(standaloneExit);
+      expect(mountedOut).toBe(standaloneOut);
+      expect(mountedErr).toBe(standaloneErr);
+      return {
+        exitCode: standaloneExit,
+        stdout: standaloneOut,
+        stderr: standaloneErr,
+      };
+    }
+
+    it("preserves a LEADING `--` — `harvest -- --help` is an unknown command, not help", async () => {
+      const { exitCode, stderr } = await runBoth(["--", "--help"]);
+
+      // Standalone, post-`--` tokens are operands: `--help` is an unknown
+      // command (exit 1), NOT a help request.
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("unknown command");
+    });
+
+    it("preserves a LEADING `--` — `harvest -- run --run-id x` does NOT execute the run", async () => {
+      const { exitCode, stderr } = await runBoth([
+        "--",
+        "run",
+        "--run-id",
+        "x",
+      ]);
+
+      // Standalone, `--run-id x` after `--` are inert operands, so the run
+      // subcommand's requiredOption fails — the pipeline must NOT execute
+      // (no `--checkout` gate is ever reached).
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--run-id <id>");
+      expect(stderr).not.toContain("--checkout");
+    });
+
+    it("preserves a post-verb `--` — `harvest run -- --run-id x` keeps the operands inert", async () => {
+      const { exitCode, stderr } = await runBoth([
+        "run",
+        "--",
+        "--run-id",
+        "x",
+      ]);
+
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--run-id <id>");
+    });
+
+    it("forwards a value-bearing pre-verb flag — `harvest --runs-dir /x run …` matches standalone", async () => {
+      const { exitCode, stderr } = await runBoth([
+        "--runs-dir",
+        "/x",
+        "run",
+        "--run-id",
+        "y",
+      ]);
+
+      // The driver's program level declares no --runs-dir option, so both
+      // forms reject it identically.
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--runs-dir");
+    });
+
+    it("shows the driver's own help — `harvest --help` exits 0 with the atlas-harvest usage", async () => {
+      const { exitCode, stdout } = await runBoth(["--help"]);
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Usage: atlas-harvest");
+    });
   });
 });

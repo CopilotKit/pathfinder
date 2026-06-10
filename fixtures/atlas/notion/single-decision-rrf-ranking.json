@@ -1,0 +1,14 @@
+{
+  "url": "https://www.notion.so/copilotkit/Hybrid-Search-RRF-Ranking-Decision",
+  "title": "Hybrid Search: RRF Ranking Decision",
+  "subsystem": "search-ranking",
+  "repo_url": "https://github.com/CopilotKit/pathfinder",
+  "ref": "main",
+  "date": "2026-03-30",
+  "sections": [
+    {
+      "heading": "Decision: Use Reciprocal Rank Fusion for hybrid search",
+      "body": "Hybrid search fuses lexical and vector result lists with Reciprocal Rank Fusion (RRF) rather than a weighted score sum. RRF is rank-based so it is robust to the incomparable score scales of BM25 and cosine similarity, which a weighted sum is not. Rejected alternative: linear score combination (rejected: requires per-query score normalization that is brittle across corpora). Evidence: pathfinder PR #214."
+    }
+  ]
+}

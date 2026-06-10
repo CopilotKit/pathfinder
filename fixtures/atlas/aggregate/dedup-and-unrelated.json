@@ -1,0 +1,92 @@
+{
+  "_comment": "Dedup + no-spurious-fusion: two byte-identical fragments (same subsystem + same source + same content + same ref) must collapse so their identity is not double-counted in fused_from; and two fragments in DIFFERENT subsystems must remain two separate output fragments (no cross-subsystem fusion).",
+  "fragments": [
+    {
+      "sourcetype": "github-pr",
+      "subsystem": "cpk-runtime",
+      "claimSlugHint": "two-layer-shim",
+      "source_name": "github-pr",
+      "repo_url": "https://github.com/CopilotKit/CopilotKit",
+      "ref": "2001",
+      "title": "CopilotRuntime is a two-layer compat shim",
+      "content": "The public CopilotRuntime delegates to the v2 CopilotRuntime, which is itself a shim selecting CopilotSseRuntime / CopilotIntelligenceRuntime.",
+      "provenance": {
+        "source": "github-pr",
+        "url": "https://github.com/CopilotKit/CopilotKit/pull/2001",
+        "date": "2026-06-08",
+        "classification": {
+          "sensitivity": "internal",
+          "knowledge_type": "architecture",
+          "audience": "engineering",
+          "validation_status": "source-verified",
+          "confidence": "high",
+          "provenance_class": "primary",
+          "freshness": { "as_of": "2026-06-08", "re_verify_by": "2026-09-08" }
+        }
+      },
+      "evidence": [
+        { "kind": "changed_file", "path": "packages/runtime/src/v2/runtime/core/runtime.ts:348" }
+      ],
+      "needsReview": false,
+      "validationTargets": []
+    },
+    {
+      "sourcetype": "github-pr",
+      "subsystem": "cpk-runtime",
+      "claimSlugHint": "two-layer-shim",
+      "source_name": "github-pr",
+      "repo_url": "https://github.com/CopilotKit/CopilotKit",
+      "ref": "2001",
+      "title": "CopilotRuntime is a two-layer compat shim",
+      "content": "The public CopilotRuntime delegates to the v2 CopilotRuntime, which is itself a shim selecting CopilotSseRuntime / CopilotIntelligenceRuntime.",
+      "provenance": {
+        "source": "github-pr",
+        "url": "https://github.com/CopilotKit/CopilotKit/pull/2001",
+        "date": "2026-06-08",
+        "classification": {
+          "sensitivity": "internal",
+          "knowledge_type": "architecture",
+          "audience": "engineering",
+          "validation_status": "source-verified",
+          "confidence": "high",
+          "provenance_class": "primary",
+          "freshness": { "as_of": "2026-06-08", "re_verify_by": "2026-09-08" }
+        }
+      },
+      "evidence": [
+        { "kind": "changed_file", "path": "packages/runtime/src/v2/runtime/core/runtime.ts:348" }
+      ],
+      "needsReview": false,
+      "validationTargets": []
+    },
+    {
+      "sourcetype": "memory",
+      "subsystem": "testing-sse",
+      "claimSlugHint": "buffer-replay-timing-invariant",
+      "source_name": "memory-store",
+      "repo_url": "https://github.com/ag-ui-protocol/ag-ui",
+      "ref": "feedback_streaming_tests_assert_timing",
+      "title": "Assert wall-clock spread, not payload, to prove SSE streaming",
+      "content": "A buffered-then-dumped SSE stream is byte-identical to a truly streamed one; assert the wall-clock spread between chunk arrivals to prove streaming.",
+      "provenance": {
+        "source": "memory-store",
+        "url": "file:///Users/jpr5/.local/share/copilotkit/memory/store/feedback_streaming_tests_assert_timing.md",
+        "date": "2026-05-30",
+        "classification": {
+          "sensitivity": "internal",
+          "knowledge_type": "operational",
+          "audience": "engineering",
+          "validation_status": "source-verified",
+          "confidence": "high",
+          "provenance_class": "primary",
+          "freshness": { "as_of": "2026-05-30", "re_verify_by": "2026-11-30" }
+        }
+      },
+      "evidence": [
+        { "kind": "thread", "body": "feedback_streaming_tests_assert_timing" }
+      ],
+      "needsReview": false,
+      "validationTargets": []
+    }
+  ]
+}

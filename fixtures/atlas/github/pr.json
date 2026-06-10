@@ -1,0 +1,32 @@
+{
+  "kind": "pull_request",
+  "sourceName": "atlas",
+  "repo": {
+    "fullName": "CopilotKit/copilotkit",
+    "cloneUrl": "https://github.com/CopilotKit/copilotkit.git",
+    "defaultBranch": "main"
+  },
+  "pullRequest": {
+    "number": 1337,
+    "title": "Route runtime requests through the agent bridge",
+    "body": "## Summary\n\nThe runtime now routes every inbound request through the new agent bridge instead of calling the provider adapters directly. This removes the per-provider branching that had accumulated in `runtime/index.ts` and centralizes retry + tracing in one place.\n\n## Why\n\nThe old direct-call path duplicated retry logic across five provider adapters and made tracing inconsistent. Centralizing through the bridge means a single retry policy and one tracing span per request.\n\n## How\n\nWe introduce an `AgentBridge` that owns the provider registry. The runtime resolves a provider once, hands the request to the bridge, and the bridge applies the shared retry/tracing decorators before dispatch.\n\n## Test plan\n\n- [x] unit tests for the bridge\n- [x] integration smoke test\n\n## Checklist\n\n- [x] I have read the CONTRIBUTING doc\n- [ ] I have added a changeset\n\n<!-- This is an HTML comment that should be stripped -->",
+    "htmlUrl": "https://github.com/CopilotKit/copilotkit/pull/1337",
+    "mergeCommitSha": "feedface1234567890abcdef",
+    "baseRef": "main",
+    "headRef": "feature/agent-bridge",
+    "author": "octocat",
+    "mergedBy": "maintainer"
+  },
+  "changedFiles": [
+    "packages/runtime/src/agent-bridge.ts",
+    "packages/runtime/src/index.ts",
+    "packages/runtime/src/providers/registry.ts"
+  ],
+  "linkedIssues": [
+    "https://github.com/CopilotKit/copilotkit/issues/1290"
+  ],
+  "reviewThreads": [
+    "Should the retry policy be configurable per provider, or is one global policy enough? Resolved: one global policy for now; per-provider override tracked in #1290.",
+    "Nit: rename `dispatch` to `dispatchToProvider` for clarity."
+  ]
+}

@@ -95,14 +95,8 @@ export interface AtlasRepositoryFilter {
 }
 
 export interface AtlasContentQuery {
-  // Microsecond-precision high-water TEXT (the `to_char(... 'US')` value of a
-  // row's `updated_at`, e.g. "2026-01-01T00:00:00.123456Z"). These bounds are
-  // bound into SQL as `$N::timestamptz` text params — NOT as JS Dates — so the
-  // sub-millisecond digits survive the round trip and `updated_at` is compared
-  // at full microsecond precision. A JS Date would truncate to milliseconds and
-  // either re-fetch (`<=`) or permanently drop (`>`) the boundary row.
-  changedAfter?: string;
-  changedOnOrBefore?: string;
+  changedAfter?: Date;
+  changedOnOrBefore?: Date;
   repositories?: AtlasRepositoryFilter[];
 }
 
@@ -243,18 +237,13 @@ function addUpdatedAtClauses(
   params: unknown[],
 ): string[] {
   const clauses: string[] = [];
-  // Bind the microsecond token as a TEXT param cast to timestamptz in SQL
-  // (`$N::timestamptz`) rather than a JS Date. Postgres parses the full
-  // microsecond text, so `updated_at > $token::timestamptz` excludes only the
-  // exact high-water row (no double-fetch next run) and `<= $token::timestamptz`
-  // includes it exactly — both at full precision, with no rounding.
   if (query.changedAfter) {
     params.push(query.changedAfter);
-    clauses.push(`${alias}.updated_at > $${params.length}::timestamptz`);
+    clauses.push(`${alias}.updated_at > $${params.length}`);
   }
   if (query.changedOnOrBefore) {
     params.push(query.changedOnOrBefore);
-    clauses.push(`${alias}.updated_at <= $${params.length}::timestamptz`);
+    clauses.push(`${alias}.updated_at <= $${params.length}`);
   }
   return clauses;
 }
@@ -788,18 +777,10 @@ export async function getAtlasStateToken(
   );
   if (cacheRepositoryClause) cacheClauses.push(cacheRepositoryClause);
 
-  // Select the high-water mark as microsecond TEXT (`to_char(... 'US')`) rather
-  // than letting the driver coerce it to a millisecond JS Date. The raw text
-  // preserves the sub-millisecond digits, and we hand it back verbatim as the
-  // state token: the acquire queries bind it as a `$N::timestamptz` text param,
-  // so `updated_at <= $token` includes the high-water row exactly and the next
-  // run's `updated_at > $token` excludes only that exact row — no rounding, no
-  // drop, no double-fetch.
-  const TOKEN_FORMAT = `'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'`;
   const [seedResult, cacheResult] = await Promise.all([
     pool.query(
       `
-        SELECT to_char(MAX(seed.updated_at) AT TIME ZONE 'UTC', ${TOKEN_FORMAT}) AS state_token
+        SELECT MAX(seed.updated_at) AS state_token
         FROM atlas_seed_entries seed
         WHERE ${seedClauses.join(" AND ")}
       `,
@@ -807,7 +788,7 @@ export async function getAtlasStateToken(
     ),
     pool.query(
       `
-        SELECT to_char(MAX(cache.updated_at) AT TIME ZONE 'UTC', ${TOKEN_FORMAT}) AS state_token
+        SELECT MAX(cache.updated_at) AS state_token
         FROM atlas_cache_pages cache
         WHERE ${cacheClauses.join(" AND ")}
       `,
@@ -815,16 +796,16 @@ export async function getAtlasStateToken(
     ),
   ]);
 
-  const texts = [
+  const values = [
     seedResult.rows[0]?.state_token,
     cacheResult.rows[0]?.state_token,
-  ].filter((value): value is string => typeof value === "string");
-  if (texts.length === 0) return null;
-  // Pick the larger of the two source high-water marks at full text precision
-  // and return it verbatim. The fixed-width `YYYY-MM-DDTHH:MM:SS.ffffffZ` text
-  // sorts lexicographically == chronologically, so string comparison preserves
-  // sub-millisecond ordering the driver's millisecond Date would have flattened.
-  return texts.reduce((a, b) => (a >= b ? a : b));
+  ]
+    .map((value) => toDate(value, "atlas state token"))
+    .filter((value): value is Date => value !== null);
+  if (values.length === 0) return null;
+  return new Date(
+    Math.max(...values.map((value) => value.getTime())),
+  ).toISOString();
 }
 
 // Test-only exports of the otherwise-private row mappers and timestamp parser.

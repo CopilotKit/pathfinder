@@ -427,6 +427,14 @@ export function createWebhookHandler(orchestrator: ReindexOrchestrator) {
         return NO_REINDEX;
       }
 
+      // Default-branch gate. The seed candidate's stored `ref` is the PR's
+      // BASE branch by choice (atlas.ts: `ref = baseBranch`): because this
+      // gate admits only baseBranch === defaultBranch deliveries, every
+      // upserted candidate's ref names the repo's default branch — the branch
+      // a downstream validator checks out. Note the extraction REQUIRES
+      // pull_request.base.ref unconditionally (placed BEFORE its merged-PR
+      // early return), so this comparison can never see an absent base ref —
+      // a payload without one was already rejected as malformed (400) above.
       if (extraction.baseBranch !== extraction.defaultBranch) {
         recordPullRequestDelivery({
           source: "github",

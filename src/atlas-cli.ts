@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runAtlasHarvestCli } from "./atlas/harvest-cli.js";
+
 const DEFAULT_TOOL = "atlas-search";
 const DEFAULT_FEEDBACK_TOOL = "submit-feedback";
 const FEEDBACK_RATINGS = ["helpful", "not_helpful"] as const;
@@ -425,11 +427,32 @@ export async function runAtlasCli(
   const writeOut = io.stdout ?? ((text: string) => process.stdout.write(text));
   const writeErr = io.stderr ?? ((text: string) => process.stderr.write(text));
 
+  // `harvest` short-circuits BEFORE commander parses: the raw tail is
+  // forwarded to the harvest driver genuinely verbatim — order intact,
+  // INCLUDING a leading `--`, which commander's `[args...]` variadic would
+  // otherwise consume as its own operand separator and silently drop,
+  // turning standalone-inert operands back into parsed options. The driver
+  // (src/atlas/harvest-cli.ts) owns its own commander program, io wiring,
+  // exit codes, and stderr formatting (formatCliError), so `atlas harvest
+  // run --run-id ...` behaves exactly like running the driver module
+  // directly.
+  if (argv[0] === "harvest") {
+    return runAtlasHarvestCli(argv.slice(1), {
+      stdout: writeOut,
+      stderr: writeErr,
+    });
+  }
+
   const program = new Command();
   program
     .name("atlas")
     .description("Agent-facing Atlas search over Pathfinder MCP")
     .exitOverride()
+    // Required so the `harvest` mount below can use passThroughOptions():
+    // option processing stops at the first subcommand, leaving each verb to
+    // parse its own flags (search/feedback already declare all their options
+    // locally, so their behavior is unchanged).
+    .enablePositionalOptions()
     .configureOutput({
       writeOut,
       writeErr,
@@ -470,9 +493,34 @@ export async function runAtlasCli(
       await feedback(query, options, writeOut);
     });
 
+  // The harvest DRIVER (src/atlas/harvest-cli.ts) as a registered verb.
+  // Execution is handled by the pre-parse short-circuit at the top of
+  // runAtlasCli (which forwards the raw tail verbatim, leading `--`
+  // included), so this registration is UNREACHABLE for `atlas harvest ...`
+  // invocations. It is kept so `atlas --help` still lists the verb, and as a
+  // correct fallback for any commander-routed path.
+  let harvestExitCode: number | undefined;
+  program
+    .command("harvest")
+    .description(
+      "Atlas harvest driver — run the pipeline over a fragment corpus and " +
+        "drive ratification/index (subcommands: run, artifact, sync, reindex)",
+    )
+    .helpOption(false)
+    .allowUnknownOption()
+    .allowExcessArguments(true)
+    .passThroughOptions()
+    .argument("[args...]", "Arguments forwarded to the harvest driver")
+    .action(async (args: string[]) => {
+      harvestExitCode = await runAtlasHarvestCli(args, {
+        stdout: writeOut,
+        stderr: writeErr,
+      });
+    });
+
   try {
     await program.parseAsync(argv, { from: "user" });
-    return 0;
+    return harvestExitCode ?? 0;
   } catch (error) {
     if (error instanceof CommanderError) {
       return error.exitCode;
