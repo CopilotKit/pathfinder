@@ -478,7 +478,7 @@ function extractIssue(
 export const githubAdapter: LeafAdapter<GitHubPrOrIssueUnit> = {
   // PRs and issues share one adapter; the fragment's own `sourcetype` field
   // distinguishes `github-pr` from `github-issue` per unit. The registry
-  // (`buildLeafAdapterRegistry` in scripts/atlas-harvest.ts) registers this
+  // (`buildLeafAdapterRegistry` in src/atlas/harvest-cli.ts) registers this
   // adapter object under BOTH keys; the declared `sourcetype` here is the PR
   // one (the dominant GitHub unit) per the LeafAdapter contract.
   sourcetype: "github-pr",

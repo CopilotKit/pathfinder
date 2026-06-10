@@ -8,9 +8,12 @@
 // shared `src/atlas/adapters/index.ts` (S3-S9 each own only their own adapter
 // file and never edit a shared index, which avoids 7-slot file contention).
 //
-// NOTE: the existing `src/atlas-cli.ts` is the UNRELATED consumer-side Atlas
-// retrieval CLI (agent-facing search over Pathfinder MCP). THIS file is the new
-// harvest-side driver — different surface, no conflict, not edited here.
+// NOTE: `src/atlas-cli.ts` is the consumer-side Atlas retrieval CLI
+// (agent-facing search over Pathfinder MCP) — a different surface with its own
+// env conventions. This driver now ALSO mounts there as the `atlas harvest`
+// verb: atlas-cli forwards the remaining argv to `runAtlasHarvestCli`, so
+// `atlas harvest run --run-id ...` behaves exactly like running this module
+// directly (`npx tsx src/atlas/harvest-cli.ts run --run-id ...`).
 //
 // Pipeline (the spec §4 data-flow), per `run`:
 //
@@ -24,10 +27,10 @@
 //     → toSeedEntryRow → upsertAtlasSeedCandidate  (only when --upsert; --dry-run writes NOTHING)
 //
 // Subcommands:
-//   run      --run-id <id> [--upsert] [--dry-run]   run the pipeline (preview / write pending rows)
-//   artifact --run-id <id> --parent <pageId>        generate the Notion approval artifact
-//   sync     --page <pageId> --actor <name>         read the edited page → enact approve/reject
-//   reindex  [--scope full|source|repo] [--source <s>]   queue a (scoped) reindex
+//   run      --run-id <id> --checkout <dir> --feature-registry <path> [--upsert] [--dry-run]   run the pipeline (preview / write pending rows; needs --token|ANALYTICS_TOKEN)
+//   artifact --run-id <id> --parent <pageId> --checkout <dir> --feature-registry <path>        generate the Notion approval artifact (needs --notion-token|NOTION_TOKEN)
+//   sync     --page <pageId> --actor <name>         read the edited page → enact approve/reject (needs BOTH --token|ANALYTICS_TOKEN and --notion-token|NOTION_TOKEN)
+//   reindex  [--scope full|source|repo] [--source <s>] [--repo <url>]   queue a (scoped) reindex (needs --token|ANALYTICS_TOKEN)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -36,41 +39,35 @@ import { Command, CommanderError, Option } from "commander";
 import { Client } from "@notionhq/client";
 
 // ── The seven leaf adapters — imported HERE and nowhere else (assembly point) ──
-import { memoryAdapter } from "../src/atlas/adapters/memory.js";
-import { githubAdapter } from "../src/atlas/adapters/github.js";
-import { notionAdapter } from "../src/atlas/adapters/notion.js";
-import { linearAdapter } from "../src/atlas/adapters/linear.js";
-import { episodicAdapter } from "../src/atlas/adapters/episodic.js";
-import { sourceCommentAdapter } from "../src/atlas/adapters/source-comment.js";
-import { showcaseAdapter } from "../src/atlas/adapters/showcase.js";
-import type { LeafAdapterRegistry } from "../src/atlas/adapters/types.js";
+import { memoryAdapter } from "./adapters/memory.js";
+import { githubAdapter } from "./adapters/github.js";
+import { notionAdapter } from "./adapters/notion.js";
+import { linearAdapter } from "./adapters/linear.js";
+import { episodicAdapter } from "./adapters/episodic.js";
+import { sourceCommentAdapter } from "./adapters/source-comment.js";
+import { showcaseAdapter } from "./adapters/showcase.js";
+import type { LeafAdapterRegistry } from "./adapters/types.js";
 
 // ── Pipeline stages ────────────────────────────────────────────────────────────
-import { aggregate } from "../src/atlas/aggregate.js";
-import { finalizeClassification } from "../src/atlas/classify.js";
-import { canonicalize, recomputeRankScore } from "../src/atlas/canonicalize.js";
-import {
-  dedupAgainstRagCorpus,
-  type RagDedupContext,
-} from "../src/atlas/rag-dedup.js";
-import {
-  promoteValidation,
-  type ValidationContext,
-} from "../src/atlas/validate.js";
-import { loadValidationContext } from "../src/atlas/validate-checkout.js";
-import { toSeedEntryRow, type Candidate } from "../src/atlas/types.js";
+import { aggregate } from "./aggregate.js";
+import { finalizeClassification } from "./classify.js";
+import { canonicalize, recomputeRankScore } from "./canonicalize.js";
+import { dedupAgainstRagCorpus, type RagDedupContext } from "./rag-dedup.js";
+import { promoteValidation, type ValidationContext } from "./validate.js";
+import { loadValidationContext } from "./validate-checkout.js";
+import { toSeedEntryRow, type Candidate } from "./types.js";
 import {
   RunStore,
   CorruptRunManifestError,
   type RunManifest,
-} from "../src/atlas/run-store.js";
-import { AtlasHttpClient } from "../src/atlas/client.js";
-import { generateApprovalArtifact } from "../src/atlas/artifact/generate.js";
-import { syncApprovalArtifact } from "../src/atlas/artifact/sync.js";
-import { OpenAIDistiller, type LlmDistiller } from "../src/atlas/llm.js";
+} from "./run-store.js";
+import { AtlasHttpClient } from "./client.js";
+import { generateApprovalArtifact } from "./artifact/generate.js";
+import { syncApprovalArtifact } from "./artifact/sync.js";
+import { OpenAIDistiller, type LlmDistiller } from "./llm.js";
 
 // ── Storage layer (EXISTING, origin/main) ──────────────────────────────────────
-import { upsertAtlasSeedCandidate } from "../src/db/atlas.js";
+import { upsertAtlasSeedCandidate } from "../db/atlas.js";
 
 // ── Registry assembly (THE single place the map is populated) ───────────────────
 
@@ -321,6 +318,7 @@ export function parseMinOverlap(raw: string): number {
 
 type WriteFn = (text: string) => void;
 
+// NOTE: advisory console.warn output deliberately bypasses this injected io (it goes to process stderr).
 interface HarvestCliIo {
   stdout?: WriteFn;
   stderr?: WriteFn;

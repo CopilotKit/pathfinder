@@ -23,7 +23,7 @@ import {
   locateCheckoutDir,
   loadFeatureRegistry,
 } from "../atlas/validate-checkout.js";
-import { formatCliError } from "../../scripts/atlas-harvest.js";
+import { formatCliError } from "../atlas/harvest-cli.js";
 
 function eaccesError(syscall: string): NodeJS.ErrnoException {
   return Object.assign(

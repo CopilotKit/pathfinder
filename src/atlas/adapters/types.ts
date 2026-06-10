@@ -4,7 +4,7 @@
 // and the SHAPE of the adapter registry — but it deliberately does NOT assemble
 // the registry map. Per the plan (§2 / §4.2 / S2), the populated
 // `LeafAdapterRegistry` is built in exactly ONE place: the S18 harvest driver
-// (`scripts/atlas-harvest.ts`), which imports all seven adapters. There is NO
+// (`src/atlas/harvest-cli.ts`), which imports all seven adapters. There is NO
 // shared `src/atlas/adapters/index.ts`. S2 owns only the contract type and the
 // `getAdapter` accessor.
 //
