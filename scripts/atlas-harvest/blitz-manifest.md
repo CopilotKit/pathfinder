@@ -4,13 +4,13 @@ This is the `blitz` decomposition for an **actual harvest RUN** (not the
 codebase build — that is a different, already-shipped plan). It fans the
 Tier-1 acquisition out over the whole company's signal-bearing sources with
 maximal parallelism. The deterministic reduce/classify/validate half is NOT in
-this fleet — it is the in-process driver (`scripts/atlas-harvest.ts run`) that
+this fleet — it is the in-process driver (`atlas harvest run`) that
 runs AFTER the fleet, over the fragments this fleet produces.
 
 ## Shape
 
 - **Sharded by source family.** One shard per source family. A shard is a
-  *fan-out*: it enumerates its units and launches one tiny **leaf task** per
+  _fan-out_: it enumerates its units and launches one tiny **leaf task** per
   unit. Sharding by family keeps each leaf's adapter, MCP surface, and unit
   shape homogeneous, so the leaf prompt (`leaf-prompt.md`) is parameterized by
   family + unit, not rewritten per leaf.
@@ -28,18 +28,23 @@ runs AFTER the fleet, over the fragments this fleet produces.
 
 ## Run parameters (every shard inherits these)
 
-| Param | Meaning |
-|---|---|
-| `RUN_ID` | The run id (e.g. `2026-06-08-full`). All shards write under the same run. |
-| `FRAGMENTS_DIR` | Absolute path to `runs/<RUN_ID>/fragments/`. The single write target. |
-| `AS_OF` | The harvest "as of" calendar date (`YYYY-MM-DD`) stamped into provenance freshness for sources that lack their own date. |
+| Param           | Meaning                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `RUN_ID`        | The run id (e.g. `2026-06-08-full`). All shards write under the same run.                                                |
+| `FRAGMENTS_DIR` | Absolute path to `runs/<RUN_ID>/fragments/`. The single write target.                                                    |
+| `AS_OF`         | The harvest "as of" calendar date (`YYYY-MM-DD`) stamped into provenance freshness for sources that lack their own date. |
 
 ## Fragment id convention
 
 Each leaf owns a unique, filesystem-safe, deterministic file stem so parallel
-leaves can never collide. Writes are exclusive (`wx`) and FAIL LOUD on
+leaves can never collide. The in-process RunStore writer
+(`RunStore.writeFragment`) writes exclusively (`wx`) and FAILS LOUD on
 collision — a retried leaf must delete its prior fragment file first (or the
-run must use a fresh run id), per the run-store error contract. Recommended:
+run must use a fresh run id), per the run-store error contract. That guarantee
+covers ONLY the in-process writer: leaves are out-of-process and write their
+fragment files directly, so each leaf must create its file exclusively (fail
+if it already exists — see leaf-prompt step 4), and unique stems remain the
+fleet's primary collision defense. Recommended:
 `<sourcetype>-<stable-unit-key>` (e.g. `github-pr-pathfinder-1746`,
 `memory-feedback_nextjs_bundles_node_modules`, `notion-doc-<pageId>-<n>` for the
 n-th decision split off a page). The id is the file stem only — the
@@ -53,7 +58,7 @@ Each shard below names: the **adapter** whose contract its leaves emulate (in
 `src/atlas/adapters/` — leaves are out-of-process agents; the adapter source is
 the executable contract, not code a leaf invokes),
 the **registry sourcetype** key (as wired in `buildLeafAdapterRegistry()` in
-`scripts/atlas-harvest.ts`), the **`*Unit`** shape each leaf assembles, the
+`src/atlas/harvest-cli.ts`), the **`*Unit`** shape each leaf assembles, the
 **enumeration** that produces the units, and notes.
 
 ### Shard 1 — Memory store
@@ -132,7 +137,10 @@ the **registry sourcetype** key (as wired in `buildLeafAdapterRegistry()` in
   (`distillEpisodicWindow`) — NOT a plain adapter call.
 - **Notes:** episodic knowledge is NEVER self-verifying — every fragment comes
   out `needsReview=true`, `validation_status="unverified"`,
-  `provenance_class="derived"` (the adapter re-asserts these). LLM calls go
+  `provenance_class="derived"`, `confidence="low"` (clamped — a stronger
+  distiller signal is an unsafe escalation), and `sensitivity` floored at
+  `"internal"` (any stronger distiller signal is preserved) — the adapter
+  re-asserts all of these. LLM calls go
   through the `OPENAI_BASE_URL` seam. Keep concurrency low (LLM + MCP). Split
   into sub-shards by session-date range if the window count is large.
 
@@ -168,16 +176,16 @@ the **registry sourcetype** key (as wired in `buildLeafAdapterRegistry()` in
 
 ## Concurrency / scheduling summary
 
-| Shard | Adapter | Registry key(s) | MCP-gated | LLM | Concurrency |
-|---|---|---|---|---|---|
-| 1 Memory | `memoryAdapter` | `memory` | no | no | high |
-| 2 PRs (×3 repos) | `githubAdapter` | `github-pr` | no (gh/API) | no | high, per-repo bucket |
-| 3 Issues | `githubAdapter` | `github-issue` | no (gh/API) | no | with repo bucket |
-| 4 Notion | `notionAdapter` | `notion-doc` | yes (Notion) | no | low |
-| 5 Linear | `linearAdapter` | `linear-doc` | yes (Linear) | no | low |
-| 6 Episodic | `episodicAdapter` | `episodic` | yes (episodic) | **yes** | low |
-| 7 Source-comment | `sourceCommentAdapter` | `agent-doc` | no | no | high |
-| 8 Showcase | `showcaseAdapter` | `derived` | no | no | high |
+| Shard            | Adapter                | Registry key(s) | MCP-gated      | LLM     | Concurrency           |
+| ---------------- | ---------------------- | --------------- | -------------- | ------- | --------------------- |
+| 1 Memory         | `memoryAdapter`        | `memory`        | no             | no      | high                  |
+| 2 PRs (×3 repos) | `githubAdapter`        | `github-pr`     | no (gh/API)    | no      | high, per-repo bucket |
+| 3 Issues         | `githubAdapter`        | `github-issue`  | no (gh/API)    | no      | with repo bucket      |
+| 4 Notion         | `notionAdapter`        | `notion-doc`    | yes (Notion)   | no      | low                   |
+| 5 Linear         | `linearAdapter`        | `linear-doc`    | yes (Linear)   | no      | low                   |
+| 6 Episodic       | `episodicAdapter`      | `episodic`      | yes (episodic) | **yes** | low                   |
+| 7 Source-comment | `sourceCommentAdapter` | `agent-doc`     | no             | no      | high                  |
+| 8 Showcase       | `showcaseAdapter`      | `derived`       | no             | no      | high                  |
 
 Global live-slot cap: **10** (org `blitz` ceiling). Pure shards (1, 2, 3, 7, 8)
 can run wide; MCP/LLM shards (4, 5, 6) run narrow to respect rate limits.
@@ -190,7 +198,7 @@ reports DONE, the fragments dir is the handoff. The orchestrator then runs the
 driver over it:
 
 ```
-npx tsx scripts/atlas-harvest.ts run --run-id <RUN_ID> --upsert \
+atlas harvest run --run-id <RUN_ID> --upsert \
   --checkout <checkout dir> --feature-registry <feature-registry.json>
 ```
 
@@ -201,8 +209,8 @@ See `README.md` for the full Steps 2-7 (run → artifact → edit → sync → r
 
 Do NOT launch all shards at full width on the first run. Ramp:
 
-1. Run ONE shard (e.g. Memory) limited to ~5 units → ~5 fragments.
-2. `npx tsx scripts/atlas-harvest.ts run --run-id <RUN_ID> --dry-run ...` and
+1. Run ONE shard (e.g. Memory) limited to ~4 units → ~4 fragments.
+2. `atlas harvest run --run-id <RUN_ID> --dry-run ...` and
    confirm the fragments parse (Zod) and Tiers 2-3 produce candidates
    (serverless dry-runs fail fast at 5 consecutive rag-probe failures — keep
    the serverless ramp at ≤4 fragments or stub the search route; see the
@@ -210,5 +218,5 @@ Do NOT launch all shards at full width on the first run. Ramp:
 3. Widen that shard, then add the next shard, re-running the dry-run gate each
    widening.
 
-This catches a malformed-fragment / wrong-`*Unit`-shape defect at 5 units
+This catches a malformed-fragment / wrong-`*Unit`-shape defect at ~4 units
 instead of after a thousand-unit fleet.

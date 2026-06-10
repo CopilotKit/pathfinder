@@ -1,9 +1,9 @@
 # Atlas Harvest — running a harvest end-to-end
 
 This directory is the **Tier-1 leaf-fleet agent harness** for the Atlas seed
-harvest. It is the *agent-orchestration half* of the system; the
-*deterministic in-process half* lives in `src/atlas/**` and is driven by
-`scripts/atlas-harvest.ts`.
+harvest. It is the _agent-orchestration half_ of the system; the
+_deterministic in-process half_ lives in `src/atlas/**` and is driven by
+`src/atlas/harvest-cli.ts`.
 
 The two halves meet at one seam: **fragments on disk**. The leaf fleet writes
 one `CandidateFragment` JSON per unit into `runs/<run-id>/fragments/`; the
@@ -12,21 +12,21 @@ driver reads them back and runs the deterministic Tiers 2-3 over the corpus.
 ```
 SOURCES ──(Tier-1 leaf fleet: blitz agents, 1 unit each)──▶ runs/<run-id>/fragments/*.json
                                                                       │
-                                                  scripts/atlas-harvest.ts run
+                                                       atlas harvest run
                                           (Tier-2 aggregate → classify → Tier-3
                                            canonicalize → rag-dedup → validate)
                                                                       │
                                                        --upsert ▶ pending atlas_seed_entries rows
                                                                       │
-                                                  scripts/atlas-harvest.ts artifact
+                                                     atlas harvest artifact
                                                                       │
                                                         Notion approval page (lead edits it)
                                                                       │
-                                                  scripts/atlas-harvest.ts sync
+                                                       atlas harvest sync
                                             (checked & ¬excluded & approvable → approve;
                                              else → reject; 409 → conflicted)
                                                                       │
-                                                  scripts/atlas-harvest.ts reindex
+                                                      atlas harvest reindex
                                                           (AtlasDataProvider → pgvector)
                                                                       │
                                                   WIRE-ON (LAST, deferred — see below)
@@ -35,22 +35,26 @@ SOURCES ──(Tier-1 leaf fleet: blitz agents, 1 unit each)──▶ runs/<run-
 The contracts these docs describe are the real ones:
 
 - The fragment schema is `CandidateFragmentSchema` in `src/atlas/types.ts`.
-- The driver CLI is `scripts/atlas-harvest.ts` (read its top-of-file comment for
+- The driver CLI is `src/atlas/harvest-cli.ts`, mounted as the `harvest`
+  subcommand of the installed `atlas` binary (read its top-of-file comment for
   the authoritative subcommand list — it is the source of truth, these docs
-  mirror it).
+  mirror it). Invocations below use the installed form, `atlas harvest <sub>
+...`; the from-source equivalents are `npx tsx src/atlas/harvest-cli.ts
+<sub> ...` (pre-build) and `node dist/atlas-cli.js harvest <sub> ...`
+  (post-build).
 - The seven adapters live in `src/atlas/adapters/` and are assembled into the
   `LeafAdapterRegistry` in exactly one place — `buildLeafAdapterRegistry()` in
-  `scripts/atlas-harvest.ts`. There is no shared `src/atlas/adapters/index.ts`.
+  `src/atlas/harvest-cli.ts`. There is no shared `src/atlas/adapters/index.ts`.
 
 ---
 
 ## The pieces
 
-| Artifact | What it is |
-|---|---|
-| `blitz-manifest.md` | The source-sharded blitz decomposition for an actual harvest RUN — one shard per source family, each fanning out to tiny one-unit leaf tasks. |
-| `leaf-prompt.md` | The per-leaf agent prompt TEMPLATE — handed ONE unit, builds the fragment the matching adapter would emit, writes exactly ONE fragment JSON. |
-| `scripts/atlas-harvest.ts` | The in-process driver CLI (not in this dir — one level up). Runs Tiers 2-3, generates/syncs the Notion artifact, queues reindex. |
+| Artifact                   | What it is                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `blitz-manifest.md`        | The source-sharded blitz decomposition for an actual harvest RUN — one shard per source family, each fanning out to tiny one-unit leaf tasks.                            |
+| `leaf-prompt.md`           | The per-leaf agent prompt TEMPLATE — handed ONE unit, builds the fragment the matching adapter would emit, writes exactly ONE fragment JSON.                             |
+| `src/atlas/harvest-cli.ts` | The in-process driver CLI (not in this dir — it lives in `src/atlas/`, mounted as `atlas harvest`). Runs Tiers 2-3, generates/syncs the Notion artifact, queues reindex. |
 
 ---
 
@@ -76,7 +80,7 @@ the absolute fragments directory as inputs.
 ## Step 1 — Run the Tier-1 leaf fleet (this harness)
 
 The leaf fleet is launched as a `blitz` fleet from `blitz-manifest.md`. Each
-slot is a *shard* over one source family (memory, PRs per repo, Notion, Linear,
+slot is a _shard_ over one source family (memory, PRs per repo, Notion, Linear,
 episodic, source comments, showcase); each shard fans out to tiny leaf tasks,
 one **unit** per leaf. Every leaf:
 
@@ -99,7 +103,7 @@ The output of this step is a directory of fragments. Nothing has touched the DB
 yet.
 
 > **Incremental ramp (org discipline).** Do NOT launch the full fleet on the
-> first run. Start with ONE shard of ~5 units, run Step 2 as a `--dry-run`,
+> first run. Start with ONE shard of ~4 units, run Step 2 as a `--dry-run`,
 > confirm the fragments parse, then ramp the shards up. (Serverless dry-runs
 > fail fast at 5 consecutive rag-probe failures — keep a serverless ramp at ≤4
 > fragments or stub the search route.) See "Smoke-ramp" below.
@@ -116,7 +120,7 @@ promoteValidation`, then (only with `--upsert`) writes each candidate as a
 Preview (writes NOTHING):
 
 ```
-npx tsx scripts/atlas-harvest.ts run \
+atlas harvest run \
   --run-id <run-id> \
   --checkout <read-only origin/main checkout dir> \
   --feature-registry <showcase feature-registry.json>
@@ -125,7 +129,7 @@ npx tsx scripts/atlas-harvest.ts run \
 Write pending rows:
 
 ```
-npx tsx scripts/atlas-harvest.ts run \
+atlas harvest run \
   --run-id <run-id> --upsert \
   --checkout <checkout dir> \
   --feature-registry <feature-registry.json>
@@ -140,8 +144,12 @@ Required flags / env for `run` (enforced by the driver — it throws if missing)
   validation gate maps claims against to showcase-verify them.
 - `--token <token>` or `ANALYTICS_TOKEN` — bearer for the live endpoints; the
   rag-dedup gate probes `GET /api/search`.
-- `--url <url>` or `PATHFINDER_BASE_URL` — the live Pathfinder base URL (default
-  `http://localhost:3001`). **A live server must be reachable** because the
+
+Base URL (NOT enforced — the driver warns and falls back if missing):
+
+- `--url <url>` or `PATHFINDER_BASE_URL` — the live Pathfinder base URL; when
+  neither is set the driver warns and falls back to `http://localhost:3001`.
+  **A live server must be reachable** because the
   rag-dedup gate makes one `search` round-trip per candidate (approximately:
   a candidate with too few distinct tokens to ever clear the overlap floor
   skips its probe entirely).
@@ -152,7 +160,7 @@ pipeline but write NOTHING — overrides `--upsert`). Note that `--dry-run`
 still performs LIVE rag-dedup probes against the server — it skips the
 writes, not the probes.
 
-The rag-dedup gate **never drops** a candidate; on corpus overlap it *marks*
+The rag-dedup gate **never drops** a candidate; on corpus overlap it _marks_
 the candidate (annotates `provenance.validated_against` + a `fused_from`
 evidence ref). The validation gate promotes `validation_status`
 (`unverified → source-verified → showcase-verified`) and marks a behavior /
@@ -164,7 +172,7 @@ written; it just renders non-checkable in the approval artifact).
 ## Step 3 — Generate the Notion approval artifact
 
 ```
-npx tsx scripts/atlas-harvest.ts artifact \
+atlas harvest artifact \
   --run-id <run-id> \
   --parent <parent Notion page id> \
   --checkout <read-only origin/main checkout dir> \
@@ -213,7 +221,7 @@ The edited page is the single source of truth for what gets ratified.
 ## Step 5 — Sync the edited page back to the DB
 
 ```
-npx tsx scripts/atlas-harvest.ts sync \
+atlas harvest sync \
   --page <approval page id> \
   --actor <name> \
   [--run-id <run-id>]
@@ -233,7 +241,7 @@ server (row already settled / never existed) is treated as an idempotent no-op,
 so a re-run of `sync` is safe; those server-refused ratifications are tallied
 in a separate `conflicted` bucket rather than being counted as approved or
 rejected. Passing `--run-id` persists the run's final exclusion-rule SET into
-its manifest so the *next* run's artifact can seed from it (omit it and the
+its manifest so the _next_ run's artifact can seed from it (omit it and the
 driver warns that the rule set will NOT be persisted). The command prints
 `<approved> approved, <rejected> rejected, <excluded> excluded-by-rule,
 <conflicted> conflicted`.
@@ -241,15 +249,17 @@ driver warns that the rule set will NOT be persisted). The command prints
 An accidentally **indented** (Tab-nested) candidate checkbox is still
 discovered and enacted — the sync warns and asks you to un-indent it — but
 **rule bullets must remain top-level: an indented `atlas-rule:` bullet is not
-parsed** — the sync warns about it and asks you to un-indent it, but the rule
-stays out of enforcement and next-run seeding until you do.
+parsed** — the sync warns about it (within the 3-level nested-scan cap the
+sync descends; deeper nesting gets only a generic unscanned-children warning)
+and asks you to un-indent it, but the rule stays out of enforcement and
+next-run seeding until you do.
 
 ---
 
 ## Step 6 — Reindex
 
 ```
-npx tsx scripts/atlas-harvest.ts reindex [--scope full|source|repo] [--source <s>] [--repo <url>]
+atlas harvest reindex [--scope full|source|repo] [--source <s>] [--repo <url>]
 ```
 
 Requires `--token`/`ANALYTICS_TOKEN`. Queues a (scoped) reindex via
@@ -279,14 +289,14 @@ empty/unapproved corpus serves nothing useful.
 Before launching the fleet, prove the fragment seam on a tiny ramp (the org's
 incremental-ramp discipline):
 
-1. Hand-write ~3-5 valid `CandidateFragment` JSON files into a throwaway
+1. Hand-write ~3-4 valid `CandidateFragment` JSON files into a throwaway
    `/tmp/atlas-smoke/_smoke/fragments/` (conform to `CandidateFragmentSchema` in
    `src/atlas/types.ts` — see the worked examples in `leaf-prompt.md`).
 2. Dry-run the driver over them, pointing `--runs-dir` at the SAME throwaway
    root the fragments were written under:
 
    ```
-   ANALYTICS_TOKEN=smoke npx tsx scripts/atlas-harvest.ts run \
+   ANALYTICS_TOKEN=smoke atlas harvest run \
      --run-id _smoke --runs-dir /tmp/atlas-smoke --dry-run \
      --checkout fixtures/atlas/checkout \
      --feature-registry fixtures/atlas/showcase/feature-registry.json
@@ -294,7 +304,7 @@ incremental-ramp discipline):
 
    The summary line must report the number of fragment files you wrote — e.g.
    `atlas-harvest run [dry-run] run-id=_smoke: 3 fragments → 3 candidates → 0
-   upserted` for 3 distinct fragments. A `0 fragments` line means the fragments
+upserted` for 3 distinct fragments. A `0 fragments` line means the fragments
    directory and `--runs-dir` do not agree (the run read an empty/missing
    corpus) — the smoke pass is vacuous, fix the paths.
 
