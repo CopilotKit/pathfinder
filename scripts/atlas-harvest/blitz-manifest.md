@@ -211,10 +211,12 @@ Do NOT launch all shards at full width on the first run. Ramp:
 
 1. Run ONE shard (e.g. Memory) limited to ~4 units → ~4 fragments.
 2. `atlas harvest run --run-id <RUN_ID> --dry-run ...` and
-   confirm the fragments parse (Zod) and Tiers 2-3 produce candidates
-   (serverless dry-runs fail fast at 5 consecutive rag-probe failures — keep
-   the serverless ramp at ≤4 fragments or stub the search route; see the
-   README's "Smoke-ramp" section).
+   confirm the fragments parse (Zod) and Tiers 2-3 produce candidates. Against
+   a reachable Pathfinder server (bearer-gated `GET /api/search` +
+   `ANALYTICS_TOKEN`) the ramp has no fragment cap; only a SERVERLESS dry-run
+   must stay at ≤4 fragments or stub the search route, since serverless runs
+   fail fast at 5 consecutive rag-probe failures (see the README's
+   "Smoke-ramp" section).
 3. Widen that shard, then add the next shard, re-running the dry-run gate each
    widening.
 
