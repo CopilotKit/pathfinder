@@ -20,6 +20,7 @@ import {
   getAllChunksForLlms,
   getFaqChunks,
   getWebhookDeliveryStats,
+  textSearchChunks,
 } from "./db/queries.js";
 import {
   getConfig,
@@ -3396,6 +3397,83 @@ export function registerAtlasRatificationRoutes(app: express.Express): void {
     atlasRatificationAuth,
     async (req: Request, res: Response) => {
       await rejectAtlasCandidate(atlasCanonicalKeyFromBody(req), req, res);
+    },
+  );
+
+  // GET /api/search — the live lexical RAG-corpus probe. This is the route
+  // AtlasHttpClient.search drives for the harvest's rag-dedup gate
+  // (src/atlas/rag-dedup.ts): tsvector keyword search over the indexed
+  // `chunks` table (textSearchChunks — no embedding call, no OpenAI env), so
+  // it is available wherever the ratification routes are. Same bearer as the
+  // other atlas surfaces; the response is `{ hits: [...] }` with the
+  // SearchHit field names the client contract expects (src/atlas/client.ts)
+  // — the client fail-louds on a 200 without a `hits` array, so an empty
+  // result MUST still carry `hits: []`.
+  app.get(
+    "/api/search",
+    atlasRatificationAuth,
+    async (req: Request, res: Response) => {
+      // Express parses `?text=a&text=b` as an array (and extended parsers can
+      // yield objects). Reject any non-string shape up front with the same
+      // envelope the analytics filter parser's rejectArray emits, so the
+      // typeof narrowings below can assume string-or-undefined instead of
+      // silently dropping a duplicated `source` filter. (`limit` is already
+      // covered: parsePositiveIntParam rejects non-strings.)
+      for (const name of ["text", "source"] as const) {
+        const v = req.query[name];
+        if (v !== undefined && typeof v !== "string") {
+          res.status(400).json({
+            error: "invalid_request",
+            error_description: `${name} must be a single string value`,
+          });
+          return;
+        }
+      }
+
+      const text =
+        typeof req.query.text === "string" ? req.query.text.trim() : "";
+      if (!text) {
+        res.status(400).json({
+          error: "atlas_search_text_required",
+          error_description: "text is required",
+        });
+        return;
+      }
+
+      const limit = parseLimitOrError(req);
+      if (!limit.ok) {
+        res.status(limit.status).json(limit.body);
+        return;
+      }
+
+      // Optional source filter — empty/whitespace counts as ABSENT (the
+      // module's empty-is-absent rule, same as the candidates list above).
+      // An unknown/unconfigured source returns 200 `hits: []`, never 400 —
+      // deliberate atlas READ-path convention (same as the candidates list;
+      // textSearchChunks cannot tell unknown-source from zero-chunks, and
+      // chunks can outlive config entries). 400-on-unknown-source applies to
+      // write/enqueue ops only (adminReindexOp).
+      const sourceName =
+        typeof req.query.source === "string" && req.query.source.trim()
+          ? req.query.source.trim()
+          : undefined;
+
+      try {
+        const rows = await textSearchChunks(text, limit.value, sourceName);
+        res.json({
+          hits: rows.map((r) => ({
+            id: r.id,
+            content: r.content,
+            sourceUrl: r.source_url,
+            title: r.title,
+            sourceName: r.source_name,
+            score: r.similarity,
+          })),
+        });
+      } catch (err) {
+        console.error("[atlas] Search probe failed:", err);
+        res.status(500).json({ error: "Failed to search atlas corpus" });
+      }
     },
   );
 }
