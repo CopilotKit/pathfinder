@@ -371,6 +371,38 @@ describe("Atlas DB helpers", () => {
     expect(items.map((item) => item.key)).toEqual(["included"]);
   });
 
+  it("does not strand rows whose updated_at has sub-millisecond precision", async () => {
+    // State tokens round-trip through JS Dates (millisecond precision) while
+    // updated_at is a Postgres timestamptz (microsecond precision). A row
+    // updated at ...28.786830 produces the token ...28.786Z; the incremental
+    // bound `updated_at <= token` must still include that row, and the next
+    // run's `updated_at > token` must not re-strand it forever.
+    await upsertAtlasSeedCandidate({
+      canonicalKey: "micro",
+      sourceName: "atlas",
+      title: "Micro",
+      content: "Micro content",
+      provenance: {},
+      evidence: [],
+    });
+    await approveAtlasSeedEntry("micro", "reviewer");
+    await db.query(
+      "UPDATE atlas_seed_entries SET updated_at = '2026-06-11T01:46:28.786830+00'::timestamptz WHERE canonical_key = $1",
+      ["micro"],
+    );
+
+    const token = await getAtlasStateToken("atlas");
+    expect(token).toBe("2026-06-11T01:46:28.786Z");
+
+    // Mirror of the incremental acquire bounds: previous token < new token.
+    const items = await listIndexableAtlasContent("atlas", {
+      changedAfter: new Date("2026-06-11T01:00:00.000Z"),
+      changedOnOrBefore: new Date(token!),
+    });
+
+    expect(items.map((item) => item.key)).toEqual(["micro"]);
+  });
+
   it("surfaces stale cache pages as removals and includes them in state tokens", async () => {
     await upsertAtlasCachePage({
       pageKey: "fresh",

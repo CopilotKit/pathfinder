@@ -237,13 +237,24 @@ function addUpdatedAtClauses(
   params: unknown[],
 ): string[] {
   const clauses: string[] = [];
+  // State tokens travel through JS Dates (millisecond precision) while
+  // updated_at is a Postgres timestamptz (microsecond precision). Compare at
+  // millisecond precision on BOTH bounds, otherwise the row whose updated_at
+  // produced the token (e.g. ...28.78683 → token ...28.786Z) falls in the
+  // sub-millisecond gap: it fails `updated_at <= token` in the run that
+  // generated the token, and every later run bounds with the same token
+  // (`> token AND <= token`), stranding the row forever un-indexed.
   if (query.changedAfter) {
     params.push(query.changedAfter);
-    clauses.push(`${alias}.updated_at > $${params.length}`);
+    clauses.push(
+      `date_trunc('milliseconds', ${alias}.updated_at) > $${params.length}`,
+    );
   }
   if (query.changedOnOrBefore) {
     params.push(query.changedOnOrBefore);
-    clauses.push(`${alias}.updated_at <= $${params.length}`);
+    clauses.push(
+      `date_trunc('milliseconds', ${alias}.updated_at) <= $${params.length}`,
+    );
   }
   return clauses;
 }
