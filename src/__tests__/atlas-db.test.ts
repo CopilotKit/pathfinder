@@ -376,7 +376,8 @@ describe("Atlas DB helpers", () => {
     // updated_at is a Postgres timestamptz (microsecond precision). A row
     // updated at ...28.786830 produces the token ...28.786Z; the incremental
     // bound `updated_at <= token` must still include that row, and the next
-    // run's `updated_at > token` must not re-strand it forever.
+    // run's `updated_at > token` must not re-emit it forever (endless
+    // re-embedding).
     await upsertAtlasSeedCandidate({
       canonicalKey: "micro",
       sourceName: "atlas",
@@ -401,6 +402,23 @@ describe("Atlas DB helpers", () => {
     });
 
     expect(items.map((item) => item.key)).toEqual(["micro"]);
+
+    // Second incremental cycle: bounds collapse to (token, token]. The row is
+    // already indexed and must NOT re-emit — an un-truncated lower bound
+    // (updated_at > token) would re-embed it on every incremental run forever.
+    const second = await listIndexableAtlasContent("atlas", {
+      changedAfter: new Date(token!),
+      changedOnOrBefore: new Date(token!),
+    });
+    expect(second).toEqual([]);
+
+    // Recovery for already-stranded prod rows: clearing last_commit_sha forces
+    // fullAcquire, which bounds ONLY with changedOnOrBefore — must include the
+    // row.
+    const recovered = await listIndexableAtlasContent("atlas", {
+      changedOnOrBefore: new Date(token!),
+    });
+    expect(recovered.map((item) => item.key)).toEqual(["micro"]);
   });
 
   it("surfaces stale cache pages as removals and includes them in state tokens", async () => {
@@ -547,5 +565,25 @@ describe("Atlas row-mapper robustness", () => {
     const result = __testing.toDate(iso);
     expect(result).toBeInstanceOf(Date);
     expect(result?.toISOString()).toBe(iso);
+  });
+
+  it("resolveAtlasStateToken throws on an unparseable non-null MAX instead of silently shrinking the window", () => {
+    expect(() => __testing.resolveAtlasStateToken(["garbage"])).toThrowError(
+      /getAtlasStateToken: unparseable MAX\(updated_at\): "garbage"/,
+    );
+  });
+
+  it("resolveAtlasStateToken returns null when every table MAX is null (empty tables)", () => {
+    expect(__testing.resolveAtlasStateToken([null, null])).toBeNull();
+    expect(__testing.resolveAtlasStateToken([])).toBeNull();
+  });
+
+  it("resolveAtlasStateToken returns the max of the per-table MAXes as a ms-precision ISO string", () => {
+    expect(
+      __testing.resolveAtlasStateToken([
+        new Date("2026-01-01T00:00:00.123Z"),
+        "2026-01-02T00:00:00.456Z",
+      ]),
+    ).toBe("2026-01-02T00:00:00.456Z");
   });
 });

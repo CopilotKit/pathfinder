@@ -240,10 +240,16 @@ function addUpdatedAtClauses(
   // State tokens travel through JS Dates (millisecond precision) while
   // updated_at is a Postgres timestamptz (microsecond precision). Compare at
   // millisecond precision on BOTH bounds, otherwise the row whose updated_at
-  // produced the token (e.g. ...28.78683 → token ...28.786Z) falls in the
+  // produced the token (e.g. ...28.786830 → token ...28.786Z) falls in the
   // sub-millisecond gap: it fails `updated_at <= token` in the run that
   // generated the token, and every later run bounds with the same token
   // (`> token AND <= token`), stranding the row forever un-indexed.
+  // Truncating the LOWER bound matters independently: an un-truncated
+  // `updated_at > token` would match the boundary row (...28.786830 > ...28.786)
+  // on every incremental run, re-indexing (and re-embedding) it forever.
+  // Residual: a write landing in the token's millisecond after the items query
+  // is not picked up by the strict lower bound — accepted sliver, see the
+  // µs-faithful-token follow-up.
   if (query.changedAfter) {
     params.push(query.changedAfter);
     clauses.push(
@@ -763,6 +769,33 @@ export async function listRemovedAtlasContentIds(
   ];
 }
 
+// Resolves the raw MAX(updated_at) values from the per-table state-token
+// queries into a single token. Nulls (empty tables) are skipped; an
+// unparseable non-null MAX is a hard error — silently dropping it would
+// shrink the incremental window and no-op the run while reporting success,
+// the same silent-stranding failure class addUpdatedAtClauses guards against.
+function resolveAtlasStateToken(raw: unknown[]): string | null {
+  const values: Date[] = [];
+  for (const value of raw) {
+    if (value == null) continue;
+    const date = value instanceof Date ? value : new Date(value as string);
+    if (isNaN(date.getTime())) {
+      throw new Error(
+        `getAtlasStateToken: unparseable MAX(updated_at): ${JSON.stringify(value)}`,
+      );
+    }
+    values.push(date);
+  }
+  if (values.length === 0) return null;
+  return new Date(
+    Math.max(...values.map((value) => value.getTime())),
+  ).toISOString();
+}
+
+// Note: the returned token is implicitly ms-truncated by the Date round-trip
+// in resolveAtlasStateToken (updated_at carries microseconds, JS Dates keep
+// milliseconds); the query bounds compare ms-truncated updated_at to match
+// (see addUpdatedAtClauses).
 export async function getAtlasStateToken(
   sourceName: string,
   query: Pick<AtlasContentQuery, "repositories"> = {},
@@ -807,16 +840,10 @@ export async function getAtlasStateToken(
     ),
   ]);
 
-  const values = [
+  return resolveAtlasStateToken([
     seedResult.rows[0]?.state_token,
     cacheResult.rows[0]?.state_token,
-  ]
-    .map((value) => toDate(value, "atlas state token"))
-    .filter((value): value is Date => value !== null);
-  if (values.length === 0) return null;
-  return new Date(
-    Math.max(...values.map((value) => value.getTime())),
-  ).toISOString();
+  ]);
 }
 
 // Test-only exports of the otherwise-private row mappers and timestamp parser.
@@ -827,4 +854,5 @@ export const __testing = {
   mapSeedRow,
   mapCacheRow,
   toDate,
+  resolveAtlasStateToken,
 };
