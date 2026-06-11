@@ -243,7 +243,8 @@ function addUpdatedAtClauses(
   // produced the token (e.g. ...28.786830 → token ...28.786Z) falls in the
   // sub-millisecond gap: it fails `updated_at <= token` in the run that
   // generated the token, and every later run bounds with the same token
-  // (`> token AND <= token`), stranding the row forever un-indexed.
+  // (`> token AND <= token`), stranding the row forever un-indexed (until
+  // its updated_at next changes).
   // Truncating the LOWER bound matters independently: an un-truncated
   // `updated_at > token` would match the boundary row (...28.786830 > ...28.786)
   // on every incremental run, re-indexing (and re-embedding) it forever.
@@ -846,10 +847,12 @@ export async function getAtlasStateToken(
   ]);
 }
 
-// Test-only exports of the otherwise-private row mappers and timestamp parser.
-// These are pure functions; exporting them lets us unit-test the robustness
-// paths (malformed JSON → context-bearing error, invalid timestamp → null)
-// directly without contriving a backing store that can hold malformed columns.
+// Test-only exports of the otherwise-private row mappers, timestamp parser,
+// and state-token resolver. These are pure functions; exporting them lets us
+// unit-test the robustness paths (malformed JSON → context-bearing error,
+// invalid timestamp → null in toDate, unparseable non-null MAX → throw with
+// context and all-null/empty input → null in resolveAtlasStateToken) directly
+// without contriving a backing store that can hold malformed columns.
 export const __testing = {
   mapSeedRow,
   mapCacheRow,
