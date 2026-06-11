@@ -573,6 +573,14 @@ describe("Atlas row-mapper robustness", () => {
     );
   });
 
+  it("resolveAtlasStateToken throws on a mixed null-plus-unparseable shape (one empty table, one corrupt MAX)", () => {
+    expect(() =>
+      __testing.resolveAtlasStateToken([null, "garbage"]),
+    ).toThrowError(
+      /getAtlasStateToken: unparseable MAX\(updated_at\): "garbage"/,
+    );
+  });
+
   it("resolveAtlasStateToken returns null when every table MAX is null (empty tables)", () => {
     expect(__testing.resolveAtlasStateToken([null, null])).toBeNull();
     expect(__testing.resolveAtlasStateToken([])).toBeNull();
