@@ -302,3 +302,75 @@ export function canonicalize(fragments: CandidateFragment[]): Candidate[] {
   });
   return candidates;
 }
+
+// ── canonicalizeFragment ──────────────────────────────────────────────────────
+//
+// Per-fragment structural normalizer for the Phase-2 dual-run shadow comparator
+// (spec §6.2). Two fragments are considered "the same" iff
+// `JSON.stringify(canonicalizeFragment(a)) === JSON.stringify(canonicalizeFragment(b))`,
+// so the output must be stable under input variations that the comparator
+// does NOT care about: object-key insertion order, whitespace inside free-text
+// fields, and `1.0` vs `1` numeric encoding from the model.
+//
+// Distinct from the Tier-3 `canonicalize(fragments[])` ranker above — that one
+// dedups+ranks an ARRAY of CandidateFragments, this one structurally normalizes
+// ONE fragment-shaped object for byte-equality comparison. The two names
+// intentionally diverge from the spec's `canonicalize(fragment)` so they can
+// coexist in this module without shadowing each other; T1, T2 and T10 import
+// `canonicalizeFragment` by name (see SLOT-1 of the impl plan, spec footer).
+//
+// Behavior (§6.2):
+//   (a) Recursive object-key sort — keys at every depth emit in sorted order.
+//   (b) String-field whitespace normalization — trim leading/trailing
+//       whitespace, then collapse every internal run of whitespace + newlines
+//       (\s+) to a single space. This is **intentionally LOSSY** on free-text
+//       fields: multi-line `content` formatting and intentional double-spaces
+//       are flattened. Accepted because byte-identity on free-text from two
+//       independent LLM draws is infeasible even with a fixed seed; what we
+//       actually want to compare is structure + content-modulo-whitespace.
+//   (c) Numeric canonicalization — `Number(n).toString()` round-trip via
+//       `+value`, so `1.0` and `1` and `1.00` all normalize to the same
+//       in-memory number and JSON.stringify identically. Non-finite values
+//       (NaN, ±Infinity) are passed through unchanged (JSON.stringify will
+//       emit them as `null`, which is the same null on both sides).
+//   (d) Array order PRESERVED — arrays are NOT sorted. `evidence[]` and
+//       `validationTargets[]` element order is load-bearing and must compare
+//       positionally. Array ELEMENTS are recursively normalized in place.
+//
+// Pure: never mutates the input.
+export function canonicalizeFragment(fragment: object): object {
+  return canonicalizeValue(fragment) as object;
+}
+
+function canonicalizeValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    // §6.2(b): trim then collapse internal whitespace+newline runs to ONE
+    // space. \s covers spaces, tabs, newlines, CR, vertical tab, form feed.
+    return value.trim().replace(/\s+/g, " ");
+  }
+  if (typeof value === "number") {
+    // §6.2(c): round-trip through Number so 1.0 ≡ 1. Pass non-finite values
+    // through unchanged (Number(NaN) === NaN; JSON.stringify will emit null
+    // on both sides regardless).
+    return Number.isFinite(value) ? +value : value;
+  }
+  if (Array.isArray(value)) {
+    // §6.2(d): preserve element order; recurse into each element.
+    return value.map(canonicalizeValue);
+  }
+  if (value !== null && typeof value === "object") {
+    // §6.2(a): emit keys in sorted order. We build a NEW object inserting keys
+    // in sorted order; modern V8 preserves insertion order for string keys, so
+    // JSON.stringify emits them in that order — making the stringified output
+    // stable across key-permuted inputs.
+    const entries = Object.entries(value as Record<string, unknown>);
+    entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of entries) {
+      out[k] = canonicalizeValue(v);
+    }
+    return out;
+  }
+  // booleans, null, undefined, bigint, symbol → unchanged.
+  return value;
+}
