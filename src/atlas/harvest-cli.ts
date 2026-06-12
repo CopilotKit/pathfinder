@@ -38,6 +38,13 @@ import { fileURLToPath } from "node:url";
 import { Command, CommanderError, Option } from "commander";
 import { Client } from "@notionhq/client";
 
+// ── Schemas (write-fragment subcommand) ────────────────────────────────────────
+import {
+  CandidateFragmentSchema,
+  EpisodicCandidateFragmentSchema,
+} from "./types.js";
+import { claimSlug } from "./canonicalize.js";
+
 // ── The seven leaf adapters — imported HERE and nowhere else (assembly point) ──
 import { memoryAdapter } from "./adapters/memory.js";
 import { githubAdapter } from "./adapters/github.js";
@@ -619,6 +626,266 @@ async function reindexCommand(
   );
 }
 
+// ── write-fragment subcommand (spec §4.2) ──────────────────────────────────────
+//
+// Read a single CandidateFragment JSON object from stdin, validate it against
+// the appropriate family schema (`CandidateFragmentSchema` for non-episodic,
+// `EpisodicCandidateFragmentSchema` for episodic — the episodic schema layers
+// the four episodic-invariant refinements on top of the base), and write the
+// validated (and possibly sensitivity-coerced) fragment EXCLUSIVELY to
+// `<runs-dir>/<run-id>/fragments/<stem>.json`.
+//
+// `--stem` is OPTIONAL: when omitted, the stem is derived from the fragment's
+// canonical-key components (`claimSlug(<sourcetype>:<subsystem>:claimSlug(claimSlugHint || title))`)
+// so two fragments with the same claim text but different sourcetype/subsystem
+// don't collide. The derived stem is itself idempotent across the canonicalize
+// path (claimSlug normalizes case/punctuation).
+//
+// Exit-code matrix (spec §4.2.1):
+//   0 — success (fragment written; absolute path printed to stdout)
+//   1 — stdin/IO failure (bad JSON, unreadable stdin, write error other than EEXIST)
+//   2 — stem collision (file already exists; exclusive-create fails with EEXIST)
+//   3 — schema validation failure (base CandidateFragmentSchema rejected the input,
+//       OR an episodic input whose Zod error path is NOT one of the four episodic
+//       invariants — i.e. a base-schema failure surfaced through the episodic parse)
+//   4 — episodic invariant violation (sourcetype === "episodic" AND the Zod error
+//       path identifies one of the four episodic invariants: needsReview,
+//       provenance_class, confidence, validation_status)
+//
+// The fail-loud rule: stderr always carries the underlying error message; the
+// exit code distinguishes the FAILURE CLASS so the caller (leaf adapter, CI
+// gate) can route accordingly.
+
+const EPISODIC_INVARIANT_FIELDS = new Set([
+  "needsReview",
+  "provenance_class",
+  "confidence",
+  "validation_status",
+]);
+
+interface WriteFragmentCliOptions {
+  runId?: string;
+  runsDir?: string;
+  stem?: string;
+}
+
+// Read the entirety of an async iterable stream into a utf-8 string. Bounded
+// only by available memory — fragments are small (a few KB each) so a full
+// read is fine; streaming-parse would add complexity for zero benefit.
+async function readAllStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+// Inspect a ZodError's issues and decide whether the parse failure is purely
+// an episodic-invariant refinement violation (exit 4) versus a base-schema
+// failure that surfaced through the episodic parse (exit 3). The episodic
+// schema's refinement paths are authored explicitly (see
+// EpisodicCandidateFragmentSchema in types.ts); the four `.refine(...)` calls
+// all emit Zod issues with `code: "custom"` (the default for refinements).
+//
+// Routing rules (per spec §4.2.1):
+//   - Per-issue gate: only `code: "custom"` issues whose path-last lands on
+//     one of EPISODIC_INVARIANT_FIELDS are candidates for exit 4. invalid_type
+//     / invalid_enum_value / invalid_literal / unrecognized_keys etc. are
+//     base-schema issues and route to exit 3 even when they land on a
+//     refinement-named field.
+//   - AND-case precedence: if ANY issue in the same ZodError is a non-custom
+//     base-schema issue, the fragment isn't even valid CandidateFragment
+//     shape, so the refinement verdict is moot — route to exit 3. Exit 3
+//     ALWAYS wins over exit 4 when both apply.
+//
+// Exported for direct unit-testing of the AND-case precedence predicate;
+// production callers reach it through the write-fragment command body below.
+export function isEpisodicInvariantIssue(
+  error: unknown,
+): error is { issues: Array<{ path: (string | number)[]; message: string }> } {
+  if (!error || typeof error !== "object") return false;
+  const issues = (error as { issues?: unknown }).issues;
+  if (!Array.isArray(issues) || issues.length === 0) return false;
+  // AND-case precedence: any non-custom issue downgrades the whole ZodError
+  // to exit 3. A base-schema failure (invalid_type / invalid_enum_value /
+  // invalid_literal / unrecognized_keys / etc.) means the fragment isn't a
+  // valid CandidateFragment at all — the episodic-refinement verdict is moot.
+  if (issues.some((issue) => (issue as { code?: unknown }).code !== "custom")) {
+    return false;
+  }
+  // All issues are `code: "custom"`. At least one must point at an episodic
+  // invariant for this to route to exit 4. A custom issue whose path-last is
+  // NOT in EPISODIC_INVARIANT_FIELDS (e.g. the subsystem-delimiter refine on
+  // the base CandidateFragmentSchema) is a base-schema-class refinement and
+  // still routes to exit 3.
+  return issues.some((issue) => {
+    const path = (issue as { path?: (string | number)[] }).path;
+    if (!Array.isArray(path) || path.length === 0) return false;
+    const last = path[path.length - 1];
+    return typeof last === "string" && EPISODIC_INVARIANT_FIELDS.has(last);
+  });
+}
+
+// The write-fragment command body. Returns the exit code per §4.2.1; never
+// throws — all failure classes are routed through the exit-code matrix.
+export async function writeFragmentCommand(
+  options: WriteFragmentCliOptions,
+  writeOut: WriteFn,
+  writeErr: WriteFn,
+  stdinReader: () => Promise<string> = readAllStdin,
+): Promise<number> {
+  if (!options.runId) {
+    writeErr("atlas-harvest write-fragment: --run-id is required\n");
+    return 1;
+  }
+  if (!options.runsDir) {
+    writeErr("atlas-harvest write-fragment: --runs-dir is required\n");
+    return 1;
+  }
+
+  // 1. Read + JSON-parse stdin. Both stdin IO and JSON parse failures are
+  //    exit 1 (stdin/IO class).
+  let raw: string;
+  try {
+    raw = await stdinReader();
+  } catch (err) {
+    writeErr(
+      `atlas-harvest write-fragment: stdin read failed: ${formatCliError(err)}\n`,
+    );
+    return 1;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    writeErr(
+      `atlas-harvest write-fragment: stdin JSON parse failed: ${formatCliError(err)}\n`,
+    );
+    return 1;
+  }
+
+  // 2. Pick schema family by the fragment's `sourcetype` field. Inspect
+  //    BEFORE parsing — we need the family to decide which schema to run and
+  //    which exit-code class (3 vs 4) a failure maps to.
+  const sourcetype =
+    parsed && typeof parsed === "object"
+      ? (parsed as { sourcetype?: unknown }).sourcetype
+      : undefined;
+  const isEpisodic = sourcetype === "episodic";
+  const schema = isEpisodic
+    ? EpisodicCandidateFragmentSchema
+    : CandidateFragmentSchema;
+
+  // 3. Parse against the chosen schema. On failure:
+  //      - non-episodic OR an episodic base-schema failure → exit 3
+  //      - episodic invariant refinement failure → exit 4
+  const result = schema.safeParse(parsed);
+  if (!result.success) {
+    const exitCode =
+      isEpisodic && isEpisodicInvariantIssue(result.error) ? 4 : 3;
+    const label =
+      exitCode === 4
+        ? "episodic invariant violation"
+        : "schema validation failure";
+    writeErr(
+      `atlas-harvest write-fragment: ${label}: ${formatCliError(result.error)}\n`,
+    );
+    return exitCode;
+  }
+  const fragment = result.data as { sourcetype: string; subsystem: string };
+
+  // 4. Resolve the stem — explicit `--stem` wins; otherwise derive from the
+  //    fragment's canonical-key components (claimSlug normalizes the joined
+  //    `claimSlug(<sourcetype>:<subsystem>:claimSlug(claimSlugHint || title))`
+  //    to a filesystem-safe slug).
+  let stem: string;
+  if (options.stem !== undefined && options.stem !== "") {
+    stem = options.stem;
+  } else {
+    const fragWithClaim = result.data as {
+      sourcetype: string;
+      subsystem: string;
+      claimSlugHint?: string;
+      title: string;
+    };
+    const claim = claimSlug(fragWithClaim.claimSlugHint || fragWithClaim.title);
+    stem = claimSlug(
+      `${fragWithClaim.sourcetype}:${fragWithClaim.subsystem}:${claim}`,
+    );
+  }
+
+  // 4a. Filesystem-safe stem gate (spec §4.2.1, T-R4-4, T-R5-2). `--stem`
+  //     flows into `path.join(fragmentsDir, ...)` and an unvalidated value
+  //     like `../../evil` writes OUTSIDE the fragments directory. The
+  //     `STEM_PATTERN` regex below enforces:
+  //       - First character must be alphanumeric `[A-Za-z0-9]`. This blocks
+  //         leading-dot hidden-file values (`.hidden`), leading-dash
+  //         flag-confusable values (`-flag`), AND any leading-`..` traversal
+  //         prefix (because `.` is not in the leading char class).
+  //       - Subsequent characters limited to `[A-Za-z0-9._-]`. Any path
+  //         separator (`/`, `\`) is rejected because it's outside the body
+  //         class — so a stem cannot construct a multi-component path at all.
+  //     Note: a substring `..` is permitted in the body (e.g. `foo..bar`),
+  //     but is operationally safe — with no `/` separator available, it
+  //     cannot construct a traversal sequence to escape `fragmentsDir`.
+  //     This is the operator/input class — exit 1, BEFORE the mkdir/write
+  //     attempt.
+  const STEM_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+  if (!STEM_PATTERN.test(stem)) {
+    writeErr(
+      `atlas-harvest write-fragment: invalid stem "${stem}" — must match ${STEM_PATTERN}\n`,
+    );
+    return 1;
+  }
+
+  // 5. Write EXCLUSIVELY under `<runs-dir>/<run-id>/fragments/<stem>.json`.
+  //    The mkdir step and the write step are intentionally NOT collapsed into
+  //    one try/catch — they have DIFFERENT exit-code classes:
+  //
+  //      - mkdir failure (EEXIST against a non-dir path, EACCES, ENOSPC, ...)
+  //        is an operator-environment problem and routes to exit 1.
+  //      - writeFileSync EEXIST (file at the resolved stem path already
+  //        exists) is the spec-intended "stem collision" case and routes to
+  //        exit 2.
+  //      - Any other writeFileSync failure (EACCES, ENOSPC, ...) is also
+  //        exit 1.
+  //
+  //    Collapsing them would mis-route mkdir-EEXIST to exit 2 and mis-label
+  //    mkdir-class IO errors as "write failed" (wrong syscall name).
+  const fragmentsDir = path.join(options.runsDir, options.runId, "fragments");
+  const filePath = path.join(fragmentsDir, `${stem}.json`);
+  try {
+    fs.mkdirSync(fragmentsDir, { recursive: true });
+  } catch (err) {
+    writeErr(
+      `atlas-harvest write-fragment: mkdir failed for fragments dir ${fragmentsDir}: ${formatCliError(err)}\n`,
+    );
+    return 1;
+  }
+  try {
+    fs.writeFileSync(filePath, `${JSON.stringify(result.data, null, 2)}\n`, {
+      encoding: "utf-8",
+      flag: "wx",
+    });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      writeErr(
+        `atlas-harvest write-fragment: ${stem}.json already exists at ${filePath}\n`,
+      );
+      return 2;
+    }
+    writeErr(
+      `atlas-harvest write-fragment: write failed for ${filePath}: ${formatCliError(err)}\n`,
+    );
+    return 1;
+  }
+
+  writeOut(`${path.resolve(filePath)}\n`);
+  // Fragment received subsystem field — silence unused-var TS lint.
+  void fragment;
+  return 0;
+}
+
 // Format a CLI error for stderr, walking the `{cause}` chain (bounded depth).
 // Several pipeline failures deliberately attach the underlying error as
 // `cause` — e.g. rag-dedup's consecutive-probe fail-fast wraps the ACTUAL
@@ -756,9 +1023,50 @@ export async function runAtlasHarvestCli(
       await reindexCommand(options, writeOut);
     });
 
+  // The write-fragment subcommand has its OWN exit-code matrix (§4.2.1: 0/1/2/3/4)
+  // that the standard commander error path cannot express. The action closes over
+  // this slot and the outer return picks it up.
+  let writeFragmentExitCode: number | undefined;
+
+  program
+    .command("write-fragment")
+    .description(
+      "Read a CandidateFragment from stdin and write it under " +
+        "<runs-dir>/<run-id>/fragments/<stem>.json. When --stem is omitted, " +
+        "the stem is derived as " +
+        "claimSlug(<sourcetype>:<subsystem>:claimSlug(claimSlugHint || title)). " +
+        "Exit codes per spec §4.2.1: 0 ok, 1 stdin/IO, 2 stem collision, " +
+        "3 schema, 4 episodic invariant.",
+    )
+    .requiredOption(
+      "--run-id <id>",
+      "Run id under which the fragment is written",
+    )
+    .requiredOption(
+      "--runs-dir <dir>",
+      "Root directory of run corpora (e.g. ./runs)",
+    )
+    .option(
+      "--stem <stem>",
+      "Filesystem-safe fragment stem; if omitted, derived as " +
+        "claimSlug(<sourcetype>:<subsystem>:claimSlug(claimSlugHint || title))",
+    )
+    .option(
+      "--stdin",
+      "Read fragment from stdin (no-op; stdin is always read — accepted for " +
+        "spec-literal invocation compatibility, see §4.2.1)",
+    )
+    .action(async (options: WriteFragmentCliOptions) => {
+      writeFragmentExitCode = await writeFragmentCommand(
+        options,
+        writeOut,
+        writeErr,
+      );
+    });
+
   try {
     await program.parseAsync(argv, { from: "user" });
-    return 0;
+    return writeFragmentExitCode ?? 0;
   } catch (error) {
     if (error instanceof CommanderError) {
       return error.exitCode;
