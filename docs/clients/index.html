@@ -260,7 +260,7 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
         <li><strong>SSE (<code>/sse</code> + <code>/messages</code>)</strong> — legacy transport; needed for the claude.ai web connector and older MCP clients.</li>
     </ul>
 
-    <p>Both transports share the same tools, sessions, and OAuth flow. Clients without a bearer token pass through; invalid bearers are rejected with 401.</p>
+    <p>Both transports share the same tools, sessions, and OAuth flow. Clients without a bearer token pass through; invalid bearers are rejected with 401. As of v1.15.1, the <code>WWW-Authenticate</code> challenge on a 401 includes RFC 9728 <code>resource_metadata="…/.well-known/oauth-protected-resource"</code> plus <code>error="invalid_token"</code> per RFC 6750 §3.1 — MCP clients can use the <code>resource_metadata</code> attribute to discover the authorization server.</p>
 
     <h2>Client Configurations</h2>
 
@@ -295,7 +295,7 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
     <div class="client-card">
         <h3>Claude.ai (Web Connector)</h3>
         <div class="config-path">Settings &rarr; Connectors &rarr; Add custom connector</div>
-        <p>claude.ai uses the legacy SSE transport. Paste your Pathfinder URL into the custom connector dialog, then click <strong>Authenticate</strong> — the OAuth handshake runs automatically and the connector is approved anonymously.</p>
+        <p>claude.ai uses the legacy SSE transport. Paste your Pathfinder URL into the custom connector dialog, then click <strong>Authenticate</strong> — the OAuth handshake runs automatically. As of v1.15, the handshake shows a consent screen confirming the connector and its redirect target before issuing the auth code; the screen is single-click for the anonymous DCR flow.</p>
         <div class="code-block"><span class="comment"># Streamable HTTP (newer clients)</span>
 <span class="key">URL:</span> <span class="value">https://your-pathfinder-host/mcp</span>
 

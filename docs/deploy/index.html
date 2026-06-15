@@ -299,6 +299,7 @@ body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100
       <span class="key">GITHUB_TOKEN:</span> <span class="value">${GITHUB_TOKEN:-}</span>
       <span class="key">GITHUB_WEBHOOK_SECRET:</span> <span class="value">${GITHUB_WEBHOOK_SECRET:-}</span>
       <span class="key">MCP_JWT_SECRET:</span> <span class="value">${MCP_JWT_SECRET}</span>
+      <span class="key">PATHFINDER_CONSENT_HMAC_KEY:</span> <span class="value">${PATHFINDER_CONSENT_HMAC_KEY}</span>
       <span class="key">PATHFINDER_CONFIG:</span> <span class="value">/app/pathfinder.yaml</span>
       <span class="key">WORKSPACE_DIR:</span> <span class="value">/data/workspaces</span>
       <span class="key">PORT:</span> <span class="value">${PORT:-3001}</span>
@@ -356,6 +357,8 @@ Environment=NODE_ENV=production
 Environment=PORT=3001
 Environment=DATABASE_URL=postgresql://pathfinder:secret@localhost:5432/pathfinder
 Environment=OPENAI_API_KEY=sk-...
+Environment=MCP_JWT_SECRET=...
+Environment=PATHFINDER_CONSENT_HMAC_KEY=...
 Environment=PATHFINDER_CONFIG=/opt/pathfinder/pathfinder.yaml
 Environment=WORKSPACE_DIR=/var/lib/pathfinder/workspaces
 Restart=always
@@ -400,6 +403,7 @@ server {
         <tbody>
             <tr><td><code>DATABASE_URL</code></td><td>For search tools</td><td>-</td><td>PostgreSQL connection string (with pgvector)</td></tr>
             <tr><td><code>MCP_JWT_SECRET</code></td><td><strong>Required in production</strong></td><td>-</td><td>HMAC secret for signing OAuth access/refresh tokens. Generate with <code>openssl rand -hex 32</code>. Rotating this invalidates all issued tokens — clients will re-authenticate transparently. In any non-production environment (any <code>NODE_ENV</code> other than <code>production</code>) a random secret is generated per process and logged as a warning.</td></tr>
+            <tr><td><code>PATHFINDER_CONSENT_HMAC_KEY</code></td><td><strong>Required in production</strong></td><td>-</td><td>HMAC secret for signing the consent-screen nonce on the OAuth <code>/authorize</code> → <code>/authorize/consent</code> flow. Generate with <code>openssl rand -hex 32</code>. Comma-separated values are accepted for rotation — the first key signs, all keys verify; rotate by prepending a new key. Rotating invalidates only in-flight consent nonces (10-minute TTL) — issued access/refresh tokens are unaffected. In any non-production environment (any <code>NODE_ENV</code> other than <code>production</code>) a random ephemeral key is generated per process and logged as a warning.</td></tr>
             <tr><td><code>OPENAI_API_KEY</code></td><td>When embedding.provider is "openai" (default)</td><td>-</td><td>OpenAI API key for computing embeddings. Not needed for ollama or local providers.</td></tr>
             <tr><td><code>GITHUB_TOKEN</code></td><td>For private repos</td><td>-</td><td>GitHub PAT for cloning private repositories</td></tr>
             <tr><td><code>GITHUB_WEBHOOK_SECRET</code></td><td>For webhooks</td><td>-</td><td>Secret for validating GitHub webhook payloads</td></tr>
