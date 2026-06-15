@@ -2,15 +2,18 @@
 //
 // Anonymous OAuth: we run the full RFC 6749 / RFC 7636 (PKCE) / RFC 7591
 // (dynamic registration) / RFC 8414 (AS metadata) / RFC 9728 (protected
-// resource metadata) ceremony, but auto-approve at /authorize and issue a
-// JWT with sub: "anonymous". The /mcp endpoint uses opportunistic bearer
-// auth so existing unauthenticated clients keep working.
+// resource metadata) ceremony, and issue a JWT with sub: "anonymous". The
+// /authorize GET now renders a server-side consent screen (signed nonce
+// over the bound set; POSTed back to /authorize/consent) instead of
+// auto-approving — a phishing-resistance hardening. The /mcp endpoint
+// uses opportunistic bearer auth so existing unauthenticated clients keep
+// working.
 
 import type { Request, Response, NextFunction } from "express";
 import { createHash, timingSafeEqual } from "node:crypto";
 
 import { getConfig } from "../config.js";
-import { clientStore, codeStore } from "./store.js";
+import { clientStore, codeStore, ClientCapError } from "./store.js";
 import {
   signJWT,
   verifyJWT,
@@ -25,6 +28,14 @@ import {
   tokenLimiter,
   type OAuthRateLimiter,
 } from "./rate-limiter.js";
+import {
+  validateRedirectUri,
+  validateRedirectUris,
+} from "./redirect-uri-policy.js";
+import { signConsentNonce } from "./consent-nonce.js";
+import { renderConsentHtml } from "./consent-template.js";
+import { oauthClientIp, isTrustingProxyForOauth } from "./trusted-client-ip.js";
+import { oauthLog } from "./observability.js";
 
 const TOKEN_TTL_SEC = 3600;
 const REFRESH_TOKEN_TTL_SEC = 30 * 24 * 3600; // 30 days
@@ -32,17 +43,30 @@ const CODE_TTL_MS = 600_000;
 const TOKEN_SCOPE = "mcp";
 
 function originOf(req: Request): string {
-  const proto = (req.headers["x-forwarded-proto"] as string) || "http";
+  // Same trust-proxy gate that guards `oauthClientIp`. If the deployment is
+  // NOT configured to trust the upstream proxy, `X-Forwarded-Proto` is an
+  // attacker-controlled header — honoring it would let a remote client flip
+  // the discovery `resource`, AS `issuer`, and JWT `iss`/`aud` from `http://`
+  // to `https://` (or to whatever scheme they choose), spoofing the protected
+  // resource URL that clients use to fetch metadata and validate audiences.
+  // When we don't trust the proxy, derive the scheme from the actual socket
+  // (TLS-terminated → https) and fall back to Express's `req.protocol`, which
+  // in unparenthesized form is what Express itself uses when XFP is untrusted.
+  let proto: string;
+  if (isTrustingProxyForOauth()) {
+    proto =
+      (req.headers["x-forwarded-proto"] as string) ||
+      (req as unknown as { protocol?: string }).protocol ||
+      "http";
+  } else {
+    const socketEncrypted = (req.socket as unknown as { encrypted?: boolean })
+      ?.encrypted;
+    proto = socketEncrypted
+      ? "https"
+      : ((req as unknown as { protocol?: string }).protocol ?? "http");
+  }
   const host = req.headers.host ?? `localhost:${getConfig().port}`;
   return `${proto}://${host}`;
-}
-
-function clientIp(req: Request): string {
-  return (
-    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-    req.socket?.remoteAddress ||
-    "unknown"
-  );
 }
 
 function base64url(buf: Buffer): string {
@@ -58,7 +82,7 @@ function enforceLimit(
   req: Request,
   res: Response,
 ): boolean {
-  const ip = clientIp(req);
+  const ip = oauthClientIp(req);
   const result = limiter.check(ip);
   if (!result.ok) {
     res.setHeader("Retry-After", String(result.retryAfterSec ?? 60));
@@ -113,6 +137,7 @@ export function authorizationServerHandler(req: Request, res: Response): void {
 export function registerHandler(req: Request, res: Response): void {
   if (!enforceLimit(registerLimiter, req, res)) return;
 
+  const ip = oauthClientIp(req);
   console.log(
     `[oauth] register body=${JSON.stringify(req.body)} headers.origin=${req.headers.origin} headers.user-agent=${req.headers["user-agent"]}`,
   );
@@ -131,6 +156,22 @@ export function registerHandler(req: Request, res: Response): void {
   const clientName =
     typeof body.client_name === "string" ? body.client_name : "";
 
+  // Apply redirect_uri policy BEFORE registration so a non-compliant client
+  // never makes it into the store (and never consumes a per-IP/total slot).
+  const policy = validateRedirectUris(redirectUris);
+  if (!policy.ok) {
+    oauthLog.registerRejected({
+      reason: policy.reason,
+      ip,
+      index: policy.index,
+    });
+    res.status(400).json({
+      error: "invalid_redirect_uri",
+      error_description: `uri[${policy.index}]: ${policy.reason}`,
+    });
+    return;
+  }
+
   // Honor the client's requested auth method if it's one we support; default to none
   const supportedAuthMethods = new Set([
     "client_secret_basic",
@@ -143,10 +184,28 @@ export function registerHandler(req: Request, res: Response): void {
       ? body.token_endpoint_auth_method
       : "none";
 
-  const client = clientStore.register({ redirect_uris: redirectUris });
-  console.log(
-    `[oauth] register client_id=${client.client_id} ip=${clientIp(req)}`,
-  );
+  let client;
+  try {
+    client = clientStore.register({
+      redirect_uris: redirectUris,
+      client_name: clientName,
+      ip,
+    });
+  } catch (err) {
+    if (err instanceof ClientCapError) {
+      oauthLog.capOverflow({ scope: err.scope, ip });
+      res.setHeader("Retry-After", "3600");
+      res.status(err.scope === "per_ip" ? 429 : 503).json({
+        error: "registration_rate_limited",
+        error_description: `Client registration cap reached (${err.scope}).`,
+      });
+      return;
+    }
+    throw err;
+  }
+
+  oauthLog.register({ client_id: client.client_id, ip });
+  console.log(`[oauth] register client_id=${client.client_id} ip=${ip}`);
   res.status(201).json({
     client_id: client.client_id,
     client_secret: client.client_secret,
@@ -154,7 +213,9 @@ export function registerHandler(req: Request, res: Response): void {
     client_secret_issued_at: client.client_secret_issued_at,
     client_secret_expires_at: client.client_secret_expires_at,
     redirect_uris: client.redirect_uris,
-    client_name: clientName,
+    // Echo the stored (truncated) name, not the raw input — keeps the wire
+    // response in lockstep with what the server actually persisted.
+    client_name: client.client_name,
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
     token_endpoint_auth_method: requestedAuthMethod,
@@ -163,14 +224,14 @@ export function registerHandler(req: Request, res: Response): void {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// /authorize — RFC 6749 with PKCE (S256 only), auto-approve
+// /authorize — RFC 6749 with PKCE (S256 only), renders consent screen
 // ──────────────────────────────────────────────────────────────────────
 
 export function authorizeHandler(req: Request, res: Response): void {
   if (!enforceLimit(authorizeLimiter, req, res)) return;
 
   console.log(
-    `[oauth] authorize query=${JSON.stringify(req.query)} ip=${clientIp(req)}`,
+    `[oauth] authorize query=${JSON.stringify(req.query)} ip=${oauthClientIp(req)}`,
   );
 
   const q = (req.query ?? {}) as Record<string, string | undefined>;
@@ -214,7 +275,7 @@ export function authorizeHandler(req: Request, res: Response): void {
       error_description: "Unknown client_id.",
     });
     console.warn(
-      `[oauth] authorize unknown client_id=${client_id} ip=${clientIp(req)}`,
+      `[oauth] authorize unknown client_id=${client_id} ip=${oauthClientIp(req)}`,
     );
     return;
   }
@@ -230,22 +291,71 @@ export function authorizeHandler(req: Request, res: Response): void {
     return;
   }
 
-  const { code } = codeStore.issue({
+  // Defense in depth: re-run the policy even though the URI was already
+  // checked at /register. The policy can be tightened over time, and a
+  // pre-existing registration must not get a free pass.
+  const policy = validateRedirectUri(redirect_uri);
+  if (!policy.ok) {
+    oauthLog.registerRejected({
+      reason: policy.reason,
+      ip: oauthClientIp(req),
+      client_id,
+    });
+    res.status(400).json({
+      error: "invalid_redirect_uri",
+      error_description: `redirect_uri rejected: ${policy.reason}`,
+    });
+    return;
+  }
+
+  // Liveness is bumped only on successful consent (POST /authorize/consent) and on successful token grants; an unauthenticated GET is not proof of life.
+
+  const redirectHostname = new URL(redirect_uri).hostname;
+  const ip = oauthClientIp(req);
+  const exp = Date.now() + 10 * 60 * 1000;
+  const nonce = signConsentNonce(
+    {
+      client_id,
+      redirect_uri,
+      state: state ?? "",
+      code_challenge,
+      code_challenge_method,
+      response_type,
+      scope: TOKEN_SCOPE,
+      resource: resource ?? "",
+      exp,
+    },
+    getConfig().oauthConsentHmacKeys,
+  );
+
+  const html = renderConsentHtml({
+    clientName: client.client_name,
     clientId: client_id,
-    codeChallenge: code_challenge,
     redirectUri: redirect_uri,
-    resource,
-    ttlMs: CODE_TTL_MS,
+    redirectUriHostname: redirectHostname,
+    scope: TOKEN_SCOPE,
+    state: state ?? "",
+    codeChallenge: code_challenge,
+    codeChallengeMethod: code_challenge_method,
+    responseType: response_type,
+    resource: resource ?? "",
+    nonce,
   });
 
-  const url = new URL(redirect_uri);
-  url.searchParams.set("code", code);
-  if (state) url.searchParams.set("state", state);
-
-  console.log(
-    `[oauth] authorize client_id=${client_id} code=${code.slice(0, 8)} ip=${clientIp(req)}`,
+  oauthLog.consentMinted({ client_id, ip, host: redirectHostname });
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  // Phishing-defense headers: the consent screen is the user's last line of
+  // defense against UI-redress, so we forbid framing entirely and lock the
+  // page down via CSP (no scripts, no external resources, inline-style only).
+  // Referrer-Policy keeps the URL — which carries client_id + state — out of
+  // any link the user might click off-page.
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   );
-  res.redirect(url.toString());
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.status(200).send(html);
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -296,7 +406,7 @@ export function tokenHandler(req: Request, res: Response): void {
   const grant_type = body.grant_type;
 
   console.log(
-    `[oauth] token request grant_type=${body.grant_type} code=${String(body.code).slice(0, 8)} client_id=${body.client_id} redirect_uri=${body.redirect_uri} ip=${clientIp(req)}`,
+    `[oauth] token request grant_type=${body.grant_type} code=${String(body.code).slice(0, 8)} client_id=${body.client_id} redirect_uri=${body.redirect_uri} ip=${oauthClientIp(req)}`,
   );
 
   if (grant_type !== "authorization_code" && grant_type !== "refresh_token") {
@@ -331,7 +441,7 @@ export function tokenHandler(req: Request, res: Response): void {
         error_description: "Invalid or expired refresh token.",
       });
       console.warn(
-        `[oauth] refresh invalid/expired token ip=${clientIp(req)} client=${client_id}`,
+        `[oauth] refresh invalid/expired token ip=${oauthClientIp(req)} client=${client_id}`,
       );
       return;
     }
@@ -347,8 +457,11 @@ export function tokenHandler(req: Request, res: Response): void {
     const storedResource =
       typeof payload.resource === "string" ? payload.resource : undefined;
     const tokens = issueTokenPair(origin, client_id, secret, storedResource);
+    // Liveness: refresh-grant is one of the paths the eviction policy looks
+    // at, so bump lastUsedAt on success.
+    clientStore.touch(client_id);
     console.log(
-      `[oauth] token refreshed client_id=${client_id} ip=${clientIp(req)}`,
+      `[oauth] token refreshed client_id=${client_id} ip=${oauthClientIp(req)}`,
     );
     res.status(200).json({
       access_token: tokens.access_token,
@@ -382,7 +495,7 @@ export function tokenHandler(req: Request, res: Response): void {
       error_description: "Unknown or expired authorization code.",
     });
     console.warn(
-      `[oauth] token unknown/expired code ip=${clientIp(req)} client=${client_id}`,
+      `[oauth] token unknown/expired code ip=${oauthClientIp(req)} client=${client_id}`,
     );
     return;
   }
@@ -408,13 +521,16 @@ export function tokenHandler(req: Request, res: Response): void {
       error_description: "PKCE verification failed.",
     });
     console.warn(
-      `[oauth] token PKCE failure ip=${clientIp(req)} client=${client_id}`,
+      `[oauth] token PKCE failure ip=${oauthClientIp(req)} client=${client_id}`,
     );
     return;
   }
 
   const tokens = issueTokenPair(origin, client_id, secret, record.resource);
   const aud = record.resource || origin;
+  // Liveness: auth-code grant is the other path the eviction policy looks
+  // at; bump lastUsedAt on success.
+  clientStore.touch(client_id);
   console.log(
     `[oauth] token issued client_id=${client_id} aud=${aud} exp_in=${TOKEN_TTL_SEC}s`,
   );

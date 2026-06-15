@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { OAuthRateLimiter } from "../oauth/rate-limiter.js";
+import { OAuthRateLimiter, consentLimiter } from "../oauth/rate-limiter.js";
 
 describe("OAuthRateLimiter", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 1, 0, 0, 0));
+    // The shared consentLimiter singleton is mutated by one assertion below;
+    // clear its buckets so state doesn't leak across this file's tests or
+    // across other files under fork reuse.
+    (
+      consentLimiter as unknown as { buckets: Map<string, unknown> }
+    ).buckets.clear();
   });
 
   afterEach(() => {
@@ -55,5 +61,14 @@ describe("OAuthRateLimiter", () => {
     // Roughly 45 seconds left
     expect(result.retryAfterSec).toBeLessThanOrEqual(45);
     expect(result.retryAfterSec).toBeGreaterThanOrEqual(44);
+  });
+
+  it("consentLimiter allows 30 requests/minute per IP then rejects", () => {
+    for (let i = 0; i < 30; i++) {
+      expect(consentLimiter.check("9.9.9.9").ok).toBe(true);
+    }
+    const result = consentLimiter.check("9.9.9.9");
+    expect(result.ok).toBe(false);
+    expect(result.retryAfterSec).toBeGreaterThan(0);
   });
 });

@@ -46,3 +46,4 @@ export class OAuthRateLimiter {
 export const registerLimiter = new OAuthRateLimiter(10, 60_000);
 export const authorizeLimiter = new OAuthRateLimiter(30, 60_000);
 export const tokenLimiter = new OAuthRateLimiter(30, 60_000);
+export const consentLimiter = new OAuthRateLimiter(30, 60_000);

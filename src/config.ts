@@ -1,6 +1,7 @@
 // Centralized configuration: env-var secrets + YAML server config.
 
 import "dotenv/config";
+import { randomBytes } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,6 +54,16 @@ export interface Config {
   discordPublicKey: string;
   notionToken: string;
   mcpJwtSecret: string;
+  /**
+   * HMAC keys (≥32 hex chars each) used to sign and verify the OAuth
+   * consent-screen nonce. Parsed from comma-separated env
+   * PATHFINDER_CONSENT_HMAC_KEY. The first key signs new nonces; all keys
+   * are accepted on verify so a value can be rotated without invalidating
+   * in-flight consent screens. Required in production (fail-loud on unset
+   * or short keys); in non-production an ephemeral 64-hex key is generated
+   * at startup with a WARN log so dev/test runs work out of the box.
+   */
+  oauthConsentHmacKeys: string[];
   /**
    * URL of the CopilotKit-hosted telemetry-sink Lambda. Hosted-only — when
    * unset (the default for OSS deployments), the p2p-telemetry client
@@ -123,6 +134,50 @@ export function getIndexableSourceNames(): Set<string> {
 
 let cachedConfig: Config | null = null;
 
+/**
+ * Parse PATHFINDER_CONSENT_HMAC_KEY into a list of HMAC keys for the OAuth
+ * consent-nonce signer/verifier. Mirrors `resolveJwtSecret` policy:
+ *   - present + all entries ≥32 hex chars → use as-is (comma-separated for rotation)
+ *   - present + any entry invalid → throw (fail-loud)
+ *   - unset in production → throw (fail-loud)
+ *   - unset in non-production → generate one ephemeral 64-hex key + WARN
+ *
+ * Keys MUST be hex so the byte length is unambiguous regardless of locale or
+ * platform encoding. 32 hex chars = 16 bytes (the same MIN_BYTES used for
+ * MCP_JWT_SECRET) is the floor; `openssl rand -hex 32` (64 hex chars / 32
+ * bytes) is the recommended value.
+ */
+function parseConsentHmacKeys(nodeEnv: string): string[] {
+  const raw = process.env.PATHFINDER_CONSENT_HMAC_KEY?.trim() ?? "";
+  if (raw.length > 0) {
+    const keys = raw
+      .split(",")
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
+    for (const k of keys) {
+      if (!/^[0-9a-fA-F]{32,}$/.test(k)) {
+        throw new Error(
+          "PATHFINDER_CONSENT_HMAC_KEY entries must be ≥32 hex chars each. " +
+            "Generate with: openssl rand -hex 32 (comma-separated for rotation).",
+        );
+      }
+    }
+    if (keys.length > 0) return keys;
+  }
+  if (nodeEnv === "production") {
+    throw new Error(
+      "PATHFINDER_CONSENT_HMAC_KEY is required in production. " +
+        "Generate with: openssl rand -hex 32 (comma-separated for rotation).",
+    );
+  }
+  const ephemeral = randomBytes(32).toString("hex");
+  console.warn(
+    "[oauth] PATHFINDER_CONSENT_HMAC_KEY not set — generated an ephemeral consent-nonce key for development. " +
+      "All in-flight consent nonces will be invalidated on restart.",
+  );
+  return [ephemeral];
+}
+
 function parseConfig(): Config {
   const missing: string[] = [];
 
@@ -191,6 +246,7 @@ function parseConfig(): Config {
 
   const nodeEnv = process.env.NODE_ENV || "development";
   const mcpJwtSecret = resolveJwtSecret({ nodeEnv });
+  const oauthConsentHmacKeys = parseConsentHmacKeys(nodeEnv);
 
   // P2P telemetry — empty string env value treated as unset so a stray
   // `PATHFINDER_TELEMETRY_URL=` line in a .env file doesn't accidentally
@@ -218,6 +274,7 @@ function parseConfig(): Config {
     discordPublicKey,
     notionToken,
     mcpJwtSecret,
+    oauthConsentHmacKeys,
     p2pTelemetryUrl,
     p2pTelemetryDisabled,
     packageVersion: readPackageVersion(),

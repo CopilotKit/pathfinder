@@ -1136,6 +1136,7 @@ describe("config.ts", () => {
       process.env.GITHUB_TOKEN = "ghp_test";
       process.env.GITHUB_WEBHOOK_SECRET = "secret";
       process.env.MCP_JWT_SECRET = "x".repeat(64);
+      process.env.PATHFINDER_CONSENT_HMAC_KEY = "a".repeat(64);
 
       mockedExistsSync.mockReturnValue(true);
       mockedReadFileSync.mockReturnValue(makeYaml());
@@ -1462,6 +1463,133 @@ describe("config.ts", () => {
 
       const { getConfig } = await freshImport();
       expect(() => getConfig()).toThrow("Invalid PORT");
+    });
+  });
+
+  // ── oauthConsentHmacKeys ─────────────────────────────────────────────────
+
+  describe("oauthConsentHmacKeys", () => {
+    beforeEach(() => {
+      process.env.PATHFINDER_CONFIG = "/tmp/test.yaml";
+      process.env.DATABASE_URL = "postgresql://test";
+      process.env.OPENAI_API_KEY = "sk-test";
+    });
+
+    it("parses a single PATHFINDER_CONSENT_HMAC_KEY", async () => {
+      const k = "a".repeat(64);
+      process.env.PATHFINDER_CONSENT_HMAC_KEY = k;
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+
+      const { getConfig } = await freshImport();
+      const cfg = getConfig();
+      expect(cfg.oauthConsentHmacKeys).toEqual([k]);
+    });
+
+    it("parses comma-separated keys for rotation", async () => {
+      const k1 = "a".repeat(64);
+      const k2 = "b".repeat(48);
+      process.env.PATHFINDER_CONSENT_HMAC_KEY = `${k1},${k2}`;
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+
+      const { getConfig } = await freshImport();
+      const cfg = getConfig();
+      expect(cfg.oauthConsentHmacKeys).toEqual([k1, k2]);
+    });
+
+    it("trims whitespace around comma-separated entries", async () => {
+      const k1 = "a".repeat(64);
+      const k2 = "b".repeat(64);
+      process.env.PATHFINDER_CONSENT_HMAC_KEY = `  ${k1} , ${k2}  `;
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+
+      const { getConfig } = await freshImport();
+      const cfg = getConfig();
+      expect(cfg.oauthConsentHmacKeys).toEqual([k1, k2]);
+    });
+
+    it("rejects keys shorter than 32 hex chars", async () => {
+      process.env.PATHFINDER_CONSENT_HMAC_KEY = "abcdef"; // way too short
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+
+      const { getConfig } = await freshImport();
+      expect(() => getConfig()).toThrow(
+        /PATHFINDER_CONSENT_HMAC_KEY entries must be ≥32 hex chars/,
+      );
+    });
+
+    it("rejects non-hex characters in keys", async () => {
+      // 64 chars but contains 'g' (not hex)
+      process.env.PATHFINDER_CONSENT_HMAC_KEY = "g".repeat(64);
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+
+      const { getConfig } = await freshImport();
+      expect(() => getConfig()).toThrow(
+        /PATHFINDER_CONSENT_HMAC_KEY entries must be ≥32 hex chars/,
+      );
+    });
+
+    it("rejects when any key in a rotation list is invalid", async () => {
+      const good = "a".repeat(64);
+      const bad = "short";
+      process.env.PATHFINDER_CONSENT_HMAC_KEY = `${good},${bad}`;
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+
+      const { getConfig } = await freshImport();
+      expect(() => getConfig()).toThrow(
+        /PATHFINDER_CONSENT_HMAC_KEY entries must be ≥32 hex chars/,
+      );
+    });
+
+    it("throws in production when PATHFINDER_CONSENT_HMAC_KEY is unset", async () => {
+      process.env.NODE_ENV = "production";
+      process.env.MCP_JWT_SECRET = "x".repeat(64);
+      delete process.env.PATHFINDER_CONSENT_HMAC_KEY;
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+
+      const { getConfig } = await freshImport();
+      expect(() => getConfig()).toThrow(
+        /PATHFINDER_CONSENT_HMAC_KEY is required in production/,
+      );
+    });
+
+    it("generates an ephemeral key in development with a WARN log", async () => {
+      process.env.NODE_ENV = "development";
+      delete process.env.PATHFINDER_CONSENT_HMAC_KEY;
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { getConfig } = await freshImport();
+      const cfg = getConfig();
+      expect(cfg.oauthConsentHmacKeys).toHaveLength(1);
+      expect(cfg.oauthConsentHmacKeys[0]).toMatch(/^[0-9a-f]{64}$/);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /\[oauth\] PATHFINDER_CONSENT_HMAC_KEY not set — generated an ephemeral consent-nonce key for development\./,
+        ),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("treats whitespace-only PATHFINDER_CONSENT_HMAC_KEY as unset (dev fallback)", async () => {
+      process.env.NODE_ENV = "development";
+      process.env.PATHFINDER_CONSENT_HMAC_KEY = "   ";
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { getConfig } = await freshImport();
+      const cfg = getConfig();
+      expect(cfg.oauthConsentHmacKeys).toHaveLength(1);
+      expect(cfg.oauthConsentHmacKeys[0]).toMatch(/^[0-9a-f]{64}$/);
+      warnSpy.mockRestore();
     });
   });
 
