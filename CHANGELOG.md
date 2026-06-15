@@ -1,5 +1,12 @@
 # @copilotkit/pathfinder
 
+## 1.15.1
+
+### Patch Changes
+
+- **OAuth Bearer 401s emit RFC 9728 `resource_metadata` discovery hint on `WWW-Authenticate`** — wires the previously-dead `unauthorizedWithDiscovery` helper into all three `bearerMiddleware` failure paths. Discovery endpoint (`/.well-known/oauth-protected-resource`) was already live. Adds `[oauth] bearer_failure reason={empty_token|invalid_signature|expired|aud_mismatch|malformed_token} ip=<ip>` observability logs at every Bearer-401 path. Additive header change, backward compatible — spec-compliant clients ignore unknown attributes.
+- **RFC 6750 §3.1 conformance**: the `WWW-Authenticate` header now retains `error="invalid_token"` alongside `resource_metadata=` and `scope="mcp"`. Per RFC 6750 §3.1 the `error=` attribute MUST be in the header when a Bearer token is presented and invalid; the helper previously dropped it (kept only in the JSON body). Strengthened `assertDiscoveryHeader` test helper now pins this invariant on all four RFC 9728 paths (empty Bearer, invalid signature, expired, aud mismatch).
+
 ## 1.15.0
 
 ### Minor Changes
