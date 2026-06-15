@@ -66,6 +66,15 @@ describe("logQuery", () => {
       "docs",
       "sess-123",
       "user",
+      // v1.15.2 attribution columns. The baseEntry above doesn't carry
+      // client_ip/user_agent/blocked/block_reason, so the writer persists the
+      // documented defaults: null for the two optional strings, false for the
+      // blocked flag, and null for the reason. Pinning these explicitly so any
+      // future drift in the column order or default coercion fails loudly.
+      null,
+      null,
+      false,
+      null,
     ]);
   });
 
@@ -87,6 +96,11 @@ describe("logQuery", () => {
       baseEntry.source_name,
       baseEntry.session_id,
       baseEntry.request_source,
+      // v1.15.2 attribution columns (see non-redacted path above).
+      null,
+      null,
+      false,
+      null,
     ]);
     // And pin the literal so the constant can never silently drift to a
     // different sentinel that downstream reads wouldn't recognize.
@@ -145,6 +159,59 @@ describe("logQuery", () => {
 
     const [, params] = mockQuery.mock.calls[0];
     expect(params[7]).toBe("synthetic");
+  });
+
+  // v1.15.2 attribution columns: client_ip, user_agent, blocked, block_reason.
+  // Positional indices on params are 8, 9, 10, 11 respectively (after the
+  // existing 8 fields tool_name..request_source).
+
+  it("persists client_ip and user_agent verbatim when provided", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery({
+      ...baseEntry,
+      client_ip: "203.0.113.10",
+      user_agent: "Claude-User/1.0",
+    });
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[8]).toBe("203.0.113.10");
+    expect(params[9]).toBe("Claude-User/1.0");
+  });
+
+  it("truncates a pathological user_agent to USER_AGENT_MAX_LEN chars", async () => {
+    // Defensive truncation guards against a malicious / runaway UA bloating
+    // the row. Pinning the cap here so any future change to USER_AGENT_MAX_LEN
+    // is a deliberate, test-visible decision.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const huge = "x".repeat(2048);
+    await logQuery({ ...baseEntry, user_agent: huge });
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect((params[9] as string).length).toBe(256);
+  });
+
+  it("persists blocked=true with a block_reason", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery({
+      ...baseEntry,
+      blocked: true,
+      block_reason: "pattern:movie-box-office",
+    });
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[10]).toBe(true);
+    expect(params[11]).toBe("pattern:movie-box-office");
+  });
+
+  it("defaults blocked to false and block_reason to null when absent", async () => {
+    // The writer normalizes missing attribution fields so callers that
+    // pre-date v1.15.2 (or simply don't care) get back-compatible behavior.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery(baseEntry);
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[10]).toBe(false);
+    expect(params[11]).toBeNull();
   });
 });
 

@@ -136,7 +136,38 @@ export interface QueryLogEntry {
    * so the persisted column is always a known value for new rows.
    */
   request_source?: RequestSource | string | null;
+  /**
+   * Per-request client IP at MCP-session init, resolved via the same trust-
+   * proxy boundary as {@link oauthClientIp} / {@link clientIp}. Optional so
+   * existing call sites compile unchanged; absent values persist as NULL.
+   */
+  client_ip?: string | null;
+  /**
+   * Per-request User-Agent at MCP-session init, truncated to
+   * {@link USER_AGENT_MAX_LEN} chars at the write boundary to bound row size.
+   */
+  user_agent?: string | null;
+  /**
+   * Whether the abuse blocklist short-circuited the query. Defaults to false
+   * at the write boundary so call sites that don't pass it compile and read
+   * back as "not blocked".
+   */
+  blocked?: boolean;
+  /**
+   * Free-form reason string when {@link blocked} is true (e.g. a
+   * `pattern:<name>` tag from the abuse blocklist). NULL when not blocked.
+   */
+  block_reason?: string | null;
 }
+
+/**
+ * Hard cap on `user_agent` storage to bound row size. Pathfinder doesn't need
+ * the full UA for any analytics workflow — first 256 chars is more than enough
+ * to distinguish Claude-User, browsers, curl, and the common bots. Truncating
+ * at the write boundary keeps a runaway / pathological UA header from bloating
+ * the column.
+ */
+export const USER_AGENT_MAX_LEN = 256;
 
 export interface AnalyticsSummary {
   total_queries: number;
@@ -275,10 +306,22 @@ export async function logQuery(
   // written before this column existed stay NULL and are read back as real
   // users by the analytics layer.
   const requestSource = normalizeRequestSource(entry.request_source);
+  // Defensive truncation at the write boundary so a pathological UA header
+  // can't bloat the row. See USER_AGENT_MAX_LEN. `null`/`undefined` pass
+  // through unchanged; `slice` on a string is safe for non-ASCII too because
+  // it operates on UTF-16 code units, not bytes, so a 256-cap always fits
+  // any DB text column with reasonable headroom.
+  const userAgent =
+    typeof entry.user_agent === "string"
+      ? entry.user_agent.slice(0, USER_AGENT_MAX_LEN)
+      : (entry.user_agent ?? null);
+  const blocked = entry.blocked ?? false;
+  const blockReason = entry.block_reason ?? null;
+  const clientIp = entry.client_ip ?? null;
   try {
     await pool.query(
-      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, request_source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, request_source, client_ip, user_agent, blocked, block_reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         entry.tool_name,
         text,
@@ -288,6 +331,10 @@ export async function logQuery(
         entry.source_name,
         entry.session_id,
         requestSource,
+        clientIp,
+        userAgent,
+        blocked,
+        blockReason,
       ],
     );
   } catch (err) {

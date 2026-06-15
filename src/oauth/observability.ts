@@ -87,4 +87,13 @@ export const oauthLog = {
   ): void {
     console.warn(`[oauth] consent_redirect_uri_unparseable ${format(fields)}`);
   },
+  // Abuse blocklist hit on a search/knowledge tool call. Logged with the
+  // matching pattern reason and the resolved client IP so the operator can
+  // grep `[oauth] search_blocked` for abuse volume independent of the
+  // per-row `query_log.blocked` flag. Kept on `oauthLog` for vocabulary
+  // consistency with the rest of the `[oauth] …` log surface; the block
+  // itself is not OAuth-scoped but the IP attribution and grep surface are.
+  searchBlocked(fields: Fields & { ip: string; reason: string }): void {
+    console.warn(`[oauth] search_blocked ${format(fields)}`);
+  },
 } as const;

@@ -110,6 +110,10 @@ CREATE TABLE IF NOT EXISTS query_log (
     source_name     TEXT,
     session_id      TEXT,
     request_source  TEXT,
+    client_ip       TEXT,
+    user_agent      TEXT,
+    blocked         BOOLEAN NOT NULL DEFAULT FALSE,
+    block_reason    TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -121,6 +125,20 @@ CREATE INDEX IF NOT EXISTS idx_query_log_tool_name ON query_log (tool_name);
 -- predates the column. The CREATE TABLE above carries it for fresh installs.
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS request_source TEXT;
 CREATE INDEX IF NOT EXISTS idx_query_log_request_source ON query_log (request_source);
+
+-- Per-request attribution columns (v1.15.2). Added so cross-correlation against
+-- an external system (PostHog, etc.) by session-id-prefix is no longer required
+-- to answer "which IP/UA sent this query". All four columns are additive and
+-- nullable / defaulted, so the migration is backward compatible for installs
+-- whose query_log predates v1.15.2. The CREATE TABLE above carries them
+-- verbatim for fresh installs. The blocked column defaults to FALSE so
+-- historical rows read back as "not blocked" without a backfill.
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS client_ip TEXT;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS user_agent TEXT;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS block_reason TEXT;
+CREATE INDEX IF NOT EXISTS idx_query_log_blocked ON query_log (blocked);
+CREATE INDEX IF NOT EXISTS idx_query_log_client_ip ON query_log (client_ip);
 
 -- Webhook delivery tracking
 CREATE TABLE IF NOT EXISTS webhook_deliveries (

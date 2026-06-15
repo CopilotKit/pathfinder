@@ -29,6 +29,12 @@ export function createMcpServer(
   // originated the traffic. Optional so existing callers/tests keep compiling;
   // when absent the writer defaults the column to 'user'.
   getRequestSource?: () => string | undefined,
+  // Per-session client IP / User-Agent accessors captured at MCP init.
+  // Threaded the same way as getRequestSource so each query_log row carries
+  // IP + UA without a session-id join against an external system. Both
+  // optional; absent values persist as NULL in the new columns.
+  getClientIp?: () => string | undefined,
+  getUserAgent?: () => string | undefined,
 ): McpServer {
   const cfg = getConfig();
   const serverCfg = getServerConfig();
@@ -63,6 +69,8 @@ export function createMcpServer(
           onToolCall: hooks?.onToolCall,
           getSessionId,
           getRequestSource,
+          getClientIp,
+          getUserAgent,
         });
         break;
       case "bash": {
@@ -102,6 +110,8 @@ export function createMcpServer(
           onToolCall: hooks?.onToolCall,
           getSessionId,
           getRequestSource,
+          getClientIp,
+          getUserAgent,
         });
         break;
       default: {
