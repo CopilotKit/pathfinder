@@ -585,7 +585,10 @@ export function bearerMiddleware(
   }
   const token = trimmed.slice("Bearer".length).trim();
   if (!token) {
-    unauthorized(res, "invalid_token");
+    console.warn(
+      `[oauth] bearer_failure reason=empty_token ip=${oauthClientIp(req)}`,
+    );
+    unauthorizedWithDiscovery(req, res);
     return;
   }
 
@@ -610,11 +613,29 @@ export function bearerMiddleware(
       err instanceof InvalidAudience ||
       err instanceof MalformedToken
     ) {
-      unauthorized(res, "invalid_token");
+      // The catch block fans in four distinct JWT failure modes; tag the
+      // observability log with the actual reason so operators can tell
+      // signature drift apart from clock skew apart from aud mismatch
+      // (RFC 8707 resource binding) apart from a malformed token.
+      const reason =
+        err instanceof InvalidSignature
+          ? "invalid_signature"
+          : err instanceof TokenExpired
+            ? "expired"
+            : err instanceof InvalidAudience
+              ? "aud_mismatch"
+              : "malformed_token";
+      console.warn(
+        `[oauth] bearer_failure reason=${reason} ip=${oauthClientIp(req)}`,
+      );
+      unauthorizedWithDiscovery(req, res);
       return;
     }
     // Unknown error — fail closed
-    unauthorized(res, "invalid_token");
+    console.warn(
+      `[oauth] bearer_failure reason=unknown ip=${oauthClientIp(req)}`,
+    );
+    unauthorizedWithDiscovery(req, res);
   }
 }
 

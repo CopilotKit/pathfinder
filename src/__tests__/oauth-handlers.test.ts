@@ -1511,9 +1511,13 @@ describe("bearerMiddleware", () => {
       "WWW-Authenticate",
       expect.stringContaining('Bearer realm="mcp"'),
     );
+    // RFC 9728: `WWW-Authenticate` advertises `resource_metadata=` so
+    // clients can discover the protected-resource document. The
+    // `error="invalid_token"` code now lives in the JSON body (see
+    // `unauthorizedWithDiscovery`).
     expect(res.setHeader).toHaveBeenCalledWith(
       "WWW-Authenticate",
-      expect.stringContaining('error="invalid_token"'),
+      expect.stringContaining("resource_metadata="),
     );
     expect(next).not.toHaveBeenCalled();
   });
@@ -1576,6 +1580,122 @@ describe("bearerMiddleware", () => {
     bearerMiddleware(req as never, res as never, next);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // RFC 9728 — every Bearer 401 must include `resource_metadata=` on
+  // `WWW-Authenticate` so clients can discover the protected-resource
+  // metadata document. The helper at handlers.ts:626 constructs the URL
+  // from `originOf(req)` + "/.well-known/oauth-protected-resource"; tests
+  // mirror that construction to detect drift.
+  // ──────────────────────────────────────────────────────────────────────
+  describe("RFC 9728 resource_metadata discovery on 401", () => {
+    const expectedResourceMetadata =
+      "https://mcp.example.com/.well-known/oauth-protected-resource";
+
+    function assertDiscoveryHeader(
+      res: ReturnType<typeof mockRes>,
+      next: ReturnType<typeof vi.fn>,
+    ): void {
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+      expect(res.setHeader).toHaveBeenCalledWith(
+        "WWW-Authenticate",
+        expect.stringContaining("Bearer"),
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        "WWW-Authenticate",
+        expect.stringContaining(
+          `resource_metadata="${expectedResourceMetadata}"`,
+        ),
+      );
+    }
+
+    it("empty Bearer token → 401 + resource_metadata", () => {
+      const req = mockReq({
+        headers: {
+          host: "mcp.example.com",
+          "x-forwarded-proto": "https",
+          authorization: "Bearer ",
+        },
+      });
+      const res = mockRes();
+      const next = vi.fn();
+      bearerMiddleware(req as never, res as never, next);
+      assertDiscoveryHeader(res, next);
+    });
+
+    it("invalid signature → 401 + resource_metadata", () => {
+      const now = Math.floor(Date.now() / 1000);
+      const token = signJWT(
+        {
+          sub: "x",
+          aud: "https://mcp.example.com",
+          iat: now,
+          exp: now + 3600,
+        },
+        "wrong-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      );
+      const req = mockReq({
+        headers: {
+          host: "mcp.example.com",
+          "x-forwarded-proto": "https",
+          authorization: `Bearer ${token}`,
+        },
+      });
+      const res = mockRes();
+      const next = vi.fn();
+      bearerMiddleware(req as never, res as never, next);
+      assertDiscoveryHeader(res, next);
+    });
+
+    it("expired token → 401 + resource_metadata", () => {
+      const now = Math.floor(Date.now() / 1000);
+      const token = signJWT(
+        {
+          sub: "x",
+          aud: "https://mcp.example.com",
+          iat: now - 7200,
+          exp: now - 3600,
+        },
+        "a".repeat(64),
+      );
+      const req = mockReq({
+        headers: {
+          host: "mcp.example.com",
+          "x-forwarded-proto": "https",
+          authorization: `Bearer ${token}`,
+        },
+      });
+      const res = mockRes();
+      const next = vi.fn();
+      bearerMiddleware(req as never, res as never, next);
+      assertDiscoveryHeader(res, next);
+    });
+
+    it("aud mismatch → 401 + resource_metadata", () => {
+      const now = Math.floor(Date.now() / 1000);
+      const token = signJWT(
+        {
+          sub: "x",
+          aud: "https://other.example",
+          iat: now,
+          exp: now + 3600,
+        },
+        "a".repeat(64),
+      );
+      const req = mockReq({
+        headers: {
+          host: "mcp.example.com",
+          "x-forwarded-proto": "https",
+          authorization: `Bearer ${token}`,
+        },
+      });
+      const res = mockRes();
+      const next = vi.fn();
+      bearerMiddleware(req as never, res as never, next);
+      assertDiscoveryHeader(res, next);
+    });
   });
 });
 
