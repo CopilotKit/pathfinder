@@ -1,5 +1,15 @@
 # @copilotkit/pathfinder
 
+## 1.15.0
+
+### Minor Changes
+
+- **OAuth phishing-resistance hardening**: GET `/authorize` now renders a server-rendered consent screen (HMAC-bound nonce, `CSP frame-ancestors 'none'`, `X-Frame-Options DENY`, `Referrer-Policy no-referrer`) instead of auto-approving. POST `/authorize/consent` re-validates the bound payload field-by-field and builds the final redirect URL from the nonce-bound `redirect_uri`, not the form body — the phishing-resistance invariant.
+- **`redirect_uri` policy validator**: `/register` and consent re-validate every URI against a hardened policy — `https`-only except loopback (`localhost`, `127.0.0.0/8`, `[::1]`); rejects 0.0.0.0/8, RFC1918, link-local (`fe80::/10`), ULA, IPv4-mapped private; max 2048 chars per URI, max 10 URIs per client.
+- **Client cap with TTL eviction**: 10,000 total / 100 per-IP cap on registered clients; lazy sweep on every register (>30d unused or >7d never-used-after-registration). `Retry-After` returned with 429 (per-IP) or 503 (total).
+- **OAuth trusted-IP plumbing**: `oauthClientIp(req)` resolves the client IP via a setter-injection seam wired at server bootstrap, gating `X-Forwarded-For` and `X-Forwarded-Proto` on the same trust-proxy boundary as the rest of the server. `originOf()` no longer accepts attacker-controlled `X-Forwarded-Proto` when the proxy isn't trusted.
+- **`PATHFINDER_CONSENT_HMAC_KEY` config**: New env var carrying the HMAC key for consent-nonce signing. Comma-separated for rotation (first key signs, all keys verify). ≥32 hex chars per entry. Fail-loud in production when unset; dev fallback generates an ephemeral key per process and warns.
+
 ## 1.14.0
 
 ### Minor Changes
