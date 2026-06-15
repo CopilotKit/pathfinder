@@ -70,6 +70,11 @@ import {
   revocationHandler,
   bearerMiddleware,
 } from "./oauth/handlers.js";
+import { consentHandler } from "./oauth/consent-handler.js";
+import {
+  setTrustingProxy,
+  assertOauthIpResolverInjected,
+} from "./oauth/trusted-client-ip.js";
 import { WorkspaceManager } from "./workspace.js";
 import { generateLlmsTxt, generateLlmsFullTxt } from "./llms-txt.js";
 import { generateFaqTxt } from "./faq-txt.js";
@@ -559,7 +564,9 @@ if (process.env.PATHFINDER_TRACE_CLAUDE_AI === "1") {
 }
 
 // ---------------------------------------------------------------------------
-// OAuth 2.1 ceremonial flow — RFC-compliant endpoints with auto-approval.
+// OAuth 2.1 ceremonial flow — RFC-compliant endpoints. GET /authorize renders
+// a server-side consent screen (HMAC-bound nonce, POSTed to /authorize/consent)
+// instead of auto-approving.
 // Opportunistic bearer auth on /mcp lets existing unauthenticated clients
 // keep working while claude.ai-style clients can complete the OAuth handshake.
 // ---------------------------------------------------------------------------
@@ -568,6 +575,7 @@ app.get("/.well-known/oauth-protected-resource", protectedResourceHandler);
 app.get("/.well-known/oauth-authorization-server", authorizationServerHandler);
 app.post("/register", registerHandler);
 app.get("/authorize", authorizeHandler);
+app.post("/authorize/consent", consentHandler);
 app.post("/token", tokenHandler);
 app.post("/revoke", revocationHandler);
 
@@ -3930,6 +3938,13 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
   // the previous value — the module-level `trustProxy` var and Express
   // must agree, always.
   trustProxy = serverCfg.server.trust_proxy ?? false;
+  setTrustingProxy(() => isTrustingProxy());
+  // Fail-loud guard: if a refactor ever dead-strips the setTrustingProxy
+  // call above, the OAuth IP resolver would silently degrade to the fail-safe
+  // `() => false` default and XFF/XFP would be ignored with no operator
+  // signal. Assert the injection landed so the regression crashes startup
+  // instead of leaking into production behavior.
+  assertOauthIpResolverInjected();
   app.set("trust proxy", trustProxy);
   if (isTrustingProxy()) {
     // R4-14: print the configured value so operators can confirm the shape
