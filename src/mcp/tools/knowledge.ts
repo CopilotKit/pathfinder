@@ -13,6 +13,8 @@ import {
 } from "../../db/queries.js";
 import { logQuery } from "../../db/analytics.js";
 import { getAnalyticsConfig } from "../../config.js";
+import { checkBlocklist } from "../abuse-blocklist.js";
+import { oauthLog } from "../../oauth/observability.js";
 
 /**
  * Format FAQ results in the standard QUESTION/ANSWER/SOURCE/CONFIDENCE format.
@@ -71,6 +73,9 @@ export function registerKnowledgeTool(
     // persists the X-Pathfinder-Source origin tag on each query_log row.
     getSessionId?: () => string | undefined;
     getRequestSource?: () => string | undefined;
+    // Per-session client IP / User-Agent — see registerSearchTool.
+    getClientIp?: () => string | undefined;
+    getUserAgent?: () => string | undefined;
   },
 ): void {
   const inputSchema = {
@@ -106,6 +111,58 @@ export function registerKnowledgeTool(
       const effectiveConfidence = min_confidence ?? toolConfig.min_confidence;
       const startMs = Date.now();
 
+      // Abuse blocklist short-circuit (search mode only — browse mode has no
+      // user-supplied query). Mirrors registerSearchTool: telemetry first
+      // (blocked=true row), then structured response with a domain hint. See
+      // src/mcp/abuse-blocklist.ts for the pattern set + rationale.
+      if (query && query.trim() !== "") {
+        const blocked = checkBlocklist(query);
+        if (blocked.matched) {
+          const logQueries = getAnalyticsConfig()?.log_queries ?? true;
+          const sessionClientIp = options?.getClientIp?.();
+          logQuery(
+            {
+              tool_name: toolConfig.name,
+              query_text: query,
+              result_count: 0,
+              top_score: null,
+              latency_ms: Date.now() - startMs,
+              source_name: toolConfig.sources.join(","),
+              session_id: options?.getSessionId?.() ?? null,
+              request_source: options?.getRequestSource?.() ?? null,
+              client_ip: sessionClientIp ?? null,
+              user_agent: options?.getUserAgent?.() ?? null,
+              blocked: true,
+              block_reason: blocked.reason ?? null,
+            },
+            logQueries,
+          ).catch((err) => {
+            console.error(
+              `[analytics] Failed to log blocked query: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+          oauthLog.searchBlocked({
+            ip: sessionClientIp ?? "",
+            reason: blocked.reason ?? "unknown",
+            tool: toolConfig.name,
+          });
+          const payload = {
+            results: [],
+            blocked: true,
+            domain: "CopilotKit + AG-UI documentation",
+            hint: "This query is off-topic for this MCP server's index (CopilotKit, AG-UI, agentic-frameworks documentation only). For general questions outside this domain, use a web search instead of this tool.",
+          };
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(payload),
+              },
+            ],
+          };
+        }
+      }
+
       try {
         if (!query || query.trim() === "") {
           // Browse mode: return the most-recent N FAQ entries above confidence
@@ -130,6 +187,10 @@ export function registerKnowledgeTool(
               source_name: toolConfig.sources.join(","),
               session_id: options?.getSessionId?.() ?? null,
               request_source: options?.getRequestSource?.() ?? null,
+              client_ip: options?.getClientIp?.() ?? null,
+              user_agent: options?.getUserAgent?.() ?? null,
+              blocked: false,
+              block_reason: null,
             },
             analyticsConfig?.log_queries ?? true,
           ).catch((err) => {
@@ -215,6 +276,10 @@ export function registerKnowledgeTool(
               source_name: toolConfig.sources.join(","),
               session_id: options?.getSessionId?.() ?? null,
               request_source: options?.getRequestSource?.() ?? null,
+              client_ip: options?.getClientIp?.() ?? null,
+              user_agent: options?.getUserAgent?.() ?? null,
+              blocked: false,
+              block_reason: null,
             },
             analyticsConfig?.log_queries ?? true,
           ).catch((err) => {

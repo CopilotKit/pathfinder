@@ -74,6 +74,7 @@ import { consentHandler } from "./oauth/consent-handler.js";
 import {
   setTrustingProxy,
   assertOauthIpResolverInjected,
+  oauthClientIp,
 } from "./oauth/trusted-client-ip.js";
 import { WorkspaceManager } from "./workspace.js";
 import { generateLlmsTxt, generateLlmsFullTxt } from "./llms-txt.js";
@@ -1850,6 +1851,17 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       // subsequent tool call in the session with the origin the client
       // declared on initialize.
       const requestSource = requestSourceFromHeaders(req);
+      // Same idea for the per-request client IP and User-Agent — captured
+      // once at init via the same trust-proxy boundary the oauth surface
+      // uses (oauthClientIp), then closed over for the lifetime of the
+      // session so every tool call records identical attribution. UA is
+      // truncated by the analytics writer (USER_AGENT_MAX_LEN), so we
+      // hand over the raw header here.
+      const sessionClientIp = oauthClientIp(req);
+      const rawUserAgent = req.headers["user-agent"];
+      const sessionUserAgent = Array.isArray(rawUserAgent)
+        ? rawUserAgent[0]
+        : rawUserAgent;
       const server = createMcpServer(
         bashInstances,
         sessionStateManager,
@@ -1863,6 +1875,8 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
           },
         },
         () => requestSource,
+        () => sessionClientIp,
+        () => sessionUserAgent,
       );
       // Z-1: server.connect(transport) can throw AFTER handleSessionInitAccept
       // committed maps + ipLimiter counter + ensureSession + onclose wiring.
@@ -2027,6 +2041,15 @@ const sseHandlers = createSseHandlers({
     const requestSource = req
       ? requestSourceFromHeaders(req)
       : normalizeRequestSource(undefined);
+    // Same per-session capture for client IP + User-Agent. When `req` is
+    // absent (older SSE bootstrapping paths) both fall back to undefined and
+    // the analytics writer persists NULL for the row — preserving the
+    // pre-v1.15.2 shape on that code path instead of guessing.
+    const sessionClientIp = req ? oauthClientIp(req) : undefined;
+    const rawUserAgent = req?.headers["user-agent"];
+    const sessionUserAgent = Array.isArray(rawUserAgent)
+      ? rawUserAgent[0]
+      : rawUserAgent;
     // The handler creates the transport first, then calls createMcpServer()
     // and connect(transport). We need the sessionId late-bound so bash tools
     // can discover it via getSessionId().
@@ -2043,6 +2066,8 @@ const sseHandlers = createSseHandlers({
         },
       },
       () => requestSource,
+      () => sessionClientIp,
+      () => sessionUserAgent,
     );
     // Intercept connect() so we can capture the transport reference for
     // the getSessionId closure above.

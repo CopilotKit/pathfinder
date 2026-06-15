@@ -9,6 +9,8 @@ import {
 } from "../../db/queries.js";
 import { logQuery } from "../../db/analytics.js";
 import { getAnalyticsConfig } from "../../config.js";
+import { checkBlocklist } from "../abuse-blocklist.js";
+import { oauthLog } from "../../oauth/observability.js";
 
 function formatDocsResults(results: ChunkResult[]): string {
   if (results.length === 0) return "No results found.";
@@ -78,6 +80,12 @@ export function registerSearchTool(
     // keep working — the analytics writer defaults a missing source to 'user'.
     getSessionId?: () => string | undefined;
     getRequestSource?: () => string | undefined;
+    // Per-session client IP / User-Agent captured at MCP init. Same pattern
+    // as getRequestSource — closed over for the lifetime of the session so
+    // every tool call records the attribution from the init request. Both
+    // optional; absent values land in query_log as NULL.
+    getClientIp?: () => string | undefined;
+    getUserAgent?: () => string | undefined;
   },
 ): void {
   const inputSchema = {
@@ -114,6 +122,65 @@ export function registerSearchTool(
       const effectiveLimit = limit ?? toolConfig.default_limit;
       const searchMode = toolConfig.search_mode ?? "vector";
       const startMs = Date.now();
+
+      // Abuse blocklist short-circuit. Runs BEFORE the embedding call so a
+      // blocked query never costs an embedding round-trip. The blocked row is
+      // still logged (with blocked=true + block_reason) so abuse volume is
+      // visible on the analytics surface; the structured response teaches the
+      // calling LLM what's actually in scope. See src/mcp/abuse-blocklist.ts.
+      const blocked = checkBlocklist(query);
+      if (blocked.matched) {
+        const logQueries = getAnalyticsConfig()?.log_queries ?? true;
+        const sessionClientIp = options?.getClientIp?.();
+        logQuery(
+          {
+            tool_name: toolConfig.name,
+            query_text: query,
+            result_count: 0,
+            top_score: null,
+            latency_ms: Date.now() - startMs,
+            source_name: toolConfig.source,
+            session_id: options?.getSessionId?.() ?? null,
+            request_source: options?.getRequestSource?.() ?? null,
+            client_ip: sessionClientIp ?? null,
+            user_agent: options?.getUserAgent?.() ?? null,
+            blocked: true,
+            block_reason: blocked.reason ?? null,
+          },
+          logQueries,
+        ).catch((err) => {
+          console.error(
+            `[analytics] Failed to log blocked query: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+        // Observability hook. `ip` defaults to empty string when unavailable
+        // so the log line shape stays stable; `reason` is the pattern tag.
+        oauthLog.searchBlocked({
+          ip: sessionClientIp ?? "",
+          reason: blocked.reason ?? "unknown",
+          tool: toolConfig.name,
+        });
+        // Structured tool response. MCP tools return text content, so the
+        // JSON-shaped payload is serialized and emitted as a `text` chunk —
+        // the calling LLM still sees the structured fields (`blocked`,
+        // `domain`, `hint`) and can act on them. Keeping a TEXT shape avoids
+        // depending on MCP content-type extensions that vary across clients.
+        const payload = {
+          results: [],
+          blocked: true,
+          domain: "CopilotKit + AG-UI documentation",
+          hint: "This query is off-topic for this MCP server's index (CopilotKit, AG-UI, agentic-frameworks documentation only). For general questions outside this domain, use a web search instead of this tool.",
+        };
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(payload),
+            },
+          ],
+        };
+      }
+
       try {
         let results: ChunkResult[];
         const minScore = min_score ?? toolConfig.min_score;
@@ -177,6 +244,10 @@ export function registerSearchTool(
             source_name: toolConfig.source,
             session_id: options?.getSessionId?.() ?? null,
             request_source: options?.getRequestSource?.() ?? null,
+            client_ip: options?.getClientIp?.() ?? null,
+            user_agent: options?.getUserAgent?.() ?? null,
+            blocked: false,
+            block_reason: null,
           },
           logQueries,
         ).catch((err) => {

@@ -1,5 +1,12 @@
 # @copilotkit/pathfinder
 
+## 1.15.2
+
+### Patch Changes
+
+- **Abuse blocklist**: hard-coded query-pattern blocklist short-circuits searches for off-topic terms confirmed via production analytics (box-office news, SCOTUS/Kalshi/CFTC certiorari, etc.). Matched queries return a structured 200 response with `blocked: true` and a teaching hint pointing at the server's actual domain (CopilotKit + AG-UI documentation). Zero false-positives on legitimate documentation queries.
+- **`query_log` attribution**: added `client_ip`, `user_agent`, `blocked`, `block_reason` columns. Per-request IP/UA now stored alongside the query for cross-correlation; no more session-id join against external systems for IP attribution. Schema change is additive (nullable) — backward compatible.
+
 ## 1.15.1
 
 ### Patch Changes
