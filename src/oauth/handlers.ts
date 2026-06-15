@@ -649,7 +649,7 @@ function unauthorizedWithDiscovery(req: Request, res: Response): void {
   const resourceMetadata = `${origin}/.well-known/oauth-protected-resource`;
   res.setHeader(
     "WWW-Authenticate",
-    `Bearer realm="mcp", resource_metadata="${resourceMetadata}", scope="${TOKEN_SCOPE}"`,
+    `Bearer realm="mcp", resource_metadata="${resourceMetadata}", scope="${TOKEN_SCOPE}", error="invalid_token"`,
   );
   res.status(401).json({ error: "invalid_token" });
 }

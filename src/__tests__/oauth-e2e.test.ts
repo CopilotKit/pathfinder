@@ -384,9 +384,11 @@ describe("OAuth 2.1 end-to-end ceremonial flow", () => {
     const www = res.headers.get("www-authenticate");
     expect(www).toContain('Bearer realm="mcp"');
     // RFC 9728: discovery URL advertised on WWW-Authenticate so the client
-    // can fetch the protected-resource metadata document. The
-    // `error="invalid_token"` code now lives in the JSON response body.
+    // can fetch the protected-resource metadata document. Per RFC 6750 §3.1,
+    // the `error="invalid_token"` attribute MUST also be in the header (it
+    // is additionally returned in the JSON response body).
     expect(www).toContain("resource_metadata=");
+    expect(www).toContain('error="invalid_token"');
     const body = (await res.json()) as { error?: string };
     expect(body.error).toBe("invalid_token");
   });

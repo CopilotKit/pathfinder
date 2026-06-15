@@ -1512,12 +1512,17 @@ describe("bearerMiddleware", () => {
       expect.stringContaining('Bearer realm="mcp"'),
     );
     // RFC 9728: `WWW-Authenticate` advertises `resource_metadata=` so
-    // clients can discover the protected-resource document. The
-    // `error="invalid_token"` code now lives in the JSON body (see
-    // `unauthorizedWithDiscovery`).
+    // clients can discover the protected-resource document. Per RFC 6750
+    // §3.1, when a Bearer token is present-but-invalid the `error=`
+    // attribute MUST also be in the `WWW-Authenticate` header (it is
+    // additionally returned in the JSON body).
     expect(res.setHeader).toHaveBeenCalledWith(
       "WWW-Authenticate",
       expect.stringContaining("resource_metadata="),
+    );
+    expect(res.setHeader).toHaveBeenCalledWith(
+      "WWW-Authenticate",
+      expect.stringContaining('error="invalid_token"'),
     );
     expect(next).not.toHaveBeenCalled();
   });
@@ -1608,6 +1613,12 @@ describe("bearerMiddleware", () => {
         expect.stringContaining(
           `resource_metadata="${expectedResourceMetadata}"`,
         ),
+      );
+      // RFC 6750 §3.1 — when a Bearer token is present-but-invalid the
+      // `error=` attribute MUST appear in `WWW-Authenticate`.
+      expect(res.setHeader).toHaveBeenCalledWith(
+        "WWW-Authenticate",
+        expect.stringContaining('error="invalid_token"'),
       );
     }
 
