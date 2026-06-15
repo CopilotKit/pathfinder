@@ -53,22 +53,22 @@ const CODE_TTL_MS = 600_000;
 const TOKEN_SCOPE = "mcp";
 
 function enforce(
-    limiter: OAuthRateLimiter,
-    req: Request,
-    res: Response,
+  limiter: OAuthRateLimiter,
+  req: Request,
+  res: Response,
 ): boolean {
-    const ip = oauthClientIp(req);
-    const r = limiter.check(ip);
-    if (!r.ok) {
-        res.setHeader("Retry-After", String(r.retryAfterSec ?? 60));
-        res.status(429).json({
-            error: "rate_limited",
-            error_description: "Too many requests — slow down.",
-        });
-        oauthLog.consentRateLimited({ ip });
-        return false;
-    }
-    return true;
+  const ip = oauthClientIp(req);
+  const r = limiter.check(ip);
+  if (!r.ok) {
+    res.setHeader("Retry-After", String(r.retryAfterSec ?? 60));
+    res.status(429).json({
+      error: "rate_limited",
+      error_description: "Too many requests — slow down.",
+    });
+    oauthLog.consentRateLimited({ ip });
+    return false;
+  }
+  return true;
 }
 
 // Fields that must be byte-equal between the form body and the nonce
@@ -76,214 +76,213 @@ function enforce(
 // is internal to the MAC, and the nonce token is what gets verified
 // rather than compared against itself.
 const BOUND_FIELDS = [
-    "client_id",
-    "redirect_uri",
-    "state",
-    "code_challenge",
-    "code_challenge_method",
-    "response_type",
-    "scope",
-    "resource",
+  "client_id",
+  "redirect_uri",
+  "state",
+  "code_challenge",
+  "code_challenge_method",
+  "response_type",
+  "scope",
+  "resource",
 ] as const;
 
 export function consentHandler(req: Request, res: Response): void {
-    // (1) Rate-limit per IP.
-    if (!enforce(consentLimiter, req, res)) return;
+  // (1) Rate-limit per IP.
+  if (!enforce(consentLimiter, req, res)) return;
 
-    const ip = oauthClientIp(req);
-    const body = (req.body ?? {}) as Record<string, string | undefined>;
+  const ip = oauthClientIp(req);
+  const body = (req.body ?? {}) as Record<string, string | undefined>;
 
-    // (2) Verify nonce — MAC first, then expiry (the verifier handles the
-    // ordering correctly so we don't have to disambiguate here).
-    const nonceToken = body.nonce ?? "";
-    const v = verifyConsentNonce(nonceToken, getConfig().oauthConsentHmacKeys);
-    if (!v.ok) {
-        oauthLog.consentNonceInvalid({ reason: v.reason, ip });
-        res.status(400).json({
-            error: "invalid_request",
-            error_description: `consent nonce: ${v.reason}`,
-        });
-        return;
+  // (2) Verify nonce — MAC first, then expiry (the verifier handles the
+  // ordering correctly so we don't have to disambiguate here).
+  const nonceToken = body.nonce ?? "";
+  const v = verifyConsentNonce(nonceToken, getConfig().oauthConsentHmacKeys);
+  if (!v.ok) {
+    oauthLog.consentNonceInvalid({ reason: v.reason, ip });
+    res.status(400).json({
+      error: "invalid_request",
+      error_description: `consent nonce: ${v.reason}`,
+    });
+    return;
+  }
+  const p = v.payload;
+
+  // (3) Field-by-field equality. Generic 400 — do NOT leak which field
+  // mismatched, because that would help an attacker iterate on a forged
+  // submission. The internal log line carries the field name for
+  // operators.
+  for (const k of BOUND_FIELDS) {
+    const formVal = body[k] ?? "";
+    // BOUND_FIELDS is a tuple of string-valued payload keys (the only
+    // payload field NOT in the tuple is the numeric `exp`), so the
+    // string-narrow is safe by construction.
+    const payloadVal = (p as unknown as Record<string, string>)[k] ?? "";
+    if (formVal !== payloadVal) {
+      oauthLog.consentNonceInvalid({
+        reason: "field_mismatch",
+        ip,
+        field: k,
+      });
+      res.status(400).json({
+        error: "invalid_request",
+        error_description: "consent parameters do not match.",
+      });
+      return;
     }
-    const p = v.payload;
+  }
 
-    // (3) Field-by-field equality. Generic 400 — do NOT leak which field
-    // mismatched, because that would help an attacker iterate on a forged
-    // submission. The internal log line carries the field name for
-    // operators.
-    for (const k of BOUND_FIELDS) {
-        const formVal = body[k] ?? "";
-        // BOUND_FIELDS is a tuple of string-valued payload keys (the only
-        // payload field NOT in the tuple is the numeric `exp`), so the
-        // string-narrow is safe by construction.
-        const payloadVal = (p as unknown as Record<string, string>)[k] ?? "";
-        if (formVal !== payloadVal) {
-            oauthLog.consentNonceInvalid({
-                reason: "field_mismatch",
-                ip,
-                field: k,
-            });
-            res.status(400).json({
-                error: "invalid_request",
-                error_description: "consent parameters do not match.",
-            });
-            return;
-        }
-    }
+  // (4) Look up the client. A client may have been evicted (lazy sweep)
+  // or explicitly deleted in the window between consent-screen render
+  // and form submit.
+  const client = clientStore.get(p.client_id);
+  if (!client) {
+    oauthLog.consentStaleClient({ ip, client_id: p.client_id });
+    res.status(400).json({
+      error: "unauthorized_client",
+      error_description: "Unknown client_id.",
+    });
+    return;
+  }
 
-    // (4) Look up the client. A client may have been evicted (lazy sweep)
-    // or explicitly deleted in the window between consent-screen render
-    // and form submit.
-    const client = clientStore.get(p.client_id);
-    if (!client) {
-        oauthLog.consentStaleClient({ ip, client_id: p.client_id });
-        res.status(400).json({
-            error: "unauthorized_client",
-            error_description: "Unknown client_id.",
-        });
-        return;
-    }
+  // (5a) Re-validate against the redirect_uri policy. Defense in depth:
+  // policy may have tightened since the nonce was minted (e.g. operator
+  // pushed a stricter ruleset between mint and redeem).
+  const policy = validateRedirectUri(p.redirect_uri);
+  if (!policy.ok) {
+    oauthLog.registerRejected({
+      reason: policy.reason,
+      ip,
+      client_id: p.client_id,
+    });
+    res.status(400).json({
+      error: "invalid_redirect_uri",
+      error_description: `redirect_uri rejected: ${policy.reason}`,
+    });
+    return;
+  }
 
-    // (5a) Re-validate against the redirect_uri policy. Defense in depth:
-    // policy may have tightened since the nonce was minted (e.g. operator
-    // pushed a stricter ruleset between mint and redeem).
-    const policy = validateRedirectUri(p.redirect_uri);
-    if (!policy.ok) {
-        oauthLog.registerRejected({
-            reason: policy.reason,
-            ip,
-            client_id: p.client_id,
-        });
-        res.status(400).json({
-            error: "invalid_redirect_uri",
-            error_description: `redirect_uri rejected: ${policy.reason}`,
-        });
-        return;
-    }
+  // (5b) Exact-match against the client's registered list. Distinct
+  // log line from (5a) so operators can disambiguate policy-evasion
+  // from list-tampering.
+  if (
+    client.redirect_uris.length > 0 &&
+    !client.redirect_uris.includes(p.redirect_uri)
+  ) {
+    oauthLog.registerRejected({
+      reason: "not_in_list",
+      ip,
+      client_id: p.client_id,
+    });
+    res.status(400).json({
+      error: "invalid_redirect_uri",
+      error_description: "redirect_uri not in registered list.",
+    });
+    return;
+  }
 
-    // (5b) Exact-match against the client's registered list. Distinct
-    // log line from (5a) so operators can disambiguate policy-evasion
-    // from list-tampering.
-    if (
-        client.redirect_uris.length > 0 &&
-        !client.redirect_uris.includes(p.redirect_uri)
-    ) {
-        oauthLog.registerRejected({
-            reason: "not_in_list",
-            ip,
-            client_id: p.client_id,
-        });
-        res.status(400).json({
-            error: "invalid_redirect_uri",
-            error_description: "redirect_uri not in registered list.",
-        });
-        return;
-    }
+  // (6a) Scope re-check — split from response_type/PKCE check so the
+  // 400 shapes are distinct (invalid_scope vs invalid_request) and
+  // operators can grep them separately.
+  if (p.scope !== TOKEN_SCOPE) {
+    oauthLog.consentScopeMismatch({
+      ip,
+      client_id: p.client_id,
+      scope: p.scope,
+    });
+    res.status(400).json({
+      error: "invalid_scope",
+      error_description: `scope must be ${TOKEN_SCOPE}.`,
+    });
+    return;
+  }
 
-    // (6a) Scope re-check — split from response_type/PKCE check so the
-    // 400 shapes are distinct (invalid_scope vs invalid_request) and
-    // operators can grep them separately.
-    if (p.scope !== TOKEN_SCOPE) {
-        oauthLog.consentScopeMismatch({
-            ip,
-            client_id: p.client_id,
-            scope: p.scope,
-        });
-        res.status(400).json({
-            error: "invalid_scope",
-            error_description: `scope must be ${TOKEN_SCOPE}.`,
-        });
-        return;
-    }
+  // (6b) response_type + code_challenge_method re-check.
+  if (p.response_type !== "code" || p.code_challenge_method !== "S256") {
+    oauthLog.consentParamUnsupported({
+      ip,
+      client_id: p.client_id,
+      response_type: p.response_type,
+      code_challenge_method: p.code_challenge_method,
+    });
+    res.status(400).json({
+      error: "invalid_request",
+      error_description: "response_type or code_challenge_method unsupported.",
+    });
+    return;
+  }
 
-    // (6b) response_type + code_challenge_method re-check.
-    if (p.response_type !== "code" || p.code_challenge_method !== "S256") {
-        oauthLog.consentParamUnsupported({
-            ip,
-            client_id: p.client_id,
-            response_type: p.response_type,
-            code_challenge_method: p.code_challenge_method,
-        });
-        res.status(400).json({
-            error: "invalid_request",
-            error_description:
-                "response_type or code_challenge_method unsupported.",
-        });
-        return;
-    }
+  const decision = body.decision;
 
-    const decision = body.decision;
-
-    // (7) Deny path. The redirect URL is built from `p.redirect_uri` —
-    // the nonce-bound value — NOT from `body.redirect_uri`. Step (3)
-    // already proved they're byte-equal, but we still read from the
-    // payload as a belt-and-suspenders guarantee: even a programming
-    // error in step (3) would not let a tampered body URI win here.
-    if (decision === "deny") {
-        oauthLog.consentDenied({ client_id: p.client_id, ip });
-        let url: URL;
-        try {
-            url = new URL(p.redirect_uri);
-        } catch {
-            oauthLog.consentRedirectUriUnparseable({
-                ip,
-                client_id: p.client_id,
-            });
-            res.status(400).json({
-                error: "invalid_request",
-                error_description: "redirect_uri unparseable",
-            });
-            return;
-        }
-        url.searchParams.set("error", "access_denied");
-        url.searchParams.set("error_description", "user_denied_consent");
-        if (p.state) url.searchParams.set("state", p.state);
-        res.redirect(url.toString());
-        return;
-    }
-
-    // (8) Approve path — or anything that isn't `deny` and isn't
-    // `approve` falls through to a 400 below.
-    if (decision !== "approve") {
-        oauthLog.consentUnknownDecision({
-            ip,
-            client_id: p.client_id,
-            decision: String(body.decision),
-        });
-        res.status(400).json({
-            error: "invalid_request",
-            error_description: "unknown decision.",
-        });
-        return;
-    }
-
-    // Approve: touch the client (liveness signal for TTL eviction),
-    // mint an auth code bound to the nonce's PKCE challenge + resource,
-    // and redirect to the nonce-bound URI.
+  // (7) Deny path. The redirect URL is built from `p.redirect_uri` —
+  // the nonce-bound value — NOT from `body.redirect_uri`. Step (3)
+  // already proved they're byte-equal, but we still read from the
+  // payload as a belt-and-suspenders guarantee: even a programming
+  // error in step (3) would not let a tampered body URI win here.
+  if (decision === "deny") {
+    oauthLog.consentDenied({ client_id: p.client_id, ip });
     let url: URL;
     try {
-        url = new URL(p.redirect_uri);
+      url = new URL(p.redirect_uri);
     } catch {
-        oauthLog.consentRedirectUriUnparseable({
-            ip,
-            client_id: p.client_id,
-        });
-        res.status(400).json({
-            error: "invalid_request",
-            error_description: "redirect_uri unparseable",
-        });
-        return;
+      oauthLog.consentRedirectUriUnparseable({
+        ip,
+        client_id: p.client_id,
+      });
+      res.status(400).json({
+        error: "invalid_request",
+        error_description: "redirect_uri unparseable",
+      });
+      return;
     }
-    clientStore.touch(p.client_id);
-    const { code } = codeStore.issue({
-        clientId: p.client_id,
-        codeChallenge: p.code_challenge,
-        redirectUri: p.redirect_uri,
-        resource: p.resource || undefined,
-        ttlMs: CODE_TTL_MS,
-    });
-    url.searchParams.set("code", code);
+    url.searchParams.set("error", "access_denied");
+    url.searchParams.set("error_description", "user_denied_consent");
     if (p.state) url.searchParams.set("state", p.state);
-    oauthLog.consentApproved({ client_id: p.client_id, ip });
     res.redirect(url.toString());
+    return;
+  }
+
+  // (8) Approve path — or anything that isn't `deny` and isn't
+  // `approve` falls through to a 400 below.
+  if (decision !== "approve") {
+    oauthLog.consentUnknownDecision({
+      ip,
+      client_id: p.client_id,
+      decision: String(body.decision),
+    });
+    res.status(400).json({
+      error: "invalid_request",
+      error_description: "unknown decision.",
+    });
+    return;
+  }
+
+  // Approve: touch the client (liveness signal for TTL eviction),
+  // mint an auth code bound to the nonce's PKCE challenge + resource,
+  // and redirect to the nonce-bound URI.
+  let url: URL;
+  try {
+    url = new URL(p.redirect_uri);
+  } catch {
+    oauthLog.consentRedirectUriUnparseable({
+      ip,
+      client_id: p.client_id,
+    });
+    res.status(400).json({
+      error: "invalid_request",
+      error_description: "redirect_uri unparseable",
+    });
+    return;
+  }
+  clientStore.touch(p.client_id);
+  const { code } = codeStore.issue({
+    clientId: p.client_id,
+    codeChallenge: p.code_challenge,
+    redirectUri: p.redirect_uri,
+    resource: p.resource || undefined,
+    ttlMs: CODE_TTL_MS,
+  });
+  url.searchParams.set("code", code);
+  if (p.state) url.searchParams.set("state", p.state);
+  oauthLog.consentApproved({ client_id: p.client_id, ip });
+  res.redirect(url.toString());
 }

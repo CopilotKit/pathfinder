@@ -36,46 +36,46 @@
  * today but harmless and matches the rest of the codebase's escaping style).
  */
 function escHtml(s: string): string {
-    return s
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export interface ConsentRenderArgs {
-    /** Display name from client registration. Already truncated to 80 chars upstream. */
-    clientName: string;
-    /** Stable client identifier (UUID). Shown as fallback when `clientName` is empty. */
-    clientId: string;
-    /** Full redirect_uri the authorization code will be sent to. */
-    redirectUri: string;
-    /** Hostname component of `redirectUri`, surfaced as the dominant visual element. */
-    redirectUriHostname: string;
-    /** Requested OAuth scope string. */
-    scope: string;
-    /** Opaque client state echoed back on redirect. */
-    state: string;
-    /** PKCE code_challenge value. */
-    codeChallenge: string;
-    /** PKCE method, typically `S256`. */
-    codeChallengeMethod: string;
-    /** OAuth response_type, typically `code`. */
-    responseType: string;
-    /** Optional RFC 8707 resource indicator. Empty string when unused. */
-    resource: string;
-    /** HMAC-signed consent nonce re-verified by the consent handler. */
-    nonce: string;
+  /** Display name from client registration. Already truncated to 80 chars upstream. */
+  clientName: string;
+  /** Stable client identifier (UUID). Shown as fallback when `clientName` is empty. */
+  clientId: string;
+  /** Full redirect_uri the authorization code will be sent to. */
+  redirectUri: string;
+  /** Hostname component of `redirectUri`, surfaced as the dominant visual element. */
+  redirectUriHostname: string;
+  /** Requested OAuth scope string. */
+  scope: string;
+  /** Opaque client state echoed back on redirect. */
+  state: string;
+  /** PKCE code_challenge value. */
+  codeChallenge: string;
+  /** PKCE method, typically `S256`. */
+  codeChallengeMethod: string;
+  /** OAuth response_type, typically `code`. */
+  responseType: string;
+  /** Optional RFC 8707 resource indicator. Empty string when unused. */
+  resource: string;
+  /** HMAC-signed consent nonce re-verified by the consent handler. */
+  nonce: string;
 }
 
 export function renderConsentHtml(a: ConsentRenderArgs): string {
-    // If a client registered without a name, show the opaque client_id rather
-    // than a blank header — at least gives the user *something* identifying.
-    const displayName = a.clientName.length > 0 ? a.clientName : a.clientId;
-    const e = escHtml;
+  // If a client registered without a name, show the opaque client_id rather
+  // than a blank header — at least gives the user *something* identifying.
+  const displayName = a.clientName.length > 0 ? a.clientName : a.clientId;
+  const e = escHtml;
 
-    return `<!doctype html>
+  return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

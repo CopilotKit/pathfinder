@@ -213,7 +213,9 @@ describe("OAuth 2.1 end-to-end ceremonial flow", () => {
     const html = await authRes.text();
     // Sanity-check shape — the consent form must include the hidden bound
     // set and the POST action our handler expects.
-    expect(html).toMatch(/<form\s+method="POST"\s+action="\/authorize\/consent"/);
+    expect(html).toMatch(
+      /<form\s+method="POST"\s+action="\/authorize\/consent"/,
+    );
     const hidden = extractFormFields(html);
     expect(hidden.nonce).toBeTruthy();
     expect(hidden.client_id).toBe(client_id);

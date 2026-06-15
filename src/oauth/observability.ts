@@ -41,14 +41,18 @@ export const oauthLog = {
       `[oauth] cap_evicted ttl=${fields.ttl} unused=${fields.unused}`,
     );
   },
-  capOverflow(fields: Fields & { scope: "total" | "per_ip"; ip: string }): void {
+  capOverflow(
+    fields: Fields & { scope: "total" | "per_ip"; ip: string },
+  ): void {
     console.warn(`[oauth] cap_overflow ${format(fields)}`);
   },
   // Consent-endpoint rate-limit hit. Mirrors handlers.ts:72 shape but tags
   // the endpoint so the consent funnel is greppable independent of the
   // generic OAuth rate-limit log.
   consentRateLimited(fields: Fields & { ip: string }): void {
-    console.warn(`[oauth] rate_limited ${format({ ...fields, endpoint: "consent" })}`);
+    console.warn(
+      `[oauth] rate_limited ${format({ ...fields, endpoint: "consent" })}`,
+    );
   },
   // Post-MAC-verify tamper/divergence signals. Reaching any of these means
   // the nonce MAC was valid and step 3 (field equality) passed, so the

@@ -102,10 +102,18 @@ beforeEach(() => {
   const cds = codeStore as unknown as { codes: Map<string, unknown> };
   cds.codes.clear();
   // Reset rate-limiter buckets so per-IP windows don't leak across tests.
-  (registerLimiter as unknown as { buckets: Map<string, unknown> }).buckets.clear();
-  (authorizeLimiter as unknown as { buckets: Map<string, unknown> }).buckets.clear();
-  (tokenLimiter as unknown as { buckets: Map<string, unknown> }).buckets.clear();
-  (consentLimiter as unknown as { buckets: Map<string, unknown> }).buckets.clear();
+  (
+    registerLimiter as unknown as { buckets: Map<string, unknown> }
+  ).buckets.clear();
+  (
+    authorizeLimiter as unknown as { buckets: Map<string, unknown> }
+  ).buckets.clear();
+  (
+    tokenLimiter as unknown as { buckets: Map<string, unknown> }
+  ).buckets.clear();
+  (
+    consentLimiter as unknown as { buckets: Map<string, unknown> }
+  ).buckets.clear();
   // OAuth handlers consult `oauthClientIp(req)` AND `originOf` (via
   // `isTrustingProxyForOauth`) — both gated on the injected trustProxy
   // accessor. The bulk of this file's tests assert HTTPS metadata derived
@@ -565,7 +573,9 @@ describe("authorizeHandler", () => {
     expect(res.send).toHaveBeenCalled();
     const html = res.send.mock.calls[0][0] as string;
     expect(html).toMatch(/<!doctype html>/i);
-    expect(html).toMatch(/<form\s+method="POST"\s+action="\/authorize\/consent"/);
+    expect(html).toMatch(
+      /<form\s+method="POST"\s+action="\/authorize\/consent"/,
+    );
     // No code-bearing redirect anymore.
     expect(res.redirect).not.toHaveBeenCalled();
   });
@@ -796,12 +806,17 @@ describe("authorizeHandler — consent", () => {
     authorizeHandler(req as never, res as never);
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
-    expect(res.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
+    expect(res.setHeader).toHaveBeenCalledWith(
+      "Referrer-Policy",
+      "no-referrer",
+    );
     // CSP must include frame-ancestors 'none' (clickjacking) and form-action
     // 'self' (locks the Approve POST destination to our origin).
-    const cspCall = (res.setHeader as unknown as {
-      mock: { calls: [string, string][] };
-    }).mock.calls.find(([h]) => h === "Content-Security-Policy");
+    const cspCall = (
+      res.setHeader as unknown as {
+        mock: { calls: [string, string][] };
+      }
+    ).mock.calls.find(([h]) => h === "Content-Security-Policy");
     expect(cspCall).toBeDefined();
     const csp = cspCall![1];
     expect(csp).toContain("frame-ancestors 'none'");
@@ -827,9 +842,10 @@ describe("authorizeHandler — consent", () => {
       registeredAt: Date.now(),
       lastUsedAt: Date.now(),
     };
-    (
-      clientStore as unknown as { clients: Map<string, unknown> }
-    ).clients.set("legacy-bad", directlyInjected);
+    (clientStore as unknown as { clients: Map<string, unknown> }).clients.set(
+      "legacy-bad",
+      directlyInjected,
+    );
 
     const req = mockReq({
       query: {

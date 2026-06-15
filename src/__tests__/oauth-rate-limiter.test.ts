@@ -1,8 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  OAuthRateLimiter,
-  consentLimiter,
-} from "../oauth/rate-limiter.js";
+import { OAuthRateLimiter, consentLimiter } from "../oauth/rate-limiter.js";
 
 describe("OAuthRateLimiter", () => {
   beforeEach(() => {
@@ -11,7 +8,9 @@ describe("OAuthRateLimiter", () => {
     // The shared consentLimiter singleton is mutated by one assertion below;
     // clear its buckets so state doesn't leak across this file's tests or
     // across other files under fork reuse.
-    (consentLimiter as unknown as { buckets: Map<string, unknown> }).buckets.clear();
+    (
+      consentLimiter as unknown as { buckets: Map<string, unknown> }
+    ).buckets.clear();
   });
 
   afterEach(() => {

@@ -205,9 +205,7 @@ export function registerHandler(req: Request, res: Response): void {
   }
 
   oauthLog.register({ client_id: client.client_id, ip });
-  console.log(
-    `[oauth] register client_id=${client.client_id} ip=${ip}`,
-  );
+  console.log(`[oauth] register client_id=${client.client_id} ip=${ip}`);
   res.status(201).json({
     client_id: client.client_id,
     client_secret: client.client_secret,

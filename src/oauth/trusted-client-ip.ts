@@ -33,8 +33,8 @@ let injected = false;
  * without booting a real Express app.
  */
 export function setTrustingProxy(fn: () => boolean): void {
-    trustingProxyAccessor = fn;
-    injected = true;
+  trustingProxyAccessor = fn;
+  injected = true;
 }
 
 /**
@@ -45,7 +45,7 @@ export function setTrustingProxy(fn: () => boolean): void {
  * injected yet — same behavior as `oauthClientIp` pre-bootstrap.
  */
 export function isTrustingProxyForOauth(): boolean {
-    return trustingProxyAccessor();
+  return trustingProxyAccessor();
 }
 
 /**
@@ -54,7 +54,7 @@ export function isTrustingProxyForOauth(): boolean {
  * prefer `assertOauthIpResolverInjected()` which throws on regression.
  */
 export function oauthIpResolverInjected(): boolean {
-    return injected;
+  return injected;
 }
 
 /**
@@ -66,11 +66,11 @@ export function oauthIpResolverInjected(): boolean {
  * crashes startup loudly so the regression cannot ship.
  */
 export function assertOauthIpResolverInjected(): void {
-    if (!injected) {
-        throw new Error(
-            "oauth trusted-IP resolver was not wired at server bootstrap",
-        );
-    }
+  if (!injected) {
+    throw new Error(
+      "oauth trusted-IP resolver was not wired at server bootstrap",
+    );
+  }
 }
 
 /**
@@ -85,5 +85,5 @@ export function assertOauthIpResolverInjected(): void {
  * XFF unconditionally.
  */
 export function oauthClientIp(req: Request): string {
-    return clientIp(req, trustingProxyAccessor());
+  return clientIp(req, trustingProxyAccessor());
 }
