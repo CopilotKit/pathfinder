@@ -25,6 +25,93 @@ function toFiniteNumber(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Strip NUL bytes (U+0000) from a string. Postgres `text` columns and the
+ * string members of `jsonb` documents both reject `0x00` with
+ * `invalid byte sequence for encoding "UTF8": 0x00`, so any indexed-content
+ * value reaching the chunk insert MUST be sanitized first.
+ *
+ * Indexed source code legitimately contains `\x00` (e.g. ag-ui's
+ * `sdks/typescript/packages/a2ui-toolkit/src/validate.ts` joins cycle keys with
+ * `"\x00"` as a separator). A single NUL in `content` errors the whole INSERT,
+ * the orchestrator holds the source's state token for retry, and the source's
+ * health goes RED indefinitely — blocking every subsequent diff from landing.
+ *
+ * We DROP the byte (not escape it as `\x00`): the NUL has no semantic meaning
+ * in indexed search content, and preserving a literal `\x00` would pollute
+ * full-text matches against actual source text. Drop is also reversible by
+ * reindex, escape is not. Returns the input unchanged when no NUL is present
+ * (the common case) so the hot path pays only the regex's fast-fail cost.
+ */
+export function stripNulBytes(s: string): string {
+  return s.includes("\x00") ? s.replace(/\x00/g, "") : s;
+}
+
+/**
+ * Recursively strip NUL bytes from every string inside a JSON-compatible value
+ * — including object KEYS, not just values. Used to sanitize a chunk's
+ * `metadata` (jsonb) before serialization: jsonb stores string members as
+ * Postgres text and rejects `0x00` the same way the `content`/`title` text
+ * columns do, AND it rejects `0x00` in keys identically — a NUL anywhere
+ * inside metadata (key or value, at any depth) fails the whole INSERT. A
+ * NUL-bearing key would otherwise survive `JSON.stringify` as the 6-char
+ * escape ` ` and still error the jsonb cast at the wire.
+ *
+ * Returns the input unchanged (referentially `===`) when nothing needed
+ * sanitizing — defers allocating a new array/object until the first mutation
+ * is observed, so the common no-NUL path makes zero intermediate allocations.
+ *
+ * If two pre-sanitization keys collide post-strip (e.g. both `"a\x00"` and
+ * `"a"` map to `"a"`), the later entry from `Object.entries` order wins.
+ * This is acceptable because a NUL-bearing key is by definition malformed
+ * input — losing one of the colliding entries is preferable to failing the
+ * whole INSERT and bricking the source's index pipeline.
+ */
+export function stripNulBytesDeep(value: unknown): unknown {
+  if (typeof value === "string") return stripNulBytes(value);
+  if (Array.isArray(value)) {
+    let out: unknown[] | null = null;
+    for (let i = 0; i < value.length; i++) {
+      const v = value[i];
+      const cleaned = stripNulBytesDeep(v);
+      if (cleaned !== v && out === null) {
+        out = value.slice(0, i);
+      }
+      if (out !== null) out.push(cleaned);
+    }
+    return out ?? value;
+  }
+  if (value !== null && typeof value === "object") {
+    // Output container is a null-prototype object so that bracket assignment
+    // of a sanitized key like "__proto__" (from input "__proto__\x00") creates
+    // an own data property instead of invoking the Object.prototype setter
+    // — which would silently discard a non-object/null value (typical case:
+    // string), dropping the entry on the floor and losing the source's
+    // metadata. JSON.stringify walks own enumerable properties on a
+    // null-prototype object identically to a plain object, so the only
+    // downstream consumer (chunkInsertParams, which JSON.stringify's the
+    // result) is transparent to the prototype swap.
+    let out: Record<string, unknown> | null = null;
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const cleanedKey = stripNulBytes(k);
+      const cleanedVal = stripNulBytesDeep(v);
+      if ((cleanedKey !== k || cleanedVal !== v) && out === null) {
+        out = Object.create(null) as Record<string, unknown>;
+        // Backfill prior (already-clean) entries we walked past.
+        for (const [pk, pv] of Object.entries(
+          value as Record<string, unknown>,
+        )) {
+          if (pk === k) break;
+          out[pk] = pv;
+        }
+      }
+      if (out !== null) out[cleanedKey] = cleanedVal;
+    }
+    return out ?? value;
+  }
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
@@ -307,23 +394,34 @@ const INSERT_CHUNK_SQL = `
                 tsv        = EXCLUDED.tsv
         `;
 
-/** Positional params for INSERT_CHUNK_SQL, in column order. */
+/**
+ * Positional params for INSERT_CHUNK_SQL, in column order.
+ *
+ * Every text-typed parameter (and every string inside the jsonb `metadata`
+ * blob) is passed through {@link stripNulBytes} / {@link stripNulBytesDeep}
+ * because Postgres rejects `0x00` in `text` and in jsonb string members alike.
+ * Indexed source code legitimately contains NUL (e.g. an
+ * `Array#join("\x00")` separator), and a single unsanitized byte fails the
+ * entire INSERT — which then holds the source's state token for retry and
+ * blocks ALL subsequent changes for that source from indexing.
+ */
 function chunkInsertParams(chunk: Chunk): unknown[] {
+  const metadata = stripNulBytesDeep(chunk.metadata ?? {});
   return [
-    chunk.source_name,
-    chunk.source_url ?? null,
-    chunk.title ?? null,
-    chunk.content,
+    stripNulBytes(chunk.source_name),
+    chunk.source_url == null ? null : stripNulBytes(chunk.source_url),
+    chunk.title == null ? null : stripNulBytes(chunk.title),
+    stripNulBytes(chunk.content),
     pgvector.toSql(chunk.embedding),
-    chunk.repo_url,
-    chunk.file_path,
+    chunk.repo_url == null ? null : stripNulBytes(chunk.repo_url),
+    stripNulBytes(chunk.file_path),
     chunk.start_line ?? null,
     chunk.end_line ?? null,
-    chunk.language ?? null,
+    chunk.language == null ? null : stripNulBytes(chunk.language),
     chunk.chunk_index,
-    JSON.stringify(chunk.metadata ?? {}),
-    chunk.commit_sha ?? null,
-    chunk.version ?? null,
+    JSON.stringify(metadata),
+    chunk.commit_sha == null ? null : stripNulBytes(chunk.commit_sha),
+    chunk.version == null ? null : stripNulBytes(chunk.version),
   ];
 }
 
@@ -352,9 +450,14 @@ export async function replaceChunksForFile(
 
   try {
     await client.query("BEGIN");
+    // Sanitize text bindings on DELETE to match the INSERT side. Postgres
+    // rejects 0x00 in `text` columns on DELETE identically to INSERT, so an
+    // un-sanitized DELETE on NUL-bearing input would crash with `invalid byte
+    // sequence for encoding "UTF8": 0x00` BEFORE the new chunks are written —
+    // breaking the atomic-replace invariant this transaction exists to uphold.
     await client.query(
       "DELETE FROM chunks WHERE source_name = $1 AND file_path = $2",
-      [sourceName, filePath],
+      [stripNulBytes(sourceName), stripNulBytes(filePath)],
     );
     for (const chunk of chunks) {
       await client.query(INSERT_CHUNK_SQL, chunkInsertParams(chunk));
@@ -409,9 +512,11 @@ export async function deleteChunksByFile(
   filePath: string,
 ): Promise<void> {
   const pool = getPool();
+  // Sanitize text bindings: see replaceChunksForFile for the same reasoning.
+  // Postgres rejects 0x00 on DELETE identically to INSERT.
   await pool.query(
     "DELETE FROM chunks WHERE source_name = $1 AND file_path = $2",
-    [sourceName, filePath],
+    [stripNulBytes(sourceName), stripNulBytes(filePath)],
   );
 }
 
@@ -420,7 +525,10 @@ export async function deleteChunksByFile(
  */
 export async function deleteChunksBySource(sourceName: string): Promise<void> {
   const pool = getPool();
-  await pool.query("DELETE FROM chunks WHERE source_name = $1", [sourceName]);
+  // Sanitize text bindings: see replaceChunksForFile.
+  await pool.query("DELETE FROM chunks WHERE source_name = $1", [
+    stripNulBytes(sourceName),
+  ]);
 }
 
 /**
