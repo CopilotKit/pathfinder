@@ -57,59 +57,203 @@ export function stripNulBytes(s: string): string {
  * NUL-bearing key would otherwise survive `JSON.stringify` as the 6-char
  * escape ` ` and still error the jsonb cast at the wire.
  *
- * Returns the input unchanged (referentially `===`) when nothing needed
- * sanitizing — defers allocating a new array/object until the first mutation
- * is observed, so the common no-NUL path makes zero intermediate allocations.
+ * Safe under cyclic inputs and arbitrary nesting depth — does not recurse on
+ * the JS call stack. Implemented as a two-pass iterative walk over an
+ * explicit work-stack with a `WeakSet` for cycle tracking on the detect pass
+ * and a `WeakMap<input,output>` on the transform pass. Untrusted callers (the
+ * MCP-driven `insertCollectedData` accepts arbitrary tool-supplied JSON) can
+ * therefore feed cyclic OR arbitrarily-deep payloads without risking a
+ * `RangeError: Maximum call stack size exceeded` mid-INSERT.
+ *
+ * Identity preservation: returns the input unchanged (referentially `===`)
+ * when no string anywhere in the tree carried a NUL — the detect pass
+ * short-circuits and skips the transform allocation entirely. This is the
+ * common case for indexed content. NOTE: under the iterative scheme the
+ * identity guarantee is now whole-tree — if ANY descendant required cleaning,
+ * EVERY container on the path from root to that descendant is freshly
+ * allocated (the prior recursive impl had the same property in practice,
+ * since a dirty descendant forced cloning at every wrapping container).
+ *
+ * Object containers are allocated via `Object.create(null)` so that bracket
+ * assignment of a sanitized key like `"__proto__"` (from input
+ * `"__proto__\x00"`) creates an own data property instead of invoking the
+ * `Object.prototype` setter — which would silently discard a non-object/null
+ * value, dropping a metadata entry on the floor. `JSON.stringify` walks own
+ * enumerable properties on a null-prototype object identically to a plain
+ * object, so the only downstream consumer (`chunkInsertParams`, via
+ * `insertCollectedData`'s `JSON.stringify`) is transparent to the swap.
  *
  * If two pre-sanitization keys collide post-strip (e.g. both `"a\x00"` and
  * `"a"` map to `"a"`), the later entry from `Object.entries` order wins.
  * This is acceptable because a NUL-bearing key is by definition malformed
  * input — losing one of the colliding entries is preferable to failing the
  * whole INSERT and bricking the source's index pipeline.
+ *
+ * Cyclic inputs: the cycle is preserved in the OUTPUT (the same back-edge
+ * structure, rewritten onto cloned containers). The downstream
+ * `JSON.stringify` will of course throw `TypeError: cyclic` on such an output
+ * — but it would have thrown identically on the input had we returned it
+ * unchanged. This function's contract is "do not stack-overflow"; it does
+ * not promise to flatten cycles into a JSON-serializable shape.
+ *
+ * Non-plain objects (Date, Buffer, RegExp, Map, Set, class instances —
+ * anything whose prototype is neither `Object.prototype` nor `null`) are
+ * treated as opaque LEAVES: they are passed through untouched, NOT walked or
+ * reallocated. Walking such values would be doubly wrong: (a)
+ * `Object.entries(new Date(...))` returns `[]` (no own enumerable props), so
+ * the reallocation would silently flatten the value to `{}` and destroy its
+ * `toJSON()` behavior on the downstream `JSON.stringify`; (b) Map/Set hold
+ * their content in internal slots, not enumerable own properties, so the
+ * walker can't see the payload anyway. The cost of this contract is that any
+ * NUL bytes embedded in strings INSIDE such non-plain leaves are NOT
+ * sanitized — acceptable because every realistic consumer (jsonb metadata,
+ * MCP-tool JSON input) is already plain-shape; the rare Date/Buffer in a
+ * caller-hydrated payload survives intact rather than being silently lost.
+ * Arrays are still walked (they're plain-shape).
  */
+function isPlainContainer(o: object): boolean {
+  // Arrays are plain-shape and handled by Array.isArray branches.
+  if (Array.isArray(o)) return true;
+  const proto = Object.getPrototypeOf(o);
+  return proto === Object.prototype || proto === null;
+}
+
 export function stripNulBytesDeep(value: unknown): unknown {
+  // Fast path: scalars and the no-container case bypass both passes.
   if (typeof value === "string") return stripNulBytes(value);
-  if (Array.isArray(value)) {
-    let out: unknown[] | null = null;
-    for (let i = 0; i < value.length; i++) {
-      const v = value[i];
-      const cleaned = stripNulBytesDeep(v);
-      if (cleaned !== v && out === null) {
-        out = value.slice(0, i);
+  if (value === null || typeof value !== "object") return value;
+  // Non-plain objects (Date/Buffer/RegExp/Map/Set/class instances) are
+  // treated as leaves — see JSDoc above. Returning unchanged preserves the
+  // value's identity and its `toJSON()` semantics for the downstream
+  // `JSON.stringify` consumer.
+  if (!isPlainContainer(value)) return value;
+
+  // ---- Pass 1: detect whether any string (key or value) carries a NUL. ----
+  // Iterative DFS over an explicit work-stack. WeakSet guards against cycles;
+  // a cycle alone does NOT mean "needs cleaning" — we keep walking the rest
+  // of the tree.
+  const seen = new WeakSet<object>();
+  const detectStack: unknown[] = [value];
+  let needsClean = false;
+  while (detectStack.length > 0) {
+    const node = detectStack.pop();
+    if (typeof node === "string") {
+      if (node.includes("\x00")) {
+        needsClean = true;
+        break;
       }
-      if (out !== null) out.push(cleaned);
+      continue;
     }
-    return out ?? value;
+    if (node === null || typeof node !== "object") continue;
+    // Non-plain objects (Date/Buffer/RegExp/Map/Set/class instances) are
+    // opaque leaves — do not walk their internals. Skips both the cycle
+    // record (irrelevant for leaves) and any false-positive NUL hits inside
+    // opaque payloads we wouldn't be able to safely rewrite anyway.
+    if (!isPlainContainer(node)) continue;
+    if (seen.has(node)) continue;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (let i = node.length - 1; i >= 0; i--) detectStack.push(node[i]);
+    } else {
+      // Object.entries semantics: own enumerable string-keyed properties.
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        if (k.includes("\x00")) {
+          needsClean = true;
+          break;
+        }
+        detectStack.push(v);
+      }
+      if (needsClean) break;
+    }
   }
-  if (value !== null && typeof value === "object") {
-    // Output container is a null-prototype object so that bracket assignment
-    // of a sanitized key like "__proto__" (from input "__proto__\x00") creates
-    // an own data property instead of invoking the Object.prototype setter
-    // — which would silently discard a non-object/null value (typical case:
-    // string), dropping the entry on the floor and losing the source's
-    // metadata. JSON.stringify walks own enumerable properties on a
-    // null-prototype object identically to a plain object, so the only
-    // downstream consumer (chunkInsertParams, which JSON.stringify's the
-    // result) is transparent to the prototype swap.
-    let out: Record<string, unknown> | null = null;
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const cleanedKey = stripNulBytes(k);
-      const cleanedVal = stripNulBytesDeep(v);
-      if ((cleanedKey !== k || cleanedVal !== v) && out === null) {
-        out = Object.create(null) as Record<string, unknown>;
-        // Backfill prior (already-clean) entries we walked past.
-        for (const [pk, pv] of Object.entries(
-          value as Record<string, unknown>,
-        )) {
-          if (pk === k) break;
-          out[pk] = pv;
+  if (!needsClean) return value;
+
+  // ---- Pass 2: build cleaned mirror iteratively. -------------------------
+  // WeakMap input→output preserves cycles (a back-edge in the input becomes
+  // a back-edge in the output pointing at the already-allocated clone).
+  // Strategy: pre-allocate the output container for every reachable container
+  // on a first sweep (so back-edges can resolve), then a second sweep wires
+  // up children.
+  const mirror = new WeakMap<object, unknown[] | Record<string, unknown>>();
+  const allocStack: object[] = [value as object];
+  // Allocate skeletons. Non-plain children (Date/Buffer/RegExp/Map/Set/class
+  // instances) are NOT allocated a mirror — they're treated as leaves in the
+  // fill pass and the input reference is wired through unchanged.
+  while (allocStack.length > 0) {
+    const node = allocStack.pop()!;
+    if (mirror.has(node)) continue;
+    if (Array.isArray(node)) {
+      mirror.set(node, new Array(node.length));
+      for (let i = 0; i < node.length; i++) {
+        const child = node[i];
+        if (
+          child !== null &&
+          typeof child === "object" &&
+          isPlainContainer(child as object)
+        )
+          allocStack.push(child as object);
+      }
+    } else {
+      mirror.set(node, Object.create(null) as Record<string, unknown>);
+      for (const v of Object.values(node as Record<string, unknown>)) {
+        if (
+          v !== null &&
+          typeof v === "object" &&
+          isPlainContainer(v as object)
+        )
+          allocStack.push(v as object);
+      }
+    }
+  }
+  // Fill skeletons.
+  const fillStack: object[] = [value as object];
+  const filled = new WeakSet<object>();
+  while (fillStack.length > 0) {
+    const node = fillStack.pop()!;
+    if (filled.has(node)) continue;
+    filled.add(node);
+    const out = mirror.get(node)!;
+    if (Array.isArray(node)) {
+      const outArr = out as unknown[];
+      for (let i = 0; i < node.length; i++) {
+        const child = node[i];
+        if (typeof child === "string") {
+          outArr[i] = stripNulBytes(child);
+        } else if (child !== null && typeof child === "object") {
+          // Non-plain children are passed through by reference (leaf
+          // semantics — see JSDoc). Plain children resolve to their
+          // pre-allocated mirror and get filled on a later iteration.
+          if (!isPlainContainer(child as object)) {
+            outArr[i] = child;
+          } else {
+            outArr[i] = mirror.get(child as object)!;
+            fillStack.push(child as object);
+          }
+        } else {
+          outArr[i] = child;
         }
       }
-      if (out !== null) out[cleanedKey] = cleanedVal;
+    } else {
+      const outObj = out as Record<string, unknown>;
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        const cleanedKey = k.includes("\x00") ? stripNulBytes(k) : k;
+        if (typeof v === "string") {
+          outObj[cleanedKey] = stripNulBytes(v);
+        } else if (v !== null && typeof v === "object") {
+          // See array branch above — non-plain values are leaves.
+          if (!isPlainContainer(v as object)) {
+            outObj[cleanedKey] = v;
+          } else {
+            outObj[cleanedKey] = mirror.get(v as object)!;
+            fillStack.push(v as object);
+          }
+        } else {
+          outObj[cleanedKey] = v;
+        }
+      }
     }
-    return out ?? value;
   }
-  return value;
+  return mirror.get(value as object)!;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,13 +277,29 @@ export async function searchChunks(
   const params: unknown[] = [pgvector.toSql(embedding)];
   let paramIdx = 2;
 
-  if (sourceName) {
+  // Sanitize text-typed binds: chunks rows are written with stripNulBytes
+  // applied to source_name/version, so a NUL-bearing reader bind would either
+  // (a) crash the SELECT with `invalid byte sequence for encoding "UTF8":
+  // 0x00`, or (b) silently miss rows because the stored values are sanitized
+  // while the WHERE comparand is not. Mirror the writer-side discipline.
+  //
+  // Eager-sanitize every optional text filter ONCE, then test truthy on the
+  // sanitized local: a raw `"\x00"` is truthy under the truthy check, but
+  // sanitizes to `""`. Without this ordering the WHERE filter would become
+  // `source_name = ''` / `version = ''` — matching zero rows because the
+  // writer stores non-empty NUL-stripped values. textSearchChunks applies
+  // the same discipline for its sourceName/version filters and keyword
+  // pattern (which feeds plainto_tsquery's TEXT bind on the wire).
+  const sanitizedSourceName =
+    sourceName != null ? stripNulBytes(sourceName) : undefined;
+  const sanitizedVersion = version != null ? stripNulBytes(version) : undefined;
+  if (sanitizedSourceName) {
     conditions.push(`source_name = $${paramIdx++}`);
-    params.push(sourceName);
+    params.push(sanitizedSourceName);
   }
-  if (version) {
+  if (sanitizedVersion) {
     conditions.push(`version = $${paramIdx++}`);
-    params.push(version);
+    params.push(sanitizedVersion);
   }
 
   const whereClause =
@@ -194,7 +354,31 @@ export async function textSearchChunks(
   sourceName?: string,
   version?: string,
 ): Promise<ChunkResult[]> {
-  if (!pattern.trim()) return [];
+  // Eager-sanitize EVERY caller-supplied text input ONCE at function entry,
+  // then use the sanitized locals throughout. This makes the
+  // sanitize-then-truthy ordering bug impossible by construction: a raw input
+  // never reaches a truthy gate or a bind site. Mirrors searchChunks; the
+  // value of doing it at the top (rather than per-binding) is that adding a
+  // new conditional filter later cannot reintroduce the raw-truthy bug.
+  //
+  // For each optional filter: a `null`/`undefined`/missing value preserves
+  // "no filter" semantics (the caller omitted it). A NUL-only input
+  // (`"\x00"`) is truthy on the raw value but sanitizes to `""`; treating
+  // empty-after-sanitize as "no filter" prevents `WHERE source_name = ''`,
+  // which would match zero rows because the writer stores NUL-stripped
+  // non-empty values. Downstream, hybridSearchChunks uses textSearchChunks
+  // for the keyword half of the RRF merge, so a NUL in the source filter
+  // would silently zero out the keyword contribution on NUL-bearing inputs.
+  const sanitizedPattern = stripNulBytes(pattern);
+  // Sanitize BEFORE the empty/whitespace early-return: NUL bytes are not
+  // whitespace, so a NUL-only input (`"\x00\x00\x00"`) would otherwise
+  // survive `pattern.trim()` and issue a useless plainto_tsquery DB
+  // roundtrip against an empty string.
+  if (!sanitizedPattern.trim()) return [];
+
+  const sanitizedSourceName =
+    sourceName != null ? stripNulBytes(sourceName) : undefined;
+  const sanitizedVersion = version != null ? stripNulBytes(version) : undefined;
 
   const pool = getPool();
 
@@ -202,20 +386,26 @@ export async function textSearchChunks(
   const params: unknown[] = [];
   let paramIdx = 1;
 
-  // tsquery from user input — plainto_tsquery handles special chars safely
+  // tsquery from user input — plainto_tsquery handles special chars safely.
+  // The pattern bind is the sanitized local: a NUL in the tsquery text bind
+  // raises the same `invalid byte sequence for encoding "UTF8": 0x00` error
+  // as the chunks text columns (plainto_tsquery's input is a TEXT bind on
+  // the wire).
   conditions.push(`tsv @@ plainto_tsquery('english', $${paramIdx})`);
-  params.push(pattern);
+  params.push(sanitizedPattern);
   paramIdx++;
 
-  if (sourceName) {
-    conditions.push(`source_name = $${paramIdx}`);
-    params.push(sourceName);
-    paramIdx++;
+  // The truthy check runs on the SANITIZED locals — a NUL-only input
+  // sanitizes to `""` and is correctly treated as "no filter" rather than
+  // "match empty string".
+  if (sanitizedSourceName) {
+    conditions.push(`source_name = $${paramIdx++}`);
+    params.push(sanitizedSourceName);
   }
 
-  if (version) {
+  if (sanitizedVersion) {
     conditions.push(`version = $${paramIdx++}`);
-    params.push(version);
+    params.push(sanitizedVersion);
   }
 
   const whereClause = conditions.join(" AND ");
@@ -539,9 +729,12 @@ export async function getIndexedItemIds(
   sourceName: string,
 ): Promise<Set<string>> {
   const pool = getPool();
+  // Sanitize sourceName: chunks.source_name is stored NUL-stripped on write,
+  // so a NUL-bearing bind here would either crash the SELECT or silently miss
+  // rows. Matches the chunks-table writer-side discipline.
   const { rows } = await pool.query(
     "SELECT DISTINCT file_path FROM chunks WHERE source_name = $1",
-    [sourceName],
+    [stripNulBytes(sourceName)],
   );
   return new Set(
     rows.map((r: Record<string, unknown>) => r.file_path as string),
@@ -565,7 +758,14 @@ export async function getIndexState(
         FROM index_state
         WHERE source_type = $1 AND source_key = $2
     `;
-  const { rows } = await pool.query(sql, [sourceType, sourceKey]);
+  // Sanitize text identifiers: index_state.source_type / source_key are
+  // written through upsertIndexState with NUL-stripped binds, so a
+  // NUL-bearing lookup would either crash with `invalid byte sequence` or
+  // miss the row entirely against the sanitized stored value.
+  const { rows } = await pool.query(sql, [
+    stripNulBytes(sourceType),
+    stripNulBytes(sourceKey),
+  ]);
   if (rows.length === 0) return null;
 
   const row = rows[0];
@@ -595,13 +795,22 @@ export async function upsertIndexState(state: IndexState): Promise<void> {
             status          = EXCLUDED.status,
             error_message   = EXCLUDED.error_message
     `;
+  // Sanitize every text-typed bind. The highest-risk column here is
+  // error_message: it's populated with raw upstream errors, which in the
+  // chunks-INSERT failure mode is literally a stringified Postgres error
+  // containing the offending 0x00 byte. Persisting that raw would re-trip
+  // `invalid byte sequence for encoding "UTF8": 0x00` on the index_state
+  // UPDATE itself — turning the original transient failure into a poison-pill
+  // loop the orchestrator can never advance past. Sanitizing all binds here
+  // (not just error_message) also keeps the ON CONFLICT EXCLUDED.* targets
+  // symmetric with their INSERT VALUES counterparts.
   await pool.query(sql, [
-    state.source_type,
-    state.source_key,
-    state.last_commit_sha ?? null,
+    stripNulBytes(state.source_type),
+    stripNulBytes(state.source_key),
+    state.last_commit_sha == null ? null : stripNulBytes(state.last_commit_sha),
     state.last_indexed_at ?? null,
-    state.status ?? "idle",
-    state.error_message ?? null,
+    stripNulBytes(state.status ?? "idle"),
+    state.error_message == null ? null : stripNulBytes(state.error_message),
   ]);
 }
 
@@ -617,9 +826,18 @@ export async function insertCollectedData(
   data: Record<string, unknown>,
 ): Promise<void> {
   const pool = getPool();
+  // Sanitize the tool_name TEXT bind and walk the data JSONB blob with
+  // stripNulBytesDeep before JSON.stringify. collected_data is fed from
+  // arbitrary caller payloads: collect.ts forwards user MCP input, and
+  // bash-telemetry.ts records raw shell-command strings (which legitimately
+  // contain NUL — e.g. `printf '\0' | xxd`). An unsanitized NUL anywhere in
+  // the JSONB string members fails the cast with `invalid byte sequence for
+  // encoding "UTF8": 0x00` and rejects the INSERT. Walking with the deep
+  // sanitizer also covers object KEYS, which jsonb rejects identically to
+  // values.
   await pool.query(
     "INSERT INTO collected_data (tool_name, data) VALUES ($1, $2)",
-    [toolName, JSON.stringify(data)],
+    [stripNulBytes(toolName), JSON.stringify(stripNulBytesDeep(data))],
   );
 }
 
@@ -655,12 +873,18 @@ export async function recordWebhookDelivery(delivery: {
     await pool.query(
       `INSERT INTO webhook_deliveries (source, event_type, repo, decision, reason, payload_size)
        VALUES ($1, $2, $3, $4, $5, $6)`,
+      // Webhook payloads are partly attacker-influenced (event_type/repo/
+      // reason come from incoming webhook bodies). A NUL in any of those text
+      // binds would error the INSERT with `invalid byte sequence for encoding
+      // "UTF8": 0x00`; since recordWebhookDelivery is fire-and-forget, the
+      // failure would only surface as a logged tracking miss, but the cleanup
+      // is identical to the chunks-table side: strip the byte at the bind.
       [
-        delivery.source,
-        delivery.event_type ?? null,
-        delivery.repo ?? null,
-        delivery.decision,
-        delivery.reason ?? null,
+        stripNulBytes(delivery.source),
+        delivery.event_type == null ? null : stripNulBytes(delivery.event_type),
+        delivery.repo == null ? null : stripNulBytes(delivery.repo),
+        stripNulBytes(delivery.decision),
+        delivery.reason == null ? null : stripNulBytes(delivery.reason),
         delivery.payload_size ?? null,
       ],
     );
@@ -850,9 +1074,23 @@ export async function getFaqChunks(
 
   if (sourceNames.length === 0) return [];
 
+  // Sanitize each source_name text bind FIRST, then drop empty-after-sanitize
+  // entries: chunks.source_name is stored NUL-stripped by the writer side, so
+  // a NUL-only caller input would sanitize to `""` and pollute the IN clause
+  // with a never-matching empty-string comparand (silent zero-rows for any
+  // legitimate companion entries in the list). If every entry sanitizes away,
+  // there is nothing to filter on — return [] (same semantic as the
+  // `length === 0` guard above). Mirrors searchChunks / textSearchChunks.
+  const sanitizedSourceNames = sourceNames
+    .map((s) => stripNulBytes(s))
+    .filter((s) => s !== "");
+  if (sanitizedSourceNames.length === 0) return [];
+
   // Build parameterized source_name IN clause
-  const placeholders = sourceNames.map((_, i) => `$${i + 1}`).join(", ");
-  const confidenceParam = sourceNames.length + 1;
+  const placeholders = sanitizedSourceNames
+    .map((_, i) => `$${i + 1}`)
+    .join(", ");
+  const confidenceParam = sanitizedSourceNames.length + 1;
 
   // Guard BOTH confidence casts with jsonb_typeof so a row whose `confidence`
   // KEY exists but holds non-numeric text (e.g. "high") degrades to 0.0 instead
@@ -892,7 +1130,7 @@ export async function getFaqChunks(
         ORDER BY indexed_at DESC, id DESC
     `;
 
-  const params: unknown[] = [...sourceNames, minConfidence];
+  const params: unknown[] = [...sanitizedSourceNames, minConfidence];
 
   if (limit != null) {
     sql += ` LIMIT $${confidenceParam + 1}`;

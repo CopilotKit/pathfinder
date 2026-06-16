@@ -277,6 +277,78 @@ describe("stripNulBytesDeep (identity-preservation contract)", () => {
   });
 });
 
+describe("stripNulBytesDeep safety under adversarial input (cycles + deep nesting)", () => {
+  // The only consumer of stripNulBytesDeep that doesn't control its input is
+  // insertCollectedData (queries.ts:651): MCP tool-call payloads land here as
+  // arbitrary JSON-shaped JS values produced by external clients. A recursive
+  // tree walk on such input is a stack-overflow waiting to happen — either
+  // the client constructs a self-referential structure (cycle) or simply
+  // feeds a deeply-nested object. Pre-fix the recursive impl in queries.ts
+  // would throw `RangeError: Maximum call stack size exceeded` on both
+  // shapes, bricking the INSERT in exactly the way the JSON.stringify ->
+  // stripNulBytesDeep swap was supposed to prevent. Iterative walk closes
+  // the regression by construction.
+  it("does not throw on a self-referential object (cycle root)", () => {
+    const a: Record<string, unknown> = { x: "ok\x00cyc" };
+    a.self = a;
+    // Must not stack-overflow. The visible NUL on `x` is stripped.
+    const out = stripNulBytesDeep(a) as Record<string, unknown>;
+    expect(out).not.toBe(a);
+    expect(out.x).toBe("okcyc");
+    // The output preserves the cycle structurally — `self` points back at
+    // the cloned root (NOT at the input). This matches the docstring: the
+    // function's contract is "do not stack-overflow", not "flatten cycles".
+    expect(out.self).toBe(out);
+  });
+
+  it("does not throw on a cycle that requires no sanitization (identity NOT preserved on cycle)", () => {
+    // A clean cycle would, in the no-cycle case, return the input
+    // referentially. With cycles present and a NUL elsewhere in the tree,
+    // the detect pass still trips needsClean and we clone — verify that the
+    // walk terminates regardless of whether the dirty string is reached
+    // before or after the back-edge.
+    const a: Record<string, unknown> = { dirty: "x\x00y" };
+    const b: Record<string, unknown> = { ref: a };
+    a.back = b;
+    const out = stripNulBytesDeep(a) as Record<string, unknown>;
+    expect(out).not.toBe(a);
+    expect(out.dirty).toBe("xy");
+    const outBack = out.back as Record<string, unknown>;
+    expect(outBack).not.toBe(b);
+    expect(outBack.ref).toBe(out); // back-edge rewritten onto the clone
+  });
+
+  it("does not throw on a 10,000-level deeply nested linear object", () => {
+    // Construct a 10k-deep linear chain. Pre-fix this stack-overflows on
+    // V8's default ~10k call-stack budget the moment the walker descends
+    // through every level. Iterative walk pays only heap, not stack.
+    let cur: Record<string, unknown> = { leaf: "deep\x00leaf" };
+    for (let i = 0; i < 10000; i++) cur = { a: cur };
+    // Must not throw.
+    const out = stripNulBytesDeep(cur);
+    // Descend the output non-recursively to verify both that we got a clean
+    // mirror back AND that the deepest string was sanitized.
+    let node: unknown = out;
+    for (let i = 0; i < 10000; i++) {
+      node = (node as Record<string, unknown>).a;
+    }
+    expect((node as Record<string, unknown>).leaf).toBe("deepleaf");
+  });
+
+  it("does not throw on a deeply nested array (mirror shape via Array.isArray branch)", () => {
+    // Same idea as the deep-object test, but exercising the array branch of
+    // the iterative walker — a deeply nested `[[[ ... ]]]` chain.
+    let curArr: unknown[] = ["deep\x00leaf"];
+    for (let i = 0; i < 10000; i++) curArr = [curArr];
+    const out = stripNulBytesDeep(curArr) as unknown[];
+    let node: unknown = out;
+    for (let i = 0; i < 10000; i++) {
+      node = (node as unknown[])[0];
+    }
+    expect((node as unknown[])[0]).toBe("deepleaf");
+  });
+});
+
 describe("stripNulBytesDeep prototype-setter trap (the __proto__ key drop)", () => {
   // A NUL-bearing key like "__proto__\x00" sanitizes to "__proto__". Assigning
   // through bracket notation on a plain {} invokes the __proto__ setter — when
@@ -328,6 +400,96 @@ describe("stripNulBytesDeep prototype-setter trap (the __proto__ key drop)", () 
     expect(Object.prototype.hasOwnProperty.call(out, "constructor")).toBe(true);
     expect(out["constructor"]).toBe("evil");
     expect(out["normal"]).toBe("ok");
+  });
+});
+
+describe("stripNulBytesDeep non-plain-object leaf semantics (Date/Buffer/RegExp)", () => {
+  // J1 (recurring CR finding): the walker reallocates every container it
+  // visits as `Object.create(null)` or a fresh array, enumerating via
+  // `Object.entries`. For a Date/Buffer/RegExp nested INSIDE a dirty subtree,
+  // `Object.entries(date)` returns `[]` (no own enumerable props) and the
+  // value gets silently replaced with an empty null-prototype object — its
+  // `toJSON()` semantics are lost. This is path-dependent corruption: a Date
+  // next to a NUL-bearing sibling is destroyed; a Date in a clean subtree is
+  // preserved by the identity-hot-path early-return.
+  //
+  // The fix: treat non-plain objects (prototype is neither Object.prototype
+  // nor null) as opaque leaves — pass them through by reference, do NOT
+  // walk, do NOT reallocate. This restores `JSON.stringify`'s delegation to
+  // the value's `toJSON()` for Dates and to its native serializer for Buffer
+  // / class instances.
+
+  it("preserves a Date when a sibling string carries a NUL (dirty-path)", () => {
+    const ts = new Date("2024-01-01T00:00:00Z");
+    const input = { ts, bad: "n\x00ul" };
+    const out = stripNulBytesDeep(input) as { ts: unknown; bad: string };
+    // Sanitization of the dirty sibling still happens.
+    expect(out.bad).toBe("nul");
+    // The Date survives intact: same reference AND same ISO serialization
+    // through JSON.stringify (which is the realistic consumer path via
+    // chunkInsertParams). Pre-fix, the walker would reallocate `ts` as an
+    // empty `Object.create(null)` and JSON.stringify would emit `"{}"`.
+    expect(out.ts).toBeInstanceOf(Date);
+    expect(out.ts).toBe(ts);
+    expect((out.ts as Date).toISOString()).toBe("2024-01-01T00:00:00.000Z");
+    expect(JSON.stringify(out)).toContain('"ts":"2024-01-01T00:00:00.000Z"');
+  });
+
+  it("preserves a Buffer when a sibling string carries a NUL (dirty-path)", () => {
+    const buf = Buffer.from("hello");
+    const input = { buf, bad: "n\x00ul" };
+    const out = stripNulBytesDeep(input) as { buf: unknown; bad: string };
+    expect(out.bad).toBe("nul");
+    // Pre-fix: `out.buf` would be `{}` (Object.entries(Buffer) returns [];
+    // Buffer's own enumerable props are the numeric indices, but the walker
+    // would still reallocate as `Object.create(null)` and not preserve
+    // Buffer semantics). Post-fix: same reference, IS-A Buffer.
+    expect(Buffer.isBuffer(out.buf)).toBe(true);
+    expect(out.buf).toBe(buf);
+    expect((out.buf as Buffer).toString("utf8")).toBe("hello");
+  });
+
+  it("preserves a RegExp when a sibling string carries a NUL (dirty-path)", () => {
+    const re = /abc/g;
+    const input = { re, bad: "n\x00ul" };
+    const out = stripNulBytesDeep(input) as { re: unknown; bad: string };
+    expect(out.bad).toBe("nul");
+    // Pre-fix: `out.re` would be `{}`. Post-fix: same reference, IS-A RegExp.
+    expect(out.re).toBeInstanceOf(RegExp);
+    expect(out.re).toBe(re);
+    expect((out.re as RegExp).source).toBe("abc");
+    expect((out.re as RegExp).flags).toBe("g");
+  });
+
+  it("preserves a non-plain leaf nested under multiple dirty containers", () => {
+    // Depth check: the walker must treat the non-plain object as a leaf at
+    // ANY depth, not just at the root level. A Date deep under two dirty
+    // wrapping objects must survive the same way.
+    const ts = new Date("2025-06-01T12:34:56Z");
+    const input = {
+      outer: { dirty: "x\x00y", inner: { ts, alsoDirty: "p\x00q" } },
+    };
+    const out = stripNulBytesDeep(input) as {
+      outer: {
+        dirty: string;
+        inner: { ts: unknown; alsoDirty: string };
+      };
+    };
+    expect(out.outer.dirty).toBe("xy");
+    expect(out.outer.inner.alsoDirty).toBe("pq");
+    expect(out.outer.inner.ts).toBeInstanceOf(Date);
+    expect(out.outer.inner.ts).toBe(ts);
+  });
+
+  it("preserves a non-plain leaf inside a dirty array element", () => {
+    // Array branch coverage — symmetric to the object branch above.
+    const ts = new Date("2026-01-01T00:00:00Z");
+    const input = ["clean", "n\x00ul", ts];
+    const out = stripNulBytesDeep(input) as unknown[];
+    expect(out[0]).toBe("clean");
+    expect(out[1]).toBe("nul");
+    expect(out[2]).toBeInstanceOf(Date);
+    expect(out[2]).toBe(ts);
   });
 });
 
