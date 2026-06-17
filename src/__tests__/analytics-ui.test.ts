@@ -281,6 +281,7 @@ describe("analytics dashboard UI — date preset wiring", () => {
       },
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, calls, chartInstances } = await loadDashboard(endpoints);
@@ -386,6 +387,7 @@ describe("analytics dashboard UI — date preset wiring", () => {
         "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
         "/api/analytics/queries": () => [],
         "/api/analytics/empty-queries": () => [],
+        "/api/analytics/blocked-queries": () => [],
       };
 
       const { dom, calls } = await loadDashboard(endpoints);
@@ -474,6 +476,7 @@ describe("analytics dashboard UI — date preset wiring", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, calls } = await loadDashboard(endpoints);
@@ -542,6 +545,7 @@ describe("analytics dashboard UI — dynamic window labels", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
   }
 
@@ -697,6 +701,7 @@ describe("analytics dashboard UI — daily bar click drills down", () => {
         "/api/analytics/tool-counts": () => canned(3, 500).toolCounts,
         "/api/analytics/queries": () => [],
         "/api/analytics/empty-queries": () => [],
+        "/api/analytics/blocked-queries": () => [],
       };
 
       const { dom, calls, chartInstances } = await loadDashboard(endpoints);
@@ -760,6 +765,7 @@ describe("analytics dashboard UI — custom-range apply", () => {
       "/api/analytics/tool-counts": () => canned(3, 100).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, calls } = await loadDashboard(endpoints);
@@ -827,6 +833,178 @@ describe("analytics dashboard UI — custom-range apply", () => {
   });
 });
 
+describe("analytics dashboard UI — Pacific timestamps (v1.15.3)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders Empty Queries last_seen in Pacific time with PDT/PST marker, not UTC", async () => {
+    // Two instants — one in DST (June, PDT = UTC-7) and one in standard
+    // (January, PST = UTC-8) — verify the formatter picks the right
+    // marker for each.
+    const dstInstant = "2026-06-17T16:40:32.000Z"; // 09:40:32 PDT
+    const stdInstant = "2026-01-15T17:40:32.000Z"; // 09:40:32 PST
+
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 0).summary,
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [
+        {
+          query_text: "summer-query",
+          tool_name: "search-docs",
+          source_name: "docs",
+          count: 1,
+          last_seen: dstInstant,
+        },
+        {
+          query_text: "winter-query",
+          tool_name: "search-docs",
+          source_name: "docs",
+          count: 1,
+          last_seen: stdInstant,
+        },
+      ],
+      "/api/analytics/blocked-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+    const rows = Array.from(
+      dom.window.document.querySelectorAll("#emptyQueriesTable tbody tr"),
+    );
+    expect(rows.length).toBe(2);
+
+    const cells = rows.map((r) =>
+      Array.from(r.querySelectorAll("td")).map((c) => c.textContent ?? ""),
+    );
+    // Row order matches the array we sent (count is the same, server
+    // doesn't re-sort here — the client renders what it receives).
+    // PDT row (June 17, 09:40:32 PDT — UTC-7).
+    expect(cells[0][4]).toContain("PDT");
+    expect(cells[0][4]).toContain("2026-06-17");
+    expect(cells[0][4]).toContain("09:40:32");
+    expect(cells[0][4]).not.toContain("UTC");
+    // PST row (Jan 15, 09:40:32 PST — UTC-8).
+    expect(cells[1][4]).toContain("PST");
+    expect(cells[1][4]).toContain("2026-01-15");
+    expect(cells[1][4]).toContain("09:40:32");
+    expect(cells[1][4]).not.toContain("UTC");
+  });
+
+  it("renders an em-dash for missing / non-parseable last_seen instead of 'Invalid Date'", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 0).summary,
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [
+        {
+          query_text: "q1",
+          tool_name: "t",
+          source_name: "s",
+          count: 1,
+          last_seen: null,
+        },
+        {
+          query_text: "q2",
+          tool_name: "t",
+          source_name: "s",
+          count: 1,
+          last_seen: "not-a-date",
+        },
+      ],
+      "/api/analytics/blocked-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+    const rows = Array.from(
+      dom.window.document.querySelectorAll("#emptyQueriesTable tbody tr"),
+    );
+    expect(rows.length).toBe(2);
+    const lastSeenCells = rows.map(
+      (r) => r.querySelectorAll("td")[4]?.textContent ?? "",
+    );
+    // Both should render the em-dash, not "Invalid Date".
+    expect(lastSeenCells[0]).toBe("—");
+    expect(lastSeenCells[1]).toBe("—");
+  });
+});
+
+describe("analytics dashboard UI — Blocked Queries panel (v1.15.3)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetches /api/analytics/blocked-queries on load and renders one row per block_reason", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 0).summary,
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [
+        {
+          block_reason: "box-office",
+          hits: 142,
+          last_seen: "2026-06-17T16:40:32.000Z",
+          sample_queries: ["box office weekend", "toy story 5 box office"],
+        },
+        {
+          block_reason: "kalshi-scotus",
+          hits: 5,
+          last_seen: "2026-06-17T05:00:00.000Z",
+          sample_queries: ["cftc kalshi certiorari"],
+        },
+      ],
+    };
+
+    const { dom, calls } = await loadDashboard(endpoints);
+
+    // The endpoint must have been called.
+    expect(
+      calls.some((u) => u.startsWith("/api/analytics/blocked-queries")),
+    ).toBe(true);
+
+    // The panel must exist and have two body rows.
+    const rows = Array.from(
+      dom.window.document.querySelectorAll("#blockedQueriesTable tbody tr"),
+    );
+    expect(rows.length).toBe(2);
+
+    const firstCells = Array.from(rows[0].querySelectorAll("td")).map(
+      (c) => c.textContent ?? "",
+    );
+    expect(firstCells[0]).toBe("box-office");
+    expect(firstCells[1]).toBe("142");
+    // Pacific time marker for the rendered last_seen.
+    expect(firstCells[2]).toContain("PDT");
+    expect(firstCells[2]).not.toContain("UTC");
+    // Sample queries joined by " · ".
+    expect(firstCells[3]).toContain("box office weekend");
+    expect(firstCells[3]).toContain("toy story 5 box office");
+    expect(firstCells[3]).toContain("·");
+  });
+
+  it("renders an explanatory 'No blocked queries' row when the panel is empty", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 0).summary,
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
+    };
+
+    const { dom } = await loadDashboard(endpoints);
+    const rows = Array.from(
+      dom.window.document.querySelectorAll("#blockedQueriesTable tbody tr"),
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].textContent).toContain("No blocked queries");
+  });
+});
+
 describe("analytics dashboard UI — HTML escaping", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -856,6 +1034,7 @@ describe("analytics dashboard UI — HTML escaping", () => {
       "/api/analytics/tool-counts": () => [],
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom } = await loadDashboard(endpoints);
@@ -941,6 +1120,7 @@ describe("analytics dashboard UI — unfilteredSourcesCache", () => {
       ],
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
   }
 
@@ -1077,6 +1257,7 @@ describe("analytics dashboard UI — loadGeneration race guard", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom } = await loadDashboard(endpoints);
@@ -1145,6 +1326,7 @@ describe("analytics dashboard UI — error banner", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
     // Swallow the [analytics] load() console.error — it's intentional and
     // the test assertion lives on the banner, not on the log.
@@ -1177,6 +1359,7 @@ describe("analytics dashboard UI — error banner", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { dom } = await loadDashboard(endpoints);
@@ -1218,6 +1401,7 @@ describe("analytics dashboard UI — error banner", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
     // Swallow the intentional console.error from load()'s catch + the
     // fetchJson parse-fail log, since the test assertion lives on the
@@ -1247,6 +1431,7 @@ describe("analytics dashboard UI — error banner", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { dom } = await loadDashboard(endpoints);
@@ -1274,6 +1459,7 @@ describe("analytics dashboard UI — error banner", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { dom } = await loadDashboard(endpoints);
@@ -1310,6 +1496,7 @@ describe("analytics dashboard UI — fetchJson 401/403 auth failure", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
     // Prime sessionStorage with a stale token BEFORE the page loads so the
     // dashboard picks it up as TOKEN at init time. We need to seed the
@@ -1397,6 +1584,7 @@ describe("analytics dashboard UI — custom-range invalid input", () => {
       "/api/analytics/tool-counts": () => canned(3, 500).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, calls } = await loadDashboard(endpoints);
@@ -1609,6 +1797,7 @@ describe("analytics dashboard UI — p95 sampled badge", () => {
       "/api/analytics/tool-counts": () => [],
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom } = await loadDashboard(endpoints);
@@ -1636,6 +1825,7 @@ describe("analytics dashboard UI — p95 sampled badge", () => {
       "/api/analytics/tool-counts": () => [],
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom } = await loadDashboard(endpoints);
@@ -1668,6 +1858,7 @@ describe("analytics dashboard UI — Today preset exclusive highlight", () => {
       "/api/analytics/tool-counts": () => canned(1, 500).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom } = await loadDashboard(endpoints);
@@ -1729,6 +1920,7 @@ describe("analytics dashboard UI — daily chart drill-down malformed-day reject
       "/api/analytics/tool-counts": () => canned(3, 500).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, calls, chartInstances } = await loadDashboard(endpoints);
@@ -1795,6 +1987,7 @@ describe("analytics dashboard UI — custom-range backwards swap", () => {
       "/api/analytics/tool-counts": () => canned(3, 100).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, calls } = await loadDashboard(endpoints);
@@ -1902,6 +2095,7 @@ describe("analytics dashboard UI — fetchJson stale-401 generation guard", () =
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     // Inline the loadDashboard dance so we can seed sessionStorage + prime
@@ -2055,6 +2249,7 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, calls } = await loadDashboardAtUrl(
@@ -2085,6 +2280,7 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, calls } = await loadDashboardAtUrl(
@@ -2118,6 +2314,7 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, win } = await loadDashboardAtUrl(
@@ -2171,6 +2368,7 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, win } = await loadDashboardAtUrl(
@@ -2226,6 +2424,7 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { calls } = await loadDashboardAtUrl(
@@ -2256,6 +2455,7 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
         "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
         "/api/analytics/queries": () => [],
         "/api/analytics/empty-queries": () => [],
+        "/api/analytics/blocked-queries": () => [],
       };
 
       const { calls } = await loadDashboardAtUrl(
@@ -2279,6 +2479,7 @@ describe("analytics dashboard UI — URL-persisted time window", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { calls } = await loadDashboardAtUrl(
@@ -2435,6 +2636,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(3, 500).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, win, chartInstances } = await loadDashboardAtUrl(
@@ -2495,6 +2697,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { win } = await loadDashboardAtUrl(
@@ -2519,6 +2722,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { win } = await loadDashboardAtUrl(
@@ -2545,6 +2749,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, win } = await loadDashboardAtUrl(
@@ -2573,6 +2778,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, win, calls } = await loadDashboardAtUrl(
@@ -2655,6 +2861,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, win, calls } = await loadDashboardAtUrl(
@@ -2734,6 +2941,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     // Tokyo early-morning scenario: UTC today is 2026-04-20, but the user's
@@ -2766,6 +2974,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     const { dom, win, calls } = await loadDashboardAtUrl(
@@ -2848,6 +3057,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
 
     // URL deep-link path: today+2 is unambiguously future-future and must
@@ -2958,6 +3168,7 @@ describe("analytics dashboard UI — data availability label", () => {
       "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
       "/api/analytics/queries": () => [],
       "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
     };
   }
 

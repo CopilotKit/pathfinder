@@ -1,5 +1,17 @@
 # @copilotkit/pathfinder
 
+## 1.15.4
+
+### Patch Changes
+
+- **Re-ship of v1.15.3 with the broken `getBlockedQueries` SQL fixed and defensive client-side panel isolation.** v1.15.3 was reverted via PR #117 within minutes of deploy because the `/api/analytics/blocked-queries` route 500'd against real Postgres and the page's `Promise.all` then nuked the entire `/analytics` dashboard. v1.15.4 re-ships all three v1.15.3 changes (blocked filter on empty-results, new Blocked Queries panel, Pacific timestamps) with the SQL and resilience defects fixed.
+- **`getBlockedQueries` SQL — rewrote as a CTE-backed correlated subquery.** The original v1.15.3 SQL grouped the outer query on `COALESCE(block_reason, '<unknown>')` but the correlated subquery referenced raw `query_log.block_reason`, which Postgres rejects as an ungrouped column reference (`subquery uses ungrouped column "query_log.block_reason" from outer query`). The fix pre-projects the COALESCEd expression into a CTE (`blocked_rows.block_reason_key`) so the outer GROUP BY and the inner correlated reference operate on the same column. Verified against the actual prod Postgres schema before push.
+- **Analytics page — `Promise.all` replaced with `Promise.allSettled`.** A single panel's fetch failure used to throw out of `Promise.all` and blank the entire `/analytics` page (this is what made the v1.15.3 SQL bug catastrophic instead of merely cosmetic). Each section now renders independently: the summary endpoint failing still surfaces via the top-level error banner (the page can't render statcards without it), but per-panel failures (empty queries / blocked queries / tool counts) degrade to an empty state with a `console.error` and leave the rest of the dashboard intact. Auth (401) errors still bubble to the outer catch since a bad token fails every endpoint identically.
+
+## 1.15.3 — REVERTED
+
+This release was reverted via PR #117 immediately after deploy. Its `getBlockedQueries` SQL was incompatible with real Postgres (ungrouped column reference inside a correlated subquery) and its client-side `Promise.all` rendering blanked the entire `/analytics` page on a single panel's failure. See v1.15.4 for the fixed re-ship.
+
 ## 1.15.2
 
 ### Patch Changes

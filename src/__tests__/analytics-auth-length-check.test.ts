@@ -19,6 +19,7 @@ vi.mock("../db/analytics.js", () => ({
   getAnalyticsSummary: vi.fn(),
   getTopQueries: vi.fn(),
   getEmptyQueries: vi.fn(),
+  getBlockedQueries: vi.fn(),
   getToolCounts: vi.fn(),
 }));
 
@@ -79,6 +80,7 @@ describe("analyticsAuth length-check early return (R4-18)", () => {
       getAnalyticsSummary: async () => ({ total: 0 }) as never,
       getTopQueries: async () => [],
       getEmptyQueries: async () => [],
+      getBlockedQueries: async () => [],
       getToolCounts: async () => [],
     });
     server = http.createServer(app);
