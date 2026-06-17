@@ -1,13 +1,5 @@
 # @copilotkit/pathfinder
 
-## 1.15.3
-
-### Patch Changes
-
-- **Analytics view — "Empty Result Queries" excludes blocked rows**: rows the v1.15.2 abuse blocklist short-circuited (`blocked = true`) are filtered out of the "Empty Result Queries (Last 7 days)" table. Those queries never reached retrieval, so `result_count = 0` is a known by-design outcome — not a content gap. Previously they showed up alongside genuine empty-result rows because the SQL filtered on `result_count = 0` alone. The blocked-column predicate is `blocked = false`, which is safe for historical rows that predate the column (the schema declares `BOOLEAN NOT NULL DEFAULT FALSE`).
-- **New "Blocked Queries (Last 7 days)" panel on /analytics**: surfaces the rows the blocklist caught, grouped by `block_reason` with hit count, last-seen timestamp, and up to 5 sample queries per reason. Operators can now see the blocklist actively catching abuse instead of inferring it from the absence of off-topic rows in the empty-results table. The panel deliberately ignores tool/source/request-source filters — those carry no meaning for rows the blocklist short-circuited before retrieval — but does honor the same `days` window as the rest of the dashboard.
-- **Analytics timestamps render in Pacific time (DST-aware)**: every absolute timestamp on the /analytics operator-facing page now renders in `America/Los_Angeles` via `Intl.DateTimeFormat`, emitting e.g. `2026-06-17 09:40:32 PDT` (or `PST` in winter). The dashboard is operated from Pacific; UTC timestamps forced an in-head conversion on every read. Storage and URL contracts are unchanged — Postgres still stores `created_at TIMESTAMPTZ` in UTC, the server still computes windows in UTC, and the URL `from`/`to` contract is still a UTC calendar date. Only display flips.
-
 ## 1.15.2
 
 ### Patch Changes
