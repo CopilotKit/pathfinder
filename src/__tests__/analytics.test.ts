@@ -11,6 +11,7 @@ import {
   getAnalyticsSummary,
   getTopQueries,
   getEmptyQueries,
+  getBlockedQueries,
   getToolCounts,
   cleanupOldQueryLogs,
   REDACTED_QUERY_TEXT,
@@ -750,6 +751,113 @@ describe("getEmptyQueries edge cases", () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const result = await getEmptyQueries(7, 0);
     expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getEmptyQueries — excludes blocked rows (v1.15.3)
+// ---------------------------------------------------------------------------
+
+describe("getEmptyQueries blocked-exclusion", () => {
+  it("filters on blocked = false in the WHERE clause", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getEmptyQueries();
+
+    const [sql] = mockQuery.mock.calls[0];
+    // Must AND with blocked = false so blocked-and-empty rows don't
+    // double-count in the "real users searched and found nothing" view.
+    expect(sql).toContain("blocked = false");
+    // Sanity: must still gate on result_count = 0 (the original filter
+    // isn't replaced — it's intersected with blocked = false).
+    expect(sql).toContain("result_count = 0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getBlockedQueries
+// ---------------------------------------------------------------------------
+
+describe("getBlockedQueries", () => {
+  it("returns blocked-rows grouped by block_reason", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          block_reason: "box-office",
+          hits: 42,
+          last_seen: "2026-06-17T10:00:00Z",
+          sample_queries: ["box office weekend", "toy story 5 box office"],
+        },
+        {
+          block_reason: "kalshi-scotus",
+          hits: 5,
+          last_seen: "2026-06-17T05:00:00Z",
+          sample_queries: ["cftc kalshi certiorari"],
+        },
+      ],
+    });
+
+    const result = await getBlockedQueries(7);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].block_reason).toBe("box-office");
+    expect(result[0].hits).toBe(42);
+    expect(result[0].sample_queries).toEqual([
+      "box office weekend",
+      "toy story 5 box office",
+    ]);
+  });
+
+  it("filters on blocked = true and a windowed created_at", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getBlockedQueries(7);
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("blocked = true");
+    // Window uses a parameterized interval — days is passed as a string
+    // so `($N || ' days')::interval` composes correctly.
+    expect(sql).toContain("NOW() - ($1 || ' days')::interval");
+    expect(params).toEqual(["7"]);
+  });
+
+  it("groups by COALESCE(block_reason, '<unknown>') so null-reason rows stay visible", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getBlockedQueries();
+
+    const [sql] = mockQuery.mock.calls[0];
+    // v1.15.4: the COALESCE projection moved into a CTE
+    // (`blocked_rows.block_reason_key`) so the outer GROUP BY and the
+    // correlated subquery reference the same column expression. Without
+    // the CTE, Postgres rejected the correlated subquery's
+    // `query_log.block_reason` reference as ungrouped (the outer was
+    // grouped on COALESCE(block_reason, '<unknown>'), not raw
+    // block_reason). Assertions pin both halves:
+    expect(sql).toContain("COALESCE(block_reason, '<unknown>')");
+    expect(sql).toContain("AS block_reason_key");
+    expect(sql).toContain("GROUP BY block_reason_key");
+  });
+
+  it("orders by hits DESC", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getBlockedQueries();
+
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain("ORDER BY hits DESC");
+  });
+
+  it("coerces missing sample_queries to an empty array", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          block_reason: "x",
+          hits: 1,
+          last_seen: "2026-06-17T00:00:00Z",
+          sample_queries: null,
+        },
+      ],
+    });
+
+    const result = await getBlockedQueries();
+    expect(result[0].sample_queries).toEqual([]);
   });
 });
 
