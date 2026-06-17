@@ -238,6 +238,27 @@ export interface EmptyQuery {
   last_seen: string;
 }
 
+/**
+ * Aggregate row for the "Blocked Queries" analytics panel — one row per
+ * `block_reason` value, summarizing how many times that off-topic / abuse
+ * pattern fired in the window. Surfaced separately from {@link EmptyQuery}
+ * so operators can see the abuse blocklist actively short-circuiting traffic
+ * (the same rows are excluded from the empty-results list to avoid
+ * double-counting blocked queries as "real users found nothing").
+ *
+ * `block_reason` is the raw classifier label (e.g. `box-office`,
+ * `kalshi-scotus`, `scary-movie-2026`); the dashboard renders it verbatim.
+ * `sample_queries` is a deduplicated, alphabetically-sorted preview capped at
+ * 5 entries per reason so the panel can show concrete examples without
+ * leaking the long tail.
+ */
+export interface BlockedQueryGroup {
+  block_reason: string;
+  hits: number;
+  last_seen: string;
+  sample_queries: string[];
+}
+
 export interface ToolCount {
   tool_type: string;
   count: number;
@@ -1035,6 +1056,15 @@ export async function getTopQueries(
  * that happens to return zero entries is not a real "user searched and found
  * nothing" gap, so surfacing a literal `<browse>` row in the Empty-Result
  * dashboard would be misleading noise.
+ *
+ * Blocked rows (`blocked = true`) are ALSO excluded: those queries were
+ * short-circuited by the abuse blocklist (v1.15.2) before they ever reached
+ * the index, so `result_count = 0` is a known by-design outcome — not a
+ * content gap. They surface in {@link getBlockedQueries} instead so operators
+ * can see the blocklist actively catching abuse without polluting the
+ * "real users searched and found nothing" view. `blocked` is
+ * `BOOLEAN NOT NULL DEFAULT FALSE` so the predicate is safe for historical
+ * rows that predate the column (they read back as `false`).
  */
 export async function getEmptyQueries(
   days: number = 7,
@@ -1054,6 +1084,10 @@ export async function getEmptyQueries(
   const limitIdx = browseIdx + 1;
   const baseClauses = [
     "result_count = 0",
+    // Exclude rows the v1.15.2 abuse blocklist short-circuited (see JSDoc).
+    // The column is BOOLEAN NOT NULL DEFAULT FALSE so a plain `= false` is
+    // correct for both historical (pre-column) and current rows.
+    "blocked = false",
     ...dw.clauses,
     ...rs.clauses,
     `query_text != $${redactedIdx}`,
@@ -1090,6 +1124,72 @@ export async function getEmptyQueries(
     source_name: (r.source_name as string) ?? null,
     count: r.count as number,
     last_seen: r.last_seen as string,
+  }));
+}
+
+/**
+ * Get rows the v1.15.2 abuse blocklist short-circuited (`blocked = true`),
+ * grouped by `block_reason` so operators can see at a glance which patterns
+ * are firing and how often. Counterpart to {@link getEmptyQueries}, which now
+ * excludes these rows so a blocked query doesn't double-count as both
+ * "blocked" and "empty result".
+ *
+ * Returns up to 5 sample `query_text` values per `block_reason` (deduplicated,
+ * alphabetically sorted) so the panel can show concrete examples without
+ * leaking the long tail or unbounded text.
+ *
+ * Rows with `blocked = true` but `block_reason IS NULL` (defensive — should
+ * not happen since the writer sets both atomically) collapse into a single
+ * `<unknown>` bucket so they remain visible rather than silently dropping.
+ *
+ * Window semantics intentionally match {@link getEmptyQueries}:
+ * `created_at > NOW() - INTERVAL '<days> days'`. No filter parameter — the
+ * blocklist panel is operational-only and the filter wiring (tool/source/
+ * request_source) doesn't carry meaning for short-circuited rows that never
+ * reached the retrieval layer.
+ */
+export async function getBlockedQueries(
+  days: number = 7,
+): Promise<BlockedQueryGroup[]> {
+  const pool = getPool();
+
+  // Plain `interval N days` is bound via a parameterized integer so the
+  // operator-facing panel can't be SQL-injected through the days arg even
+  // if a future route surfaces it. Postgres rejects negative intervals on
+  // the `created_at >` half-bound anyway, but defense-in-depth.
+  const { rows } = await pool.query(
+    `SELECT
+        COALESCE(block_reason, '<unknown>') AS block_reason,
+        count(*)::int AS hits,
+        max(created_at)::text AS last_seen,
+        (
+          SELECT array_agg(s ORDER BY s)
+          FROM (
+            SELECT DISTINCT query_text AS s
+            FROM query_log AS inner_q
+            WHERE inner_q.blocked = true
+              AND COALESCE(inner_q.block_reason, '<unknown>')
+                  = COALESCE(query_log.block_reason, '<unknown>')
+              AND inner_q.created_at > NOW() - ($1 || ' days')::interval
+            ORDER BY query_text
+            LIMIT 5
+          ) sub
+        ) AS sample_queries
+     FROM query_log
+     WHERE blocked = true
+       AND created_at > NOW() - ($1 || ' days')::interval
+     GROUP BY COALESCE(block_reason, '<unknown>')
+     ORDER BY hits DESC`,
+    [String(days)],
+  );
+
+  return rows.map((r: Record<string, unknown>) => ({
+    block_reason: r.block_reason as string,
+    hits: r.hits as number,
+    last_seen: r.last_seen as string,
+    sample_queries: Array.isArray(r.sample_queries)
+      ? (r.sample_queries as string[])
+      : [],
   }));
 }
 

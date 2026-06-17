@@ -13,6 +13,7 @@ vi.mock("../db/analytics.js", () => ({
   getAnalyticsSummary: vi.fn(),
   getTopQueries: vi.fn(),
   getEmptyQueries: vi.fn(),
+  getBlockedQueries: vi.fn(),
   getToolCounts: vi.fn(),
 }));
 
@@ -45,6 +46,9 @@ function buildApp() {
       throw new Error("db boom");
     },
     getEmptyQueries: async () => {
+      throw new Error("db boom");
+    },
+    getBlockedQueries: async () => {
       throw new Error("db boom");
     },
     getToolCounts: async () => {
