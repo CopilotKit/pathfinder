@@ -84,6 +84,7 @@ import {
   getAnalyticsSummary,
   getTopQueries,
   getEmptyQueries,
+  getBlockedQueries,
   getToolCounts,
   normalizeRequestSource,
   REQUEST_SOURCE_HEADER,
@@ -3038,6 +3039,7 @@ export interface AnalyticsRouteDeps {
   getAnalyticsSummary?: typeof getAnalyticsSummary;
   getTopQueries?: typeof getTopQueries;
   getEmptyQueries?: typeof getEmptyQueries;
+  getBlockedQueries?: typeof getBlockedQueries;
   getToolCounts?: typeof getToolCounts;
   analyticsHtmlPath?: string;
 }
@@ -3054,6 +3056,7 @@ export function registerAnalyticsRoutes(
   const _getAnalyticsSummary = deps.getAnalyticsSummary ?? getAnalyticsSummary;
   const _getTopQueries = deps.getTopQueries ?? getTopQueries;
   const _getEmptyQueries = deps.getEmptyQueries ?? getEmptyQueries;
+  const _getBlockedQueries = deps.getBlockedQueries ?? getBlockedQueries;
   const _getToolCounts = deps.getToolCounts ?? getToolCounts;
   const _analyticsHtmlPath =
     deps.analyticsHtmlPath ?? path.resolve(__dirname, "../docs/analytics.html");
@@ -3161,6 +3164,33 @@ export function registerAnalyticsRoutes(
           err,
         );
         res.status(500).json({ error: "Failed to fetch empty queries" });
+      }
+    },
+  );
+
+  app.get(
+    "/api/analytics/blocked-queries",
+    analyticsAuth,
+    async (req: Request, res: Response) => {
+      // Blocked-queries panel has no filter wiring: it surfaces rows the
+      // abuse blocklist short-circuited BEFORE retrieval, so tool/source/
+      // request-source filters carry no meaning here (the row never reached
+      // the layer those filters describe). We still parse `days` so the
+      // window matches the rest of the dashboard.
+      const daysParsed = parseDaysOrError(req);
+      if (!daysParsed.ok) {
+        res.status(daysParsed.status).json(daysParsed.body);
+        return;
+      }
+      try {
+        const groups = await _getBlockedQueries(daysParsed.value);
+        res.json(groups);
+      } catch (err) {
+        console.error(
+          `[analytics] Blocked queries failed (days=${daysParsed.value} ip=${clientIp(req, trustProxy)}):`,
+          err,
+        );
+        res.status(500).json({ error: "Failed to fetch blocked queries" });
       }
     },
   );

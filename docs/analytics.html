@@ -4,19 +4,41 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pathfinder Analytics</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0f'/%3E%3Cpolygon points='16,4 22,16 16,28 10,16' fill='none' stroke='%2300ccff' stroke-width='2.5' stroke-linejoin='round'/%3E%3C/svg%3E">
-    <meta name="description" content="Real-time analytics dashboard for your Pathfinder knowledge server.">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://pathfinder.copilotkit.dev/analytics">
-    <meta property="og:title" content="Pathfinder Analytics">
-    <meta property="og:description" content="Real-time analytics dashboard for your Pathfinder knowledge server.">
-    <meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
-    <meta property="og:image:width" content="1200">
-    <meta property="og:image:height" content="630">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Pathfinder Analytics">
-    <meta name="twitter:description" content="Real-time analytics dashboard for your Pathfinder knowledge server.">
-    <meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0f'/%3E%3Cpolygon points='16,4 22,16 16,28 10,16' fill='none' stroke='%2300ccff' stroke-width='2.5' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+    <meta
+      name="description"
+      content="Real-time analytics dashboard for your Pathfinder knowledge server."
+    />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:url"
+      content="https://pathfinder.copilotkit.dev/analytics"
+    />
+    <meta property="og:title" content="Pathfinder Analytics" />
+    <meta
+      property="og:description"
+      content="Real-time analytics dashboard for your Pathfinder knowledge server."
+    />
+    <meta
+      property="og:image"
+      content="https://pathfinder.copilotkit.dev/og-image.png"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Pathfinder Analytics" />
+    <meta
+      name="twitter:description"
+      content="Real-time analytics dashboard for your Pathfinder knowledge server."
+    />
+    <meta
+      name="twitter:image"
+      content="https://pathfinder.copilotkit.dev/og-image.png"
+    />
     <!-- Pin to an exact version (not the floating '@4' tag) so an upstream
          patch release can't silently change what this page executes. The
          integrity hash binds the execution to a specific bytes-on-disk
@@ -389,7 +411,7 @@
         border: 0;
       }
     </style>
-  <script src="/pixels.js" defer></script>
+    <script src="/pixels.js" defer></script>
   </head>
   <body>
     <h1>Pathfinder Analytics</h1>
@@ -408,7 +430,9 @@
         ></canvas>
         <span class="chart-caption">Click a bar to filter to that day</span>
         <table id="dailyChartTable" class="sr-only">
-          <caption>Queries per day (data table for screen readers)</caption>
+          <caption>
+            Queries per day (data table for screen readers)
+          </caption>
           <thead>
             <tr>
               <th scope="col">Day</th>
@@ -427,7 +451,9 @@
           aria-describedby="sourceChartTable"
         ></canvas>
         <table id="sourceChartTable" class="sr-only">
-          <caption>Queries by source (data table for screen readers)</caption>
+          <caption>
+            Queries by source (data table for screen readers)
+          </caption>
           <thead>
             <tr>
               <th scope="col">Source</th>
@@ -468,6 +494,34 @@
           <th>Source</th>
           <th>Count</th>
           <th>Last Seen</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <h2 id="blockedQueriesTitle" style="margin-bottom: 4px">
+      Blocked Queries &#x1F6E1;&#xFE0F;
+    </h2>
+    <p
+      id="blockedQueriesSubtitle"
+      style="
+        color: var(--text-secondary, #6b7280);
+        margin-top: 0;
+        margin-bottom: 12px;
+        font-size: 14px;
+      "
+    >
+      Off-topic queries short-circuited by the abuse blocklist before retrieval.
+      These are filtered out of "Empty Result Queries" above so blocked traffic
+      doesn't double-count as a real-user content gap.
+    </p>
+    <table id="blockedQueriesTable">
+      <thead>
+        <tr>
+          <th>Block Reason</th>
+          <th>Hits</th>
+          <th>Last Seen</th>
+          <th>Sample Queries</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -700,6 +754,27 @@
               last_seen: new Date(Date.now() - 3600 * 1000 * 8).toISOString(),
             },
           ],
+          "/api/analytics/blocked-queries": [
+            {
+              block_reason: "box-office",
+              hits: 142,
+              last_seen: new Date(Date.now() - 1800 * 1000).toISOString(),
+              sample_queries: [
+                "box office weekend",
+                "toy story 5 box office",
+                "weekend box office numbers",
+              ],
+            },
+            {
+              block_reason: "kalshi-scotus",
+              hits: 38,
+              last_seen: new Date(Date.now() - 3600 * 1000 * 2).toISOString(),
+              sample_queries: [
+                "cftc kalshi certiorari",
+                "scotus kalshi sports event contracts",
+              ],
+            },
+          ],
         };
 
         var originalFetch = window.fetch.bind(window);
@@ -804,6 +879,78 @@
         timeZone: "UTC",
       });
 
+      // ----------------------------------------------------------------
+      // Operator-facing absolute timestamps render in Pacific time
+      // (America/Los_Angeles, DST-aware via Intl.DateTimeFormat) — never
+      // UTC. The dashboard is operated from Pacific; UTC timestamps were
+      // forcing every operator to convert in their head. This formatter
+      // emits e.g. "2026-06-17 09:40:32 PDT" / "2026-01-15 09:40:32 PST"
+      // depending on whether the instant falls in DST.
+      //
+      // SCOPE: display only. The storage layer still writes UTC
+      // (Postgres `created_at TIMESTAMPTZ`), the server still computes
+      // windows in UTC, and the URL `from`/`to` contract is still a UTC
+      // calendar date (see parseISODate / todayISO / tomorrowISO above,
+      // which retain their explicit `timeZone: "UTC"` / `Date.UTC`
+      // construction). Only the absolute-instant cells in the per-row
+      // tables flip to Pacific.
+      // ----------------------------------------------------------------
+      var ANALYTICS_TZ = "America/Los_Angeles";
+      var analyticsTimeFmt = new Intl.DateTimeFormat("en-US", {
+        timeZone: ANALYTICS_TZ,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZoneName: "short",
+      });
+
+      /**
+       * Format a Date / ISO string / epoch ms for the /analytics
+       * operator-facing page. Pacific time, DST-aware. Returns an em-dash
+       * for missing / non-finite inputs so a malformed last_seen never
+       * renders the literal "Invalid Date" string.
+       *
+       * Output shape: "YYYY-MM-DD HH:MM:SS PDT" (or PST).
+       */
+      function formatAnalyticsTimestamp(value) {
+        if (value === null || value === undefined || value === "") {
+          return "—";
+        }
+        var d = value instanceof Date ? value : new Date(value);
+        if (!Number.isFinite(d.getTime())) return "—";
+        var parts = analyticsTimeFmt.formatToParts(d);
+        var get = function (type) {
+          for (var i = 0; i < parts.length; i++) {
+            if (parts[i].type === type) return parts[i].value;
+          }
+          return "";
+        };
+        // Intl en-US under hour12:false emits hour "24" for midnight on
+        // some engines. Normalize to "00" so the output is unambiguously
+        // ISO-shaped HH:MM:SS.
+        var hour = get("hour");
+        if (hour === "24") hour = "00";
+        return (
+          get("year") +
+          "-" +
+          get("month") +
+          "-" +
+          get("day") +
+          " " +
+          hour +
+          ":" +
+          get("minute") +
+          ":" +
+          get("second") +
+          " " +
+          get("timeZoneName")
+        );
+      }
+
       function parseISODate(s) {
         // Parse YYYY-MM-DD as a UTC-noon Date. UTC (not local) so the
         // resulting Date is frame-aligned with todayISO() — both use UTC
@@ -850,11 +997,7 @@
       function tomorrowISO() {
         var d = new Date();
         var t = new Date(
-          Date.UTC(
-            d.getUTCFullYear(),
-            d.getUTCMonth(),
-            d.getUTCDate() + 1,
-          ),
+          Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1),
         );
         var y = t.getUTCFullYear();
         var m = String(t.getUTCMonth() + 1).padStart(2, "0");
@@ -967,7 +1110,9 @@
         }
         var qs = params.toString();
         var newUrl =
-          window.location.pathname + (qs ? "?" + qs : "") + window.location.hash;
+          window.location.pathname +
+          (qs ? "?" + qs : "") +
+          window.location.hash;
         window.history.replaceState(null, "", newUrl);
       }
 
@@ -1536,9 +1681,7 @@
             var f = (
               document.getElementById("dateFromInput").value || ""
             ).trim();
-            var t = (
-              document.getElementById("dateToInput").value || ""
-            ).trim();
+            var t = (document.getElementById("dateToInput").value || "").trim();
             if (
               !/^\d{4}-\d{2}-\d{2}$/.test(f) ||
               !/^\d{4}-\d{2}-\d{2}$/.test(t)
@@ -1547,10 +1690,10 @@
                 dateErr.textContent = "Dates must be YYYY-MM-DD format";
                 dateErr.style.display = "block";
               }
-              console.warn(
-                "[analytics] dateApply rejected malformed input",
-                { from: f, to: t },
-              );
+              console.warn("[analytics] dateApply rejected malformed input", {
+                from: f,
+                to: t,
+              });
               return;
             }
             if (dateErr) {
@@ -1575,10 +1718,10 @@
                 dateErr.textContent = "End date cannot be in the future.";
                 dateErr.style.display = "block";
               }
-              console.warn(
-                "[analytics] dateApply rejected future range",
-                { from: f, to: t },
-              );
+              console.warn("[analytics] dateApply rejected future range", {
+                from: f,
+                to: t,
+              });
               return;
             }
             activeFrom = f;
@@ -1646,6 +1789,18 @@
             "/api/analytics/summary" + (fp ? "?" + fp.replace(/^&/, "") : "");
           var queriesUrl = "/api/analytics/queries?limit=50" + fp;
           var emptyUrl = "/api/analytics/empty-queries?limit=50" + fp;
+          // Blocked-queries panel intentionally does NOT take filter
+          // params: the rows it surfaces were short-circuited BEFORE
+          // retrieval, so tool/source/request-source carry no meaning. It
+          // still passes the same `days` window as everything else (read
+          // out of the parsed-filter `days` param when present, else
+          // server default).
+          var daysParam = "";
+          if (fp) {
+            var m = /[?&]days=([^&]+)/.exec(fp);
+            if (m) daysParam = "?days=" + m[1];
+          }
+          var blockedUrl = "/api/analytics/blocked-queries" + daysParam;
           // Same '?' / leading-'&' handling as summary above.
           var toolCountsUrl =
             "/api/analytics/tool-counts" +
@@ -1655,12 +1810,14 @@
             fetchJson(queriesUrl, gen),
             fetchJson(emptyUrl, gen),
             fetchJson(toolCountsUrl, gen),
+            fetchJson(blockedUrl, gen),
           ]);
           if (gen !== loadGeneration) return; // stale response — abort
           var summary = results[0];
           var topQueries = results[1];
           var emptyQueries = results[2];
           var toolCounts = results[3];
+          var blockedQueries = results[4];
 
           // Clear any previous error
           document.getElementById("error").style.display = "none";
@@ -1895,9 +2052,7 @@
           // (#dailyChartTable). Canvas elements are opaque to assistive tech
           // and HTML scrapers; the sr-only table gives both consumers the
           // same numbers the visible bars encode.
-          var dailyTableBody = document.querySelector(
-            "#dailyChartTable tbody",
-          );
+          var dailyTableBody = document.querySelector("#dailyChartTable tbody");
           if (dailyTableBody) {
             dailyTableBody.innerHTML =
               perDayArr
@@ -1910,7 +2065,7 @@
                     "</td></tr>"
                   );
                 })
-                .join("") || "<tr><td colspan=\"2\">No data</td></tr>";
+                .join("") || '<tr><td colspan="2">No data</td></tr>';
           }
 
           // Source chart - destroy previous instance
@@ -1968,7 +2123,7 @@
                     "</td></tr>"
                   );
                 })
-                .join("") || "<tr><td colspan=\"2\">No data</td></tr>";
+                .join("") || '<tr><td colspan="2">No data</td></tr>';
           }
 
           // Top queries table (now with Tool column)
@@ -2008,26 +2163,16 @@
             asArray(emptyQueries)
               .map(function (q) {
                 // Guard against missing / non-parseable last_seen values.
-                // `new Date(undefined).toLocaleString()` yields the literal
-                // string "Invalid Date", which would be rendered raw and
-                // looks like a bug. Fall back to an em dash instead, and
-                // route the result through esc() on interpolation.
+                // `formatAnalyticsTimestamp` already handles null /
+                // undefined / "Invalid Date" gracefully (returns "\u2014"), so
+                // we don't repeat the guard here.
                 //
-                // Render as ISO-8601 in UTC (e.g. "2026-04-29 06:10:04 UTC")
-                // rather than the browser locale's mixed month-first / 12h
-                // format. The dashboard is internal and read across
-                // timezones; an explicit, sortable, timezone-labelled
-                // timestamp avoids ambiguity. Trim ISO milliseconds and the
-                // "T"/"Z" separators for readability while keeping it
-                // unambiguously parseable.
-                var lastSeenRaw = q.last_seen ? new Date(q.last_seen) : null;
-                var lastSeenStr =
-                  lastSeenRaw && Number.isFinite(lastSeenRaw.getTime())
-                    ? lastSeenRaw
-                        .toISOString()
-                        .replace("T", " ")
-                        .replace(/\.\d{3}Z$/, " UTC")
-                    : "\u2014";
+                // Renders Pacific time (America/Los_Angeles, DST-aware)
+                // rather than UTC \u2014 the dashboard is operated from
+                // Pacific. Storage and URL contracts remain UTC; only the
+                // display flips. See the formatAnalyticsTimestamp JSDoc
+                // for full scope and rationale.
+                var lastSeenStr = formatAnalyticsTimestamp(q.last_seen);
                 return (
                   '<tr class="empty"><td>' +
                   esc(q.query_text) +
@@ -2044,6 +2189,60 @@
               })
               .join("") ||
             '<tr><td colspan="5">No empty-result queries.</td></tr>';
+
+          // Blocked queries title — append window label so it tracks the
+          // same window as Top Queries / Empty Queries.
+          var blockedTitle = document.getElementById("blockedQueriesTitle");
+          if (blockedTitle) {
+            // Replace the entire title text + the trailing shield glyph,
+            // using a real span node so we don't have to manually escape
+            // anything in winLabel.
+            blockedTitle.textContent = "Blocked Queries (" + winLabel + ") ";
+            var shield = document.createElement("span");
+            shield.textContent = "🛡️";
+            blockedTitle.appendChild(shield);
+          }
+
+          // Blocked queries table. Each row is one block_reason bucket
+          // with hits, last_seen (Pacific via formatAnalyticsTimestamp),
+          // and up to 5 sample queries joined by " · " for compactness.
+          var blockedBody = document.querySelector(
+            "#blockedQueriesTable tbody",
+          );
+          if (blockedBody) {
+            blockedBody.innerHTML =
+              asArray(blockedQueries)
+                .map(function (b) {
+                  var samples = Array.isArray(b.sample_queries)
+                    ? b.sample_queries
+                    : [];
+                  // Truncate each sample to ~80 chars so a single
+                  // long-tail query can't blow up the column width;
+                  // join with " · " so the cell stays readable. esc()
+                  // each fragment individually before concatenation.
+                  var samplesHtml =
+                    samples
+                      .map(function (s) {
+                        var text = String(s);
+                        if (text.length > 80) text = text.slice(0, 77) + "…";
+                        return esc(text);
+                      })
+                      .join(" · ") || "—";
+                  return (
+                    "<tr><td>" +
+                    esc(b.block_reason) +
+                    "</td><td>" +
+                    esc(safeNumber(b.hits).toLocaleString()) +
+                    "</td><td>" +
+                    esc(formatAnalyticsTimestamp(b.last_seen)) +
+                    "</td><td>" +
+                    samplesHtml +
+                    "</td></tr>"
+                  );
+                })
+                .join("") ||
+              '<tr><td colspan="4">No blocked queries in this window.</td></tr>';
+          }
         } catch (err) {
           // Stale-response guard also applies to failures: a slow old
           // request that rejects after a newer load() has already

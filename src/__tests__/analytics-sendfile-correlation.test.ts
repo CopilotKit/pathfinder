@@ -17,6 +17,7 @@ vi.mock("../db/analytics.js", () => ({
   getAnalyticsSummary: vi.fn(),
   getTopQueries: vi.fn(),
   getEmptyQueries: vi.fn(),
+  getBlockedQueries: vi.fn(),
   getToolCounts: vi.fn(),
 }));
 

@@ -6,12 +6,14 @@ import path from "node:path";
 const mockGetAnalyticsSummary = vi.fn();
 const mockGetTopQueries = vi.fn();
 const mockGetEmptyQueries = vi.fn();
+const mockGetBlockedQueries = vi.fn();
 const mockGetToolCounts = vi.fn();
 
 vi.mock("../db/analytics.js", () => ({
   getAnalyticsSummary: (...args: unknown[]) => mockGetAnalyticsSummary(...args),
   getTopQueries: (...args: unknown[]) => mockGetTopQueries(...args),
   getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
+  getBlockedQueries: (...args: unknown[]) => mockGetBlockedQueries(...args),
   getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
 }));
 
@@ -82,6 +84,8 @@ function buildTestApp() {
       mockGetTopQueries(...args),
     getEmptyQueries: (...args: Parameters<typeof mockGetEmptyQueries>) =>
       mockGetEmptyQueries(...args),
+    getBlockedQueries: (...args: Parameters<typeof mockGetBlockedQueries>) =>
+      mockGetBlockedQueries(...args),
     getToolCounts: (...args: Parameters<typeof mockGetToolCounts>) =>
       mockGetToolCounts(...args),
     analyticsHtmlPath,
@@ -362,6 +366,86 @@ describe("Analytics server routes (HTTP-level)", () => {
         error: "misconfigured",
         error_description: "Analytics config read failed",
       });
+      consoleErrSpy.mockRestore();
+    });
+  });
+
+  // ---- /api/analytics/blocked-queries (v1.15.3) ----------------------------
+
+  describe("GET /api/analytics/blocked-queries (v1.15.3)", () => {
+    it("returns blocked-row groups with a valid token", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+      mockGetBlockedQueries.mockResolvedValue([
+        {
+          block_reason: "box-office",
+          hits: 142,
+          last_seen: "2026-06-17T16:40:32.000Z",
+          sample_queries: ["box office weekend"],
+        },
+      ]);
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/blocked-queries?days=7",
+        { Authorization: "Bearer secret" },
+      );
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(Array.isArray(body)).toBe(true);
+      expect(body[0].block_reason).toBe("box-office");
+      expect(body[0].hits).toBe(142);
+      // The route forwards the parsed days value to the DB call.
+      expect(mockGetBlockedQueries).toHaveBeenCalledWith(7);
+    });
+
+    it("returns 401 without a token", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/blocked-queries",
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 500 with a clean error envelope when the DB call rejects", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+      mockGetBlockedQueries.mockRejectedValue(new Error("boom"));
+      const consoleErrSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/blocked-queries",
+        { Authorization: "Bearer secret" },
+      );
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBe("Failed to fetch blocked queries");
       consoleErrSpy.mockRestore();
     });
   });
