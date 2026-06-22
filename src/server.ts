@@ -86,6 +86,7 @@ import {
   getEmptyQueries,
   getBlockedQueries,
   getToolCounts,
+  getToolBreakdown,
   normalizeRequestSource,
   REQUEST_SOURCE_HEADER,
   REQUEST_SOURCE_VALUES,
@@ -3041,6 +3042,7 @@ export interface AnalyticsRouteDeps {
   getEmptyQueries?: typeof getEmptyQueries;
   getBlockedQueries?: typeof getBlockedQueries;
   getToolCounts?: typeof getToolCounts;
+  getToolBreakdown?: typeof getToolBreakdown;
   analyticsHtmlPath?: string;
 }
 
@@ -3058,6 +3060,7 @@ export function registerAnalyticsRoutes(
   const _getEmptyQueries = deps.getEmptyQueries ?? getEmptyQueries;
   const _getBlockedQueries = deps.getBlockedQueries ?? getBlockedQueries;
   const _getToolCounts = deps.getToolCounts ?? getToolCounts;
+  const _getToolBreakdown = deps.getToolBreakdown ?? getToolBreakdown;
   const _analyticsHtmlPath =
     deps.analyticsHtmlPath ?? path.resolve(__dirname, "../docs/analytics.html");
 
@@ -3218,6 +3221,40 @@ export function registerAnalyticsRoutes(
           err,
         );
         res.status(500).json({ error: "Failed to fetch tool counts" });
+      }
+    },
+  );
+
+  // Full tool_name breakdown (un-collapsed counterpart to tool-counts, which
+  // only exposes the first-hyphen prefix). Powers the weekly search report's
+  // per-search-tool and explore-command breakdowns. Same filter/window parsing
+  // as the sibling tool-counts endpoint.
+  app.get(
+    "/api/analytics/tool-breakdown",
+    analyticsAuth,
+    async (req: Request, res: Response) => {
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
+      const daysParsed = parseDaysOrError(req);
+      if (!daysParsed.ok) {
+        res.status(daysParsed.status).json(daysParsed.body);
+        return;
+      }
+      try {
+        const breakdown = await _getToolBreakdown(
+          daysParsed.value,
+          parsed.filter,
+        );
+        res.json(breakdown);
+      } catch (err) {
+        console.error(
+          `[analytics] Tool breakdown failed (filter=${JSON.stringify(parsed.filter)} days=${daysParsed.value} ip=${clientIp(req, trustProxy)}):`,
+          err,
+        );
+        res.status(500).json({ error: "Failed to fetch tool breakdown" });
       }
     },
   );
