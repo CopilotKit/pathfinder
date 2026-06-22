@@ -13,6 +13,11 @@ name: Weekly Search Report
 # of publishing a degraded "could not generate" page. A red run + Slack alert is
 # the intended signal.
 #
+# On SUCCESS, the script additionally posts a one-line digest to #engr (a SEPARATE
+# webhook from the failure alert) so a healthy weekly report is visible to
+# engineering. The success ping is best-effort: an unset success webhook simply
+# skips the ping and never affects the exit code or any fail-loud path.
+#
 # Required repository secrets:
 #   PATHFINDER_ANALYTICS_TOKEN  Bearer token for GET /api/analytics/* on the
 #                               production MCP (https://mcp.copilotkit.ai). When
@@ -22,9 +27,13 @@ name: Weekly Search Report
 #                               report page. A publish failure is fail-loud.
 #   SLACK_WEBHOOK_OSS_ALERTS    Incoming-webhook URL (org-level secret shared by
 #                               every workflow). Mapped to the script's
-#                               SLACK_WEBHOOK env. Posted to only on failure.
-#                               When unset, the alert no-ops but the non-zero
-#                               exit still stands.
+#                               SLACK_WEBHOOK env. Posted to only on FAILURE
+#                               (#oss-alerts). When unset, the alert no-ops but
+#                               the non-zero exit still stands.
+#   SLACK_WEBHOOK_ENGR          Incoming-webhook URL for #engr (B0T app). Mapped
+#                               to the script's SLACK_ENGR_WEBHOOK env. Posted to
+#                               only on SUCCESS (the weekly digest). When unset,
+#                               the success ping is simply skipped.
 on:
   schedule:
     # Weekly, Sunday ~09:07 UTC — off the :00 mark to avoid the cron stampede.
@@ -59,10 +68,14 @@ jobs:
           PATHFINDER_ANALYTICS_TOKEN: ${{ secrets.PATHFINDER_ANALYTICS_TOKEN }}
           # Notion publish target. Publish failure is fail-loud.
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          # Slack alert (failure only). The script reads SLACK_WEBHOOK; the
-          # org-level secret is SLACK_WEBHOOK_OSS_ALERTS. Unset → alert no-ops,
-          # non-zero exit still stands.
+          # Slack alert (failure only → #oss-alerts). The script reads
+          # SLACK_WEBHOOK; the org-level secret is SLACK_WEBHOOK_OSS_ALERTS.
+          # Unset → alert no-ops, non-zero exit still stands.
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
+          # Slack success digest (success only → #engr). The script reads
+          # SLACK_ENGR_WEBHOOK; the org-level secret is SLACK_WEBHOOK_ENGR.
+          # Unset → the success ping is simply skipped.
+          SLACK_ENGR_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_ENGR }}
           # Pathfinder project page where weekly reports land.
           NOTION_PARENT_PAGE_ID: "3373aa38-1852-8152-a10b-e4aa1b8a667e"
           # Production analytics API base.

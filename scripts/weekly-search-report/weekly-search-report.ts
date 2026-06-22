@@ -30,10 +30,17 @@
  *   NOTION_PARENT_PAGE_ID       Parent page id (default the Pathfinder project
  *                               page).
  *   SLACK_WEBHOOK               Incoming-webhook URL the script posts FAILURE
- *                               alerts to. The WORKFLOW maps the org secret
- *                               (SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}).
+ *                               alerts to (#oss-alerts). The WORKFLOW maps the
+ *                               org secret (SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}).
  *                               If unset, the alert no-ops but the non-zero exit
  *                               still stands.
+ *   SLACK_ENGR_WEBHOOK          Incoming-webhook URL the script posts a SUCCESS
+ *                               digest to (#engr), so a healthy weekly report is
+ *                               visible to engineering. The WORKFLOW maps the org
+ *                               secret (SLACK_ENGR_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_ENGR }}).
+ *                               Distinct from the failure SLACK_WEBHOOK. If unset,
+ *                               the success ping is simply skipped (it never
+ *                               affects the exit code or any fail-loud path).
  *   ANALYTICS_BASE_URL          Override the analytics host (default prod).
  *   REPORT_DAYS                 Lookback window in days (default 7).
  *
@@ -897,6 +904,7 @@ export interface RunEnv {
   NOTION_TOKEN?: string;
   NOTION_PARENT_PAGE_ID?: string;
   SLACK_WEBHOOK?: string;
+  SLACK_ENGR_WEBHOOK?: string;
   ANALYTICS_BASE_URL?: string;
   REPORT_DAYS?: string;
 }
@@ -908,8 +916,13 @@ export interface RunDeps {
   fetchJson: <T>(path: string) => Promise<T>;
   /** Publish the report to Notion. Returns the page URL (or null). Throws on failure. */
   publishNotion: (title: string, markdown: string) => Promise<string | null>;
-  /** Post a Slack alert (no-op if the webhook is unset). Never throws. */
+  /** Post a Slack FAILURE alert to #oss-alerts (no-op if the webhook is unset). Never throws. */
   postSlack: (text: string) => Promise<void>;
+  /**
+   * Post a Slack SUCCESS digest to #engr (no-op if the webhook is unset). Never
+   * throws and never affects the exit code — purely best-effort visibility.
+   */
+  postSuccess: (text: string) => Promise<void>;
   /**
    * Write the rendered report to a local path (mkdir -p its parent first).
    * Injected so the --report write is a unit-testable fail-loud surface like
@@ -1162,8 +1175,9 @@ export async function run(deps: RunDeps): Promise<void> {
   }
 
   // Notion publish failure after a good fetch is also fail-loud.
+  let url: string | null;
   try {
-    const url = await deps.publishNotion(title, markdown);
+    url = await deps.publishNotion(title, markdown);
     deps.log(`[weekly-report] Published to Notion: ${url ?? "(no url)"}`);
   } catch (err) {
     const reason = `Notion publish failed: ${String(
@@ -1175,7 +1189,35 @@ export async function run(deps: RunDeps): Promise<void> {
     return;
   }
 
+  // Best-effort SUCCESS visibility to #engr. postSuccess never throws and never
+  // touches the exit code, so it cannot affect the fail-loud contract above.
+  await deps.postSuccess(buildSuccessDigest(bundle, url));
+
   deps.log("[weekly-report] Done.");
+}
+
+/**
+ * Build the one-line Slack mrkdwn SUCCESS digest posted to #engr after a healthy
+ * publish. The Notion link is rendered as an `<url|report>` hyperlink (a
+ * `[report]` link, NOT the raw url); when there is no url (publish returned
+ * null) the trailing segment is the plain text `(report published)` instead.
+ * The `top:` segment is omitted when there are no categorized queries.
+ */
+export function buildSuccessDigest(
+  bundle: AnalyticsBundle,
+  url: string | null,
+): string {
+  const { summary } = bundle;
+  const emptyRatePct = (summary.empty_result_rate_window * 100).toFixed(1);
+  const cats = categorizeQueries(bundle.queries);
+  const topSegment = cats.length > 0 ? ` · top: ${cats[0].category}` : "";
+  const link = url ? `<${url}|report>` : "(report published)";
+  return (
+    `:bar_chart: Pathfinder weekly search report — ` +
+    `${summary.total_queries_window} tool calls · ` +
+    `${summary.unique_ip_count_window} unique IPs${topSegment} · ` +
+    `${emptyRatePct}% empty · ${link}`
+  );
 }
 
 // ── Real-environment wiring (only runs when invoked directly) ─────────────────
@@ -1186,6 +1228,7 @@ function buildRealDeps(): RunDeps {
     NOTION_TOKEN: process.env.NOTION_TOKEN,
     NOTION_PARENT_PAGE_ID: process.env.NOTION_PARENT_PAGE_ID,
     SLACK_WEBHOOK: process.env.SLACK_WEBHOOK,
+    SLACK_ENGR_WEBHOOK: process.env.SLACK_ENGR_WEBHOOK,
     ANALYTICS_BASE_URL: process.env.ANALYTICS_BASE_URL,
     REPORT_DAYS: process.env.REPORT_DAYS,
   };
@@ -1194,6 +1237,7 @@ function buildRealDeps(): RunDeps {
   const notionToken = env.NOTION_TOKEN ?? "";
   const parentPageId = env.NOTION_PARENT_PAGE_ID ?? DEFAULT_PARENT_PAGE_ID;
   const webhook = env.SLACK_WEBHOOK ?? "";
+  const engrWebhook = env.SLACK_ENGR_WEBHOOK ?? "";
 
   return {
     env,
@@ -1201,6 +1245,7 @@ function buildRealDeps(): RunDeps {
     fetchJson: makeFetchJson(baseUrl, token),
     publishNotion: makePublishNotion(notionToken, parentPageId),
     postSlack: makePostSlack(webhook),
+    postSuccess: makePostSlack(engrWebhook),
     writeReport: (path: string, markdown: string) => {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, markdown, "utf-8");

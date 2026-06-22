@@ -23,6 +23,7 @@ import {
   assertValidSummary,
   buildObservations,
   sanitizeCell,
+  makePostSlack,
   type NotionClientLike,
   type RunDeps,
   type EmptyQuery,
@@ -45,6 +46,7 @@ interface Recorder {
   deps: RunDeps;
   notionCalls: Array<{ title: string; markdown: string }>;
   slackCalls: string[];
+  successCalls: string[];
   exitCodes: number[];
   fetchedPaths: string[];
   writtenReports: Array<{ path: string; markdown: string }>;
@@ -60,6 +62,7 @@ function makeRecorder(
 ): Recorder {
   const notionCalls: Array<{ title: string; markdown: string }> = [];
   const slackCalls: string[] = [];
+  const successCalls: string[] = [];
   const exitCodes: number[] = [];
   const fetchedPaths: string[] = [];
   const writtenReports: Array<{ path: string; markdown: string }> = [];
@@ -95,6 +98,9 @@ function makeRecorder(
     postSlack: async (text: string) => {
       slackCalls.push(text);
     },
+    postSuccess: async (text: string) => {
+      successCalls.push(text);
+    },
     writeReport:
       overrides.writeReport ??
       ((path: string, markdown: string) => {
@@ -118,6 +124,7 @@ function makeRecorder(
     deps,
     notionCalls,
     slackCalls,
+    successCalls,
     exitCodes,
     fetchedPaths,
     writtenReports,
@@ -322,6 +329,81 @@ describe("happy path", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── success ping → #engr (digest with a [report] mrkdwn link) ────────────────--
+//
+// On a fully successful run, AFTER publishNotion returns the page url, the
+// script posts ONE success digest to the SEPARATE #engr webhook (postSuccess),
+// while the FAILURE poster (postSlack → #oss-alerts) is never touched. The
+// digest carries the headline numbers and renders the Notion link as an
+// `<url|report>` mrkdwn hyperlink (a "[report]" link, NOT a bare url).
+
+describe("success ping → #engr", () => {
+  it("posts exactly one success digest with the headline numbers and a <url|report> mrkdwn link; never touches the failure poster", async () => {
+    const rec = makeRecorder();
+    await runCatchingExit(rec.deps);
+
+    // Exactly one success ping; the failure poster is untouched.
+    expect(rec.successCalls).toHaveLength(1);
+    expect(rec.slackCalls).toHaveLength(0);
+    expect(rec.exitCodes).not.toContain(1);
+
+    const msg = rec.successCalls[0];
+    // Headline numbers from SUMMARY_FIXTURE (1234 tool calls, 87 IPs, 7.8% empty).
+    expect(msg).toContain("1234");
+    expect(msg).toContain("87");
+    expect(msg).toContain("7.8%");
+    // Top category for the fixture is Agents/CoAgents/AG-UI (CoAgents 50 + ag-ui 25).
+    expect(msg).toContain("Agents/CoAgents/AG-UI");
+    // The link is rendered as an <url|report> mrkdwn hyperlink, NOT a bare url.
+    expect(msg).toContain("https://notion.example/page");
+    expect(msg).toContain("|report>");
+    expect(msg).toContain("<https://notion.example/page|report>");
+    expect(msg).not.toContain(" https://notion.example/page ");
+  });
+
+  it("does NOT post a success ping and DOES post the failure alert on a fetch failure (fail-loud unchanged)", async () => {
+    const rec = makeRecorder({
+      fetchJson: async <T>(path: string): Promise<T> => {
+        if (path.includes("/tool-breakdown")) {
+          throw new Error(
+            "Analytics fetch failed: 500 Internal Server Error for /api/analytics/tool-breakdown",
+          );
+        }
+        if (path.includes("/summary")) return SUMMARY_FIXTURE as unknown as T;
+        if (path.includes("/empty-queries"))
+          return EMPTY_QUERIES_FIXTURE as unknown as T;
+        if (path.includes("/queries")) return QUERIES_FIXTURE as unknown as T;
+        throw new Error(`unexpected path ${path}`);
+      },
+    });
+    await runCatchingExit(rec.deps);
+
+    // Fail-loud: failure poster fires, success poster does not.
+    expect(rec.successCalls).toHaveLength(0);
+    expect(rec.slackCalls.length).toBeGreaterThan(0);
+    expect(rec.slackCalls[0]).toMatch(/FAILED/i);
+    expect(rec.exitCodes).toContain(1);
+  });
+
+  it("posts a no-link '(report published)' digest when publishNotion returns null", async () => {
+    const rec = makeRecorder({ publishNotion: async () => null });
+    await runCatchingExit(rec.deps);
+
+    expect(rec.successCalls).toHaveLength(1);
+    expect(rec.slackCalls).toHaveLength(0);
+    const msg = rec.successCalls[0];
+    expect(msg).toContain("(report published)");
+    expect(msg).not.toContain("|report>");
+  });
+
+  it("the success poster no-ops (never throws) when its webhook env is unset", async () => {
+    // The success poster mirrors makePostSlack: an unset webhook is a logged
+    // no-op, never a throw. Posting must resolve without error.
+    const post = makePostSlack("");
+    await expect(post("anything")).resolves.toBeUndefined();
   });
 });
 
