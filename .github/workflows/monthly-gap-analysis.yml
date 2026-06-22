@@ -19,10 +19,11 @@ name: Monthly Gap Analysis
 #   NOTION_TOKEN                Notion integration token used to publish the
 #                               report page. When unset, the Notion step is
 #                               skipped.
-#   SLACK_WEBHOOK_OSS_ALERTS    Incoming-webhook URL (org-level secret shared by
-#                               every workflow). Posted to ONLY when new
-#                               high-severity gaps are detected. When unset, no
-#                               alert is sent.
+#   SLACK_WEBHOOK_ENGR          Incoming-webhook URL (org-level secret) for #engr.
+#                               The gap report (a successful-run signal) posts
+#                               here ONLY when new high-severity gaps are
+#                               detected. When unset, no alert is sent. Run
+#                               FAILURES surface as a red CI run, not a Slack alert.
 #
 # Prior-run state (for new-gap diffing) is carried across runs as the
 # `gap-analysis-state` artifact rather than the Actions cache: caches are

@@ -26,14 +26,15 @@
  *                               publish step is skipped.
  *   NOTION_PARENT_PAGE_ID       Parent page under which a new dated report page
  *                               is created each run. Defaults to Plans/Proposals.
- *   SLACK_WEBHOOK               Incoming-webhook URL the script posts new
- *                               high-severity alerts to. The WORKFLOW maps the
- *                               org-level secret into it
- *                               (SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}),
- *                               so a CI run alerts via the shared org webhook
- *                               while a local run must export SLACK_WEBHOOK
- *                               itself or the alert is a silent no-op. If unset,
- *                               no Slack alert.
+ *   SLACK_WEBHOOK               Incoming-webhook URL the script posts the gap
+ *                               report (new high-severity gaps) to. The gap
+ *                               report is a successful-run signal, so the
+ *                               WORKFLOW maps the #engr org-level secret into it
+ *                               (SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_ENGR }}),
+ *                               so a CI run posts to #engr while a local run
+ *                               must export SLACK_WEBHOOK itself or the alert is
+ *                               a silent no-op. If unset, no Slack alert. (Run
+ *                               FAILURES are surfaced as a red CI run, not Slack.)
  *
  * Other env:
  *   ANALYTICS_BASE_URL          Override the analytics host (default prod).
