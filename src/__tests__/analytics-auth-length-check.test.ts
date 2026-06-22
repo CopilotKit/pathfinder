@@ -21,6 +21,7 @@ vi.mock("../db/analytics.js", () => ({
   getEmptyQueries: vi.fn(),
   getBlockedQueries: vi.fn(),
   getToolCounts: vi.fn(),
+  getToolBreakdown: vi.fn(),
 }));
 
 vi.mock("../config.js", () => ({

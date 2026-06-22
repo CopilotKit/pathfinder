@@ -8,6 +8,7 @@ const mockGetTopQueries = vi.fn();
 const mockGetEmptyQueries = vi.fn();
 const mockGetBlockedQueries = vi.fn();
 const mockGetToolCounts = vi.fn();
+const mockGetToolBreakdown = vi.fn();
 
 vi.mock("../db/analytics.js", () => ({
   getAnalyticsSummary: (...args: unknown[]) => mockGetAnalyticsSummary(...args),
@@ -15,6 +16,7 @@ vi.mock("../db/analytics.js", () => ({
   getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
   getBlockedQueries: (...args: unknown[]) => mockGetBlockedQueries(...args),
   getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
+  getToolBreakdown: (...args: unknown[]) => mockGetToolBreakdown(...args),
 }));
 
 vi.mock("../config.js", () => ({
@@ -88,6 +90,8 @@ function buildTestApp() {
       mockGetBlockedQueries(...args),
     getToolCounts: (...args: Parameters<typeof mockGetToolCounts>) =>
       mockGetToolCounts(...args),
+    getToolBreakdown: (...args: Parameters<typeof mockGetToolBreakdown>) =>
+      mockGetToolBreakdown(...args),
     analyticsHtmlPath,
   });
 
@@ -446,6 +450,131 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(res.status).toBe(500);
       const body = JSON.parse(res.body);
       expect(body.error).toBe("Failed to fetch blocked queries");
+      consoleErrSpy.mockRestore();
+    });
+  });
+
+  // ---- /api/analytics/tool-breakdown ---------------------------------------
+  //
+  // HTTP-level coverage for the un-collapsed tool_name breakdown route, the
+  // sibling of /api/analytics/tool-counts. Mirrors the tool-counts wiring:
+  // the route forwards the parsed `days` window (first arg) and filter
+  // (second arg) to getToolBreakdown and returns its rows as JSON.
+  // ---------------------------------------------------------------------------
+
+  describe("GET /api/analytics/tool-breakdown", () => {
+    it("returns the breakdown rows with a valid token and forwards days", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+      const rows = [
+        { tool_name: "search-pathfinder", count: 128 },
+        { tool_name: "explore-docs", count: 42 },
+      ];
+      mockGetToolBreakdown.mockResolvedValue(rows);
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/tool-breakdown?days=14",
+        { Authorization: "Bearer secret" },
+      );
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toEqual(rows);
+      // days=14 (non-default) is forwarded as the first arg so a regression
+      // that drops the param and reapplies the default of 7 is caught.
+      expect(mockGetToolBreakdown).toHaveBeenCalledWith(14, {});
+    });
+
+    it("defaults days to 7 when not provided", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+      mockGetToolBreakdown.mockResolvedValue([]);
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/tool-breakdown",
+        {
+          Authorization: "Bearer secret",
+        },
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockGetToolBreakdown).toHaveBeenCalledWith(7, {});
+    });
+
+    it("returns 401 without a token", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+
+      await startApp();
+      const res = await request(server, "GET", "/api/analytics/tool-breakdown");
+
+      expect(res.status).toBe(401);
+      expect(mockGetToolBreakdown).not.toHaveBeenCalled();
+    });
+
+    it("rejects days=abc with 400", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+      mockGetToolBreakdown.mockResolvedValue([]);
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/tool-breakdown?days=abc",
+        { Authorization: "Bearer secret" },
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockGetToolBreakdown).not.toHaveBeenCalled();
+    });
+
+    it("returns 500 with a clean error envelope when the DB call rejects", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+      mockGetToolBreakdown.mockRejectedValue(new Error("boom"));
+      const consoleErrSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/tool-breakdown",
+        { Authorization: "Bearer secret" },
+      );
+
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBe("Failed to fetch tool breakdown");
+      expect(res.body).not.toContain("boom");
       consoleErrSpy.mockRestore();
     });
   });

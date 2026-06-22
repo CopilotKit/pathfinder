@@ -1,0 +1,82 @@
+name: Weekly Search Report
+# Runs the Pathfinder weekly search-query report on a 7-day lookback and
+# publishes a deterministic (no-LLM) report page to Notion. Replaces the old
+# claude.ai routine that scraped ephemeral Railway stdout logs and quietly
+# posted an error page when its token was missing.
+#
+# IMPORTANT: this job works only from the durable query_log-backed analytics
+# JSON API. It does NOT read the indexed repos and does NOT reproduce queries
+# against the live MCP — doing so would self-inflate the analytics it measures.
+#
+# Fail-loud: unlike the retired routine, a run that cannot fetch its data (or
+# cannot publish) exits non-zero and posts a Slack alert to #oss-alerts instead
+# of publishing a degraded "could not generate" page. A red run + Slack alert is
+# the intended signal.
+#
+# Required repository secrets:
+#   PATHFINDER_ANALYTICS_TOKEN  Bearer token for GET /api/analytics/* on the
+#                               production MCP (https://mcp.copilotkit.ai). When
+#                               unset, the script FAILS LOUD (non-zero exit +
+#                               Slack alert) — the report cannot run without it.
+#   NOTION_TOKEN                Notion integration token used to publish the
+#                               report page. A publish failure is fail-loud.
+#   SLACK_WEBHOOK_OSS_ALERTS    Incoming-webhook URL (org-level secret shared by
+#                               every workflow). Mapped to the script's
+#                               SLACK_WEBHOOK env. Posted to only on failure.
+#                               When unset, the alert no-ops but the non-zero
+#                               exit still stands.
+on:
+  schedule:
+    # Weekly, Sunday ~09:07 UTC — off the :00 mark to avoid the cron stampede.
+    # A Sunday run reports the prior Mon–Sun 7-day window.
+    - cron: "7 9 * * 0"
+  workflow_dispatch:
+
+# Stateless report — no prior-run artifact to read, so no `actions: read`.
+permissions:
+  contents: read
+
+jobs:
+  weekly-search-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - run: npm ci
+
+      - name: Run weekly search report
+        env:
+          # Read-only analytics access. Unset → script FAILS LOUD (no token,
+          # no report). This secret already exists in the repo (shared with
+          # monthly-gap-analysis).
+          PATHFINDER_ANALYTICS_TOKEN: ${{ secrets.PATHFINDER_ANALYTICS_TOKEN }}
+          # Notion publish target. Publish failure is fail-loud.
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          # Slack alert (failure only). The script reads SLACK_WEBHOOK; the
+          # org-level secret is SLACK_WEBHOOK_OSS_ALERTS. Unset → alert no-ops,
+          # non-zero exit still stands.
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
+          # Pathfinder project page where weekly reports land.
+          NOTION_PARENT_PAGE_ID: "3373aa38-1852-8152-a10b-e4aa1b8a667e"
+          # Production analytics API base.
+          ANALYTICS_BASE_URL: "https://mcp.copilotkit.ai"
+          # 7-day lookback window.
+          REPORT_DAYS: "7"
+        run: npx tsx scripts/weekly-search-report/weekly-search-report.ts --report /tmp/weekly-report.md
+
+      # Keep the rendered report as a build artifact for inspection even when
+      # Notion publishing is not yet configured.
+      - name: Upload weekly report artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: weekly-search-report
+          path: /tmp/weekly-report.md
+          if-no-files-found: ignore

@@ -191,6 +191,21 @@ export interface AnalyticsSummary {
    */
   low_confidence_rate_window: number;
   avg_latency_ms_window: number;
+  /**
+   * Distinct non-NULL `client_ip` values in the window. Computed inside the
+   * windowed summary subquery (via `COUNT(DISTINCT ...) FILTER (WHERE ... IS
+   * NOT NULL)`) so it shares total_queries_window's exact predicates (date
+   * window, latency_ms >= 0, redacted exclusion, request-source,
+   * buildFilterClauses) and reconciles with it. NULL IPs are ignored. Headline
+   * input for the weekly search report ("M unique IPs across S sessions").
+   */
+  unique_ip_count_window: number;
+  /**
+   * Distinct non-NULL `session_id` values in the window. Same windowed
+   * population and predicates as unique_ip_count_window; NULL sessions are
+   * ignored. Headline input for the weekly search report.
+   */
+  unique_session_count_window: number;
   p95_latency_ms_window: number;
   /**
    * True when the p95 latency was computed over a random sample capped at
@@ -261,6 +276,18 @@ export interface BlockedQueryGroup {
 
 export interface ToolCount {
   tool_type: string;
+  count: number;
+}
+
+/**
+ * One row per FULL `tool_name` (e.g. `search-docs`, `search-code`,
+ * `explore-file`) — the un-collapsed counterpart to {@link ToolCount}, whose
+ * `tool_type` is only the first-hyphen prefix. Produced by
+ * {@link getToolBreakdown} for the weekly search report's per-tool and
+ * explore-command breakdowns.
+ */
+export interface ToolBreakdown {
+  tool_name: string;
   count: number;
 }
 
@@ -767,7 +794,9 @@ export async function getAnalyticsSummary(
             AND top_score IS NOT NULL
             AND top_score < $${lowConfIdx2}
         )::int AS low_confidence,
-        COALESCE(avg(latency_ms)::int, 0) AS avg_latency
+        COALESCE(avg(latency_ms)::int, 0) AS avg_latency,
+        COUNT(DISTINCT client_ip) FILTER (WHERE client_ip IS NOT NULL)::int AS unique_ip_count_window,
+        COUNT(DISTINCT session_id) FILTER (WHERE session_id IS NOT NULL)::int AS unique_session_count_window
     FROM query_log
     ${summaryWhere}`,
     [
@@ -933,6 +962,14 @@ export async function getAnalyticsSummary(
   const emptyWindow = toFiniteNumber(s.empty);
   const lowConfidenceWindow = toFiniteNumber(s.low_confidence);
   const avgLatencyWindow = toFiniteNumber(s.avg_latency);
+  // Unique IP / session counts over the SAME windowed population as
+  // total_queries_window (they're columns on the windowed summary subquery).
+  // Coerced defensively because node-postgres can deserialize the ::int
+  // COUNT(DISTINCT ...) as a string, and a missing column must default to 0.
+  const uniqueIpCountWindow = toFiniteNumber(s.unique_ip_count_window);
+  const uniqueSessionCountWindow = toFiniteNumber(
+    s.unique_session_count_window,
+  );
   // Normalize undefined (truly missing) to null so consumers get a
   // consistent shape regardless of whether the DB returned an empty
   // row, a row with NULL, or no row at all.
@@ -959,6 +996,8 @@ export async function getAnalyticsSummary(
     low_confidence_rate_window:
       totalWindow > 0 ? lowConfidenceWindow / totalWindow : 0,
     avg_latency_ms_window: avgLatencyWindow,
+    unique_ip_count_window: uniqueIpCountWindow,
+    unique_session_count_window: uniqueSessionCountWindow,
     p95_latency_ms_window: p95Latency,
     // Only set when the cap was actually hit so existing consumers (tests,
     // older UI builds) can treat the absence of the flag as "exact".
@@ -1259,6 +1298,76 @@ export async function getToolCounts(
 
   return rows.map((r: Record<string, unknown>) => ({
     tool_type: r.tool_type as string,
+    count: r.count as number,
+  }));
+}
+
+/**
+ * Get query counts grouped by the FULL `tool_name` (e.g. `search-docs`,
+ * `search-code`, `explore-file`) rather than the first-hyphen prefix that
+ * {@link getToolCounts} collapses to. This is the EXACT getToolCounts body
+ * with `split_part(tool_name, '-', 1)` replaced by the full `tool_name`, so
+ * its counts reconcile with the existing tool-counts donut and the summary
+ * totals. The weekly search report uses it for the per-search-tool breakdown
+ * (search-docs vs search-code vs search-ag-ui-*) and the explore/bash command
+ * breakdown (explore-* tool names).
+ *
+ * Predicate set is identical to getToolCounts: the date window
+ * ({@link buildDateWindow}), the request-source clause
+ * ({@link buildRequestSourceClause}, real-users-by-default), `latency_ms >= 0`
+ * (exclude backfilled rows), and the `source`-only filter (the `tool_type`
+ * filter is dropped — filtering the breakdown by tool type would be circular).
+ *
+ * Intentional divergences carried over from getToolCounts (do NOT "fix for
+ * consistency"):
+ *  - Does NOT exclude redacted rows (`query_text = REDACTED_QUERY_TEXT`):
+ *    `tool_name` survives redaction, so they contribute valid tool-usage
+ *    signal.
+ *  - Does NOT add a `blocked = FALSE` clause: it mirrors getToolCounts
+ *    exactly, which also omits the `blocked` filter, so the two reconcile
+ *    against the same tool-counts donut. (Some other windowed readers, e.g.
+ *    getEmptyQueries, do filter `blocked = FALSE`; the breakdown deliberately
+ *    does not, to stay 1:1 with getToolCounts.)
+ */
+export async function getToolBreakdown(
+  days: number = 7,
+  filter: AnalyticsFilter = {},
+): Promise<ToolBreakdown[]> {
+  const pool = getPool();
+
+  // tool_type intentionally ignored (matches getToolCounts): filtering the
+  // breakdown by tool type would be circular. Only `source` is honored.
+  const { tool_type: _ignoredToolType, ...rest } = filter;
+  void _ignoredToolType;
+  const sourceOnlyFilter: AnalyticsFilter = rest;
+
+  const {
+    clauses: fc,
+    params: fp,
+    nextIdx,
+  } = buildFilterClauses(sourceOnlyFilter);
+  const dw = buildDateWindow(sourceOnlyFilter, days, nextIdx);
+  // request_source survives in `rest` (only tool_type is stripped above), so
+  // the breakdown honors the same real-users-by-default behavior as every
+  // other windowed aggregate.
+  const rs = buildRequestSourceClause(sourceOnlyFilter, dw.nextIdx);
+  // Exclude backfilled rows (latency_ms < 0) so the breakdown counts match the
+  // windowed aggregates used elsewhere (summary, latency, per-day, tool-counts).
+  const baseClauses = [...dw.clauses, ...rs.clauses, "latency_ms >= 0"];
+  const where = whereAnd(baseClauses, fc);
+  const { rows } = await pool.query(
+    `SELECT
+        tool_name,
+        count(*)::int AS count
+    FROM query_log
+    ${where}
+    GROUP BY tool_name
+    ORDER BY count DESC`,
+    [...fp, ...dw.params, ...rs.params],
+  );
+
+  return rows.map((r: Record<string, unknown>) => ({
+    tool_name: r.tool_name as string,
     count: r.count as number,
   }));
 }

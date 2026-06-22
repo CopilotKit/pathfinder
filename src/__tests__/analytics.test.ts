@@ -13,6 +13,7 @@ import {
   getEmptyQueries,
   getBlockedQueries,
   getToolCounts,
+  getToolBreakdown,
   cleanupOldQueryLogs,
   REDACTED_QUERY_TEXT,
   P95_LATENCY_ROW_CAP,
@@ -22,7 +23,6 @@ import {
   REQUEST_SOURCE_VALUES,
   ALL_TIME_DAYS,
   ROLLING_WINDOW_CAP_DAYS,
-  BROWSE_QUERY_TEXT,
 } from "../db/analytics.js";
 import type { QueryLogEntry } from "../db/analytics.js";
 
@@ -1943,5 +1943,177 @@ describe("request-source clause on top/empty/tool-count readers", () => {
 
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).not.toContain("request_source");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getAnalyticsSummary unique IP / session counts (weekly-report fields)
+//
+// The windowed summary subquery gains two COUNT(DISTINCT ...) aggregates so
+// the weekly search report can headline "M unique IPs across S sessions".
+// They live INSIDE the existing windowed summaryRes SELECT so they inherit
+// its exact predicates (date window, latency_ms >= 0, redacted exclusion,
+// request_source, buildFilterClauses) and reconcile with total_queries_window.
+// NULL client_ip / session_id are ignored via FILTER.
+// ---------------------------------------------------------------------------
+
+describe("getAnalyticsSummary unique IP/session counts", () => {
+  // Mock order: total, windowed summary, latency rows, by-source, per-day,
+  // earliest-day. The unique counts are columns on the SAME windowed summary
+  // row (call index 1), so they're returned alongside total/empty/avg_latency.
+  function mockSummary(summaryRow: Record<string, unknown>) {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ count: 1000 }] }) // total
+      .mockResolvedValueOnce({ rows: [summaryRow] }) // windowed summary
+      .mockResolvedValueOnce({ rows: [] }) // latency
+      .mockResolvedValueOnce({ rows: [] }) // by source
+      .mockResolvedValueOnce({ rows: [] }) // per day
+      .mockResolvedValueOnce({ rows: [{ earliest_day: null }] }); // earliest day
+  }
+
+  it("returns unique_ip_count_window and unique_session_count_window from the windowed summary row", async () => {
+    mockSummary({
+      total: 200,
+      empty: 10,
+      avg_latency: 45,
+      unique_ip_count_window: 37,
+      unique_session_count_window: 52,
+    });
+
+    const result = await getAnalyticsSummary();
+
+    expect(result.unique_ip_count_window).toBe(37);
+    expect(result.unique_session_count_window).toBe(52);
+  });
+
+  it("computes both counts in the SAME windowed subquery as total_queries_window (one summary call, COUNT DISTINCT with NULL-ignoring FILTER)", async () => {
+    mockSummary({
+      total: 200,
+      empty: 10,
+      avg_latency: 45,
+      unique_ip_count_window: 37,
+      unique_session_count_window: 52,
+    });
+
+    await getAnalyticsSummary({}, 7);
+
+    // The windowed summary subquery is the one that selects `AS total`.
+    const summaryCall = mockQuery.mock.calls.find(
+      (call) =>
+        typeof call[0] === "string" &&
+        /AS total\b/.test(call[0]) &&
+        /latency_ms >= 0/.test(call[0]),
+    );
+    expect(summaryCall, "windowed summary query not found").toBeDefined();
+    const sql = summaryCall![0] as string;
+    expect(sql).toMatch(
+      /COUNT\(DISTINCT client_ip\)\s+FILTER\s*\(WHERE client_ip\s+IS NOT NULL\)::int\s+AS unique_ip_count_window/i,
+    );
+    expect(sql).toMatch(
+      /COUNT\(DISTINCT session_id\)\s+FILTER\s*\(WHERE session_id\s+IS NOT NULL\)::int\s+AS unique_session_count_window/i,
+    );
+  });
+
+  it("coerces the unique counts defensively (string-typed driver values become numbers; missing → 0)", async () => {
+    // node-postgres deserializes some integer/numeric columns as strings;
+    // the summary numerics are coerced via toFiniteNumber. A missing column
+    // must default to 0, not NaN/undefined.
+    mockSummary({
+      total: 200,
+      empty: 10,
+      avg_latency: 45,
+      unique_ip_count_window: "37",
+      // unique_session_count_window intentionally absent
+    });
+
+    const result = await getAnalyticsSummary();
+
+    expect(result.unique_ip_count_window).toBe(37);
+    expect(result.unique_session_count_window).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getToolBreakdown — full tool_name breakdown (NOT prefix-collapsed)
+//
+// Exact getToolCounts body with split_part(tool_name, '-', 1) replaced by the
+// full tool_name. Same predicate set as getToolCounts: buildDateWindow +
+// buildRequestSourceClause + latency_ms >= 0 + sourceOnlyFilter (tool_type
+// dropped). NO blocked filter; NO redacted exclusion (preserves the
+// getToolCounts divergence). Returns [{ tool_name, count }] ordered count desc.
+// Drives the weekly report's per-search-tool + explore-command breakdowns.
+// ---------------------------------------------------------------------------
+
+describe("getToolBreakdown", () => {
+  it("returns FULL tool names as distinct rows (not collapsed to the hyphen prefix)", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { tool_name: "search-docs", count: 120 },
+        { tool_name: "search-code", count: 80 },
+        { tool_name: "explore-file", count: 15 },
+      ],
+    });
+
+    const result = await getToolBreakdown(7);
+
+    // All three full names appear separately — NOT collapsed to search/explore.
+    expect(result).toHaveLength(3);
+    expect(result.map((r) => r.tool_name)).toEqual([
+      "search-docs",
+      "search-code",
+      "explore-file",
+    ]);
+    expect(result[0]).toEqual({ tool_name: "search-docs", count: 120 });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    // Uses the FULL tool_name, never the prefix-collapsing split_part.
+    expect(sql).not.toContain("split_part");
+    expect(sql).toMatch(/GROUP BY tool_name/);
+    expect(sql).toMatch(/ORDER BY count DESC/);
+    // Same predicate set as getToolCounts.
+    expect(sql).toContain("latency_ms >= 0");
+    // No blocked clause, no redacted exclusion (matches getToolCounts).
+    expect(sql).not.toContain("blocked");
+    expect(sql).not.toContain("REDACTED");
+    // Default request-source filter binds "user" (real-users-by-default).
+    expect(params).toEqual([7, "user"]);
+  });
+
+  it("returns empty array when no queries exist", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const result = await getToolBreakdown(7);
+    expect(result).toEqual([]);
+  });
+
+  it("drops the tool_type filter (like getToolCounts) so the breakdown is never circular", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolBreakdown(7, { tool_type: "search" });
+
+    const [sql] = mockQuery.mock.calls[0];
+    // tool_type would defeat the breakdown — its clause must be absent.
+    // (`LIKE` still appears via the default service-traffic exclusion on
+    // session_id, so we assert specifically against the tool_type predicate
+    // shape — `tool_name = $N OR tool_name LIKE $N+1 || '-%'`.)
+    expect(sql).not.toContain("tool_name = $");
+    expect(sql).not.toContain("tool_name LIKE");
+  });
+
+  it("honors the source filter", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolBreakdown(7, { source: "docs" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("source_name = $");
+    expect(params).toContain("docs");
+  });
+
+  it("honors request_source: 'analysis' as exact match", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getToolBreakdown(7, { request_source: "analysis" });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain("request_source = $");
+    expect(sql).not.toContain("request_source IS NULL");
+    expect(params).toContain("analysis");
   });
 });

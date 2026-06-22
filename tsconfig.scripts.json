@@ -4,6 +4,6 @@
     "noEmit": true,
     "rootDir": null
   },
-  "include": ["scripts/gap-analysis/**/*"],
+  "include": ["scripts/gap-analysis/**/*", "scripts/weekly-search-report/**/*"],
   "exclude": ["node_modules", "dist"]
 }
