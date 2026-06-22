@@ -921,13 +921,32 @@ type NotionBlockType =
   | "heading_2"
   | "heading_3"
   | "bulleted_list_item"
-  | "paragraph";
+  | "paragraph"
+  | "table";
 
 interface NotionBlock {
   object: "block";
   type: NotionBlockType;
   [key: string]: unknown;
 }
+
+interface NotionTableRow {
+  type: "table_row";
+  table_row: { cells: NotionRichText[][] };
+}
+
+interface NotionTableBlock extends NotionBlock {
+  type: "table";
+  table: {
+    table_width: number;
+    has_column_header: boolean;
+    has_row_header: boolean;
+    children: NotionTableRow[];
+  };
+}
+
+/** Max DATA rows (excluding header) emitted per Notion table. */
+export const NOTION_MAX_TABLE_ROWS = 100;
 
 /**
  * Split a single line's text into <=NOTION_RICH_TEXT_LIMIT-char rich_text spans.
@@ -959,12 +978,98 @@ function makeBlock(type: NotionBlockType, text: string): NotionBlock {
   };
 }
 
+/** A markdown table row line starts and ends with a pipe (after trimming). */
+function isTableLine(line: string): boolean {
+  const t = line.trim();
+  return t.startsWith("|") && t.endsWith("|") && t.length > 1;
+}
+
+/** A `| --- | :--: |`-style separator row that delimits header from body. */
+function isSeparatorRow(line: string): boolean {
+  return splitTableRow(line).every((c) => /^:?-{1,}:?$/.test(c.trim()));
+}
+
+/**
+ * Split one `| a | b |` line into its cell strings (drops the outer pipes).
+ * Splits on UNESCAPED pipes only, so a `\|` inside a cell stays part of that
+ * cell.
+ */
+function splitTableRow(line: string): string[] {
+  const t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  // Negative lookbehind: a `|` not preceded by a backslash is a delimiter.
+  return t.split(/(?<!\\)\|/);
+}
+
+/**
+ * Un-escape a markdown table cell (Notion cells are not markdown, so a `\|`
+ * escape must be undone) and trim surrounding space.
+ */
+function tableCellText(raw: string): string {
+  return raw.replace(/\\\|/g, "|").trim();
+}
+
+function makeTableRow(cells: string[]): NotionTableRow {
+  return {
+    type: "table_row",
+    table_row: { cells: cells.map((c) => lineToRichText(tableCellText(c))) },
+  };
+}
+
+/**
+ * Build a native Notion `table` block from a contiguous run of `|...|` lines.
+ * The separator row is dropped; the first remaining row is the header. Tables
+ * are capped at NOTION_MAX_TABLE_ROWS data rows (a trailing truncation note is
+ * the caller's responsibility) and every cell respects the rich_text cap.
+ */
+function tableRunToBlock(run: string[]): {
+  block: NotionTableBlock;
+  truncatedFrom: number | null;
+} {
+  const rows = run.filter((l) => !isSeparatorRow(l)).map(splitTableRow);
+  const width = rows.reduce((max, r) => Math.max(max, r.length), 0);
+  const header = rows[0] ?? [];
+  const dataRows = rows.slice(1);
+  const totalData = dataRows.length;
+  const keptData =
+    totalData > NOTION_MAX_TABLE_ROWS
+      ? dataRows.slice(0, NOTION_MAX_TABLE_ROWS)
+      : dataRows;
+
+  // Pad ragged rows to a uniform width so Notion accepts the table.
+  const pad = (cells: string[]): string[] =>
+    cells.length >= width
+      ? cells
+      : [...cells, ...Array(width - cells.length).fill("")];
+
+  const children: NotionTableRow[] = [
+    makeTableRow(pad(header)),
+    ...keptData.map((r) => makeTableRow(pad(r))),
+  ];
+
+  return {
+    block: {
+      object: "block",
+      type: "table",
+      table: {
+        table_width: width,
+        has_column_header: true,
+        has_row_header: false,
+        children,
+      },
+    },
+    truncatedFrom: totalData > NOTION_MAX_TABLE_ROWS ? totalData : null,
+  };
+}
+
 /**
  * Convert a markdown report into native Notion block objects so the published
- * page renders headings and bullet lists instead of the literal `#`/`-` source.
- * Line-by-line mapping:
+ * page renders headings, bullet lists, and tables instead of the literal
+ * `#`/`-`/`|` source. Line-by-line mapping:
  *   `# `   → heading_1   `## ` → heading_2   `### ` → heading_3
  *   `- `/`* ` → bulleted_list_item
+ *   a contiguous run of `|...|` lines → one native `table` block (separator row
+ *     dropped, first row as header); tables longer than NOTION_MAX_TABLE_ROWS
+ *     data rows are capped with a trailing truncation note
  *   blank line → skipped (Notion spacing comes from block structure)
  *   anything else → paragraph
  * The report's FIRST line is a redundant top-level `# CopilotKit Docs (MCP) Gap Analysis —
@@ -976,10 +1081,34 @@ function makeBlock(type: NotionBlockType, text: string): NotionBlock {
 export function markdownToNotionBlocks(markdown: string): NotionBlock[] {
   const blocks: NotionBlock[] = [];
   const rawLines = markdown.split("\n");
-  rawLines.forEach((line, idx) => {
+
+  for (let idx = 0; idx < rawLines.length; idx++) {
+    const line = rawLines[idx];
     // Drop the leading duplicate-title H1 line (only the very first line).
-    if (idx === 0 && line.startsWith("# ")) return;
-    if (line.trim() === "") return; // blank → no empty paragraph block
+    if (idx === 0 && line.startsWith("# ")) continue;
+
+    // Gather a contiguous run of table lines and emit one table block.
+    if (isTableLine(line)) {
+      const run: string[] = [];
+      while (idx < rawLines.length && isTableLine(rawLines[idx])) {
+        run.push(rawLines[idx]);
+        idx++;
+      }
+      idx--; // step back: the for-loop's idx++ re-consumes the non-table line
+      const { block, truncatedFrom } = tableRunToBlock(run);
+      blocks.push(block);
+      if (truncatedFrom !== null) {
+        blocks.push(
+          makeBlock(
+            "paragraph",
+            `(table truncated to first ${NOTION_MAX_TABLE_ROWS} rows of ${truncatedFrom})`,
+          ),
+        );
+      }
+      continue;
+    }
+
+    if (line.trim() === "") continue; // blank → no empty paragraph block
     if (line.startsWith("### ")) {
       blocks.push(makeBlock("heading_3", line.slice(4)));
     } else if (line.startsWith("## ")) {
@@ -991,7 +1120,7 @@ export function markdownToNotionBlocks(markdown: string): NotionBlock[] {
     } else {
       blocks.push(makeBlock("paragraph", line));
     }
-  });
+  }
   return blocks;
 }
 
