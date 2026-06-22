@@ -22,7 +22,7 @@ jobs:
       # Cover the gap-analysis script too: it ships from scripts/ and was
       # previously neither format-checked nor type-checked in CI (the other
       # scripts/ files predate this gate and are out of scope here).
-      - run: npx prettier --check "src/**/*.ts" "scripts/gap-analysis/**/*.ts"
+      - run: npx prettier --check "src/**/*.ts" "scripts/gap-analysis/**/*.ts" "scripts/weekly-search-report/**/*.ts"
 
   typecheck-scripts:
     runs-on: ubuntu-latest
