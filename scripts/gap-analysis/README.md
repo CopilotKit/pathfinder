@@ -47,24 +47,25 @@ the very signal it measures.
 ## Required secrets
 
 Configure the per-repo ones as **repository secrets** (Settings → Secrets and
-variables → Actions); `SLACK_WEBHOOK_OSS_ALERTS` is an **org-level** secret
-shared by every workflow and is already provisioned. The workflow runs without
+variables → Actions); `SLACK_WEBHOOK_ENGR` is an **org-level** secret
+and is already provisioned. The workflow runs without
 any of them, but no-ops gracefully until they are provisioned, so CI/lint and
 dry runs stay green.
 
-| Secret                       | Purpose                                                                                                             | When unset                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `PATHFINDER_ANALYTICS_TOKEN` | Bearer token for `GET /api/analytics/*` on the production MCP (`https://mcp.copilotkit.ai`).                        | Script logs "skipping live fetch" and exits 0.                             |
-| `ANTHROPIC_API_KEY`          | Anthropic key for the single LLM classification/summarization pass.                                                 | Deterministic fallback report is produced from the clusters (no LLM call). |
-| `NOTION_TOKEN`               | Notion integration token used to publish the report page.                                                           | Notion publish step is skipped.                                            |
-| `SLACK_WEBHOOK_OSS_ALERTS`   | Org-level incoming-webhook URL (shared by every workflow). Posted to only when new high-severity gaps are detected. | No Slack alert is sent.                                                    |
+| Secret                       | Purpose                                                                                                                                          | When unset                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| `PATHFINDER_ANALYTICS_TOKEN` | Bearer token for `GET /api/analytics/*` on the production MCP (`https://mcp.copilotkit.ai`).                                                     | Script logs "skipping live fetch" and exits 0.                             |
+| `ANTHROPIC_API_KEY`          | Anthropic key for the single LLM classification/summarization pass.                                                                              | Deterministic fallback report is produced from the clusters (no LLM call). |
+| `NOTION_TOKEN`               | Notion integration token used to publish the report page.                                                                                        | Notion publish step is skipped.                                            |
+| `SLACK_WEBHOOK_ENGR`         | Org-level incoming-webhook URL for **#engr**. The gap report (a successful-run signal) posts here only when new high-severity gaps are detected. | No Slack alert is sent.                                                    |
 
-> **Slack env var name:** the _script_ reads the webhook URL from `SLACK_WEBHOOK`,
-> not `SLACK_WEBHOOK_OSS_ALERTS`. The workflow bridges the two by mapping the
-> org secret into the script's variable
-> (`SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}`). So in CI the alert
-> uses the shared org webhook automatically, but a **local** run must export
-> `SLACK_WEBHOOK` itself — otherwise the alert step is a silent no-op.
+> **Slack env var name + channel:** the _script_ reads the webhook URL from
+> `SLACK_WEBHOOK`, not `SLACK_WEBHOOK_ENGR`. The workflow bridges the two by
+> mapping the org secret into the script's variable
+> (`SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_ENGR }}`), so in CI the gap report
+> posts to **#engr** automatically; a **local** run must export `SLACK_WEBHOOK`
+> itself — otherwise the alert step is a silent no-op. Run FAILURES are surfaced
+> as a red CI run, not a Slack alert.
 
 The Notion parent page id defaults to the Gap-Reports page
 (`3793aa38-1852-80a5-89d3-c3d37147aa22`) and can be overridden with the
@@ -97,14 +98,14 @@ PATHFINDER_ANALYTICS_TOKEN=... NOTION_TOKEN=... \
 
 ### Useful env overrides
 
-| Var                     | Default                                   | Notes                                                                                                                |
-| ----------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `ANALYTICS_BASE_URL`    | `https://mcp.copilotkit.ai`               | Point at a local/staging MCP.                                                                                        |
-| `GAP_ANALYSIS_DAYS`     | `30`                                      | Lookback window.                                                                                                     |
-| `GAP_STATE_PATH`        | `/tmp/pathfinder-gap-analysis-state.json` | Prior-run state for new-gap diffing.                                                                                 |
-| `ANTHROPIC_MODEL`       | `claude-haiku-4-5-20251001`               | Override the model id.                                                                                               |
-| `NOTION_PARENT_PAGE_ID` | Gap-Reports page                          | Where the report page is created.                                                                                    |
-| `SLACK_WEBHOOK`         | _(unset)_                                 | Webhook the alert posts to. The workflow maps `SLACK_WEBHOOK_OSS_ALERTS` into it; set it directly for a local alert. |
+| Var                     | Default                                   | Notes                                                                                                                       |
+| ----------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `ANALYTICS_BASE_URL`    | `https://mcp.copilotkit.ai`               | Point at a local/staging MCP.                                                                                               |
+| `GAP_ANALYSIS_DAYS`     | `30`                                      | Lookback window.                                                                                                            |
+| `GAP_STATE_PATH`        | `/tmp/pathfinder-gap-analysis-state.json` | Prior-run state for new-gap diffing.                                                                                        |
+| `ANTHROPIC_MODEL`       | `claude-haiku-4-5-20251001`               | Override the model id.                                                                                                      |
+| `NOTION_PARENT_PAGE_ID` | Gap-Reports page                          | Where the report page is created.                                                                                           |
+| `SLACK_WEBHOOK`         | _(unset)_                                 | Webhook the gap report posts to (#engr). The workflow maps `SLACK_WEBHOOK_ENGR` into it; set it directly for a local alert. |
 
 ## Files
 

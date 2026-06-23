@@ -1175,6 +1175,46 @@ describe("markdownToNotionBlocks", () => {
       }
     }
   });
+
+  it("renders a markdown table as a native Notion table block (not pipe paragraphs)", () => {
+    // Header + separator + 2 data rows. The old code emitted each `|...|` line as
+    // a paragraph containing literal pipes; the fix must emit ONE native `table`
+    // block whose table_row children carry the cell text (separator row dropped,
+    // first row as header).
+    const md = [
+      "| Cluster | Hits | Variants |",
+      "| --- | --- | --- |",
+      "| agent state | 10 | 1 |",
+      "| theming | 4 | 2 |",
+    ].join("\n");
+    const blocks = markdownToNotionBlocks(md);
+
+    // Exactly one block, of type "table" — NOT four pipe paragraphs.
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("table");
+    expect(
+      blocks.some((b) => b.type === "paragraph" && blockText(b).includes("|")),
+    ).toBe(false);
+
+    const table = (blocks[0] as any).table;
+    expect(table.table_width).toBe(3);
+    expect(table.has_column_header).toBe(true);
+    // Header row + 2 data rows = 3 table_row children (separator dropped).
+    expect(table.children).toHaveLength(3);
+    for (const row of table.children) {
+      expect(row.type).toBe("table_row");
+    }
+
+    // Cell text is reachable via each cell's rich_text spans.
+    const cellText = (cell: any[]): string =>
+      cell.map((r) => r.text.content).join("");
+    const rowText = (row: any): string[] =>
+      row.table_row.cells.map((c: any[]) => cellText(c));
+
+    expect(rowText(table.children[0])).toEqual(["Cluster", "Hits", "Variants"]);
+    expect(rowText(table.children[1])).toEqual(["agent state", "10", "1"]);
+    expect(rowText(table.children[2])).toEqual(["theming", "4", "2"]);
+  });
 });
 
 // ── batchBlocks (respect Notion's 100-children-per-request cap) ───────────────

@@ -19,10 +19,11 @@ name: Monthly Gap Analysis
 #   NOTION_TOKEN                Notion integration token used to publish the
 #                               report page. When unset, the Notion step is
 #                               skipped.
-#   SLACK_WEBHOOK_OSS_ALERTS    Incoming-webhook URL (org-level secret shared by
-#                               every workflow). Posted to ONLY when new
-#                               high-severity gaps are detected. When unset, no
-#                               alert is sent.
+#   SLACK_WEBHOOK_ENGR          Incoming-webhook URL (org-level secret) for #engr.
+#                               The gap report (a successful-run signal) posts
+#                               here ONLY when new high-severity gaps are
+#                               detected. When unset, no alert is sent. Run
+#                               FAILURES surface as a red CI run, not a Slack alert.
 #
 # Prior-run state (for new-gap diffing) is carried across runs as the
 # `gap-analysis-state` artifact rather than the Actions cache: caches are
@@ -101,9 +102,12 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           # Gap-Reports parent page.
           NOTION_PARENT_PAGE_ID: "3793aa38-1852-80a5-89d3-c3d37147aa22"
-          # Slack alert (new high-severity gaps only). Unset → no alert.
-          # Org-level secret shared by every workflow (see header).
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
+          # Gap report (new high-severity gaps only) → #engr. Unset → no alert.
+          # The gap report is a successful-run signal for engineering, so it
+          # routes to #engr via SLACK_WEBHOOK_ENGR (matching the weekly
+          # search-report success digest), NOT #oss-alerts. A run FAILURE is
+          # surfaced as a red CI run, not a Slack alert.
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_ENGR }}
           # Stable path the download step writes to and the upload step reads
           # from, so prior-run state survives across runs via the artifact.
           GAP_STATE_PATH: /tmp/gap-state/pathfinder-gap-analysis-state.json
