@@ -34,6 +34,8 @@ runs AFTER the fleet, over the fragments this fleet produces.
 | `FRAGMENTS_DIR` | Absolute path to `runs/<RUN_ID>/fragments/`. The single write target.                                                    |
 | `AS_OF`         | The harvest "as of" calendar date (`YYYY-MM-DD`) stamped into provenance freshness for sources that lack their own date. |
 
+- Phase-0 canonical write path: pipe fragments through `atlas harvest write-fragment --stdin`. See `runs/fragments/README.md` for the on-disk contract.
+
 ## Fragment id convention
 
 Each leaf owns a unique, filesystem-safe, deterministic file stem so parallel

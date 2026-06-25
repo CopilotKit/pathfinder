@@ -147,6 +147,57 @@ export const CandidateFragmentSchema = CandidateFragmentObject.refine(
   SUBSYSTEM_NO_DELIMITER_ISSUE,
 );
 
+// ── EpisodicCandidateFragmentSchema (spec §4.6) ───────────────────────────────
+//
+// A wrapping variant of `CandidateFragmentSchema` that enforces the five
+// episodic-leaf invariants. Four are predicate refinements that REJECT on
+// violation; the fifth (sensitivity) is a `.transform()` that COERCES UP to
+// the `"internal"` floor — `"public"` is silently rewritten to `"internal"`,
+// while `"proprietary"` / `"secret"` are preserved verbatim. This is the
+// "coerce up to floor" rule, NOT "reject below floor".
+//
+// The CLI helper detects `sourcetype === "episodic"` after the base parse and
+// runs this narrowed schema as a SECOND parse. The on-disk fragment carries
+// the coerced sensitivity value.
+//
+// If you add a `.regex(...)`, `.refine(...)`, or `.transform(...)` here, update
+// the §4.1.1 refinement-audit test (T9) — JSON Schema conversion silently
+// drops these and they must be wired into the post-pass.
+export const EpisodicCandidateFragmentSchema = CandidateFragmentSchema.refine(
+  (f) => f.needsReview === true,
+  {
+    message: "episodic fragment requires needsReview=true",
+    path: ["needsReview"],
+  },
+)
+  .refine((f) => f.provenance.classification.provenance_class === "derived", {
+    message: "episodic requires provenance_class=derived",
+    path: ["provenance", "classification", "provenance_class"],
+  })
+  .refine((f) => f.provenance.classification.confidence === "low", {
+    message: "episodic requires confidence=low (clamped)",
+    path: ["provenance", "classification", "confidence"],
+  })
+  .refine(
+    (f) => f.provenance.classification.validation_status === "unverified",
+    {
+      message: "episodic requires validation_status=unverified",
+      path: ["provenance", "classification", "validation_status"],
+    },
+  )
+  // Sensitivity-floor transform: coerce up to "internal" floor (NOT reject-below).
+  // "public" → "internal"; "internal" / "proprietary" / "secret" preserved verbatim.
+  .transform((f) => {
+    if (f.provenance.classification.sensitivity === "public") {
+      f.provenance.classification.sensitivity = "internal";
+    }
+    return f;
+  });
+
+export type EpisodicCandidateFragment = z.infer<
+  typeof EpisodicCandidateFragmentSchema
+>;
+
 // ── Candidate (Tier-3 finalized row, 1:1 with an atlas_seed_entries row) ───────
 
 export const CandidateSchema = CandidateFragmentObject.extend({
