@@ -1,7 +1,23 @@
 name: Publish Docker
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: "Git tag / version to build and publish (e.g. v1.16.0)"
+        required: true
+        type: string
+    secrets:
+      SLACK_WEBHOOK_OSS_ALERTS:
+        description: "Slack webhook for OSS publish alerts (optional)"
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag / version to build and publish (e.g. v1.16.0)"
+        required: true
+        type: string
 permissions: {}
 jobs:
   docker:
@@ -11,8 +27,28 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Resolve image ref
+        id: ref
+        env:
+          # For push:tags the ref is github.ref_name; for workflow_call /
+          # workflow_dispatch it comes from the explicit `tag` input.
+          INPUT_TAG: ${{ inputs.tag }}
+          PUSH_REF: ${{ github.ref_name }}
+        run: |
+          if [ -n "${INPUT_TAG}" ]; then
+            REF="${INPUT_TAG}"
+          else
+            REF="${PUSH_REF}"
+          fi
+          if [ -z "${REF}" ]; then
+            echo "::error::Could not resolve a tag/ref to build"
+            exit 1
+          fi
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "Building Docker image for ref: ${REF}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ steps.ref.outputs.ref }}
           persist-credentials: false
       - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
@@ -26,7 +62,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/copilotkit/pathfinder:latest
-            ghcr.io/copilotkit/pathfinder:${{ github.ref_name }}
+            ghcr.io/copilotkit/pathfinder:${{ steps.ref.outputs.ref }}
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -34,7 +70,7 @@ jobs:
         if: success()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
-          REF_NAME: ${{ github.ref_name }}
+          REF_NAME: ${{ steps.ref.outputs.ref }}
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
             payload=$(jq -nc --arg ref "$REF_NAME" \
