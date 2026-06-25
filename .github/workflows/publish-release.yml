@@ -136,3 +136,20 @@ jobs:
               -H "Content-Type: application/json" \
               -d "$payload" || true
           fi
+
+  # Build & push the Docker image in the SAME run, right after the npm
+  # publish + tag succeed. The tag push above uses GITHUB_TOKEN, which does
+  # NOT trigger the `on: push: tags` event in publish-docker.yml, so we
+  # invoke that workflow directly via workflow_call instead of relying on
+  # the tag-push event firing it.
+  docker:
+    needs: [build, publish]
+    if: needs.build.outputs.published == 'false'
+    uses: ./.github/workflows/publish-docker.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      tag: v${{ needs.build.outputs.version }}
+    secrets:
+      SLACK_WEBHOOK_OSS_ALERTS: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
