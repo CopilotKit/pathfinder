@@ -102,6 +102,10 @@ program
       await import("./validate.js");
     const result = await validateConfig(opts.config);
     console.log(formatValidationResult(result));
+    // #88 — only hard `errors[]` fail the command. Optional-dependency
+    // advisories live in `result.warnings[]` and exit 0 (validate is a static
+    // linter; the eager `serve` startup guard is the real enforcement for a
+    // missing local-embedding peer).
     process.exit(result.errors.length > 0 ? 1 : 0);
   });
 
