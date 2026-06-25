@@ -18,6 +18,8 @@
 // the typed shapes below.
 
 import OpenAI from "openai";
+import { Agent as HttpAgent } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
 
 import type { CandidateFragment, Classification } from "./types.js";
 import { mostRestrictiveSensitivity } from "./types.js";
@@ -301,9 +303,26 @@ export class OpenAIDistiller implements LlmDistiller {
             "mock server for tests.",
         );
       }
+      // When a baseURL is configured it is, in this repo, only ever a local
+      // aimock/proxy server (see the comment above). Under the full test suite
+      // every aimock-backed file runs its own in-process server in parallel
+      // (src + the built dist copy, so ~2x the servers), and the OpenAI SDK's
+      // node-fetch pools keep-alive sockets. Under that contention a server can
+      // close an idle pooled socket exactly as a request reuses it, which
+      // node-fetch surfaces as `FetchError: ... Premature close` — a flaky,
+      // load-dependent failure across every aimock test (deterministic in CI).
+      // Pinning a non-keep-alive agent for the mock/proxy case forces a fresh
+      // socket per request, removing the reuse race. Production (no baseURL →
+      // real OpenAI over HTTPS) keeps the SDK's default keep-alive agent.
+      const httpAgent = baseURL
+        ? baseURL.startsWith("https:")
+          ? new HttpsAgent({ keepAlive: false })
+          : new HttpAgent({ keepAlive: false })
+        : undefined;
       this.client = new OpenAI({
         apiKey,
         ...(baseURL ? { baseURL } : {}),
+        ...(httpAgent ? { httpAgent } : {}),
       });
     }
   }
