@@ -2,7 +2,11 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { getConfig, getServerConfig } from "./config.js";
+import {
+  getConfig,
+  getServerConfig,
+  resolveLocalEmbeddingDep,
+} from "./config.js";
 import {
   isFileSourceConfig,
   isSlackSourceConfig,
@@ -30,6 +34,15 @@ export interface ValidationResult {
   }>;
   tools: Array<{ name: string; valid: boolean; detail: string }>;
   errors: string[];
+  /**
+   * #88 — non-fatal advisories (currently optional missing peer deps).
+   * Separated from `errors[]` so `validate` can exit 0 when only warnings
+   * exist: a missing optional dep is a linter advisory, not a config defect
+   * the user must fix to run elsewhere. The eager `serve` startup guard is
+   * the real enforcement for `provider: local`. Displayed under "Optional
+   * Dependencies".
+   */
+  warnings: string[];
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
@@ -43,6 +56,7 @@ export async function validateConfig(
     sources: [],
     tools: [],
     errors: [],
+    warnings: [],
   };
 
   // Step 1: Config schema validation
@@ -186,11 +200,12 @@ export async function validateConfig(
     }
   }
 
-  // Check for @xenova/transformers when using local embeddings
+  // Check for @xenova/transformers when using local embeddings (#88 — via
+  // the shared resolver so the dep-resolution logic matches the eager serve
+  // startup guard exactly).
   if (serverCfg.embedding?.provider === "local") {
-    try {
-      await import("@xenova/transformers");
-    } catch {
+    const present = await resolveLocalEmbeddingDep();
+    if (!present) {
       optionalDepChecks.push({
         name: "@xenova/transformers",
         pkg: "@xenova/transformers",
@@ -200,9 +215,10 @@ export async function validateConfig(
     }
   }
 
-  // Add to result
+  // #88 — Optional-dependency findings are WARNINGS, not errors: they route
+  // to `result.warnings[]` so `validate` exits 0 when only warnings exist.
   for (const check of optionalDepChecks) {
-    result.errors.push(
+    result.warnings.push(
       `Missing optional dependency: ${check.name} — ${check.message}. Install: npm install ${check.pkg}`,
     );
   }
@@ -377,32 +393,31 @@ export function formatValidationResult(result: ValidationResult): string {
   }
   lines.push("");
 
-  // Separate optional dep warnings from hard errors for display
-  const optDepErrors = result.errors.filter((e) =>
-    e.startsWith("Missing optional dependency:"),
-  );
-  const otherErrors = result.errors.filter(
-    (e) => !e.startsWith("Missing optional dependency:"),
-  );
+  // #88 — Optional-dependency advisories now live in `result.warnings[]`
+  // (previously they were mixed into `errors[]` and filtered out here for
+  // display while still inflating the exit code). Display them under
+  // "Optional Dependencies"; they never count toward the hard-error total.
+  const optDepWarnings = result.warnings;
+  const hardErrors = result.errors;
 
-  if (optDepErrors.length > 0) {
+  if (optDepWarnings.length > 0) {
     lines.push("Optional Dependencies:");
-    for (const err of optDepErrors) {
-      lines.push(`  - ${err}`);
+    for (const warn of optDepWarnings) {
+      lines.push(`  - ${warn}`);
     }
     lines.push("");
   }
 
-  const errorCount = result.errors.length;
-  if (errorCount === 0) {
+  const errorCount = hardErrors.length;
+  if (errorCount === 0 && optDepWarnings.length === 0) {
     lines.push(`Result: All validations passed.`);
-  } else if (otherErrors.length === 0) {
+  } else if (errorCount === 0) {
     lines.push(
-      `Result: ${optDepErrors.length} optional dependency warning(s), no hard errors.`,
+      `Result: ${optDepWarnings.length} optional dependency warning(s), no hard errors.`,
     );
   } else {
     lines.push(`Result: ${errorCount} error(s) found.`);
-    for (const err of otherErrors) {
+    for (const err of hardErrors) {
       lines.push(`  - ${err}`);
     }
   }

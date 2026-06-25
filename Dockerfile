@@ -28,7 +28,16 @@ RUN npm ci --omit=dev
 # the server will throw a clear "Install <pkg>" error at runtime when that
 # feature is first exercised (e.g. embedding.provider: local).
 # RUN npm install pdf-parse mammoth        # For type: document (PDF/DOCX)
-# RUN npm install @xenova/transformers     # For embedding.provider: local (transformers.js / in-process CPU embeddings)
+#
+# #88 — `@xenova/transformers` for embedding.provider: local. The CI matrix
+# in .github/workflows/publish-docker.yml builds two variants of this image
+# from the SAME Dockerfile: the default (slim, arg=false → tags :latest /
+# :<ref>) and the `-local` variant (arg=true → tags :latest-local /
+# :<ref>-local) which preinstalls the dep below. Default build stays slim.
+ARG INCLUDE_LOCAL_EMBEDDINGS=false
+RUN if [ "$INCLUDE_LOCAL_EMBEDDINGS" = "true" ]; then \
+      npm install @xenova/transformers; \
+    fi
 COPY --from=build /app/dist/ ./dist/
 COPY docs/analytics.html ./docs/analytics.html
 COPY deploy/copilotkit-docs.yaml ./copilotkit-docs.yaml

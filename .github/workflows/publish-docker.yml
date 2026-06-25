@@ -57,12 +57,33 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      # #88 — two image variants built in the SAME run from the SAME
+      # Dockerfile, with DISJOINT tags:
+      #   default (slim): no build-arg → :latest, :<ref>          ONLY
+      #   local:  INCLUDE_LOCAL_EMBEDDINGS=true → :latest-local,
+      #           :<ref>-local                                    ONLY
+      # :latest / :<ref> always point at the slim default digest, never at
+      # the -local digest. Both multi-arch; cache shared via type=gha. One
+      # Slack notify summarizes both at the end of the job.
+      - name: Build & push default (slim) image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           push: true
           tags: |
             ghcr.io/copilotkit/pathfinder:latest
             ghcr.io/copilotkit/pathfinder:${{ steps.ref.outputs.ref }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build & push -local image (preinstalls @xenova/transformers)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          push: true
+          build-args: |
+            INCLUDE_LOCAL_EMBEDDINGS=true
+          tags: |
+            ghcr.io/copilotkit/pathfinder:latest-local
+            ghcr.io/copilotkit/pathfinder:${{ steps.ref.outputs.ref }}-local
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -74,7 +95,7 @@ jobs:
         run: |
           if [ -n "$SLACK_WEBHOOK" ]; then
             payload=$(jq -nc --arg ref "$REF_NAME" \
-              '{text: "Docker image published: ghcr.io/copilotkit/pathfinder:\($ref)"}')
+              '{text: "Docker images published: ghcr.io/copilotkit/pathfinder:\($ref) (slim) and :\($ref)-local (with @xenova/transformers)"}')
             curl -sf -X POST "$SLACK_WEBHOOK" \
               -H 'Content-Type: application/json' \
               -d "$payload" || true

@@ -95,6 +95,10 @@ vi.mock("../config.js", () => {
         stale_threshold_hours: 24,
       },
     }),
+    // #88 — the local-embedding optional-dep check routes through this shared
+    // resolver. Default to "absent" so the local-provider test exercises the
+    // missing-dep warning path without touching node_modules.
+    resolveLocalEmbeddingDep: vi.fn().mockResolvedValue(false),
   };
 });
 
@@ -502,13 +506,17 @@ describe("validateConfig", () => {
       });
 
       const result = await validateConfig();
+      // #88 — optional-dep findings are WARNINGS now, not errors.
       expect(
-        result.errors.some(
+        result.warnings.some(
           (e) =>
             e.includes("Missing optional dependency: pdf-parse") &&
             e.includes("npm install pdf-parse"),
         ),
       ).toBe(true);
+      expect(
+        result.errors.some((e) => e.includes("Missing optional dependency")),
+      ).toBe(false);
     });
 
     it("reports missing mammoth for DOCX document sources", async () => {
@@ -535,13 +543,17 @@ describe("validateConfig", () => {
       });
 
       const result = await validateConfig();
+      // #88 — optional-dep findings are WARNINGS now, not errors.
       expect(
-        result.errors.some(
+        result.warnings.some(
           (e) =>
             e.includes("Missing optional dependency: mammoth") &&
             e.includes("npm install mammoth"),
         ),
       ).toBe(true);
+      expect(
+        result.errors.some((e) => e.includes("Missing optional dependency")),
+      ).toBe(false);
     });
 
     it("reports missing @xenova/transformers for local embedding provider", async () => {
@@ -573,17 +585,29 @@ describe("validateConfig", () => {
       });
 
       const result = await validateConfig();
+      // #88 — local-embedding peer-dep finding is a WARNING now, not an error,
+      // so `validate` exits 0 (config is schema-valid; user may run elsewhere).
       expect(
-        result.errors.some(
+        result.warnings.some(
           (e) =>
             e.includes("Missing optional dependency: @xenova/transformers") &&
             e.includes("npm install @xenova/transformers"),
         ),
       ).toBe(true);
+      expect(
+        result.errors.some((e) => e.includes("Missing optional dependency")),
+      ).toBe(false);
+      // Exit-0 contract: a schema-valid local config with the dep absent must
+      // produce ZERO hard errors (cli.ts exits 0). This is the RED→GREEN line
+      // for #88 — previously the finding landed in errors[] and exited 1.
+      expect(result.errors).toHaveLength(0);
     });
 
-    it("does not report optional dep errors when no document sources or local embeddings", async () => {
+    it("does not report optional dep warnings when no document sources or local embeddings", async () => {
       const result = await validateConfig();
+      expect(
+        result.warnings.some((e) => e.includes("Missing optional dependency")),
+      ).toBe(false);
       expect(
         result.errors.some((e) => e.includes("Missing optional dependency")),
       ).toBe(false);
@@ -943,6 +967,7 @@ describe("formatValidationResult", () => {
       ],
       tools: [{ name: "search-docs", valid: true, detail: "-> docs" }],
       errors: [],
+      warnings: [],
     };
 
     const output = formatValidationResult(result);
@@ -961,6 +986,7 @@ describe("formatValidationResult", () => {
       sources: [],
       tools: [],
       errors: ["Config validation failed: missing server field"],
+      warnings: [],
     };
 
     const output = formatValidationResult(result);
@@ -979,6 +1005,7 @@ describe("formatValidationResult", () => {
       sources: [],
       tools: [],
       errors: ["Missing required environment variable: DATABASE_URL"],
+      warnings: [],
     };
 
     const output = formatValidationResult(result);
@@ -1001,6 +1028,7 @@ describe("formatValidationResult", () => {
       ],
       tools: [],
       errors: ['Source "docs" validation failed'],
+      warnings: [],
     };
 
     const output = formatValidationResult(result);
@@ -1026,6 +1054,7 @@ describe("formatValidationResult", () => {
       ],
       tools: [],
       errors: [],
+      warnings: [],
     };
 
     const output = formatValidationResult(result);
@@ -1046,6 +1075,7 @@ describe("formatValidationResult", () => {
         },
       ],
       errors: ['Tool "bad-tool" references missing source'],
+      warnings: [],
     };
 
     const output = formatValidationResult(result);
@@ -1060,6 +1090,7 @@ describe("formatValidationResult", () => {
       sources: [],
       tools: [],
       errors: ["Error one", "Error two", "Error three"],
+      warnings: [],
     };
 
     const output = formatValidationResult(result);
@@ -1075,20 +1106,22 @@ describe("formatValidationResult", () => {
       envVars: [],
       sources: [],
       tools: [],
-      errors: [
+      // #88 — optional-dep advisories now live in warnings[], hard errors in errors[].
+      errors: ["Missing required environment variable: DATABASE_URL"],
+      warnings: [
         "Missing optional dependency: pdf-parse — Required for PDF document sources. Install: npm install pdf-parse",
-        "Missing required environment variable: DATABASE_URL",
       ],
     };
 
     const output = formatValidationResult(result);
     expect(output).toContain("Optional Dependencies:");
     expect(output).toContain("pdf-parse");
-    expect(output).toContain("2 error(s) found");
+    // Only the hard error counts toward the error total now.
+    expect(output).toContain("1 error(s) found");
     expect(output).toContain(
       "- Missing required environment variable: DATABASE_URL",
     );
-    // The optional dep error should appear in the Optional Dependencies section, not in the error list
+    // The optional dep warning appears in the Optional Dependencies section, not the error list.
     const lines = output.split("\n");
     const errorListLines = lines.filter(
       (l) => l.startsWith("  - ") && l.includes("Missing required"),
@@ -1102,7 +1135,8 @@ describe("formatValidationResult", () => {
       envVars: [],
       sources: [],
       tools: [],
-      errors: [
+      errors: [],
+      warnings: [
         "Missing optional dependency: mammoth — Required for DOCX document sources. Install: npm install mammoth",
       ],
     };
@@ -1122,6 +1156,7 @@ describe("formatValidationResult", () => {
       sources: [],
       tools: [],
       errors: [],
+      warnings: [],
     };
 
     const output = formatValidationResult(result);

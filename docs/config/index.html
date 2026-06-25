@@ -1441,7 +1441,12 @@
           <strong>Local</strong> — runs
           <code>@xenova/transformers</code> in-process. Zero external
           dependencies, CPU-only. Install the optional peer dependency:
-          <code>npm install @xenova/transformers</code>.
+          <code>npm install @xenova/transformers</code>. Running in Docker?
+          Use the prebuilt <code>ghcr.io/copilotkit/pathfinder:latest-local</code>
+          image (also tagged <code>:&lt;version&gt;-local</code>), which ships
+          this dependency preinstalled — no <code>npm install</code> needed. The
+          default image fails loudly at startup if <code>provider: local</code>
+          is set without the dependency present.
         </p>
 
         <div class="code-block">

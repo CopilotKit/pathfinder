@@ -31,6 +31,7 @@ import {
   hasCollectTools,
   hasBashSemanticSearch,
   assertDocumentPeerDepsForSources,
+  assertLocalEmbeddingDepForProvider,
 } from "./config.js";
 import {
   isSlackSourceConfig,
@@ -4092,6 +4093,15 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
       [key: string]: unknown;
     }>,
   );
+
+  // #88 — eager local-embeddings preflight. When embedding.provider is
+  // "local" but @xenova/transformers is absent (the default slim image case),
+  // FAIL LOUDLY at boot with an actionable message instead of booting a
+  // healthy-looking server that explodes at first embed (the prior lazy throw
+  // in indexing/embeddings.ts:loadModel). Mirrors the document peer-dep guard
+  // above. The wrapper in startServer() prefixes "[startup] fatal:" and the
+  // index.ts .catch path exits non-zero, so this surfaces as a boot failure.
+  await assertLocalEmbeddingDepForProvider(serverCfg.embedding?.provider);
 
   // R4-8 — refuse to start in production when analytics is enabled but no
   // stable token is configured. The runtime `getAnalyticsToken()` throw is

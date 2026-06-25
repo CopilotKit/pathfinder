@@ -18,6 +18,8 @@ docker run -v ./pathfinder.yaml:/app/pathfinder.yaml \
   ghcr.io/copilotkit/pathfinder
 ```
 
+> For local (transformers.js) embeddings in Docker, use the `ghcr.io/copilotkit/pathfinder:latest-local` image — it ships `@xenova/transformers` preinstalled. The default image stays slim and fails loudly at startup if `embedding.provider: local` is set without the dependency.
+
 Then connect your AI agent:
 
 ```json

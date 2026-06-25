@@ -590,3 +590,64 @@ export async function assertDocumentPeerDepsForSources(
     )}\n\nAdd these to your install or remove the corresponding source.`,
   );
 }
+
+/**
+ * #88 (local-embeddings closeout) — actionable message shown when the
+ * `@xenova/transformers` optional peer is missing while `embedding.provider`
+ * is `local`. Centralized so the eager startup guard and the `validate`
+ * warning render identical wording. Extends the lazy first-embed message in
+ * indexing/embeddings.ts with the `-local` Docker image hint.
+ */
+export const LOCAL_EMBEDDING_DEP_MESSAGE =
+  'embedding.provider is "local" but the optional peer dependency ' +
+  "@xenova/transformers is not installed. Either install it " +
+  "(npm install @xenova/transformers) or use the prebuilt image " +
+  "ghcr.io/copilotkit/pathfinder:latest-local, which ships it preinstalled.";
+
+/**
+ * #88 — shared dep-resolution probe used by BOTH the eager `serve` startup
+ * guard (which exits non-zero) and `validate` (which records a warning). Pure
+ * present/absent classification: returns `true` when `@xenova/transformers`
+ * can be imported, `false` when it is absent (MODULE_NOT_FOUND /
+ * ERR_MODULE_NOT_FOUND).
+ *
+ * Unlike a generic peer probe this deliberately does NOT re-throw on an
+ * "installed but failed to import" error — for the local-embeddings guard,
+ * any failure to load the module means the provider cannot run, so we treat
+ * it as absent and surface the install/-image hint rather than a confusing
+ * partial-load stack. `tryImport` is injected so tests drive present/absent
+ * without manipulating node_modules.
+ */
+export async function resolveLocalEmbeddingDep(opts?: {
+  tryImport?: (module: string) => Promise<unknown>;
+}): Promise<boolean> {
+  const tryImport = opts?.tryImport ?? (async (m: string) => await import(m));
+  try {
+    await tryImport("@xenova/transformers");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * #88 — eager startup guard. When `embedding.provider === "local"` and the
+ * `@xenova/transformers` peer is absent, throw with the actionable message so
+ * `serve` fails loudly at boot instead of booting a healthy-looking server
+ * that explodes at first embed (the prior lazy throw in
+ * indexing/embeddings.ts:loadModel). No-op for non-local providers and when
+ * the dep is present.
+ *
+ * `tryImport` is injected (forwarded to resolveLocalEmbeddingDep) so tests
+ * cover local+absent / local+present / non-local+absent without touching
+ * node_modules.
+ */
+export async function assertLocalEmbeddingDepForProvider(
+  provider: string | undefined,
+  opts?: { tryImport?: (module: string) => Promise<unknown> },
+): Promise<void> {
+  if (provider !== "local") return;
+  const present = await resolveLocalEmbeddingDep(opts);
+  if (present) return;
+  throw new Error(LOCAL_EMBEDDING_DEP_MESSAGE);
+}
