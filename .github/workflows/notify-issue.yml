@@ -1,0 +1,27 @@
+name: Issue Notification
+on:
+  issues:
+    types: [opened, reopened]
+permissions: {}
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Notify Slack
+        if: github.actor != 'github-actions[bot]'
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_OSS_ALERTS }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_AUTHOR: ${{ github.actor }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            payload=$(jq -nc --arg title "$ISSUE_TITLE" --arg author "$ISSUE_AUTHOR" \
+              --arg url "$ISSUE_URL" --arg num "$ISSUE_NUMBER" \
+              '{text: "🐛 New issue on pathfinder: *\($title)* by \($author)\n<\($url)|View issue #\($num)>"}')
+            curl -sf -X POST "$SLACK_WEBHOOK" \
+              -H 'Content-Type: application/json' \
+              -d "$payload" || true
+          fi
