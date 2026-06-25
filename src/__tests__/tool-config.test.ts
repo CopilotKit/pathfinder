@@ -408,7 +408,12 @@ describe("ServerConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects search config without indexing", () => {
+  // issue #88: a search config may omit the `indexing` block entirely.
+  // The indexing block is no longer mandatory for RAG configs — it
+  // defaults to IndexingConfigSchema's per-field defaults (manual-only,
+  // i.e. auto_reindex off) so minimal/manual deployments validate without
+  // a cron schedule.
+  it("accepts search config without indexing and applies defaults", () => {
     const { indexing, ...configWithoutIndexing } = minimalConfig;
     const config = {
       ...configWithoutIndexing,
@@ -425,7 +430,14 @@ describe("ServerConfigSchema", () => {
       ],
     };
     const result = ServerConfigSchema.safeParse(config);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.indexing).toEqual({
+        auto_reindex: false,
+        reindex_hour_utc: 3,
+        stale_threshold_hours: 24,
+      });
+    }
   });
 
   describe("server.allowlist", () => {

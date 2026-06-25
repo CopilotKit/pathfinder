@@ -91,10 +91,18 @@ export const ChunkConfigSchema = z.object({
   overlap_lines: z.number().int().nonnegative().optional(),
 });
 
-// Base fields shared by all source types
+// Base fields shared by all source types.
+//
+// `chunk` is optional: every field inside ChunkConfigSchema is already
+// optional, so a source that omits `chunk` (or supplies an empty object)
+// falls back to the chunker's built-in per-source-type defaults. It
+// defaults to `{}` so downstream code can read `source.chunk` without a
+// null check. (issue #88 — a docs-compliant source like
+// `{ name, type, path, file_patterns }` should validate without a
+// redundant `chunk: {}`.)
 const BaseSourceFields = {
   name: z.string().min(1),
-  chunk: ChunkConfigSchema,
+  chunk: ChunkConfigSchema.default({}),
   version: z.string().optional(),
   category: z.enum(["faq"]).optional(),
 };
@@ -296,10 +304,17 @@ export const EmbeddingConfigSchema = z.discriminatedUnion("provider", [
 
 // ── Indexing configuration schemas ────────────────────────────────────────────
 
+// Indexing cron schedule. All fields have sensible defaults so a minimal
+// or manual-only deployment can omit the `indexing` block entirely (issue
+// #88). Defaults: auto_reindex off (manual indexing), 03:00 UTC if it is
+// ever enabled, and a 24h staleness window. The block itself is given a
+// `.default({})` at the ServerConfigSchema level so a `hasRag` config that
+// omits `indexing` still resolves to these defaults rather than hard-
+// failing purely for lack of a cron schedule.
 export const IndexingConfigSchema = z.object({
-  auto_reindex: z.boolean(),
-  reindex_hour_utc: z.number().int().min(0).max(23),
-  stale_threshold_hours: z.number().int().positive(),
+  auto_reindex: z.boolean().default(false),
+  reindex_hour_utc: z.number().int().min(0).max(23).default(3),
+  stale_threshold_hours: z.number().int().positive().default(24),
 });
 
 // ── Webhook configuration schemas ─────────────────────────────────────────────
@@ -371,7 +386,11 @@ export const ServerConfigSchema = z
     sources: z.array(SourceConfigSchema).min(1),
     tools: z.array(AnyToolConfigSchema).min(1),
     embedding: EmbeddingConfigSchema.optional(),
-    indexing: IndexingConfigSchema.optional(),
+    // Defaults to `{}` so the IndexingConfigSchema field defaults always
+    // populate a complete indexing block. This means a `hasRag` config no
+    // longer hard-fails purely for omitting a cron schedule (issue #88);
+    // an explicit `indexing` block still overrides the defaults.
+    indexing: IndexingConfigSchema.default({}),
     webhook: WebhookConfigSchema.optional(),
     analytics: AnalyticsConfigSchema.optional(),
   })
@@ -387,14 +406,11 @@ export const ServerConfigSchema = z
         path: ["embedding"],
       });
     }
-    if (hasRag && !cfg.indexing) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "indexing config is required when search tools are configured.",
-        path: ["indexing"],
-      });
-    }
+    // Note: `indexing` no longer needs a hasRag presence check — the
+    // schema field defaults to `{}` (resolved to IndexingConfigSchema's
+    // per-field defaults), so a complete indexing block is always present.
+    // A manual-only / minimal RAG config validates without a cron schedule
+    // (issue #88).
     const sourceNames = new Set(cfg.sources.map((s) => s.name));
     for (const tool of cfg.tools) {
       if (tool.type === "search" && tool.default_limit > tool.max_limit) {

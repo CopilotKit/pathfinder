@@ -21,9 +21,14 @@ RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-# Optional: install these if your config uses document sources or local embeddings
+# Optional peer dependencies. `npm ci --omit=dev` above intentionally
+# SKIPS these (they are declared as peerDependencies, not dependencies),
+# so the default prod image is lean. If your pathfinder.yaml uses any of
+# the features below, UNCOMMENT the matching line and rebuild — otherwise
+# the server will throw a clear "Install <pkg>" error at runtime when that
+# feature is first exercised (e.g. embedding.provider: local).
 # RUN npm install pdf-parse mammoth        # For type: document (PDF/DOCX)
-# RUN npm install @xenova/transformers     # For embedding.provider: local
+# RUN npm install @xenova/transformers     # For embedding.provider: local (transformers.js / in-process CPU embeddings)
 COPY --from=build /app/dist/ ./dist/
 COPY docs/analytics.html ./docs/analytics.html
 COPY deploy/copilotkit-docs.yaml ./copilotkit-docs.yaml
