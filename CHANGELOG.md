@@ -1,5 +1,12 @@
 # @copilotkit/pathfinder
 
+## 1.16.0
+
+### Minor Changes
+
+- Config validation accepts minimal RAG configs — `indexing` and per-source `chunk` now optional with defaults (#124)
+- Fixed Atlas distiller LLM client "Premature close" errors, by disabling keep-alive on the test/proxy client (#127)
+
 ## 1.15.4
 
 ### Patch Changes
