@@ -80,6 +80,86 @@ jobs:
           # --- GitHub API: prefetch HEAD commits ---
           HEAD_COMMITS_FILE="/tmp/head-commits.json"
 
+          # Fetch a single repo HEAD with bounded retries on transient GitHub
+          # failures. Echoes either the 8-char SHA, or an "ERROR:<reason>"
+          # sentinel carrying the real HTTP status so the drift check can emit
+          # an attributable message instead of a blind "(GitHub API error)".
+          # Transient (retried): 5xx, 429, and 403 with a rate-limit signal.
+          # A genuine 404 is a hard miss -- fail fast, do not retry.
+          fetch_head_commit() {
+            local repo="$1"
+            local branch="$2"
+            local max_attempts=3
+            local attempt=1
+            local http_code body reset reason
+            while [ "$attempt" -le "$max_attempts" ]; do
+              local response
+              # -w appends the status code on its own line; no -sf so we keep
+              # the body and exit non-zero only on transport failure (timeout).
+              if ! response=$(curl -s --max-time 30 -w $'\n%{http_code}' \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${repo}/commits/${branch}"); then
+                # Transport-level failure (timeout, connection reset) -- transient.
+                http_code="000"
+                body=""
+              else
+                http_code="${response##*$'\n'}"
+                body="${response%$'\n'*}"
+              fi
+
+              case "$http_code" in
+                2*)
+                  echo "$body" | jq -r '.sha // empty' | head -c 8
+                  return 0
+                  ;;
+                404)
+                  # Hard miss -- bad repo/branch, never going to succeed.
+                  echo "ERROR:HTTP 404, repo or branch not found"
+                  return 0
+                  ;;
+                403)
+                  # 403 is transient only when it carries a rate-limit signal;
+                  # a plain 403 (bad token, no access) is a hard failure.
+                  if echo "$body" | grep -qiE 'rate limit'; then
+                    reason="HTTP 403, secondary rate limit"
+                    reset=$(echo "$body" | jq -r '.. | objects | .reset? // empty' | head -1)
+                  else
+                    echo "ERROR:HTTP 403, access denied"
+                    return 0
+                  fi
+                  ;;
+                429)
+                  reason="HTTP 429, rate limited"
+                  ;;
+                5*)
+                  reason="HTTP ${http_code}, server error"
+                  ;;
+                000)
+                  reason="connection error or timeout"
+                  ;;
+                *)
+                  # Unexpected non-transient status -- report it as-is.
+                  echo "ERROR:HTTP ${http_code}, unexpected response"
+                  return 0
+                  ;;
+              esac
+
+              # Transient: back off and retry (1s, 2s, ...).
+              if [ "$attempt" -lt "$max_attempts" ]; then
+                echo "  retrying ${repo}@${branch} after ${reason} (attempt ${attempt}/${max_attempts})" >&2
+                sleep "$attempt"
+              fi
+              attempt=$((attempt + 1))
+            done
+
+            if [ -n "${reset:-}" ]; then
+              echo "ERROR:${reason}, reset at epoch ${reset}, retried ${max_attempts}x"
+            else
+              echo "ERROR:${reason}, retried ${max_attempts}x"
+            fi
+            return 0
+          }
+
           prefetch_head_commits() {
             local entries=("$@")
             local seen=()
@@ -96,13 +176,8 @@ jobs:
               done
               [ "$already" = true ] && continue
               seen+=("$cache_key")
-              local sha=""
-              local api_response
-              if api_response=$(curl -sf --max-time 30 \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                "https://api.github.com/repos/${repo}/commits/${branch}" 2>/dev/null); then
-                sha=$(echo "$api_response" | jq -r '.sha // empty' | head -c 8)
-              fi
+              local sha
+              sha=$(fetch_head_commit "$repo" "$branch")
               local tmp
               tmp=$(jq --arg k "$cache_key" --arg v "$sha" '.[$k] = $v' "$HEAD_COMMITS_FILE")
               echo "$tmp" > "$HEAD_COMMITS_FILE"
@@ -208,6 +283,12 @@ jobs:
               head_commit=$(get_head_commit "$src_repo" "$src_branch")
               if [ -z "$head_commit" ]; then
                 issues+=("commit drift: ${src_key} -- could not fetch HEAD for ${src_repo}@${src_branch} (GitHub API error)")
+                continue
+              fi
+              # An "ERROR:<reason>" sentinel means the HEAD fetch failed; surface
+              # the real HTTP status instead of a blind "(GitHub API error)".
+              if [ "${head_commit#ERROR:}" != "$head_commit" ]; then
+                issues+=("commit drift: ${src_key} -- could not fetch HEAD for ${src_repo}@${src_branch} (${head_commit#ERROR:})")
                 continue
               fi
 
