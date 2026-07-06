@@ -48,8 +48,7 @@ const NO_REINDEX: GitHubWebhookResult = {
 type HeaderValue = string | string[] | undefined;
 
 type NormalizedHeader =
-  | { ok: true; value: string | undefined }
-  | { ok: false; reason: string };
+  { ok: true; value: string | undefined } | { ok: false; reason: string };
 
 type DuplicateHeader = Extract<NormalizedHeader, { ok: false }>;
 

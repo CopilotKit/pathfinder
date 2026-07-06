@@ -14,8 +14,7 @@ export type AllowlistEntry = string;
  * returns `result.ok`.
  */
 export type TryAddResult =
-  | { ok: true }
-  | { ok: false; reason: "rate-limit" | "sid-collision" };
+  { ok: true } | { ok: false; reason: "rate-limit" | "sid-collision" };
 
 export interface IpSessionLimiterOptions {
   /**

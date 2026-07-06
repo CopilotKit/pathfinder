@@ -84,7 +84,13 @@ const FEATURE_RULES: FeatureRule[] = [
   },
   {
     rowLabel: "Zero-infra",
-    keywords: ["no.*database", "zero.*config", "no.*setup", "pglite", "local.*only"],
+    keywords: [
+      "no.*database",
+      "zero.*config",
+      "no.*setup",
+      "pglite",
+      "local.*only",
+    ],
   },
   {
     rowLabel: "llms.txt",
@@ -95,7 +101,10 @@ const FEATURE_RULES: FeatureRule[] = [
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const DRY_RUN = process.argv.includes("--dry-run");
-const DOCS_PATH = resolve(import.meta.dirname ?? __dirname, "../docs/index.html");
+const DOCS_PATH = resolve(
+  import.meta.dirname ?? __dirname,
+  "../docs/index.html",
+);
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? "";
 const HEADERS: Record<string, string> = {
@@ -109,7 +118,9 @@ async function fetchReadme(repo: string): Promise<string> {
   console.log(`  Fetching README from ${repo}...`);
   const res = await fetch(url, { headers: HEADERS });
   if (!res.ok) {
-    console.warn(`  WARNING: Failed to fetch README for ${repo}: ${res.status} ${res.statusText}`);
+    console.warn(
+      `  WARNING: Failed to fetch README for ${repo}: ${res.status} ${res.statusText}`,
+    );
     return "";
   }
   const json = (await res.json()) as { content?: string; encoding?: string };
@@ -162,7 +173,9 @@ function parseCurrentMatrix(html: string): {
   headers: string[];
   rows: Map<string, Map<string, string>>;
 } {
-  const tableMatch = html.match(/<table class="comp-table">([\s\S]*?)<\/table>/);
+  const tableMatch = html.match(
+    /<table class="comp-table">([\s\S]*?)<\/table>/,
+  );
   if (!tableMatch) {
     throw new Error("Could not find comp-table in HTML");
   }
@@ -225,7 +238,8 @@ function computeChanges(
       if (!currentCell) continue;
 
       // Only upgrade cells that contain the cross mark (&#10007; or the actual character)
-      const isCross = currentCell.includes("&#10007;") || currentCell.includes("\u2717");
+      const isCross =
+        currentCell.includes("&#10007;") || currentCell.includes("\u2717");
       if (isCross) {
         changes.push({
           competitor: compName,
@@ -248,7 +262,9 @@ function applyChanges(html: string, changes: DetectedChange[]): string {
   if (changes.length === 0) return html;
 
   // Parse the table to determine column indices
-  const tableMatch = html.match(/<table class="comp-table">([\s\S]*?)<\/table>/);
+  const tableMatch = html.match(
+    /<table class="comp-table">([\s\S]*?)<\/table>/,
+  );
   if (!tableMatch) return html;
   const tableHtml = tableMatch[1];
 
@@ -324,7 +340,9 @@ function writeSummary(summaryPath: string, changes: DetectedChange[]): void {
     lines.push("| Competitor | Capability | Change |");
     lines.push("| --- | --- | --- |");
     for (const ch of changes) {
-      lines.push(`| ${ch.competitor} | ${ch.capability} | ${ch.from} -> ${ch.to} |`);
+      lines.push(
+        `| ${ch.competitor} | ${ch.capability} | ${ch.from} -> ${ch.to} |`,
+      );
     }
     lines.push("");
     md = lines.join("\n");
@@ -348,7 +366,10 @@ async function main(): Promise<void> {
 
   for (const comp of COMPETITORS) {
     console.log(`\n--- ${comp.name} (${comp.repo}) ---`);
-    const [readme, pkg] = await Promise.all([fetchReadme(comp.repo), fetchPackageJson(comp.repo)]);
+    const [readme, pkg] = await Promise.all([
+      fetchReadme(comp.repo),
+      fetchPackageJson(comp.repo),
+    ]);
 
     if (!readme && !pkg) {
       console.log(`  No data fetched, skipping.`);
@@ -380,14 +401,18 @@ async function main(): Promise<void> {
     matrix = parseCurrentMatrix(html);
   } catch (err) {
     console.error(`Failed to parse comparison table: ${err}`);
-    console.log("The comparison table may need competitor columns added before this script can update them.");
+    console.log(
+      "The comparison table may need competitor columns added before this script can update them.",
+    );
     // Still write summary with detected features even if table parse fails
     const summaryPath = parseSummaryArg();
     if (summaryPath) {
       const lines: string[] = [];
       lines.push("## Competitive Matrix Scan Results");
       lines.push("");
-      lines.push("Could not parse comparison table. Detected features per competitor:");
+      lines.push(
+        "Could not parse comparison table. Detected features per competitor:",
+      );
       lines.push("");
       for (const [name, features] of competitorFeatures) {
         const detected = Object.entries(features)
@@ -424,13 +449,17 @@ async function main(): Promise<void> {
 
   console.log(`\n${changes.length} change(s) detected:`);
   for (const ch of changes) {
-    console.log(`  ${ch.competitor} / ${ch.capability}: ${ch.from} -> ${ch.to}`);
+    console.log(
+      `  ${ch.competitor} / ${ch.capability}: ${ch.from} -> ${ch.to}`,
+    );
   }
 
   if (summaryPath) writeSummary(summaryPath, changes);
 
   if (DRY_RUN) {
-    console.log("\n[DRY RUN] Would update docs/index.html with the above changes.");
+    console.log(
+      "\n[DRY RUN] Would update docs/index.html with the above changes.",
+    );
     return;
   }
 

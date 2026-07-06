@@ -1441,10 +1441,11 @@
           <strong>Local</strong> — runs
           <code>@xenova/transformers</code> in-process. Zero external
           dependencies, CPU-only. Install the optional peer dependency:
-          <code>npm install @xenova/transformers</code>. Running in Docker?
-          Use the prebuilt <code>ghcr.io/copilotkit/pathfinder:latest-local</code>
-          image (also tagged <code>:&lt;version&gt;-local</code>), which ships
-          this dependency preinstalled — no <code>npm install</code> needed. The
+          <code>npm install @xenova/transformers</code>. Running in Docker? Use
+          the prebuilt
+          <code>ghcr.io/copilotkit/pathfinder:latest-local</code> image (also
+          tagged <code>:&lt;version&gt;-local</code>), which ships this
+          dependency preinstalled — no <code>npm install</code> needed. The
           default image fails loudly at startup if <code>provider: local</code>
           is set without the dependency present.
         </p>
@@ -1622,16 +1623,40 @@
 
         <h3 id="consent-screen">Consent screen and abuse defense (v1.15+)</h3>
         <p>
-          <code>GET /authorize</code> renders a server-rendered consent screen instead of auto-approving. The screen carries an HMAC-bound nonce; the form posts back to <code>POST /authorize/consent</code>, which re-verifies every bound parameter (<code>client_id</code>, <code>redirect_uri</code>, <code>state</code>, <code>code_challenge</code>, <code>response_type</code>, <code>scope</code>, <code>resource</code>) before issuing an auth code. The final redirect URL is built from the nonce-bound <code>redirect_uri</code>, never the form body — this is the phishing-resistance invariant.
+          <code>GET /authorize</code> renders a server-rendered consent screen
+          instead of auto-approving. The screen carries an HMAC-bound nonce; the
+          form posts back to <code>POST /authorize/consent</code>, which
+          re-verifies every bound parameter (<code>client_id</code>,
+          <code>redirect_uri</code>, <code>state</code>,
+          <code>code_challenge</code>, <code>response_type</code>,
+          <code>scope</code>, <code>resource</code>) before issuing an auth
+          code. The final redirect URL is built from the nonce-bound
+          <code>redirect_uri</code>, never the form body — this is the
+          phishing-resistance invariant.
         </p>
         <p>
-          The page is locked down with <code>Content-Security-Policy: default-src 'none'; frame-ancestors 'none'</code>, <code>X-Frame-Options: DENY</code>, and <code>Referrer-Policy: no-referrer</code>. No JavaScript, no external resources.
+          The page is locked down with
+          <code
+            >Content-Security-Policy: default-src 'none'; frame-ancestors
+            'none'</code
+          >, <code>X-Frame-Options: DENY</code>, and
+          <code>Referrer-Policy: no-referrer</code>. No JavaScript, no external
+          resources.
         </p>
         <p>
-          <code>POST /register</code> applies a <strong>redirect_uri policy</strong>: <code>https</code>-only except for loopback (<code>localhost</code>, <code>127.0.0.0/8</code>, <code>[::1]</code>); rejects <code>0.0.0.0/8</code>, RFC 1918, link-local, ULA, IPv4-mapped private addresses, wildcards, userinfo, and fragments. Maximum 2048 chars per URI, 10 URIs per client.
+          <code>POST /register</code> applies a
+          <strong>redirect_uri policy</strong>: <code>https</code>-only except
+          for loopback (<code>localhost</code>, <code>127.0.0.0/8</code>,
+          <code>[::1]</code>); rejects <code>0.0.0.0/8</code>, RFC 1918,
+          link-local, ULA, IPv4-mapped private addresses, wildcards, userinfo,
+          and fragments. Maximum 2048 chars per URI, 10 URIs per client.
         </p>
         <p>
-          Registered clients are capped at <strong>10,000 total / 100 per-IP</strong> with lazy TTL eviction (30 days unused or 7 days never-used-after-registration). Overflow returns <code>429</code> (per-IP) or <code>503</code> (total) with a <code>Retry-After</code> header.
+          Registered clients are capped at
+          <strong>10,000 total / 100 per-IP</strong> with lazy TTL eviction (30
+          days unused or 7 days never-used-after-registration). Overflow returns
+          <code>429</code> (per-IP) or <code>503</code> (total) with a
+          <code>Retry-After</code> header.
         </p>
 
         <h3 id="auth-bearer">

@@ -1,0 +1,6 @@
+# Build output and dependencies
+dist/
+node_modules/
+
+# Test input data — bytes are asserted on by tests, must not be reformatted
+fixtures/

@@ -1,516 +1,1080 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Switching from mcp-ragdocs to Pathfinder</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Step-by-step guide to switching from mcp-ragdocs to Pathfinder, the knowledge server for AI agents.">
-<meta property="og:type" content="article">
-<meta property="og:url" content="https://pathfinder.copilotkit.dev/migrate-from-ragdocs">
-<meta property="og:title" content="Switching from mcp-ragdocs to Pathfinder">
-<meta property="og:description" content="mcp-ragdocs is solid. Pathfinder adds filesystem exploration, multi-source indexing, and config-driven setup.">
-<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.svg">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Switching from mcp-ragdocs to Pathfinder">
-<meta name="twitter:description" content="mcp-ragdocs is solid. Pathfinder adds filesystem exploration, multi-source indexing, and config-driven setup.">
-<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root {
-    --bg-deep: #0a0a0f;
-    --bg-surface: #111118;
-    --bg-card: #16161f;
-    --border: #222233;
-    --text-primary: #e8e8f0;
-    --text-secondary: #8888a0;
-    --text-dim: #555570;
-    --accent: #00ccff;
-    --accent-dim: #00aadd;
-    --accent-glow: rgba(0,204,255,0.15);
-    --blue: #4488ff;
-    --purple: #aa66ff;
-    --warning: #ffaa00;
-    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
-    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
-}
-* { margin:0; padding:0; box-sizing:border-box; }
-html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
-body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
-code, pre, kbd, .demo-body, .install-command { font-feature-settings: "liga" 0, "calt" 0; }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Switching from mcp-ragdocs to Pathfinder</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta
+      name="description"
+      content="Step-by-step guide to switching from mcp-ragdocs to Pathfinder, the knowledge server for AI agents."
+    />
+    <meta property="og:type" content="article" />
+    <meta
+      property="og:url"
+      content="https://pathfinder.copilotkit.dev/migrate-from-ragdocs"
+    />
+    <meta
+      property="og:title"
+      content="Switching from mcp-ragdocs to Pathfinder"
+    />
+    <meta
+      property="og:description"
+      content="mcp-ragdocs is solid. Pathfinder adds filesystem exploration, multi-source indexing, and config-driven setup."
+    />
+    <meta
+      property="og:image"
+      content="https://pathfinder.copilotkit.dev/og-image.svg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Switching from mcp-ragdocs to Pathfinder"
+    />
+    <meta
+      name="twitter:description"
+      content="mcp-ragdocs is solid. Pathfinder adds filesystem exploration, multi-source indexing, and config-driven setup."
+    />
+    <meta
+      name="twitter:image"
+      content="https://pathfinder.copilotkit.dev/og-image.svg"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-deep: #0a0a0f;
+        --bg-surface: #111118;
+        --bg-card: #16161f;
+        --border: #222233;
+        --text-primary: #e8e8f0;
+        --text-secondary: #8888a0;
+        --text-dim: #555570;
+        --accent: #00ccff;
+        --accent-dim: #00aadd;
+        --accent-glow: rgba(0, 204, 255, 0.15);
+        --blue: #4488ff;
+        --purple: #aa66ff;
+        --warning: #ffaa00;
+        --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+        --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-size: 16px;
+      }
+      body {
+        background: var(--bg-deep);
+        color: var(--text-primary);
+        font-family: var(--sans);
+        line-height: 1.6;
+        overflow-x: hidden;
+      }
+      code,
+      pre,
+      kbd,
+      .demo-body,
+      .install-command {
+        font-feature-settings:
+          "liga" 0,
+          "calt" 0;
+      }
 
-/* Noise overlay */
-body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
-    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-}
+      /* Noise overlay */
+      body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 9999;
+        background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      }
 
-/* Container */
-.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+      /* Container */
+      .container {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 2rem;
+      }
 
-/* Top Nav */
-.top-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1rem 0;
-    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
-.top-nav .nav-inner { max-width: 1400px; margin: 0 auto; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; }
-.nav-brand { display: flex; align-items: center; gap: 0.75rem; font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
-.nav-brand span { color: var(--accent); }
-.nav-links { display: flex; align-items: center; gap: 2rem; list-style: none; }
-.nav-links a { color: var(--text-secondary); font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: color 0.2s; }
-.nav-links a:hover { color: var(--text-primary); text-decoration: none; }
-.nav-links .gh-link, .nav-links .gh-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
-.nav-links .gh-link:hover, .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+      /* Top Nav */
+      .top-nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        padding: 1rem 0;
+        background: rgba(10, 10, 15, 0.85);
+        backdrop-filter: blur(20px) saturate(1.4);
+        -webkit-backdrop-filter: blur(20px) saturate(1.4);
+        border-bottom: 1px solid var(--border);
+      }
+      .top-nav .nav-inner {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 0 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .nav-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 1rem;
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-brand span {
+        color: var(--accent);
+      }
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+        list-style: none;
+      }
+      .nav-links a {
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .nav-links a:hover {
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-links .gh-link,
+      .nav-links .gh-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      .nav-links .gh-link:hover,
+      .nav-links .gh-btn:hover {
+        border-color: var(--text-dim);
+        background: var(--bg-card);
+      }
 
-/* Docs Layout */
-:root { --sidebar-width: 260px; }
-.docs-layout {
-    display: flex;
-    margin-top: 57px;
-    min-height: calc(100vh - 57px);
-}
+      /* Docs Layout */
+      :root {
+        --sidebar-width: 260px;
+      }
+      .docs-layout {
+        display: flex;
+        margin-top: 57px;
+        min-height: calc(100vh - 57px);
+      }
 
-/* Left Sidebar */
-.sidebar {
-    position: fixed;
-    top: 57px;
-    left: 0;
-    width: var(--sidebar-width);
-    height: calc(100vh - 57px);
-    overflow-y: auto;
-    background: var(--bg-surface);
-    border-right: 1px solid var(--border);
-    padding: 1.5rem 0;
-    z-index: 50;
-}
-.sidebar-section { padding: 0 1.25rem; margin-bottom: 1.5rem; }
-.sidebar-section h3 {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-dim);
-    margin-bottom: 0.5rem;
-    padding: 0 0.5rem;
-}
-.sidebar-section a {
-    display: block;
-    padding: 0.35rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s;
-}
-.sidebar-section a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
-.sidebar-section a.active { color: var(--accent); background: var(--accent-glow); }
+      /* Left Sidebar */
+      .sidebar {
+        position: fixed;
+        top: 57px;
+        left: 0;
+        width: var(--sidebar-width);
+        height: calc(100vh - 57px);
+        overflow-y: auto;
+        background: var(--bg-surface);
+        border-right: 1px solid var(--border);
+        padding: 1.5rem 0;
+        z-index: 50;
+      }
+      .sidebar-section {
+        padding: 0 1.25rem;
+        margin-bottom: 1.5rem;
+      }
+      .sidebar-section h3 {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--text-dim);
+        margin-bottom: 0.5rem;
+        padding: 0 0.5rem;
+      }
+      .sidebar-section a {
+        display: block;
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .sidebar-section a:hover {
+        color: var(--text-primary);
+        background: var(--bg-card);
+        text-decoration: none;
+      }
+      .sidebar-section a.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
 
-/* Main Content */
-.docs-content {
-    margin-left: var(--sidebar-width);
-    padding: 3rem 3rem;
-    max-width: calc(100vw - var(--sidebar-width) - 240px);
-    min-width: 0;
-}
-.docs-content h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 1rem; }
-.docs-content h1 .accent { color: var(--accent); }
-.docs-content .lead { font-size: 1.1rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 2rem; }
-.docs-content h2 { font-size: 1.5rem; font-weight: 600; margin-top: 3rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); scroll-margin-top: 80px; }
-.docs-content h3 { font-size: 1.15rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; scroll-margin-top: 80px; }
-.docs-content p { color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem; }
-.docs-content ul, .docs-content ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; }
-.docs-content li { margin-bottom: 0.35rem; line-height: 1.6; }
-.docs-content li strong { color: var(--text-primary); }
-.docs-content a { color: var(--accent); text-decoration: none; }
-.docs-content a:hover { text-decoration: underline; }
+      /* Main Content */
+      .docs-content {
+        margin-left: var(--sidebar-width);
+        padding: 3rem 3rem;
+        max-width: calc(100vw - var(--sidebar-width) - 240px);
+        min-width: 0;
+      }
+      .docs-content h1 {
+        font-size: 2.25rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        margin-bottom: 1rem;
+      }
+      .docs-content h1 .accent {
+        color: var(--accent);
+      }
+      .docs-content .lead {
+        font-size: 1.1rem;
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 2rem;
+      }
+      .docs-content h2 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-top: 3rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--border);
+        scroll-margin-top: 80px;
+      }
+      .docs-content h3 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin-top: 2rem;
+        margin-bottom: 0.75rem;
+        scroll-margin-top: 80px;
+      }
+      .docs-content p {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 1rem;
+      }
+      .docs-content ul,
+      .docs-content ol {
+        color: var(--text-secondary);
+        margin-bottom: 1rem;
+        padding-left: 1.5rem;
+      }
+      .docs-content li {
+        margin-bottom: 0.35rem;
+        line-height: 1.6;
+      }
+      .docs-content li strong {
+        color: var(--text-primary);
+      }
+      .docs-content a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .docs-content a:hover {
+        text-decoration: underline;
+      }
 
-/* Page TOC (right sidebar) */
-.page-toc {
-    position: fixed;
-    top: 80px;
-    right: 1rem;
-    width: 200px;
-    max-height: calc(100vh - 100px);
-    overflow-y: auto;
-    font-size: 0.78rem;
-}
-.page-toc-label {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-dim);
-    padding: 0 0.5rem;
-    margin-bottom: 0.75rem;
-}
-.page-toc a {
-    display: block;
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
-    color: var(--text-secondary);
-    font-size: 0.78rem;
-    line-height: 1.4;
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s;
-}
-.page-toc a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
-.page-toc a.active { color: var(--accent); background: var(--accent-glow); }
-.page-toc a.toc-h3 { padding-left: 1.5rem; font-size: 0.72rem; color: var(--text-dim); }
-@media (max-width: 1200px) { .page-toc { display: none; } }
+      /* Page TOC (right sidebar) */
+      .page-toc {
+        position: fixed;
+        top: 80px;
+        right: 1rem;
+        width: 200px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+        font-size: 0.78rem;
+      }
+      .page-toc-label {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--text-dim);
+        padding: 0 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      .page-toc a {
+        display: block;
+        padding: 0.3rem 0.5rem;
+        border-radius: 4px;
+        color: var(--text-secondary);
+        font-size: 0.78rem;
+        line-height: 1.4;
+        text-decoration: none;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .page-toc a:hover {
+        color: var(--text-primary);
+        background: var(--bg-card);
+        text-decoration: none;
+      }
+      .page-toc a.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
+      .page-toc a.toc-h3 {
+        padding-left: 1.5rem;
+        font-size: 0.72rem;
+        color: var(--text-dim);
+      }
+      @media (max-width: 1200px) {
+        .page-toc {
+          display: none;
+        }
+      }
 
-/* Sidebar toggle (mobile) */
-.sidebar-toggle {
-    display: none;
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 1.25rem;
-    cursor: pointer;
-    padding: 0.25rem;
-}
+      /* Sidebar toggle (mobile) */
+      .sidebar-toggle {
+        display: none;
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 1.25rem;
+        cursor: pointer;
+        padding: 0.25rem;
+      }
 
-/* Code blocks */
-.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
-.code-block .comment { color: var(--text-dim); }
-.code-block .key { color: var(--warning); }
-.code-block .value { color: var(--blue); }
-.code-block .cmd { color: var(--accent); }
+      /* Code blocks */
+      .code-block {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px 20px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.7;
+        overflow-x: auto;
+        margin-bottom: 16px;
+        color: var(--text-primary);
+        white-space: pre;
+      }
+      .code-block .comment {
+        color: var(--text-dim);
+      }
+      .code-block .key {
+        color: var(--warning);
+      }
+      .code-block .value {
+        color: var(--blue);
+      }
+      .code-block .cmd {
+        color: var(--accent);
+      }
 
-/* Inline code */
-.docs-content code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
+      /* Inline code */
+      .docs-content code {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.15rem 0.4rem;
+        font-family: var(--mono);
+        font-size: 0.85em;
+      }
 
-/* Config comparison */
-.config-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
-.config-compare .config-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.config-compare .config-header { padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--text-dim); font-weight: 600; }
-.config-compare .config-header.highlight { color: var(--accent); }
-.config-compare .config-body { padding: 16px; font-family: var(--mono); font-size: 13px; line-height: 1.7; white-space: pre; overflow-x: auto; }
+      /* Config comparison */
+      .config-compare {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .config-compare .config-panel {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .config-compare .config-header {
+        padding: 10px 16px;
+        background: var(--bg-card);
+        border-bottom: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-dim);
+        font-weight: 600;
+      }
+      .config-compare .config-header.highlight {
+        color: var(--accent);
+      }
+      .config-compare .config-body {
+        padding: 16px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.7;
+        white-space: pre;
+        overflow-x: auto;
+      }
 
-/* Callout cards */
-.callout-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
-.callout-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
-.callout-card .icon { font-size: 24px; margin-bottom: 8px; }
-.callout-card h4 { font-size: 15px; margin-bottom: 6px; color: var(--text-primary); }
-.callout-card p { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
+      /* Callout cards */
+      .callout-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .callout-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 20px;
+      }
+      .callout-card .icon {
+        font-size: 24px;
+        margin-bottom: 8px;
+      }
+      .callout-card h4 {
+        font-size: 15px;
+        margin-bottom: 6px;
+        color: var(--text-primary);
+      }
+      .callout-card p {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 0;
+      }
 
-/* Gaps section */
-.gap-card { background: var(--bg-surface); border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 0 10px 10px 0; padding: 16px 20px; margin-bottom: 12px; }
-.gap-card h4 { font-size: 14px; margin-bottom: 4px; color: var(--warning); }
-.gap-card p { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
+      /* Gaps section */
+      .gap-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--warning);
+        border-radius: 0 10px 10px 0;
+        padding: 16px 20px;
+        margin-bottom: 12px;
+      }
+      .gap-card h4 {
+        font-size: 14px;
+        margin-bottom: 4px;
+        color: var(--warning);
+      }
+      .gap-card p {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 0;
+      }
 
-/* Step numbers */
-.step { display: flex; gap: 16px; margin-bottom: 24px; }
-.step-num { flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: var(--bg-deep); font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px; }
-.step-content { flex: 1; }
-.step-content h3 { margin-top: 0; }
+      /* Step numbers */
+      .step {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .step-num {
+        flex-shrink: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: var(--bg-deep);
+        font-weight: 700;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-top: 2px;
+      }
+      .step-content {
+        flex: 1;
+      }
+      .step-content h3 {
+        margin-top: 0;
+      }
 
-/* Back link */
-.back-link { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); text-decoration: none; font-size: 14px; margin-top: 32px; }
-.back-link:hover { text-decoration: underline; }
+      /* Back link */
+      .back-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--accent);
+        text-decoration: none;
+        font-size: 14px;
+        margin-top: 32px;
+      }
+      .back-link:hover {
+        text-decoration: underline;
+      }
 
-/* Footer */
-.docs-footer {
-    margin-left: var(--sidebar-width);
-    padding: 3rem 4rem;
-    max-width: 860px;
-    border-top: 1px solid var(--border);
-}
-.docs-footer .footer-inner { display: flex; justify-content: space-between; align-items: center; }
-.footer-left { font-family: var(--mono); font-size: 0.8rem; color: var(--text-dim); }
-.footer-left .prompt { color: var(--accent); }
-.footer-links { display: flex; gap: 2rem; list-style: none; }
-.footer-links a { color: var(--text-dim); font-size: 0.85rem; text-decoration: none; transition: color 0.2s; }
-.footer-links a:hover { color: var(--text-primary); text-decoration: none; }
+      /* Footer */
+      .docs-footer {
+        margin-left: var(--sidebar-width);
+        padding: 3rem 4rem;
+        max-width: 860px;
+        border-top: 1px solid var(--border);
+      }
+      .docs-footer .footer-inner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .footer-left {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        color: var(--text-dim);
+      }
+      .footer-left .prompt {
+        color: var(--accent);
+      }
+      .footer-links {
+        display: flex;
+        gap: 2rem;
+        list-style: none;
+      }
+      .footer-links a {
+        color: var(--text-dim);
+        font-size: 0.85rem;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .footer-links a:hover {
+        color: var(--text-primary);
+        text-decoration: none;
+      }
 
-/* Responsive: Tablet */
-@media (max-width: 768px) {
-    .docs-footer { margin-left: 0; padding: 1.5rem; }
-    .callout-grid { grid-template-columns: 1fr; }
-    .config-compare { grid-template-columns: 1fr; }
-    .nav-links { gap: 1rem; }
-    .article h2 { font-size: 22px; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
-    .step { flex-direction: column; gap: 8px; }
-}
+      /* Responsive: Tablet */
+      @media (max-width: 768px) {
+        .docs-footer {
+          margin-left: 0;
+          padding: 1.5rem;
+        }
+        .callout-grid {
+          grid-template-columns: 1fr;
+        }
+        .config-compare {
+          grid-template-columns: 1fr;
+        }
+        .nav-links {
+          gap: 1rem;
+        }
+        .article h2 {
+          font-size: 22px;
+        }
+        .code-block {
+          font-size: 11px;
+          padding: 12px 14px;
+        }
+        .step {
+          flex-direction: column;
+          gap: 8px;
+        }
+      }
 
-/* Responsive */
-@media (max-width: 1024px) {
-    .docs-content { padding: 2rem; margin-left: var(--sidebar-width); margin-right: 0; }
-}
-@media (max-width: 768px) {
-    .sidebar-toggle { display: block; }
-    .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
-    .sidebar.open { transform: translateX(0); }
-    .docs-content { margin-left: 0; padding: 1.5rem; }
-    .nav-links a:not(.gh-link) { display: none; }
-}
-@media (max-width: 480px) {
-    .docs-content h1 { font-size: 1.75rem; }
-    .docs-content .lead { font-size: 0.95rem; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
-}
-</style>
-<script src="/pixels.js" defer></script>
-</head>
-<body>
+      /* Responsive */
+      @media (max-width: 1024px) {
+        .docs-content {
+          padding: 2rem;
+          margin-left: var(--sidebar-width);
+          margin-right: 0;
+        }
+      }
+      @media (max-width: 768px) {
+        .sidebar-toggle {
+          display: block;
+        }
+        .sidebar {
+          transform: translateX(-100%);
+          transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .sidebar.open {
+          transform: translateX(0);
+        }
+        .docs-content {
+          margin-left: 0;
+          padding: 1.5rem;
+        }
+        .nav-links a:not(.gh-link) {
+          display: none;
+        }
+      }
+      @media (max-width: 480px) {
+        .docs-content h1 {
+          font-size: 1.75rem;
+        }
+        .docs-content .lead {
+          font-size: 0.95rem;
+        }
+        .code-block {
+          font-size: 11px;
+          padding: 12px 14px;
+        }
+      }
+    </style>
+    <script src="/pixels.js" defer></script>
+  </head>
+  <body>
+    <nav class="top-nav">
+      <div class="nav-inner">
+        <div style="display: flex; align-items: center; gap: 1rem">
+          <button
+            class="sidebar-toggle"
+            onclick="
+              document.querySelector('.sidebar').classList.toggle('open')
+            "
+            aria-label="Toggle sidebar"
+          >
+            &#9776;
+          </button>
+          <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
+        </div>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
+          <li>
+            <a
+              href="https://github.com/CopilotKit/pathfinder"
+              class="gh-btn"
+              target="_blank"
+              ><svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+              >
+                <path
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+                />
+              </svg>
+              GitHub</a
+            >
+          </li>
+        </ul>
+      </div>
+    </nav>
 
-<nav class="top-nav">
-  <div class="nav-inner">
-    <div style="display: flex; align-items: center; gap: 1rem">
-      <button class="sidebar-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')" aria-label="Toggle sidebar">&#9776;</button>
-      <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
-    </div>
-    <ul class="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
-      <li><a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a></li>
-    </ul>
-  </div>
-</nav>
+    <div class="docs-layout">
+      <aside class="sidebar" id="sidebar"></aside>
 
-<div class="docs-layout">
-  <aside class="sidebar" id="sidebar"></aside>
+      <main class="docs-content">
+        <h1>
+          Switching from <span class="accent">mcp-ragdocs</span> to Pathfinder
+        </h1>
+        <p class="lead">
+          mcp-ragdocs is a solid open-source RAG MCP server. Pathfinder adds
+          filesystem exploration, multi-source indexing, conversational sources,
+          config-driven setup, and webhook auto-reindex on top of what ragdocs
+          provides.
+        </p>
 
-  <main class="docs-content">
-    <h1>Switching from <span class="accent">mcp-ragdocs</span> to Pathfinder</h1>
-    <p class="lead">mcp-ragdocs is a solid open-source RAG MCP server. Pathfinder adds filesystem exploration, multi-source indexing, conversational sources, config-driven setup, and webhook auto-reindex on top of what ragdocs provides.</p>
+        <h2>Why Switch</h2>
+        <ul>
+          <li>
+            <strong>More than search.</strong> Pathfinder gives agents bash
+            filesystem exploration (find, grep, cat, ls) alongside semantic
+            search. Agents pick the right tool for each sub-task instead of
+            relying solely on RAG.
+          </li>
+          <li>
+            <strong>Multi-source indexing.</strong> Index docs, code, Slack
+            threads, Discord forums, and Notion pages in one server. mcp-ragdocs
+            indexes URLs one at a time.
+          </li>
+          <li>
+            <strong>Config-driven.</strong> One
+            <code>pathfinder.yaml</code> file defines all sources, tools, and
+            behavior. No scattered environment variables to manage.
+          </li>
+          <li>
+            <strong>No Qdrant dependency.</strong> Pathfinder uses PostgreSQL +
+            pgvector for vector storage, or PGlite for zero-infra local
+            development. No separate vector database to run.
+          </li>
+          <li>
+            <strong>Webhook reindexing.</strong> Push to GitHub and your docs
+            reindex automatically. No manual re-ingestion step.
+          </li>
+          <li>
+            <strong>Knowledge and FAQ tools.</strong> Conversational sources
+            (Slack, Discord) are distilled into Q&amp;A pairs that agents can
+            query directly.
+          </li>
+        </ul>
 
-    <h2>Why Switch</h2>
-    <ul>
-        <li><strong>More than search.</strong> Pathfinder gives agents bash filesystem exploration (find, grep, cat, ls) alongside semantic search. Agents pick the right tool for each sub-task instead of relying solely on RAG.</li>
-        <li><strong>Multi-source indexing.</strong> Index docs, code, Slack threads, Discord forums, and Notion pages in one server. mcp-ragdocs indexes URLs one at a time.</li>
-        <li><strong>Config-driven.</strong> One <code>pathfinder.yaml</code> file defines all sources, tools, and behavior. No scattered environment variables to manage.</li>
-        <li><strong>No Qdrant dependency.</strong> Pathfinder uses PostgreSQL + pgvector for vector storage, or PGlite for zero-infra local development. No separate vector database to run.</li>
-        <li><strong>Webhook reindexing.</strong> Push to GitHub and your docs reindex automatically. No manual re-ingestion step.</li>
-        <li><strong>Knowledge and FAQ tools.</strong> Conversational sources (Slack, Discord) are distilled into Q&amp;A pairs that agents can query directly.</li>
-    </ul>
-
-    <h2>What You Gain</h2>
-    <div class="callout-grid">
-        <div class="callout-card">
+        <h2>What You Gain</h2>
+        <div class="callout-grid">
+          <div class="callout-card">
             <div class="icon">&#128270;</div>
             <h4>Search + Explore</h4>
-            <p>Agents get both semantic search and bash filesystem tools. They pick the right approach for each sub-task instead of being limited to RAG only.</p>
-        </div>
-        <div class="callout-card">
+            <p>
+              Agents get both semantic search and bash filesystem tools. They
+              pick the right approach for each sub-task instead of being limited
+              to RAG only.
+            </p>
+          </div>
+          <div class="callout-card">
             <div class="icon">&#128196;</div>
             <h4>Multi-Source</h4>
-            <p>Docs, code, Slack, Discord, Notion — all indexed in one server. mcp-ragdocs indexes one URL at a time; Pathfinder indexes everything at once.</p>
-        </div>
-        <div class="callout-card">
+            <p>
+              Docs, code, Slack, Discord, Notion — all indexed in one server.
+              mcp-ragdocs indexes one URL at a time; Pathfinder indexes
+              everything at once.
+            </p>
+          </div>
+          <div class="callout-card">
             <div class="icon">&#9889;</div>
             <h4>Zero-Infra Start</h4>
-            <p>PGlite means no database to install for local dev. Bash-only mode needs no API keys at all. Add RAG when you're ready — it's just config.</p>
-        </div>
-        <div class="callout-card">
+            <p>
+              PGlite means no database to install for local dev. Bash-only mode
+              needs no API keys at all. Add RAG when you're ready — it's just
+              config.
+            </p>
+          </div>
+          <div class="callout-card">
             <div class="icon">&#128260;</div>
             <h4>Webhook Reindexing</h4>
-            <p>Push to GitHub and docs reindex automatically. No manual add_documentation calls. Nightly full reindex on schedule.</p>
-        </div>
-        <div class="callout-card">
+            <p>
+              Push to GitHub and docs reindex automatically. No manual
+              add_documentation calls. Nightly full reindex on schedule.
+            </p>
+          </div>
+          <div class="callout-card">
             <div class="icon">&#128172;</div>
             <h4>Knowledge Tools</h4>
-            <p>Conversational sources are distilled into Q&amp;A pairs. Agents query community knowledge directly, not just documentation.</p>
-        </div>
-        <div class="callout-card">
+            <p>
+              Conversational sources are distilled into Q&amp;A pairs. Agents
+              query community knowledge directly, not just documentation.
+            </p>
+          </div>
+          <div class="callout-card">
             <div class="icon">&#128203;</div>
             <h4>Config-Driven</h4>
-            <p>One YAML file defines sources, tools, behavior, and webhooks. No scattered environment variables or manual setup steps.</p>
+            <p>
+              One YAML file defines sources, tools, behavior, and webhooks. No
+              scattered environment variables or manual setup steps.
+            </p>
+          </div>
         </div>
-    </div>
 
-    <h2>Config Comparison</h2>
-    <p>Here's how a typical mcp-ragdocs setup compares to the equivalent Pathfinder config:</p>
+        <h2>Config Comparison</h2>
+        <p>
+          Here's how a typical mcp-ragdocs setup compares to the equivalent
+          Pathfinder config:
+        </p>
 
-    <div class="config-compare">
-        <div class="config-panel">
+        <div class="config-compare">
+          <div class="config-panel">
             <div class="config-header">mcp-ragdocs (.env + MCP config)</div>
-            <div class="config-body"><span class="comment"># Environment variables</span>
-<span class="key">QDRANT_URL</span>=<span class="value">http://localhost:6333</span>
-<span class="key">OPENAI_API_KEY</span>=<span class="value">sk-...</span>
-<span class="key">EMBEDDING_MODEL</span>=<span class="value">text-embedding-ada-002</span>
-<span class="key">COLLECTION_NAME</span>=<span class="value">my-docs</span>
+            <div class="config-body">
+              <span class="comment"># Environment variables</span>
+              <span class="key">QDRANT_URL</span>=<span class="value"
+                >http://localhost:6333</span
+              >
+              <span class="key">OPENAI_API_KEY</span>=<span class="value"
+                >sk-...</span
+              >
+              <span class="key">EMBEDDING_MODEL</span>=<span class="value"
+                >text-embedding-ada-002</span
+              >
+              <span class="key">COLLECTION_NAME</span>=<span class="value"
+                >my-docs</span
+              >
 
-<span class="comment"># MCP client config</span>
-{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"ragdocs"</span>: {
-      <span class="key">"command"</span>: <span class="value">"npx"</span>,
-      <span class="key">"args"</span>: [<span class="value">"mcp-ragdocs"</span>],
-      <span class="key">"env"</span>: {
-        <span class="key">"QDRANT_URL"</span>: <span class="value">"..."</span>,
-        <span class="key">"OPENAI_API_KEY"</span>: <span class="value">"..."</span>
-      }
-    }
-  }
-}</div>
+              <span class="comment"># MCP client config</span>
+              {
+              <span class="key">"mcpServers"</span>: {
+              <span class="key">"ragdocs"</span>: {
+              <span class="key">"command"</span>:
+              <span class="value">"npx"</span>, <span class="key">"args"</span>:
+              [<span class="value">"mcp-ragdocs"</span>],
+              <span class="key">"env"</span>: {
+              <span class="key">"QDRANT_URL"</span>:
+              <span class="value">"..."</span>,
+              <span class="key">"OPENAI_API_KEY"</span>:
+              <span class="value">"..."</span> } } } }
+            </div>
+          </div>
+          <div class="config-panel">
+            <div class="config-header highlight">
+              Pathfinder (pathfinder.yaml)
+            </div>
+            <div class="config-body">
+              <span class="key">server:</span> <span class="key">name:</span>
+              <span class="value">my-project</span>
+
+              <span class="key">sources:</span>
+              - <span class="key">name:</span> <span class="value">docs</span>
+              <span class="key">type:</span> <span class="value">markdown</span>
+              <span class="key">repo:</span>
+              <span class="value"
+                >https://github.com/your-org/your-repo.git</span
+              >
+              <span class="key">path:</span> <span class="value">docs/</span>
+
+              <span class="key">tools:</span>
+              - <span class="key">name:</span>
+              <span class="value">search-docs</span>
+              <span class="key">type:</span> <span class="value">search</span>
+              <span class="key">source:</span> <span class="value">docs</span>
+
+              - <span class="key">name:</span>
+              <span class="value">explore-docs</span>
+              <span class="key">type:</span> <span class="value">bash</span>
+              <span class="key">sources:</span> [<span class="value">docs</span
+              >]
+            </div>
+          </div>
         </div>
-        <div class="config-panel">
-            <div class="config-header highlight">Pathfinder (pathfinder.yaml)</div>
-            <div class="config-body"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">my-project</span>
 
-<span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/your-org/your-repo.git</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
+        <h2>Migration Walkthrough</h2>
 
-<span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">source:</span> <span class="value">docs</span>
-
-  - <span class="key">name:</span> <span class="value">explore-docs</span>
-    <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">sources:</span> [<span class="value">docs</span>]</div>
-        </div>
-    </div>
-
-    <h2>Migration Walkthrough</h2>
-
-    <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-content">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
             <h3>Install Pathfinder</h3>
             <p><strong>CLI:</strong></p>
-            <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder init
-<span class="cmd">$</span> npx @copilotkit/pathfinder serve</div>
+            <div class="code-block">
+              <span class="cmd">$</span> npx @copilotkit/pathfinder init
+              <span class="cmd">$</span> npx @copilotkit/pathfinder serve
+            </div>
             <p><strong>Docker:</strong></p>
-            <div class="code-block"><span class="cmd">$</span> docker pull ghcr.io/copilotkit/pathfinder</div>
-            <p>See <a href="/usage">full setup guide</a> for detailed instructions.</p>
+            <div class="code-block">
+              <span class="cmd">$</span> docker pull
+              ghcr.io/copilotkit/pathfinder
+            </div>
+            <p>
+              See <a href="/usage">full setup guide</a> for detailed
+              instructions.
+            </p>
+          </div>
         </div>
-    </div>
 
-    <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-content">
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
             <h3>Create pathfinder.yaml</h3>
-            <p>Translate what mcp-ragdocs was indexing into a Pathfinder source. If you were adding URLs pointing to your docs repo, map them to a git source:</p>
-            <div class="code-block"><span class="key">server:</span>
-  <span class="key">name:</span> <span class="value">my-project</span>
+            <p>
+              Translate what mcp-ragdocs was indexing into a Pathfinder source.
+              If you were adding URLs pointing to your docs repo, map them to a
+              git source:
+            </p>
+            <div class="code-block">
+              <span class="key">server:</span> <span class="key">name:</span>
+              <span class="value">my-project</span>
 
-<span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/your-org/your-repo.git</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.md"</span>, <span class="value">"**/*.mdx"</span>]
+              <span class="key">sources:</span>
+              - <span class="key">name:</span> <span class="value">docs</span>
+              <span class="key">type:</span> <span class="value">markdown</span>
+              <span class="key">repo:</span>
+              <span class="value"
+                >https://github.com/your-org/your-repo.git</span
+              >
+              <span class="key">path:</span> <span class="value">docs/</span>
+              <span class="key">file_patterns:</span> [<span class="value"
+                >"**/*.md"</span
+              >, <span class="value">"**/*.mdx"</span>]
 
-<span class="key">tools:</span>
-  <span class="comment"># Semantic search — replaces ragdocs search_documentation</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">source:</span> <span class="value">docs</span>
-    <span class="key">default_limit:</span> <span class="value">5</span>
+              <span class="key">tools:</span>
+              <span class="comment"
+                ># Semantic search — replaces ragdocs search_documentation</span
+              >
+              - <span class="key">name:</span>
+              <span class="value">search-docs</span>
+              <span class="key">type:</span> <span class="value">search</span>
+              <span class="key">source:</span> <span class="value">docs</span>
+              <span class="key">default_limit:</span>
+              <span class="value">5</span>
 
-  <span class="comment"># Filesystem exploration — ragdocs doesn't have this</span>
-  - <span class="key">name:</span> <span class="value">explore-docs</span>
-    <span class="key">type:</span> <span class="value">bash</span>
-    <span class="key">sources:</span> [<span class="value">docs</span>]
-    <span class="key">bash:</span>
-      <span class="key">session_state:</span> <span class="value">true</span>
-      <span class="key">grep_strategy:</span> <span class="value">hybrid</span></div>
+              <span class="comment"
+                ># Filesystem exploration — ragdocs doesn't have this</span
+              >
+              - <span class="key">name:</span>
+              <span class="value">explore-docs</span>
+              <span class="key">type:</span> <span class="value">bash</span>
+              <span class="key">sources:</span> [<span class="value">docs</span
+              >]
+              <span class="key">bash:</span>
+              <span class="key">session_state:</span>
+              <span class="value">true</span>
+              <span class="key">grep_strategy:</span>
+              <span class="value">hybrid</span>
+            </div>
+          </div>
         </div>
-    </div>
 
-    <div class="step">
-        <div class="step-num">3</div>
-        <div class="step-content">
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
             <h3>Start serving</h3>
-            <p>No Qdrant needed. Pathfinder uses PGlite by default for zero-infra local development:</p>
-            <div class="code-block"><span class="cmd">$</span> npx @copilotkit/pathfinder serve</div>
-            <p>The first boot automatically indexes your sources. For production, set <code>DATABASE_URL</code> to a PostgreSQL instance with pgvector.</p>
+            <p>
+              No Qdrant needed. Pathfinder uses PGlite by default for zero-infra
+              local development:
+            </p>
+            <div class="code-block">
+              <span class="cmd">$</span> npx @copilotkit/pathfinder serve
+            </div>
+            <p>
+              The first boot automatically indexes your sources. For production,
+              set <code>DATABASE_URL</code> to a PostgreSQL instance with
+              pgvector.
+            </p>
+          </div>
         </div>
-    </div>
 
-    <div class="step">
-        <div class="step-num">4</div>
-        <div class="step-content">
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-content">
             <h3>Update your MCP client config</h3>
             <p>Replace the mcp-ragdocs server entry with Pathfinder:</p>
-            <div class="code-block"><span class="comment">// Before (mcp-ragdocs)</span>
-{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"ragdocs"</span>: {
-      <span class="key">"command"</span>: <span class="value">"npx"</span>,
-      <span class="key">"args"</span>: [<span class="value">"mcp-ragdocs"</span>]
-    }
-  }
-}
+            <div class="code-block">
+              <span class="comment">// Before (mcp-ragdocs)</span>
+              {
+              <span class="key">"mcpServers"</span>: {
+              <span class="key">"ragdocs"</span>: {
+              <span class="key">"command"</span>:
+              <span class="value">"npx"</span>, <span class="key">"args"</span>:
+              [<span class="value">"mcp-ragdocs"</span>] } } }
 
-<span class="comment">// After (Pathfinder)</span>
-{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"docs"</span>: { <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span> }
-  }
-}</div>
+              <span class="comment">// After (Pathfinder)</span>
+              {
+              <span class="key">"mcpServers"</span>: {
+              <span class="key">"docs"</span>: { <span class="key">"url"</span>:
+              <span class="value">"http://localhost:3001/mcp"</span> } } }
+            </div>
+          </div>
         </div>
-    </div>
 
-    <div class="step">
-        <div class="step-num">5</div>
-        <div class="step-content">
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-content">
             <h3>Add sources ragdocs couldn't do (optional)</h3>
-            <p>Now that you're on Pathfinder, you can index conversational sources too:</p>
-            <div class="code-block"><span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/your-org/your-repo.git</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
+            <p>
+              Now that you're on Pathfinder, you can index conversational
+              sources too:
+            </p>
+            <div class="code-block">
+              <span class="key">sources:</span> - <span class="key">name:</span>
+              <span class="value">docs</span> <span class="key">type:</span>
+              <span class="value">markdown</span> <span class="key">repo:</span>
+              <span class="value"
+                >https://github.com/your-org/your-repo.git</span
+              >
+              <span class="key">path:</span> <span class="value">docs/</span>
 
-  <span class="comment"># Slack support threads</span>
-  - <span class="key">name:</span> <span class="value">support</span>
-    <span class="key">type:</span> <span class="value">slack</span>
-    <span class="key">channels:</span> [<span class="value">"C0123456789"</span>]
+              <span class="comment"># Slack support threads</span>
+              - <span class="key">name:</span>
+              <span class="value">support</span> <span class="key">type:</span>
+              <span class="value">slack</span>
+              <span class="key">channels:</span> [<span class="value"
+                >"C0123456789"</span
+              >]
 
-  <span class="comment"># Discord community forums</span>
-  - <span class="key">name:</span> <span class="value">community</span>
-    <span class="key">type:</span> <span class="value">discord</span>
-    <span class="key">guild_id:</span> <span class="value">"123456789"</span>
-    <span class="key">channels:</span>
-      - <span class="key">id:</span> <span class="value">"111111111"</span>
-        <span class="key">type:</span> <span class="value">forum</span>
+              <span class="comment"># Discord community forums</span>
+              - <span class="key">name:</span>
+              <span class="value">community</span>
+              <span class="key">type:</span> <span class="value">discord</span>
+              <span class="key">guild_id:</span>
+              <span class="value">"123456789"</span>
+              <span class="key">channels:</span>
+              - <span class="key">id:</span>
+              <span class="value">"111111111"</span>
+              <span class="key">type:</span> <span class="value">forum</span>
 
-  <span class="comment"># Source code</span>
-  - <span class="key">name:</span> <span class="value">code</span>
-    <span class="key">type:</span> <span class="value">code</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/your-org/your-repo.git</span>
-    <span class="key">path:</span> <span class="value">src/</span></div>
+              <span class="comment"># Source code</span>
+              - <span class="key">name:</span> <span class="value">code</span>
+              <span class="key">type:</span> <span class="value">code</span>
+              <span class="key">repo:</span>
+              <span class="value"
+                >https://github.com/your-org/your-repo.git</span
+              >
+              <span class="key">path:</span> <span class="value">src/</span>
+            </div>
+          </div>
         </div>
+
+        <h2>What's Different</h2>
+        <p>
+          Pathfinder is not a drop-in replacement. Here's what works
+          differently:
+        </p>
+
+        <div class="gap-card">
+          <h4>No URL-based ingestion</h4>
+          <p>
+            mcp-ragdocs lets you add arbitrary URLs for indexing. Pathfinder
+            indexes git repos and local files instead. For web content, use the
+            <code>html</code> source type to index specific sites.
+          </p>
+        </div>
+        <div class="gap-card">
+          <h4>Different vector database</h4>
+          <p>
+            mcp-ragdocs uses Qdrant. Pathfinder uses PostgreSQL + pgvector. If
+            you have an existing Qdrant deployment, you'll be moving to a
+            different storage backend. Your embeddings will be regenerated on
+            first index.
+          </p>
+        </div>
+        <div class="gap-card">
+          <h4>Managed embeddings pipeline</h4>
+          <p>
+            Pathfinder manages its own embeddings — you don't need a separate
+            embedding service or configure embedding models per-collection. Set
+            the model once in config and Pathfinder handles the rest.
+          </p>
+        </div>
+
+        <a href="/" class="back-link">&larr; Back to Pathfinder</a>
+      </main>
+      <aside class="page-toc" id="page-toc"></aside>
     </div>
 
-    <h2>What's Different</h2>
-    <p>Pathfinder is not a drop-in replacement. Here's what works differently:</p>
-
-    <div class="gap-card">
-        <h4>No URL-based ingestion</h4>
-        <p>mcp-ragdocs lets you add arbitrary URLs for indexing. Pathfinder indexes git repos and local files instead. For web content, use the <code>html</code> source type to index specific sites.</p>
-    </div>
-    <div class="gap-card">
-        <h4>Different vector database</h4>
-        <p>mcp-ragdocs uses Qdrant. Pathfinder uses PostgreSQL + pgvector. If you have an existing Qdrant deployment, you'll be moving to a different storage backend. Your embeddings will be regenerated on first index.</p>
-    </div>
-    <div class="gap-card">
-        <h4>Managed embeddings pipeline</h4>
-        <p>Pathfinder manages its own embeddings — you don't need a separate embedding service or configure embedding models per-collection. Set the model once in config and Pathfinder handles the rest.</p>
-    </div>
-
-    <a href="/" class="back-link">&larr; Back to Pathfinder</a>
-  </main>
-  <aside class="page-toc" id="page-toc"></aside>
-</div>
-
-<footer class="docs-footer">
-  <div class="footer-inner">
-    <div class="footer-left"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a></div>
-    <ul class="footer-links">
-      <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank">GitHub</a></li>
-      <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank">npm</a></li>
-    </ul>
-  </div>
-</footer>
-<script src="/sidebar.js"></script>
-</body>
+    <footer class="docs-footer">
+      <div class="footer-inner">
+        <div class="footer-left">
+          <span class="prompt">$</span> pathfinder &middot;
+          <a
+            href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE"
+            target="_blank"
+            rel="noopener"
+            style="color: inherit; text-decoration: underline"
+            >Elastic License 2.0</a
+          >
+        </div>
+        <ul class="footer-links">
+          <li>
+            <a href="https://github.com/CopilotKit/pathfinder" target="_blank"
+              >GitHub</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.npmjs.com/package/@copilotkit/pathfinder"
+              target="_blank"
+              >npm</a
+            >
+          </li>
+        </ul>
+      </div>
+    </footer>
+    <script src="/sidebar.js"></script>
+  </body>
 </html>

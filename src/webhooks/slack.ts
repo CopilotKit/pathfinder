@@ -146,8 +146,7 @@ export function createSlackWebhookHandler(
     }
 
     const timestamp = req.headers["x-slack-request-timestamp"] as
-      | string
-      | undefined;
+      string | undefined;
     const signature = req.headers["x-slack-signature"] as string | undefined;
 
     if (

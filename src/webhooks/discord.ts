@@ -74,8 +74,7 @@ export function createDiscordWebhookHandler(
     // -- Signature verification ----------------------------------------
     const signature = req.headers["x-signature-ed25519"] as string | undefined;
     const timestamp = req.headers["x-signature-timestamp"] as
-      | string
-      | undefined;
+      string | undefined;
 
     const publicKey = cfg.discordPublicKey;
     if (

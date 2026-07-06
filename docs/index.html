@@ -1,327 +1,955 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pathfinder — The Knowledge Server for AI Agents</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Self-hosted MCP server with semantic search + filesystem exploration for AI agents. Source-available, self-hosted, free to use.">
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://pathfinder.copilotkit.dev/">
-<meta property="og:title" content="Pathfinder — The knowledge server for AI agents">
-<meta property="og:description" content="Docs, code, and conversations — one knowledge server for AI agents. Source-available, self-hosted, free to use.">
-<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pathfinder — The knowledge server for AI agents">
-<meta name="twitter:description" content="Docs, code, and conversations — one knowledge server for AI agents. Source-available, self-hosted, free to use.">
-<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root {
-    --bg-deep: #0a0a0f;
-    --bg-surface: #111118;
-    --bg-card: #16161f;
-    --border: #222233;
-    --text-primary: #e8e8f0;
-    --text-secondary: #8888a0;
-    --text-dim: #555570;
-    --accent: #00ccff;
-    --accent-dim: #00aadd;
-    --accent-glow: rgba(0,204,255,0.15);
-    --blue: #4488ff;
-    --purple: #aa66ff;
-    --warning: #ffaa00;
-    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
-    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
-    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-}
-/* Animations */
-@keyframes fadeUp {
-    from { opacity: 0; transform: translateY(30px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.fade-in { opacity: 0; transform: translateY(30px); transition: opacity 0.8s var(--ease-out-expo), transform 0.8s var(--ease-out-expo); }
-.fade-in.visible { opacity: 1; transform: translateY(0); }
-* { margin:0; padding:0; box-sizing:border-box; }
-html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
-body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
-code, pre, kbd, .demo-body, .install-command { font-feature-settings: "liga" 0, "calt" 0; }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pathfinder — The Knowledge Server for AI Agents</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta
+      name="description"
+      content="Self-hosted MCP server with semantic search + filesystem exploration for AI agents. Source-available, self-hosted, free to use."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://pathfinder.copilotkit.dev/" />
+    <meta
+      property="og:title"
+      content="Pathfinder — The knowledge server for AI agents"
+    />
+    <meta
+      property="og:description"
+      content="Docs, code, and conversations — one knowledge server for AI agents. Source-available, self-hosted, free to use."
+    />
+    <meta
+      property="og:image"
+      content="https://pathfinder.copilotkit.dev/og-image.png"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Pathfinder — The knowledge server for AI agents"
+    />
+    <meta
+      name="twitter:description"
+      content="Docs, code, and conversations — one knowledge server for AI agents. Source-available, self-hosted, free to use."
+    />
+    <meta
+      name="twitter:image"
+      content="https://pathfinder.copilotkit.dev/og-image.png"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-deep: #0a0a0f;
+        --bg-surface: #111118;
+        --bg-card: #16161f;
+        --border: #222233;
+        --text-primary: #e8e8f0;
+        --text-secondary: #8888a0;
+        --text-dim: #555570;
+        --accent: #00ccff;
+        --accent-dim: #00aadd;
+        --accent-glow: rgba(0, 204, 255, 0.15);
+        --blue: #4488ff;
+        --purple: #aa66ff;
+        --warning: #ffaa00;
+        --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+        --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
+        --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      /* Animations */
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(30px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .fade-in {
+        opacity: 0;
+        transform: translateY(30px);
+        transition:
+          opacity 0.8s var(--ease-out-expo),
+          transform 0.8s var(--ease-out-expo);
+      }
+      .fade-in.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-size: 16px;
+      }
+      body {
+        background: var(--bg-deep);
+        color: var(--text-primary);
+        font-family: var(--sans);
+        line-height: 1.6;
+        overflow-x: hidden;
+      }
+      code,
+      pre,
+      kbd,
+      .demo-body,
+      .install-command {
+        font-feature-settings:
+          "liga" 0,
+          "calt" 0;
+      }
 
-/* Noise overlay */
-body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
-    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-}
+      /* Noise overlay */
+      body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 9999;
+        background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      }
 
-/* Container */
-.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+      /* Container */
+      .container {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 2rem;
+      }
 
-/* Nav */
-nav { position:fixed; top:0; left:0; right:0; z-index:100; padding: 1rem 0;
-    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
-nav .container { display:flex; align-items:center; justify-content:space-between; }
-.nav-brand { font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
-.nav-brand span { color: var(--accent); }
-.nav-links { display:flex; gap: 2rem; align-items:center; list-style:none; }
-.nav-links a { color: var(--text-secondary); text-decoration:none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s; }
-.nav-links a:hover { color: var(--text-primary); }
-.nav-links a.active { color: var(--accent); }
-.nav-links .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
-.nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+      /* Nav */
+      nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        padding: 1rem 0;
+        background: rgba(10, 10, 15, 0.85);
+        backdrop-filter: blur(20px) saturate(1.4);
+        -webkit-backdrop-filter: blur(20px) saturate(1.4);
+        border-bottom: 1px solid var(--border);
+      }
+      nav .container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .nav-brand {
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 1rem;
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-brand span {
+        color: var(--accent);
+      }
+      .nav-links {
+        display: flex;
+        gap: 2rem;
+        align-items: center;
+        list-style: none;
+      }
+      .nav-links a {
+        color: var(--text-secondary);
+        text-decoration: none;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: color 0.2s;
+      }
+      .nav-links a:hover {
+        color: var(--text-primary);
+      }
+      .nav-links a.active {
+        color: var(--accent);
+      }
+      .nav-links .gh-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      .nav-links .gh-btn:hover {
+        border-color: var(--text-dim);
+        background: var(--bg-card);
+      }
 
-/* Hero */
-.hero { padding: 120px 0 3rem; max-width: 1120px; margin: 0 auto; padding-left: 2rem; padding-right: 2rem; position: relative; overflow: hidden; }
-.hero::before { content: ""; position: absolute; top: -200px; left: 50%; transform: translateX(-50%); width: 800px; height: 600px; background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%); pointer-events: none; z-index: 0; }
-.hero > * { position: relative; z-index: 1; }
-.badge { display: inline-flex; align-items:center; gap: 8px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 100px; font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 32px; animation: fadeUp 0.8s var(--ease-out-expo) both; }
-.badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
-@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-.hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; line-height: 1.08; margin-bottom: 24px; letter-spacing: -0.03em; animation: fadeUp 0.8s var(--ease-out-expo) 0.1s both; }
-.hero-break { display: none; }
-@media (min-width: 769px) { .hero-break { display: block; } }
-.hero h1 .accent { color: var(--accent); }
-.hero .subtitle { font-size: 1.2rem; color: var(--text-secondary); max-width: 700px; line-height: 1.7; margin-bottom: 40px; animation: fadeUp 0.8s var(--ease-out-expo) 0.2s both; }
+      /* Hero */
+      .hero {
+        padding: 120px 0 3rem;
+        max-width: 1120px;
+        margin: 0 auto;
+        padding-left: 2rem;
+        padding-right: 2rem;
+        position: relative;
+        overflow: hidden;
+      }
+      .hero::before {
+        content: "";
+        position: absolute;
+        top: -200px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 800px;
+        height: 600px;
+        background: radial-gradient(
+          ellipse,
+          var(--accent-glow) 0%,
+          transparent 70%
+        );
+        pointer-events: none;
+        z-index: 0;
+      }
+      .hero > * {
+        position: relative;
+        z-index: 1;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 16px;
+        border: 1px solid var(--border);
+        border-radius: 100px;
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        margin-bottom: 32px;
+        animation: fadeUp 0.8s var(--ease-out-expo) both;
+      }
+      .badge .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+      .hero h1 {
+        font-size: clamp(2.5rem, 6vw, 4.5rem);
+        font-weight: 700;
+        line-height: 1.08;
+        margin-bottom: 24px;
+        letter-spacing: -0.03em;
+        animation: fadeUp 0.8s var(--ease-out-expo) 0.1s both;
+      }
+      .hero-break {
+        display: none;
+      }
+      @media (min-width: 769px) {
+        .hero-break {
+          display: block;
+        }
+      }
+      .hero h1 .accent {
+        color: var(--accent);
+      }
+      .hero .subtitle {
+        font-size: 1.2rem;
+        color: var(--text-secondary);
+        max-width: 700px;
+        line-height: 1.7;
+        margin-bottom: 40px;
+        animation: fadeUp 0.8s var(--ease-out-expo) 0.2s both;
+      }
 
-/* Install box */
-.install-box { display: inline-flex; flex-direction: column; gap: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-family: var(--mono); font-size: 0.9rem; margin-bottom: 2.5rem; }
-.install-box .prompt { color: var(--accent); }
-.install-box .cmd { color: var(--text-primary); }
-.install-line { display: flex; align-items: center; gap: 12px; }
-.install-divider { color: var(--text-dim); font-size: 0.75rem; text-align: center; padding: 4px 0; }
+      /* Install box */
+      .install-box {
+        display: inline-flex;
+        flex-direction: column;
+        gap: 0;
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px 20px;
+        font-family: var(--mono);
+        font-size: 0.9rem;
+        margin-bottom: 2.5rem;
+      }
+      .install-box .prompt {
+        color: var(--accent);
+      }
+      .install-box .cmd {
+        color: var(--text-primary);
+      }
+      .install-line {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .install-divider {
+        color: var(--text-dim);
+        font-size: 0.75rem;
+        text-align: center;
+        padding: 4px 0;
+      }
 
-/* Demo grid */
-.demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1120px; }
-.demo-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-align: left; }
-.demo-header { padding: 10px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--text-dim); display:flex; gap:8px; align-items:center; }
-.demo-header .dot-r { width:10px; height:10px; border-radius:50%; background:#ff5f57; }
-.demo-header .dot-y { width:10px; height:10px; border-radius:50%; background:#ffbd2e; }
-.demo-header .dot-g { width:10px; height:10px; border-radius:50%; background:#28c840; }
-.demo-body { padding: 16px; font-family: var(--mono); font-size: 13px; line-height: 1.7; min-height: 460px; }
-.demo-body .line { opacity: 0; animation: fadeInLine 0.3s forwards; }
-.demo-body .prompt-line { color: var(--accent); }
-.demo-body .output { color: var(--text-secondary); }
-.demo-body .highlight { color: var(--warning); }
-.demo-body .file { color: var(--blue); }
-@keyframes fadeInLine { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+      /* Demo grid */
+      .demo-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        max-width: 1120px;
+      }
+      .demo-panel {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        text-align: left;
+      }
+      .demo-header {
+        padding: 10px 16px;
+        background: var(--bg-card);
+        border-bottom: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-dim);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .demo-header .dot-r {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #ff5f57;
+      }
+      .demo-header .dot-y {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #ffbd2e;
+      }
+      .demo-header .dot-g {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #28c840;
+      }
+      .demo-body {
+        padding: 16px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.7;
+        min-height: 460px;
+      }
+      .demo-body .line {
+        opacity: 0;
+        animation: fadeInLine 0.3s forwards;
+      }
+      .demo-body .prompt-line {
+        color: var(--accent);
+      }
+      .demo-body .output {
+        color: var(--text-secondary);
+      }
+      .demo-body .highlight {
+        color: var(--warning);
+      }
+      .demo-body .file {
+        color: var(--blue);
+      }
+      @keyframes fadeInLine {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
 
-/* Features */
-.features { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; position: relative; overflow: hidden; }
-.features::before { content: ""; position: absolute; top: -100px; left: 50%; transform: translateX(-50%); width: 1000px; height: 800px; background: radial-gradient(ellipse, rgba(68, 136, 255, 0.08) 0%, rgba(0, 204, 255, 0.05) 40%, transparent 70%); pointer-events: none; z-index: 0; }
-.features > * { position: relative; z-index: 1; }
-.features h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; text-align: center; }
-.features .section-sub { color: var(--text-secondary); margin-bottom: 2rem; font-size: 16px; text-align: center; }
+      /* Features */
+      .features {
+        padding: 4rem 2rem;
+        max-width: 1120px;
+        margin: 0 auto;
+        position: relative;
+        overflow: hidden;
+      }
+      .features::before {
+        content: "";
+        position: absolute;
+        top: -100px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 1000px;
+        height: 800px;
+        background: radial-gradient(
+          ellipse,
+          rgba(68, 136, 255, 0.08) 0%,
+          rgba(0, 204, 255, 0.05) 40%,
+          transparent 70%
+        );
+        pointer-events: none;
+        z-index: 0;
+      }
+      .features > * {
+        position: relative;
+        z-index: 1;
+      }
+      .features h2 {
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.02em;
+        text-align: center;
+      }
+      .features .section-sub {
+        color: var(--text-secondary);
+        margin-bottom: 2rem;
+        font-size: 16px;
+        text-align: center;
+      }
 
-/* Feature cards (3x3 grid) */
-.feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
-.feature-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; box-shadow: 0 4px 16px rgba(0,0,0,0.2); transition: all 0.3s var(--ease-out-expo); }
-.feature-card:hover { transform: translateY(-4px); border-color: var(--accent-dim); box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
-.feature-card .icon { font-size: 1.75rem; margin-bottom: 1rem; }
-.feature-card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; }
-.feature-card p { font-size: 0.875rem; color: var(--text-secondary); line-height: 1.6; }
+      /* Feature cards (3x3 grid) */
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.5rem;
+      }
+      .feature-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 2rem;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        transition: all 0.3s var(--ease-out-expo);
+      }
+      .feature-card:hover {
+        transform: translateY(-4px);
+        border-color: var(--accent-dim);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      }
+      .feature-card .icon {
+        font-size: 1.75rem;
+        margin-bottom: 1rem;
+      }
+      .feature-card h3 {
+        font-size: 1.05rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+      }
+      .feature-card p {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+        line-height: 1.6;
+      }
 
-/* Comparison matrix */
-.section-comparison { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; }
-.section-comparison h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; text-align: center; }
-.section-comparison .section-sub { color: var(--text-secondary); margin-bottom: 2rem; font-size: 16px; text-align: center; }
-.comparison-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -2rem; padding: 0 2rem; }
-.comp-matrix { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 640px; }
-.comp-matrix thead { position: sticky; top: 0; z-index: 2; }
-.comp-matrix th { padding: 12px 16px; text-align: center; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; background: var(--bg-deep); white-space: nowrap; }
-.comp-matrix th:first-child { text-align: left; }
-.comp-matrix th.col-pathfinder { color: var(--accent); border-bottom-color: var(--accent); background: rgba(0,204,255,0.06); }
-.comp-matrix td { padding: 10px 16px; border-bottom: 1px solid var(--border); text-align: center; }
-.comp-matrix td:first-child { text-align: left; color: var(--text-secondary); font-weight: 500; }
-.comp-matrix td.col-pathfinder { background: rgba(0,204,255,0.06); border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
-.comp-matrix tr:last-child td.col-pathfinder { border-bottom: 2px solid var(--accent); }
-.comp-matrix thead th.col-pathfinder { border-top: 2px solid var(--accent); }
-.comp-matrix .yes { color: #22cc88; font-weight: 600; }
-.comp-matrix .no { color: var(--text-dim); }
-.comp-matrix .partial { color: var(--warning); font-weight: 500; }
+      /* Comparison matrix */
+      .section-comparison {
+        padding: 4rem 2rem;
+        max-width: 1120px;
+        margin: 0 auto;
+      }
+      .section-comparison h2 {
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.02em;
+        text-align: center;
+      }
+      .section-comparison .section-sub {
+        color: var(--text-secondary);
+        margin-bottom: 2rem;
+        font-size: 16px;
+        text-align: center;
+      }
+      .comparison-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin: 0 -2rem;
+        padding: 0 2rem;
+      }
+      .comp-matrix {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+        min-width: 640px;
+      }
+      .comp-matrix thead {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+      }
+      .comp-matrix th {
+        padding: 12px 16px;
+        text-align: center;
+        border-bottom: 2px solid var(--border);
+        color: var(--text-secondary);
+        font-weight: 500;
+        background: var(--bg-deep);
+        white-space: nowrap;
+      }
+      .comp-matrix th:first-child {
+        text-align: left;
+      }
+      .comp-matrix th.col-pathfinder {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+        background: rgba(0, 204, 255, 0.06);
+      }
+      .comp-matrix td {
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border);
+        text-align: center;
+      }
+      .comp-matrix td:first-child {
+        text-align: left;
+        color: var(--text-secondary);
+        font-weight: 500;
+      }
+      .comp-matrix td.col-pathfinder {
+        background: rgba(0, 204, 255, 0.06);
+        border-left: 2px solid var(--accent);
+        border-right: 2px solid var(--accent);
+      }
+      .comp-matrix tr:last-child td.col-pathfinder {
+        border-bottom: 2px solid var(--accent);
+      }
+      .comp-matrix thead th.col-pathfinder {
+        border-top: 2px solid var(--accent);
+      }
+      .comp-matrix .yes {
+        color: #22cc88;
+        font-weight: 600;
+      }
+      .comp-matrix .no {
+        color: var(--text-dim);
+      }
+      .comp-matrix .partial {
+        color: var(--warning);
+        font-weight: 500;
+      }
 
-/* Migration CTA */
-.migration { padding: 4rem 2rem; max-width: 1120px; margin: 0 auto; text-align: center; }
-.migration h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); margin-bottom: 0.5rem; letter-spacing: -0.02em; }
-.migration .section-sub { color: var(--text-secondary); margin-bottom: 32px; font-size: 16px; }
-.migration .cta-btn { display: inline-flex; align-items:center; gap: 8px; padding: 14px 28px; background: var(--accent); color: var(--bg-deep); font-family: var(--mono); font-weight: 600; font-size: 0.875rem; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; transition: opacity 0.2s; }
-.migration .cta-btn:hover { opacity: 0.9; background: var(--accent-dim); }
+      /* Migration CTA */
+      .migration {
+        padding: 4rem 2rem;
+        max-width: 1120px;
+        margin: 0 auto;
+        text-align: center;
+      }
+      .migration h2 {
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.02em;
+      }
+      .migration .section-sub {
+        color: var(--text-secondary);
+        margin-bottom: 32px;
+        font-size: 16px;
+      }
+      .migration .cta-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 14px 28px;
+        background: var(--accent);
+        color: var(--bg-deep);
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 0.875rem;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        text-decoration: none;
+        transition: opacity 0.2s;
+      }
+      .migration .cta-btn:hover {
+        opacity: 0.9;
+        background: var(--accent-dim);
+      }
 
-/* Footer */
-footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center; }
-.footer-brand { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1rem; }
-.footer-brand .prompt { color: var(--accent); }
-.footer-links { display:flex; gap: 2rem; justify-content:center; list-style:none; }
-.footer-links a { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; text-decoration:none; transition: color 0.2s; }
-.footer-links a:hover { color: var(--text-primary); }
+      /* Footer */
+      footer {
+        padding: 3rem 0;
+        border-top: 1px solid var(--border);
+        text-align: center;
+      }
+      .footer-brand {
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        color: var(--text-dim);
+        margin-bottom: 1rem;
+      }
+      .footer-brand .prompt {
+        color: var(--accent);
+      }
+      .footer-links {
+        display: flex;
+        gap: 2rem;
+        justify-content: center;
+        list-style: none;
+      }
+      .footer-links a {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        font-weight: 500;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .footer-links a:hover {
+        color: var(--text-primary);
+      }
 
-/* --- Cross-Nav Footer -------------------------------------------- */
-.cross-nav-footer {
-  padding: 2rem 0;
-  border-top: 1px solid var(--border);
-}
-.cross-nav-toolbar {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 0 2rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-.cn-label {
-  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
-  font-size: 0.8rem;
-  color: var(--text-dim);
-  margin-right: 0.25rem;
-  white-space: nowrap;
-}
-.cn-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.85rem;
-  border: 1px solid var(--border);
-  border-radius: 100px;
-  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-  text-decoration: none;
-  transition: border-color 0.2s, background 0.2s, color 0.2s;
-  white-space: nowrap;
-}
-.cn-pill:hover {
-  border-color: #3a3a50;
-  color: var(--text-primary);
-  text-decoration: none;
-  background: rgba(255, 255, 255, 0.03);
-}
-.cn-pill.active {
-  border-color: var(--accent);
-  background: var(--accent-glow);
-  color: var(--text-primary);
-  cursor: default;
-  pointer-events: none;
-}
-.cn-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
+      /* --- Cross-Nav Footer -------------------------------------------- */
+      .cross-nav-footer {
+        padding: 2rem 0;
+        border-top: 1px solid var(--border);
+      }
+      .cross-nav-toolbar {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+      .cn-label {
+        font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        margin-right: 0.25rem;
+        white-space: nowrap;
+      }
+      .cn-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.35rem 0.85rem;
+        border: 1px solid var(--border);
+        border-radius: 100px;
+        font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition:
+          border-color 0.2s,
+          background 0.2s,
+          color 0.2s;
+        white-space: nowrap;
+      }
+      .cn-pill:hover {
+        border-color: #3a3a50;
+        color: var(--text-primary);
+        text-decoration: none;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .cn-pill.active {
+        border-color: var(--accent);
+        background: var(--accent-glow);
+        color: var(--text-primary);
+        cursor: default;
+        pointer-events: none;
+      }
+      .cn-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
 
-/* Responsive: Tablet */
-@media (max-width: 768px) {
-    .hero h1 { font-size: 36px; }
-    .hero .subtitle { font-size: 16px; }
-    .demo-grid { grid-template-columns: 1fr; }
-    .feature-grid { grid-template-columns: 1fr 1fr; }
-    .install-box { flex-wrap: wrap; justify-content: center; font-size: 12px; }
-    .comp-matrix { font-size: 12px; }
-    .comp-matrix th, .comp-matrix td { padding: 8px 10px; }
-    .nav-links { gap: 1rem; }
-    .hero { padding: 100px 16px 2rem; }
-    .hero, .features, .section-comparison, .migration { padding-left: 1rem; padding-right: 1rem; }
-}
+      /* Responsive: Tablet */
+      @media (max-width: 768px) {
+        .hero h1 {
+          font-size: 36px;
+        }
+        .hero .subtitle {
+          font-size: 16px;
+        }
+        .demo-grid {
+          grid-template-columns: 1fr;
+        }
+        .feature-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+        .install-box {
+          flex-wrap: wrap;
+          justify-content: center;
+          font-size: 12px;
+        }
+        .comp-matrix {
+          font-size: 12px;
+        }
+        .comp-matrix th,
+        .comp-matrix td {
+          padding: 8px 10px;
+        }
+        .nav-links {
+          gap: 1rem;
+        }
+        .hero {
+          padding: 100px 16px 2rem;
+        }
+        .hero,
+        .features,
+        .section-comparison,
+        .migration {
+          padding-left: 1rem;
+          padding-right: 1rem;
+        }
+      }
 
-/* Responsive: Mobile */
-@media (max-width: 480px) {
-    .hero h1 { font-size: 28px; }
-    .hero .subtitle { font-size: 14px; }
-    .feature-grid { grid-template-columns: 1fr; }
-    .install-box { padding: 10px 14px; font-size: 11px; }
-    .install-box .cmd { word-break: break-all; }
-    .demo-body { font-size: 11px; min-height: 360px; }
-    .migration h2, .features h2, .section-comparison h2 { font-size: 1.75rem; }
-    .cn-label { display: none; }
-}
+      /* Responsive: Mobile */
+      @media (max-width: 480px) {
+        .hero h1 {
+          font-size: 28px;
+        }
+        .hero .subtitle {
+          font-size: 14px;
+        }
+        .feature-grid {
+          grid-template-columns: 1fr;
+        }
+        .install-box {
+          padding: 10px 14px;
+          font-size: 11px;
+        }
+        .install-box .cmd {
+          word-break: break-all;
+        }
+        .demo-body {
+          font-size: 11px;
+          min-height: 360px;
+        }
+        .migration h2,
+        .features h2,
+        .section-comparison h2 {
+          font-size: 1.75rem;
+        }
+        .cn-label {
+          display: none;
+        }
+      }
 
-@media (max-width: 640px) {
-  .cross-nav-toolbar {
-    gap: 0.4rem;
-  }
-  .cn-pill {
-    font-size: 0.7rem;
-    padding: 0.3rem 0.7rem;
-  }
-}
+      @media (max-width: 640px) {
+        .cross-nav-toolbar {
+          gap: 0.4rem;
+        }
+        .cn-pill {
+          font-size: 0.7rem;
+          padding: 0.3rem 0.7rem;
+        }
+      }
 
-/* Hamburger menu */
-.hamburger { display:none; background:none; border:none; cursor:pointer; padding:0.5rem; z-index:101; }
-.hamburger span { display:block; width:22px; height:2px; background:var(--text-primary); margin:5px 0; transition: transform 0.3s, opacity 0.3s; border-radius:1px; }
-.hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
-.hamburger.open span:nth-child(2) { opacity:0; }
-.hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
-.mobile-menu { display:none; position:fixed; top:57px; left:0; right:0; background:var(--bg-surface); border-bottom:1px solid var(--border); padding:1rem 2rem 1.5rem; z-index:99; flex-direction:column; gap:0.25rem; }
-.mobile-menu.open { display:flex; }
-@media (min-width: 769px) { .mobile-menu { display:none !important; } }
-.mobile-menu a { color:var(--text-secondary); text-decoration:none; font-size:1rem; font-weight:500; padding:0.6rem 0; border-bottom:1px solid var(--border); transition:color 0.2s; }
-.mobile-menu a:last-child { border-bottom:none; }
-.mobile-menu a:hover { color:var(--text-primary); }
-.mobile-menu a.active { color:var(--accent); }
-.mobile-menu .gh-btn { display:inline-flex; align-items:center; gap:0.5rem; margin-top:0.5rem; padding:0.5rem 1rem; border:1px solid var(--border); border-radius:6px; width:fit-content; }
-.mobile-menu .gh-btn:hover { border-color:var(--text-dim); background:var(--bg-card); }
-@media (max-width: 768px) {
-    .hamburger { display:block; }
-    .nav-links { display:none !important; }
-}
-</style>
-<script src="/pixels.js" defer></script>
-</head>
-<body>
+      /* Hamburger menu */
+      .hamburger {
+        display: none;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0.5rem;
+        z-index: 101;
+      }
+      .hamburger span {
+        display: block;
+        width: 22px;
+        height: 2px;
+        background: var(--text-primary);
+        margin: 5px 0;
+        transition:
+          transform 0.3s,
+          opacity 0.3s;
+        border-radius: 1px;
+      }
+      .hamburger.open span:nth-child(1) {
+        transform: translateY(7px) rotate(45deg);
+      }
+      .hamburger.open span:nth-child(2) {
+        opacity: 0;
+      }
+      .hamburger.open span:nth-child(3) {
+        transform: translateY(-7px) rotate(-45deg);
+      }
+      .mobile-menu {
+        display: none;
+        position: fixed;
+        top: 57px;
+        left: 0;
+        right: 0;
+        background: var(--bg-surface);
+        border-bottom: 1px solid var(--border);
+        padding: 1rem 2rem 1.5rem;
+        z-index: 99;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+      .mobile-menu.open {
+        display: flex;
+      }
+      @media (min-width: 769px) {
+        .mobile-menu {
+          display: none !important;
+        }
+      }
+      .mobile-menu a {
+        color: var(--text-secondary);
+        text-decoration: none;
+        font-size: 1rem;
+        font-weight: 500;
+        padding: 0.6rem 0;
+        border-bottom: 1px solid var(--border);
+        transition: color 0.2s;
+      }
+      .mobile-menu a:last-child {
+        border-bottom: none;
+      }
+      .mobile-menu a:hover {
+        color: var(--text-primary);
+      }
+      .mobile-menu a.active {
+        color: var(--accent);
+      }
+      .mobile-menu .gh-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+        padding: 0.5rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        width: fit-content;
+      }
+      .mobile-menu .gh-btn:hover {
+        border-color: var(--text-dim);
+        background: var(--bg-card);
+      }
+      @media (max-width: 768px) {
+        .hamburger {
+          display: block;
+        }
+        .nav-links {
+          display: none !important;
+        }
+      }
+    </style>
+    <script src="/pixels.js" defer></script>
+  </head>
+  <body>
+    <nav>
+      <div class="container">
+        <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
+        <div class="nav-links">
+          <a href="/" class="active">Home</a>
+          <a href="#features">Features</a>
+          <a href="#comparison">Comparison</a>
+          <a href="#migration">Switch</a>
+          <a href="/usage">Docs</a>
+          <a
+            href="https://github.com/CopilotKit/pathfinder"
+            class="gh-btn"
+            target="_blank"
+            ><svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="currentColor"
+            >
+              <path
+                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+              />
+            </svg>
+            GitHub</a
+          >
+        </div>
+        <button class="hamburger" aria-label="Menu">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+      </div>
+    </nav>
 
-<nav>
-  <div class="container">
-    <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
-    <div class="nav-links">
-        <a href="/" class="active">Home</a>
-        <a href="#features">Features</a>
-        <a href="#comparison">Comparison</a>
-        <a href="#migration">Switch</a>
-        <a href="/usage">Docs</a>
-        <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a>
+    <div class="mobile-menu">
+      <a href="/" class="active">Home</a>
+      <a href="#features">Features</a>
+      <a href="#comparison">Comparison</a>
+      <a href="#migration">Switch</a>
+      <a href="/usage">Docs</a>
+      <a
+        href="https://github.com/CopilotKit/pathfinder"
+        class="gh-btn"
+        target="_blank"
+        ><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path
+            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+          />
+        </svg>
+        GitHub</a
+      >
     </div>
-    <button class="hamburger" aria-label="Menu">
-      <span></span>
-      <span></span>
-      <span></span>
-    </button>
-  </div>
-</nav>
 
-<div class="mobile-menu">
-    <a href="/" class="active">Home</a>
-    <a href="#features">Features</a>
-    <a href="#comparison">Comparison</a>
-    <a href="#migration">Switch</a>
-    <a href="/usage">Docs</a>
-    <a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a>
-</div>
+    <section class="hero">
+      <div class="badge">
+        <span class="dot"></span> pathfinder — the knowledge server for AI
+        agents
+      </div>
+      <h1>
+        The <span class="accent">knowledge server</span
+        ><br class="hero-break" />
+        for <span class="accent">AI agents</span>
+      </h1>
+      <p class="subtitle">
+        Index your documentation, codebase, and conversations — from Slack
+        threads to Discord forums. Pathfinder turns everything your team knows
+        into searchable, agent-accessible knowledge. Self-hosted,
+        source-available, zero lock-in.
+      </p>
 
-<section class="hero">
-    <div class="badge"><span class="dot"></span> pathfinder — the knowledge server for AI agents</div>
-    <h1>The <span class="accent">knowledge server</span><br class="hero-break"> for <span class="accent">AI agents</span></h1>
-    <p class="subtitle">Index your documentation, codebase, and conversations — from Slack threads to Discord forums. Pathfinder turns everything your team knows into searchable, agent-accessible knowledge. Self-hosted, source-available, zero lock-in.</p>
-
-    <div class="install-box">
+      <div class="install-box">
         <div class="install-line">
-            <span class="prompt">$</span>
-            <span class="cmd">npx @copilotkit/pathfinder init</span>
+          <span class="prompt">$</span>
+          <span class="cmd">npx @copilotkit/pathfinder init</span>
         </div>
         <div class="install-divider">or</div>
         <div class="install-line">
-            <span class="prompt">$</span>
-            <span class="cmd">docker pull ghcr.io/copilotkit/pathfinder</span>
+          <span class="prompt">$</span>
+          <span class="cmd">docker pull ghcr.io/copilotkit/pathfinder</span>
         </div>
-    </div>
+      </div>
 
-    <div class="demo-grid">
+      <div class="demo-grid">
         <div class="demo-panel">
-            <div class="demo-header"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span> pathfinder.yaml</div>
-            <div class="demo-body"><pre style="margin:0; font:inherit; color:inherit; white-space:pre;"><span class="highlight">server:</span>
+          <div class="demo-header">
+            <span class="dot-r"></span><span class="dot-y"></span
+            ><span class="dot-g"></span> pathfinder.yaml
+          </div>
+          <div class="demo-body">
+            <pre
+              style="margin: 0; font: inherit; color: inherit; white-space: pre"
+            ><span class="highlight">server:</span>
   name: my-project
 
 <span class="highlight">sources:</span>
@@ -345,366 +973,455 @@ footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align:center
   - name: ask-community
     type: knowledge
     sources: <span class="file">[community]</span></pre>
-            </div>
+          </div>
         </div>
         <div class="demo-panel">
-            <div class="demo-header"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span> Agent exploring your knowledge</div>
-            <div class="demo-body" id="terminal">
-            </div>
+          <div class="demo-header">
+            <span class="dot-r"></span><span class="dot-y"></span
+            ><span class="dot-g"></span> Agent exploring your knowledge
+          </div>
+          <div class="demo-body" id="terminal"></div>
         </div>
-    </div>
-</section>
+      </div>
+    </section>
 
-<section class="features" id="features">
-    <h2 class="fade-in">What's in the box</h2>
-    <p class="section-sub fade-in">A complete system enabling agents to discover and learn what's important.</p>
+    <section class="features" id="features">
+      <h2 class="fade-in">What's in the box</h2>
+      <p class="section-sub fade-in">
+        A complete system enabling agents to discover and learn what's
+        important.
+      </p>
 
-    <div class="feature-grid">
+      <div class="feature-grid">
         <div class="feature-card fade-in">
-            <div class="icon">🔍</div>
-            <h3>Semantic + Filesystem</h3>
-            <p>Agents choose the right tool: vector search for conceptual questions, grep and cat for precise lookups. Both paradigms, composable.</p>
+          <div class="icon">🔍</div>
+          <h3>Semantic + Filesystem</h3>
+          <p>
+            Agents choose the right tool: vector search for conceptual
+            questions, grep and cat for precise lookups. Both paradigms,
+            composable.
+          </p>
         </div>
         <div class="feature-card fade-in" style="transition-delay: 0.08s">
-            <div class="icon">💬</div>
-            <h3>Automatic Q&amp;A Extraction</h3>
-            <p>Slack threads and Discord forums are distilled into Q&amp;A pairs automatically. Forum posts need no LLM — they're already questions and answers.</p>
+          <div class="icon">💬</div>
+          <h3>Automatic Q&amp;A Extraction</h3>
+          <p>
+            Slack threads and Discord forums are distilled into Q&amp;A pairs
+            automatically. Forum posts need no LLM — they're already questions
+            and answers.
+          </p>
         </div>
         <div class="feature-card fade-in" style="transition-delay: 0.16s">
-            <div class="icon">🔗</div>
-            <h3>Cross-Source Intelligence</h3>
-            <p>Search docs and Q&amp;A together. Grep misses suggest semantic search. related finds similar files across sources.</p>
+          <div class="icon">🔗</div>
+          <h3>Cross-Source Intelligence</h3>
+          <p>
+            Search docs and Q&amp;A together. Grep misses suggest semantic
+            search. related finds similar files across sources.
+          </p>
         </div>
         <div class="feature-card fade-in" style="transition-delay: 0.24s">
-            <div class="icon">📋</div>
-            <h3>Knowledge on Tap</h3>
-            <p>/faq.txt and /llms.txt give agents instant context at session start. No search required — your best answers are already loaded.</p>
+          <div class="icon">📋</div>
+          <h3>Knowledge on Tap</h3>
+          <p>
+            /faq.txt and /llms.txt give agents instant context at session start.
+            No search required — your best answers are already loaded.
+          </p>
         </div>
         <div class="feature-card fade-in" style="transition-delay: 0.32s">
-            <div class="icon">🚀</div>
-            <h3>Zero-Infra Mode</h3>
-            <p>Bash-only tools work with no database, no API keys. Add RAG when you're ready — it's just config.</p>
+          <div class="icon">🚀</div>
+          <h3>Zero-Infra Mode</h3>
+          <p>
+            Bash-only tools work with no database, no API keys. Add RAG when
+            you're ready — it's just config.
+          </p>
         </div>
         <div class="feature-card fade-in" style="transition-delay: 0.4s">
-            <div class="icon">🔄</div>
-            <h3>Always Current</h3>
-            <p>Webhook-triggered reindexing on every push. Nightly full reindex on schedule. Confidence thresholds adjust without re-processing.</p>
+          <div class="icon">🔄</div>
+          <h3>Always Current</h3>
+          <p>
+            Webhook-triggered reindexing on every push. Nightly full reindex on
+            schedule. Confidence thresholds adjust without re-processing.
+          </p>
         </div>
         <div class="feature-card fade-in" style="transition-delay: 0.48s">
-            <div class="icon">🔌</div>
-            <h3>Pluggable Embeddings</h3>
-            <p>OpenAI, Ollama, or local transformers.js — choose your embedding provider. Run fully local with no API keys, or use the cloud. Switch with one config line.</p>
+          <div class="icon">🔌</div>
+          <h3>Pluggable Embeddings</h3>
+          <p>
+            OpenAI, Ollama, or local transformers.js — choose your embedding
+            provider. Run fully local with no API keys, or use the cloud. Switch
+            with one config line.
+          </p>
         </div>
         <div class="feature-card fade-in" style="transition-delay: 0.56s">
-            <div class="icon">📄</div>
-            <h3>PDF &amp; DOCX Support</h3>
-            <p>Index binary documents directly — no conversion needed. Page-break and section-aware chunking extracts structure from PDFs and Word docs.</p>
+          <div class="icon">📄</div>
+          <h3>PDF &amp; DOCX Support</h3>
+          <p>
+            Index binary documents directly — no conversion needed. Page-break
+            and section-aware chunking extracts structure from PDFs and Word
+            docs.
+          </p>
         </div>
         <div class="feature-card fade-in" style="transition-delay: 0.64s">
-            <div class="icon">📊</div>
-            <h3>Analytics Dashboard</h3>
-            <p>See what agents search for, which queries return empty, and where your knowledge gaps are. Built-in dashboard at <code>/analytics</code>.</p>
+          <div class="icon">📊</div>
+          <h3>Analytics Dashboard</h3>
+          <p>
+            See what agents search for, which queries return empty, and where
+            your knowledge gaps are. Built-in dashboard at
+            <code>/analytics</code>.
+          </p>
         </div>
-    </div>
-</section>
+      </div>
+    </section>
 
-<section class="section-comparison" id="comparison">
-    <h2 class="fade-in">How Pathfinder compares</h2>
-    <p class="section-sub fade-in">See how Pathfinder stacks up against other knowledge tools for AI agents.</p>
+    <section class="section-comparison" id="comparison">
+      <h2 class="fade-in">How Pathfinder compares</h2>
+      <p class="section-sub fade-in">
+        See how Pathfinder stacks up against other knowledge tools for AI
+        agents.
+      </p>
 
-    <div class="comparison-wrap fade-in">
-    <table class="comp-matrix">
-        <thead>
+      <div class="comparison-wrap fade-in">
+        <table class="comp-matrix">
+          <thead>
             <tr>
-                <th></th>
-                <th class="col-pathfinder">Pathfinder</th>
-                <th>Mintlify</th>
-                <th>GitBook</th>
-                <th>mcp-ragdocs</th>
-                <th>mcp-local-rag</th>
+              <th></th>
+              <th class="col-pathfinder">Pathfinder</th>
+              <th>Mintlify</th>
+              <th>GitBook</th>
+              <th>mcp-ragdocs</th>
+              <th>mcp-local-rag</th>
             </tr>
-        </thead>
-        <tbody>
+          </thead>
+          <tbody>
             <tr>
-                <td>Semantic search</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-            </tr>
-            <tr>
-                <td>Filesystem exploration</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="partial">Internal only</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Semantic search</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="yes">&#10003;</span></td>
+              <td><span class="yes">&#10003;</span></td>
+              <td><span class="yes">&#10003;</span></td>
+              <td><span class="yes">&#10003;</span></td>
             </tr>
             <tr>
-                <td>Multi-source (docs + code)</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Filesystem exploration</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="partial">Internal only</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>Slack indexing</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="partial">Via Assistant</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Multi-source (docs + code)</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>Discord indexing</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="partial">Via Assistant</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Slack indexing</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="partial">Via Assistant</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>Notion indexing</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Discord indexing</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="partial">Via Assistant</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>Config-driven (one YAML)</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Notion indexing</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>Webhook auto-reindex</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="partial">Auto</span></td>
-                <td><span class="partial">Git Sync</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Config-driven (one YAML)</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>Self-hosted</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-                <td><span class="yes">&#10003;</span></td>
+              <td>Webhook auto-reindex</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="partial">Auto</span></td>
+              <td><span class="partial">Git Sync</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>Knowledge / FAQ tool</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Self-hosted</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="yes">&#10003;</span></td>
+              <td><span class="yes">&#10003;</span></td>
             </tr>
             <tr>
-                <td>Zero-infra mode</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="yes">&#10003;</span></td>
+              <td>Knowledge / FAQ tool</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>llms.txt / faq.txt endpoints</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>Zero-infra mode</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="yes">&#10003;</span></td>
             </tr>
             <tr>
-                <td>Local embeddings (no API key)</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="yes">&#10003;</span> <span class="partial">uses local models</span></td>
+              <td>llms.txt / faq.txt endpoints</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="yes">&#10003;</span></td>
+              <td><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
             </tr>
             <tr>
-                <td>PDF/DOCX support</td>
-                <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="partial">&#10003; partial — PDF via ingest</span></td>
+              <td>Local embeddings (no API key)</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td>
+                <span class="yes">&#10003;</span>
+                <span class="partial">uses local models</span>
+              </td>
             </tr>
             <tr>
-                <td>Hosted option</td>
-                <td class="col-pathfinder"><span class="no">&#10007;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-                <td><span class="yes">&#10003;</span></td>
-                <td><span class="no">&#10007;</span></td>
-                <td><span class="no">&#10007;</span></td>
+              <td>PDF/DOCX support</td>
+              <td class="col-pathfinder"><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td>
+                <span class="partial">&#10003; partial — PDF via ingest</span>
+              </td>
             </tr>
-        </tbody>
-    </table>
-    </div>
-</section>
+            <tr>
+              <td>Hosted option</td>
+              <td class="col-pathfinder"><span class="no">&#10007;</span></td>
+              <td><span class="yes">&#10003;</span></td>
+              <td><span class="yes">&#10003;</span></td>
+              <td><span class="no">&#10007;</span></td>
+              <td><span class="no">&#10007;</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-<section class="migration" id="migration">
-    <h2 class="fade-in">Switch to Pathfinder</h2>
-    <p class="section-sub fade-in">Migration guides for every platform. Most take less than 15 minutes.</p>
-    <div class="fade-in" style="display:flex; flex-wrap:wrap; gap:12px; justify-content:center;">
-        <a href="/migrate-from-mintlify" class="cta-btn">From Mintlify &#8594;</a>
+    <section class="migration" id="migration">
+      <h2 class="fade-in">Switch to Pathfinder</h2>
+      <p class="section-sub fade-in">
+        Migration guides for every platform. Most take less than 15 minutes.
+      </p>
+      <div
+        class="fade-in"
+        style="
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          justify-content: center;
+        "
+      >
+        <a href="/migrate-from-mintlify" class="cta-btn"
+          >From Mintlify &#8594;</a
+        >
         <a href="/migrate-from-gitbook" class="cta-btn">From GitBook &#8594;</a>
-        <a href="/migrate-from-ragdocs" class="cta-btn">From mcp-ragdocs &#8594;</a>
-        <a href="/migrate-from-local-rag" class="cta-btn">From mcp-local-rag &#8594;</a>
+        <a href="/migrate-from-ragdocs" class="cta-btn"
+          >From mcp-ragdocs &#8594;</a
+        >
+        <a href="/migrate-from-local-rag" class="cta-btn"
+          >From mcp-local-rag &#8594;</a
+        >
+      </div>
+    </section>
+
+    <!-- Cross-navigation toolbar -->
+    <div class="cross-nav-footer">
+      <div class="cross-nav-toolbar">
+        <span class="cn-label">copilotkit.dev /</span>
+        <a class="cn-pill" href="https://vscode.copilotkit.dev">
+          <span class="cn-dot" style="background: #aa66ff"></span>vscode
+        </a>
+        <a class="cn-pill" href="https://aimock.copilotkit.dev">
+          <span class="cn-dot" style="background: #00ff88"></span>aimock
+        </a>
+        <a class="cn-pill" href="https://oversight.copilotkit.dev">
+          <span class="cn-dot" style="background: #ff6688"></span>oversight
+        </a>
+        <a class="cn-pill active" href="https://pathfinder.copilotkit.dev">
+          <span class="cn-dot" style="background: #00ccff"></span>pathfinder
+        </a>
+        <a class="cn-pill" href="https://outpost.copilotkit.dev">
+          <span class="cn-dot" style="background: #f97316"></span>outpost
+        </a>
+      </div>
     </div>
-</section>
 
-<!-- Cross-navigation toolbar -->
-<div class="cross-nav-footer">
-  <div class="cross-nav-toolbar">
-    <span class="cn-label">copilotkit.dev /</span>
-    <a class="cn-pill" href="https://vscode.copilotkit.dev">
-      <span class="cn-dot" style="background:#aa66ff"></span>vscode
-    </a>
-    <a class="cn-pill" href="https://aimock.copilotkit.dev">
-      <span class="cn-dot" style="background:#00ff88"></span>aimock
-    </a>
-    <a class="cn-pill" href="https://oversight.copilotkit.dev">
-      <span class="cn-dot" style="background:#ff6688"></span>oversight
-    </a>
-    <a class="cn-pill active" href="https://pathfinder.copilotkit.dev">
-      <span class="cn-dot" style="background:#00ccff"></span>pathfinder
-    </a>
-    <a class="cn-pill" href="https://outpost.copilotkit.dev">
-      <span class="cn-dot" style="background:#f97316"></span>outpost
-    </a>
-  </div>
-</div>
+    <footer>
+      <div class="container">
+        <div class="footer-brand">
+          <span class="prompt">$</span> pathfinder &middot;
+          <a
+            href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE"
+            target="_blank"
+            rel="noopener"
+            style="color: inherit; text-decoration: underline"
+            >Elastic License 2.0</a
+          >
+          &mdash; free to use, modify, and self-host
+        </div>
+        <ul class="footer-links">
+          <li><a href="/">Home</a></li>
+          <li>
+            <a
+              href="https://github.com/CopilotKit/pathfinder"
+              target="_blank"
+              rel="noopener"
+              >GitHub</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.npmjs.com/package/@copilotkit/pathfinder"
+              target="_blank"
+              rel="noopener"
+              >npm</a
+            >
+          </li>
+          <li>
+            <a href="https://copilotkit.ai" target="_blank" rel="noopener"
+              >CopilotKit</a
+            >
+          </li>
+        </ul>
+      </div>
+    </footer>
 
-<footer>
-  <div class="container">
-    <div class="footer-brand"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a> &mdash; free to use, modify, and self-host</div>
-    <ul class="footer-links">
-        <li><a href="/">Home</a></li>
-        <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank" rel="noopener">GitHub</a></li>
-        <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank" rel="noopener">npm</a></li>
-        <li><a href="https://copilotkit.ai" target="_blank" rel="noopener">CopilotKit</a></li>
-    </ul>
-  </div>
-</footer>
+    <script>
+      // Terminal animation
+      const terminal = document.getElementById("terminal");
+      const lines = [
+        { type: "prompt", text: '$ find / -name "*.mdx" | head -3' },
+        { type: "output", text: "/docs/quickstart.mdx" },
+        { type: "output", text: "/docs/guides/auth.mdx" },
+        { type: "output", text: "/docs/reference/hooks.mdx" },
+        { type: "pause", ms: 600 },
+        { type: "prompt", text: '$ qmd "how do I handle errors"' },
+        { type: "output", text: "/docs/guides/error-handling.mdx (0.94)" },
+        { type: "output", text: "/docs/reference/hooks.mdx (0.87)" },
+        { type: "pause", ms: 600 },
+        { type: "prompt", text: '> ask-community("rate limiting")' },
+        { type: "output", text: "Q: Does the API have rate limits?" },
+        { type: "output", text: "A: Yes, 100 req/min per API key..." },
+        { type: "output", text: "CONFIDENCE: 0.92  SOURCE: #help-forum" },
+        { type: "pause", ms: 800 },
+        { type: "prompt", text: '$ grep -rl "rateLimit" /docs' },
+        { type: "output", text: "/docs/reference/config.mdx" },
+        { type: "output", text: "/docs/guides/production.mdx" },
+      ];
 
-<script>
-// Terminal animation
-const terminal = document.getElementById('terminal');
-const lines = [
-    { type: 'prompt', text: '$ find / -name "*.mdx" | head -3' },
-    { type: 'output', text: '/docs/quickstart.mdx' },
-    { type: 'output', text: '/docs/guides/auth.mdx' },
-    { type: 'output', text: '/docs/reference/hooks.mdx' },
-    { type: 'pause', ms: 600 },
-    { type: 'prompt', text: '$ qmd "how do I handle errors"' },
-    { type: 'output', text: '/docs/guides/error-handling.mdx (0.94)' },
-    { type: 'output', text: '/docs/reference/hooks.mdx (0.87)' },
-    { type: 'pause', ms: 600 },
-    { type: 'prompt', text: '> ask-community("rate limiting")' },
-    { type: 'output', text: 'Q: Does the API have rate limits?' },
-    { type: 'output', text: 'A: Yes, 100 req/min per API key...' },
-    { type: 'output', text: 'CONFIDENCE: 0.92  SOURCE: #help-forum' },
-    { type: 'pause', ms: 800 },
-    { type: 'prompt', text: '$ grep -rl "rateLimit" /docs' },
-    { type: 'output', text: '/docs/reference/config.mdx' },
-    { type: 'output', text: '/docs/guides/production.mdx' },
-];
+      async function typeText(el, text, speed = 30) {
+        for (const char of text) {
+          el.textContent += char;
+          await new Promise((r) => setTimeout(r, speed));
+        }
+      }
 
-async function typeText(el, text, speed = 30) {
-    for (const char of text) {
-        el.textContent += char;
-        await new Promise(r => setTimeout(r, speed));
-    }
-}
-
-async function runTerminal() {
-    terminal.innerHTML = '';
-    for (const line of lines) {
-        if (line.type === 'pause') {
-            await new Promise(r => setTimeout(r, line.ms));
+      async function runTerminal() {
+        terminal.innerHTML = "";
+        for (const line of lines) {
+          if (line.type === "pause") {
+            await new Promise((r) => setTimeout(r, line.ms));
             continue;
-        }
-        const span = document.createElement('div');
-        span.className = line.type === 'prompt' ? 'prompt-line' : 'output';
-        span.style.opacity = '0';
-        terminal.appendChild(span);
+          }
+          const span = document.createElement("div");
+          span.className = line.type === "prompt" ? "prompt-line" : "output";
+          span.style.opacity = "0";
+          terminal.appendChild(span);
 
-        if (line.type === 'prompt') {
-            span.style.opacity = '1';
+          if (line.type === "prompt") {
+            span.style.opacity = "1";
             await typeText(span, line.text, 25);
-            await new Promise(r => setTimeout(r, 200));
-        } else {
+            await new Promise((r) => setTimeout(r, 200));
+          } else {
             span.textContent = line.text;
-            span.style.transition = 'opacity 0.3s';
-            span.style.opacity = '1';
-            await new Promise(r => setTimeout(r, 100));
+            span.style.transition = "opacity 0.3s";
+            span.style.opacity = "1";
+            await new Promise((r) => setTimeout(r, 100));
+          }
         }
-    }
-    // Add blinking cursor
-    const cursor = document.createElement('span');
-    cursor.textContent = '\u2588';
-    cursor.style.animation = 'pulse 1s infinite';
-    cursor.className = 'prompt-line';
-    terminal.appendChild(cursor);
+        // Add blinking cursor
+        const cursor = document.createElement("span");
+        cursor.textContent = "\u2588";
+        cursor.style.animation = "pulse 1s infinite";
+        cursor.className = "prompt-line";
+        terminal.appendChild(cursor);
 
-    await new Promise(r => setTimeout(r, 3000));
-    runTerminal(); // loop
-}
+        await new Promise((r) => setTimeout(r, 3000));
+        runTerminal(); // loop
+      }
 
-// Start animation when visible
-const observer = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) {
-        observer.disconnect();
-        runTerminal();
-    }
-});
-observer.observe(terminal);
-</script>
+      // Start animation when visible
+      const observer = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          observer.disconnect();
+          runTerminal();
+        }
+      });
+      observer.observe(terminal);
+    </script>
 
-<script>
-(function(){
-  var btn=document.querySelector(".hamburger");
-  var menu=document.querySelector(".mobile-menu");
-  if(!btn||!menu)return;
-  btn.addEventListener("click",function(){
-    btn.classList.toggle("open");
-    menu.classList.toggle("open");
-  });
-  menu.addEventListener("click",function(e){
-    if(e.target.tagName==="A"){
-      btn.classList.remove("open");
-      menu.classList.remove("open");
-    }
-  });
-})();
-</script>
-<script>
-// Scroll-triggered fade-in via IntersectionObserver
-(function () {
-    var observer = new IntersectionObserver(
-        function (entries) {
+    <script>
+      (function () {
+        var btn = document.querySelector(".hamburger");
+        var menu = document.querySelector(".mobile-menu");
+        if (!btn || !menu) return;
+        btn.addEventListener("click", function () {
+          btn.classList.toggle("open");
+          menu.classList.toggle("open");
+        });
+        menu.addEventListener("click", function (e) {
+          if (e.target.tagName === "A") {
+            btn.classList.remove("open");
+            menu.classList.remove("open");
+          }
+        });
+      })();
+    </script>
+    <script>
+      // Scroll-triggered fade-in via IntersectionObserver
+      (function () {
+        var observer = new IntersectionObserver(
+          function (entries) {
             entries.forEach(function (entry) {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add("visible");
-                    observer.unobserve(entry.target);
-                }
+              if (entry.isIntersecting) {
+                entry.target.classList.add("visible");
+                observer.unobserve(entry.target);
+              }
             });
-        },
-        { threshold: 0.1, rootMargin: "0px 0px -40px 0px" },
-    );
+          },
+          { threshold: 0.1, rootMargin: "0px 0px -40px 0px" },
+        );
 
-    document.querySelectorAll(".fade-in").forEach(function (el) {
-        observer.observe(el);
-    });
-})();
-</script>
-</body>
+        document.querySelectorAll(".fade-in").forEach(function (el) {
+          observer.observe(el);
+        });
+      })();
+    </script>
+  </body>
 </html>

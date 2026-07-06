@@ -1,423 +1,861 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MCP Client Setup — Pathfinder</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, VS Code, and generic HTTP MCP clients.">
-<meta property="og:type" content="article">
-<meta property="og:url" content="https://pathfinder.copilotkit.dev/clients">
-<meta property="og:title" content="MCP Client Setup — Pathfinder">
-<meta property="og:description" content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, VS Code, and generic HTTP MCP clients.">
-<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.svg">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="MCP Client Setup — Pathfinder">
-<meta name="twitter:description" content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, and more.">
-<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root {
-    --bg-deep: #0a0a0f;
-    --bg-surface: #111118;
-    --bg-card: #16161f;
-    --border: #222233;
-    --text-primary: #e8e8f0;
-    --text-secondary: #8888a0;
-    --text-dim: #555570;
-    --accent: #00ccff;
-    --accent-dim: #00aadd;
-    --accent-glow: rgba(0,204,255,0.15);
-    --blue: #4488ff;
-    --purple: #aa66ff;
-    --warning: #ffaa00;
-    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
-    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
-}
-* { margin:0; padding:0; box-sizing:border-box; }
-html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
-body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
-code, pre, kbd { font-feature-settings: "liga" 0, "calt" 0; }
-
-/* Noise overlay */
-body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
-    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-}
-
-/* Container */
-.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
-
-/* Top Nav */
-.top-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1rem 0;
-    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
-.top-nav .nav-inner { max-width: 1400px; margin: 0 auto; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; }
-.nav-brand { display: flex; align-items: center; gap: 0.75rem; font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
-.nav-brand span { color: var(--accent); }
-.nav-links { display: flex; align-items: center; gap: 2rem; list-style: none; }
-.nav-links a { color: var(--text-secondary); font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: color 0.2s; }
-.nav-links a:hover { color: var(--text-primary); text-decoration: none; }
-.nav-links .gh-link, .nav-links .gh-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
-.nav-links .gh-link:hover, .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
-
-/* Docs Layout */
-:root { --sidebar-width: 260px; }
-.docs-layout {
-    display: flex;
-    margin-top: 57px;
-    min-height: calc(100vh - 57px);
-}
-
-/* Left Sidebar */
-.sidebar {
-    position: fixed;
-    top: 57px;
-    left: 0;
-    width: var(--sidebar-width);
-    height: calc(100vh - 57px);
-    overflow-y: auto;
-    background: var(--bg-surface);
-    border-right: 1px solid var(--border);
-    padding: 1.5rem 0;
-    z-index: 50;
-}
-.sidebar-section { padding: 0 1.25rem; margin-bottom: 1.5rem; }
-.sidebar-section h3 {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-dim);
-    margin-bottom: 0.5rem;
-    padding: 0 0.5rem;
-}
-.sidebar-section a {
-    display: block;
-    padding: 0.35rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s;
-}
-.sidebar-section a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
-.sidebar-section a.active { color: var(--accent); background: var(--accent-glow); }
-
-/* Main Content */
-.docs-content {
-    margin-left: var(--sidebar-width);
-    padding: 3rem 3rem;
-    max-width: calc(100vw - var(--sidebar-width) - 240px);
-    min-width: 0;
-}
-.docs-content h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 1rem; }
-.docs-content h1 .accent { color: var(--accent); }
-.docs-content .lead { font-size: 1.1rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 2rem; }
-.docs-content h2 { font-size: 1.5rem; font-weight: 600; margin-top: 3rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); scroll-margin-top: 80px; }
-.docs-content h3 { font-size: 1.15rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; scroll-margin-top: 80px; }
-.docs-content p { color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem; }
-.docs-content ul, .docs-content ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; }
-.docs-content li { margin-bottom: 0.35rem; line-height: 1.6; }
-.docs-content li strong { color: var(--text-primary); }
-.docs-content a { color: var(--accent); text-decoration: none; }
-.docs-content a:hover { text-decoration: underline; }
-
-/* Page TOC (right sidebar) */
-.page-toc {
-    position: fixed;
-    top: 80px;
-    right: 1rem;
-    width: 200px;
-    max-height: calc(100vh - 100px);
-    overflow-y: auto;
-    font-size: 0.78rem;
-}
-.page-toc-label {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-dim);
-    padding: 0 0.5rem;
-    margin-bottom: 0.75rem;
-}
-.page-toc a {
-    display: block;
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
-    color: var(--text-secondary);
-    font-size: 0.78rem;
-    line-height: 1.4;
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s;
-}
-.page-toc a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
-.page-toc a.active { color: var(--accent); background: var(--accent-glow); }
-.page-toc a.toc-h3 { padding-left: 1.5rem; font-size: 0.72rem; color: var(--text-dim); }
-@media (max-width: 1200px) { .page-toc { display: none; } }
-
-/* Sidebar toggle (mobile) */
-.sidebar-toggle {
-    display: none;
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 1.25rem;
-    cursor: pointer;
-    padding: 0.25rem;
-}
-
-/* Code blocks */
-.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
-.code-block .comment { color: var(--text-dim); }
-.code-block .key { color: var(--warning); }
-.code-block .value { color: var(--blue); }
-.code-block .cmd { color: var(--accent); }
-
-/* Inline code */
-.docs-content code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
-
-/* Client cards */
-.client-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin-bottom: 24px; }
-.client-card h3 { margin-top: 0; margin-bottom: 8px; font-size: 20px; }
-.client-card .config-path { font-size: 13px; color: var(--text-dim); font-family: var(--mono); margin-bottom: 16px; }
-.client-card p { color: var(--text-secondary); font-size: 15px; margin-bottom: 12px; }
-.client-card .code-block { margin-bottom: 0; }
-
-/* Footer */
-.docs-footer {
-    margin-left: var(--sidebar-width);
-    padding: 3rem 4rem;
-    max-width: 860px;
-    border-top: 1px solid var(--border);
-}
-.docs-footer .footer-inner { display: flex; justify-content: space-between; align-items: center; }
-.footer-left { font-family: var(--mono); font-size: 0.8rem; color: var(--text-dim); }
-.footer-left .prompt { color: var(--accent); }
-.footer-links { display: flex; gap: 2rem; list-style: none; }
-.footer-links a { color: var(--text-dim); font-size: 0.85rem; text-decoration: none; transition: color 0.2s; }
-.footer-links a:hover { color: var(--text-primary); text-decoration: none; }
-
-/* Responsive: Tablet */
-@media (max-width: 768px) {
-    .docs-footer { margin-left: 0; padding: 1.5rem; }
-    .nav-links { gap: 1rem; }
-    .article h2 { font-size: 22px; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
-}
-
-/* Responsive */
-@media (max-width: 1024px) {
-    .docs-content { padding: 2rem; margin-left: var(--sidebar-width); margin-right: 0; }
-}
-@media (max-width: 768px) {
-    .sidebar-toggle { display: block; }
-    .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
-    .sidebar.open { transform: translateX(0); }
-    .docs-content { margin-left: 0; padding: 1.5rem; }
-    .nav-links a:not(.gh-link) { display: none; }
-}
-@media (max-width: 480px) {
-    .docs-content h1 { font-size: 1.75rem; }
-    .docs-content .lead { font-size: 0.95rem; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
-}
-</style>
-<script src="/pixels.js" defer></script>
-</head>
-<body>
-
-<nav class="top-nav">
-  <div class="nav-inner">
-    <div style="display: flex; align-items: center; gap: 1rem">
-      <button class="sidebar-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')" aria-label="Toggle sidebar">&#9776;</button>
-      <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
-    </div>
-    <ul class="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
-      <li><a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a></li>
-    </ul>
-  </div>
-</nav>
-
-<div class="docs-layout">
-  <aside class="sidebar" id="sidebar"></aside>
-
-  <main class="docs-content">
-    <h1>MCP <span class="accent">Client</span> Setup</h1>
-    <p class="lead">Pathfinder supports both the modern Streamable HTTP transport (<code>/mcp</code>) and the legacy SSE transport (<code>/sse</code>). OAuth authentication is automatic — no user accounts needed; clients register dynamically.</p>
-
-    <h2>Transport Choices</h2>
-
-    <p>Two endpoints ship in every Pathfinder instance. Pick the one your client supports:</p>
-
-    <ul>
-        <li><strong>Streamable HTTP (<code>/mcp</code>)</strong> — recommended for modern clients (Claude Code, Cursor HTTP mode, OpenCode).</li>
-        <li><strong>SSE (<code>/sse</code> + <code>/messages</code>)</strong> — legacy transport; needed for the claude.ai web connector and older MCP clients.</li>
-    </ul>
-
-    <p>Both transports share the same tools, sessions, and OAuth flow. Clients without a bearer token pass through; invalid bearers are rejected with 401. As of v1.15.1, the <code>WWW-Authenticate</code> challenge on a 401 includes RFC 9728 <code>resource_metadata="…/.well-known/oauth-protected-resource"</code> plus <code>error="invalid_token"</code> per RFC 6750 §3.1 — MCP clients can use the <code>resource_metadata</code> attribute to discover the authorization server.</p>
-
-    <h2>Client Configurations</h2>
-
-    <div class="client-card">
-        <h3>Claude Desktop</h3>
-        <div class="config-path">~/Library/Application Support/Claude/claude_desktop_config.json (macOS)</div>
-        <p>Claude Desktop uses its own config file with <code>mcpServers</code> as the top-level key.</p>
-        <div class="code-block">{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"docs"</span>: {
-      <span class="key">"type"</span>: <span class="value">"http"</span>,
-      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
-    }
-  }
-}</div>
-    </div>
-
-    <div class="client-card">
-        <h3>Claude Code</h3>
-        <div class="config-path">~/.claude/mcp.json</div>
-        <p>Claude Code uses a separate config file with <code>mcp-servers</code> as the key.</p>
-        <div class="code-block">{
-  <span class="key">"mcp-servers"</span>: {
-    <span class="key">"docs"</span>: {
-      <span class="key">"type"</span>: <span class="value">"http"</span>,
-      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
-    }
-  }
-}</div>
-    </div>
-
-    <div class="client-card">
-        <h3>Claude.ai (Web Connector)</h3>
-        <div class="config-path">Settings &rarr; Connectors &rarr; Add custom connector</div>
-        <p>claude.ai uses the legacy SSE transport. Paste your Pathfinder URL into the custom connector dialog, then click <strong>Authenticate</strong> — the OAuth handshake runs automatically. As of v1.15, the handshake shows a consent screen confirming the connector and its redirect target before issuing the auth code; the screen is single-click for the anonymous DCR flow.</p>
-        <div class="code-block"><span class="comment"># Streamable HTTP (newer clients)</span>
-<span class="key">URL:</span> <span class="value">https://your-pathfinder-host/mcp</span>
-
-<span class="comment"># SSE (claude.ai and older clients)</span>
-<span class="key">URL:</span> <span class="value">https://your-pathfinder-host/sse</span></div>
-    </div>
-
-    <div class="client-card">
-        <h3>Cursor</h3>
-        <div class="config-path">.cursor/mcp.json</div>
-        <p>Place this in your project root. Cursor picks it up automatically.</p>
-        <div class="code-block">{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"docs"</span>: {
-      <span class="key">"type"</span>: <span class="value">"http"</span>,
-      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
-    }
-  }
-}</div>
-    </div>
-
-    <div class="client-card">
-        <h3>OpenAI Codex</h3>
-        <div class="config-path">codex CLI --mcp-config</div>
-        <p>Codex supports MCP servers via the <code>--mcp-config</code> flag or a config file. Pass a JSON file with the server definition:</p>
-        <div class="code-block">{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"docs"</span>: {
-      <span class="key">"type"</span>: <span class="value">"http"</span>,
-      <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
-    }
-  }
-}</div>
-    </div>
-
-    <div class="client-card">
-        <h3>VS Code (Continue)</h3>
-        <div class="config-path">~/.continue/config.json</div>
-        <p>Add Pathfinder to the <code>mcpServers</code> section of your Continue config:</p>
-        <div class="code-block">{
-  <span class="key">"mcpServers"</span>: [
-    {
-      <span class="key">"name"</span>: <span class="value">"docs"</span>,
-      <span class="key">"transport"</span>: {
-        <span class="key">"type"</span>: <span class="value">"http"</span>,
-        <span class="key">"url"</span>: <span class="value">"http://localhost:3001/mcp"</span>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MCP Client Setup — Pathfinder</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta
+      name="description"
+      content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, VS Code, and generic HTTP MCP clients."
+    />
+    <meta property="og:type" content="article" />
+    <meta
+      property="og:url"
+      content="https://pathfinder.copilotkit.dev/clients"
+    />
+    <meta property="og:title" content="MCP Client Setup — Pathfinder" />
+    <meta
+      property="og:description"
+      content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, VS Code, and generic HTTP MCP clients."
+    />
+    <meta
+      property="og:image"
+      content="https://pathfinder.copilotkit.dev/og-image.svg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="MCP Client Setup — Pathfinder" />
+    <meta
+      name="twitter:description"
+      content="Connect AI agents to Pathfinder — Claude Desktop, Cursor, Codex, and more."
+    />
+    <meta
+      name="twitter:image"
+      content="https://pathfinder.copilotkit.dev/og-image.svg"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-deep: #0a0a0f;
+        --bg-surface: #111118;
+        --bg-card: #16161f;
+        --border: #222233;
+        --text-primary: #e8e8f0;
+        --text-secondary: #8888a0;
+        --text-dim: #555570;
+        --accent: #00ccff;
+        --accent-dim: #00aadd;
+        --accent-glow: rgba(0, 204, 255, 0.15);
+        --blue: #4488ff;
+        --purple: #aa66ff;
+        --warning: #ffaa00;
+        --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+        --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
       }
-    }
-  ]
-}</div>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-size: 16px;
+      }
+      body {
+        background: var(--bg-deep);
+        color: var(--text-primary);
+        font-family: var(--sans);
+        line-height: 1.6;
+        overflow-x: hidden;
+      }
+      code,
+      pre,
+      kbd {
+        font-feature-settings:
+          "liga" 0,
+          "calt" 0;
+      }
+
+      /* Noise overlay */
+      body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 9999;
+        background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      }
+
+      /* Container */
+      .container {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 2rem;
+      }
+
+      /* Top Nav */
+      .top-nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        padding: 1rem 0;
+        background: rgba(10, 10, 15, 0.85);
+        backdrop-filter: blur(20px) saturate(1.4);
+        -webkit-backdrop-filter: blur(20px) saturate(1.4);
+        border-bottom: 1px solid var(--border);
+      }
+      .top-nav .nav-inner {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 0 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .nav-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 1rem;
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-brand span {
+        color: var(--accent);
+      }
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+        list-style: none;
+      }
+      .nav-links a {
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .nav-links a:hover {
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-links .gh-link,
+      .nav-links .gh-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      .nav-links .gh-link:hover,
+      .nav-links .gh-btn:hover {
+        border-color: var(--text-dim);
+        background: var(--bg-card);
+      }
+
+      /* Docs Layout */
+      :root {
+        --sidebar-width: 260px;
+      }
+      .docs-layout {
+        display: flex;
+        margin-top: 57px;
+        min-height: calc(100vh - 57px);
+      }
+
+      /* Left Sidebar */
+      .sidebar {
+        position: fixed;
+        top: 57px;
+        left: 0;
+        width: var(--sidebar-width);
+        height: calc(100vh - 57px);
+        overflow-y: auto;
+        background: var(--bg-surface);
+        border-right: 1px solid var(--border);
+        padding: 1.5rem 0;
+        z-index: 50;
+      }
+      .sidebar-section {
+        padding: 0 1.25rem;
+        margin-bottom: 1.5rem;
+      }
+      .sidebar-section h3 {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--text-dim);
+        margin-bottom: 0.5rem;
+        padding: 0 0.5rem;
+      }
+      .sidebar-section a {
+        display: block;
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .sidebar-section a:hover {
+        color: var(--text-primary);
+        background: var(--bg-card);
+        text-decoration: none;
+      }
+      .sidebar-section a.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
+
+      /* Main Content */
+      .docs-content {
+        margin-left: var(--sidebar-width);
+        padding: 3rem 3rem;
+        max-width: calc(100vw - var(--sidebar-width) - 240px);
+        min-width: 0;
+      }
+      .docs-content h1 {
+        font-size: 2.25rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        margin-bottom: 1rem;
+      }
+      .docs-content h1 .accent {
+        color: var(--accent);
+      }
+      .docs-content .lead {
+        font-size: 1.1rem;
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 2rem;
+      }
+      .docs-content h2 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-top: 3rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--border);
+        scroll-margin-top: 80px;
+      }
+      .docs-content h3 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin-top: 2rem;
+        margin-bottom: 0.75rem;
+        scroll-margin-top: 80px;
+      }
+      .docs-content p {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 1rem;
+      }
+      .docs-content ul,
+      .docs-content ol {
+        color: var(--text-secondary);
+        margin-bottom: 1rem;
+        padding-left: 1.5rem;
+      }
+      .docs-content li {
+        margin-bottom: 0.35rem;
+        line-height: 1.6;
+      }
+      .docs-content li strong {
+        color: var(--text-primary);
+      }
+      .docs-content a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .docs-content a:hover {
+        text-decoration: underline;
+      }
+
+      /* Page TOC (right sidebar) */
+      .page-toc {
+        position: fixed;
+        top: 80px;
+        right: 1rem;
+        width: 200px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+        font-size: 0.78rem;
+      }
+      .page-toc-label {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--text-dim);
+        padding: 0 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      .page-toc a {
+        display: block;
+        padding: 0.3rem 0.5rem;
+        border-radius: 4px;
+        color: var(--text-secondary);
+        font-size: 0.78rem;
+        line-height: 1.4;
+        text-decoration: none;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .page-toc a:hover {
+        color: var(--text-primary);
+        background: var(--bg-card);
+        text-decoration: none;
+      }
+      .page-toc a.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
+      .page-toc a.toc-h3 {
+        padding-left: 1.5rem;
+        font-size: 0.72rem;
+        color: var(--text-dim);
+      }
+      @media (max-width: 1200px) {
+        .page-toc {
+          display: none;
+        }
+      }
+
+      /* Sidebar toggle (mobile) */
+      .sidebar-toggle {
+        display: none;
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 1.25rem;
+        cursor: pointer;
+        padding: 0.25rem;
+      }
+
+      /* Code blocks */
+      .code-block {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px 20px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.7;
+        overflow-x: auto;
+        margin-bottom: 16px;
+        color: var(--text-primary);
+        white-space: pre;
+      }
+      .code-block .comment {
+        color: var(--text-dim);
+      }
+      .code-block .key {
+        color: var(--warning);
+      }
+      .code-block .value {
+        color: var(--blue);
+      }
+      .code-block .cmd {
+        color: var(--accent);
+      }
+
+      /* Inline code */
+      .docs-content code {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.15rem 0.4rem;
+        font-family: var(--mono);
+        font-size: 0.85em;
+      }
+
+      /* Client cards */
+      .client-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 24px;
+        margin-bottom: 24px;
+      }
+      .client-card h3 {
+        margin-top: 0;
+        margin-bottom: 8px;
+        font-size: 20px;
+      }
+      .client-card .config-path {
+        font-size: 13px;
+        color: var(--text-dim);
+        font-family: var(--mono);
+        margin-bottom: 16px;
+      }
+      .client-card p {
+        color: var(--text-secondary);
+        font-size: 15px;
+        margin-bottom: 12px;
+      }
+      .client-card .code-block {
+        margin-bottom: 0;
+      }
+
+      /* Footer */
+      .docs-footer {
+        margin-left: var(--sidebar-width);
+        padding: 3rem 4rem;
+        max-width: 860px;
+        border-top: 1px solid var(--border);
+      }
+      .docs-footer .footer-inner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .footer-left {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        color: var(--text-dim);
+      }
+      .footer-left .prompt {
+        color: var(--accent);
+      }
+      .footer-links {
+        display: flex;
+        gap: 2rem;
+        list-style: none;
+      }
+      .footer-links a {
+        color: var(--text-dim);
+        font-size: 0.85rem;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .footer-links a:hover {
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+
+      /* Responsive: Tablet */
+      @media (max-width: 768px) {
+        .docs-footer {
+          margin-left: 0;
+          padding: 1.5rem;
+        }
+        .nav-links {
+          gap: 1rem;
+        }
+        .article h2 {
+          font-size: 22px;
+        }
+        .code-block {
+          font-size: 11px;
+          padding: 12px 14px;
+        }
+      }
+
+      /* Responsive */
+      @media (max-width: 1024px) {
+        .docs-content {
+          padding: 2rem;
+          margin-left: var(--sidebar-width);
+          margin-right: 0;
+        }
+      }
+      @media (max-width: 768px) {
+        .sidebar-toggle {
+          display: block;
+        }
+        .sidebar {
+          transform: translateX(-100%);
+          transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .sidebar.open {
+          transform: translateX(0);
+        }
+        .docs-content {
+          margin-left: 0;
+          padding: 1.5rem;
+        }
+        .nav-links a:not(.gh-link) {
+          display: none;
+        }
+      }
+      @media (max-width: 480px) {
+        .docs-content h1 {
+          font-size: 1.75rem;
+        }
+        .docs-content .lead {
+          font-size: 0.95rem;
+        }
+        .code-block {
+          font-size: 11px;
+          padding: 12px 14px;
+        }
+      }
+    </style>
+    <script src="/pixels.js" defer></script>
+  </head>
+  <body>
+    <nav class="top-nav">
+      <div class="nav-inner">
+        <div style="display: flex; align-items: center; gap: 1rem">
+          <button
+            class="sidebar-toggle"
+            onclick="
+              document.querySelector('.sidebar').classList.toggle('open')
+            "
+            aria-label="Toggle sidebar"
+          >
+            &#9776;
+          </button>
+          <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
+        </div>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
+          <li>
+            <a
+              href="https://github.com/CopilotKit/pathfinder"
+              class="gh-btn"
+              target="_blank"
+              ><svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+              >
+                <path
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+                />
+              </svg>
+              GitHub</a
+            >
+          </li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="docs-layout">
+      <aside class="sidebar" id="sidebar"></aside>
+
+      <main class="docs-content">
+        <h1>MCP <span class="accent">Client</span> Setup</h1>
+        <p class="lead">
+          Pathfinder supports both the modern Streamable HTTP transport
+          (<code>/mcp</code>) and the legacy SSE transport (<code>/sse</code>).
+          OAuth authentication is automatic — no user accounts needed; clients
+          register dynamically.
+        </p>
+
+        <h2>Transport Choices</h2>
+
+        <p>
+          Two endpoints ship in every Pathfinder instance. Pick the one your
+          client supports:
+        </p>
+
+        <ul>
+          <li>
+            <strong>Streamable HTTP (<code>/mcp</code>)</strong> — recommended
+            for modern clients (Claude Code, Cursor HTTP mode, OpenCode).
+          </li>
+          <li>
+            <strong>SSE (<code>/sse</code> + <code>/messages</code>)</strong> —
+            legacy transport; needed for the claude.ai web connector and older
+            MCP clients.
+          </li>
+        </ul>
+
+        <p>
+          Both transports share the same tools, sessions, and OAuth flow.
+          Clients without a bearer token pass through; invalid bearers are
+          rejected with 401. As of v1.15.1, the
+          <code>WWW-Authenticate</code> challenge on a 401 includes RFC 9728
+          <code
+            >resource_metadata="…/.well-known/oauth-protected-resource"</code
+          >
+          plus <code>error="invalid_token"</code> per RFC 6750 §3.1 — MCP
+          clients can use the <code>resource_metadata</code> attribute to
+          discover the authorization server.
+        </p>
+
+        <h2>Client Configurations</h2>
+
+        <div class="client-card">
+          <h3>Claude Desktop</h3>
+          <div class="config-path">
+            ~/Library/Application Support/Claude/claude_desktop_config.json
+            (macOS)
+          </div>
+          <p>
+            Claude Desktop uses its own config file with
+            <code>mcpServers</code> as the top-level key.
+          </p>
+          <div class="code-block">
+            { <span class="key">"mcpServers"</span>: {
+            <span class="key">"docs"</span>: { <span class="key">"type"</span>:
+            <span class="value">"http"</span>, <span class="key">"url"</span>:
+            <span class="value">"http://localhost:3001/mcp"</span> } } }
+          </div>
+        </div>
+
+        <div class="client-card">
+          <h3>Claude Code</h3>
+          <div class="config-path">~/.claude/mcp.json</div>
+          <p>
+            Claude Code uses a separate config file with
+            <code>mcp-servers</code> as the key.
+          </p>
+          <div class="code-block">
+            { <span class="key">"mcp-servers"</span>: {
+            <span class="key">"docs"</span>: { <span class="key">"type"</span>:
+            <span class="value">"http"</span>, <span class="key">"url"</span>:
+            <span class="value">"http://localhost:3001/mcp"</span> } } }
+          </div>
+        </div>
+
+        <div class="client-card">
+          <h3>Claude.ai (Web Connector)</h3>
+          <div class="config-path">
+            Settings &rarr; Connectors &rarr; Add custom connector
+          </div>
+          <p>
+            claude.ai uses the legacy SSE transport. Paste your Pathfinder URL
+            into the custom connector dialog, then click
+            <strong>Authenticate</strong> — the OAuth handshake runs
+            automatically. As of v1.15, the handshake shows a consent screen
+            confirming the connector and its redirect target before issuing the
+            auth code; the screen is single-click for the anonymous DCR flow.
+          </p>
+          <div class="code-block">
+            <span class="comment"># Streamable HTTP (newer clients)</span>
+            <span class="key">URL:</span>
+            <span class="value">https://your-pathfinder-host/mcp</span>
+
+            <span class="comment"># SSE (claude.ai and older clients)</span>
+            <span class="key">URL:</span>
+            <span class="value">https://your-pathfinder-host/sse</span>
+          </div>
+        </div>
+
+        <div class="client-card">
+          <h3>Cursor</h3>
+          <div class="config-path">.cursor/mcp.json</div>
+          <p>
+            Place this in your project root. Cursor picks it up automatically.
+          </p>
+          <div class="code-block">
+            { <span class="key">"mcpServers"</span>: {
+            <span class="key">"docs"</span>: { <span class="key">"type"</span>:
+            <span class="value">"http"</span>, <span class="key">"url"</span>:
+            <span class="value">"http://localhost:3001/mcp"</span> } } }
+          </div>
+        </div>
+
+        <div class="client-card">
+          <h3>OpenAI Codex</h3>
+          <div class="config-path">codex CLI --mcp-config</div>
+          <p>
+            Codex supports MCP servers via the <code>--mcp-config</code> flag or
+            a config file. Pass a JSON file with the server definition:
+          </p>
+          <div class="code-block">
+            { <span class="key">"mcpServers"</span>: {
+            <span class="key">"docs"</span>: { <span class="key">"type"</span>:
+            <span class="value">"http"</span>, <span class="key">"url"</span>:
+            <span class="value">"http://localhost:3001/mcp"</span> } } }
+          </div>
+        </div>
+
+        <div class="client-card">
+          <h3>VS Code (Continue)</h3>
+          <div class="config-path">~/.continue/config.json</div>
+          <p>
+            Add Pathfinder to the <code>mcpServers</code> section of your
+            Continue config:
+          </p>
+          <div class="code-block">
+            { <span class="key">"mcpServers"</span>: [ {
+            <span class="key">"name"</span>: <span class="value">"docs"</span>,
+            <span class="key">"transport"</span>: {
+            <span class="key">"type"</span>: <span class="value">"http"</span>,
+            <span class="key">"url"</span>:
+            <span class="value">"http://localhost:3001/mcp"</span> } } ] }
+          </div>
+        </div>
+
+        <div class="client-card">
+          <h3>Generic (Streamable HTTP)</h3>
+          <div class="config-path">Any MCP-compatible client</div>
+          <p>
+            Pathfinder exposes a single Streamable HTTP endpoint. Any MCP client
+            that supports this transport can connect with:
+          </p>
+          <div class="code-block">
+            <span class="comment"># Endpoint</span>
+            <span class="key">URL:</span>
+            <span class="value">http://localhost:3001/mcp</span>
+            <span class="key">Transport:</span>
+            <span class="value">Streamable HTTP</span>
+            <span class="key">Method:</span> <span class="value">POST</span>
+          </div>
+        </div>
+
+        <h2>Remote Servers</h2>
+
+        <p>
+          For deployed Pathfinder instances, replace
+          <code>localhost:3001</code> with your server's URL:
+        </p>
+
+        <div class="code-block">
+          { <span class="key">"mcpServers"</span>: {
+          <span class="key">"docs"</span>: { <span class="key">"type"</span>:
+          <span class="value">"http"</span>, <span class="key">"url"</span>:
+          <span class="value">"https://docs.example.com/mcp"</span> } } }
+        </div>
+
+        <p>
+          Pathfinder handles session management automatically. Each MCP
+          connection gets its own session with independent state (working
+          directory, workspace, etc.).
+        </p>
+
+        <h2>Verifying the Connection</h2>
+
+        <p>
+          Once connected, your agent should see Pathfinder's tools in its
+          available tools list. The exact tools depend on your
+          <a href="/config">configuration</a> — typically a combination of
+          search and bash tools.
+        </p>
+
+        <p>
+          Try asking your agent to run a simple command like
+          <code>find / -name "*.md" | head -5</code> to verify the bash tool is
+          working, or ask a question about your docs to test semantic search.
+        </p>
+
+        <h2>Known Concerns</h2>
+
+        <h3>SSE Parsing Bugs in Some MCP Clients</h3>
+
+        <p>
+          Some MCP clients have bugs handling SSE-formatted responses from
+          Streamable HTTP endpoints. This can cause initialization failures,
+          connection drops, or cryptic errors when connecting to Pathfinder's
+          <code>/mcp</code> endpoint.
+        </p>
+
+        <p>
+          The most notable example is <strong>OpenAI Codex CLI</strong>, which
+          uses the <code>rmcp</code> Rust SDK internally. That SDK's SSE parser
+          does not correctly handle the <code>text/event-stream</code> content
+          type that MCP servers typically return for single-message exchanges
+          over Streamable HTTP.
+        </p>
+
+        <h3>Pathfinder's Mitigation</h3>
+
+        <p>
+          Pathfinder enables <code>enableJsonResponse: true</code> on its
+          Streamable HTTP transport. This causes the server to return
+          <code>Content-Type: application/json</code> instead of SSE-wrapped
+          responses for single-message exchanges (i.e., requests where the
+          server sends exactly one response and does not need to stream). This
+          is fully compliant with the MCP specification, which states that
+          servers MAY return either format for non-streaming responses.
+        </p>
+
+        <p>
+          This setting works around the client-side bugs transparently — no
+          configuration needed on your end.
+        </p>
+
+        <h3>stdio Bridge Workaround</h3>
+
+        <p>
+          If you still encounter connection issues with a particular client, you
+          can use
+          <a href="https://github.com/anthropics/mcp-remote">mcp-remote</a> as a
+          stdio bridge. This converts the HTTP transport into a local stdio
+          pipe, which every MCP client supports reliably:
+        </p>
+
+        <div class="code-block">
+          <span class="comment"># Codex CLI — ~/.codex/config.toml</span>
+
+          [<span class="key">mcp_servers.pathfinder</span>]
+          <span class="key">command</span> = <span class="value">"npx"</span>
+          <span class="key">args</span> = [<span class="value"
+            >"mcp-remote@latest"</span
+          >, <span class="value">"--http"</span>,
+          <span class="value">"--allow-http"</span>,
+          <span class="value">"https://mcp.copilotkit.ai/mcp"</span>]
+        </div>
+
+        <p>
+          Replace the URL with your own Pathfinder instance's
+          <code>/mcp</code> endpoint. The <code>--http</code> flag tells
+          mcp-remote to use Streamable HTTP (not SSE), and
+          <code>--allow-http</code> permits non-TLS connections if you're
+          running locally.
+        </p>
+      </main>
+      <aside class="page-toc" id="page-toc"></aside>
     </div>
 
-    <div class="client-card">
-        <h3>Generic (Streamable HTTP)</h3>
-        <div class="config-path">Any MCP-compatible client</div>
-        <p>Pathfinder exposes a single Streamable HTTP endpoint. Any MCP client that supports this transport can connect with:</p>
-        <div class="code-block"><span class="comment"># Endpoint</span>
-<span class="key">URL:</span>       <span class="value">http://localhost:3001/mcp</span>
-<span class="key">Transport:</span> <span class="value">Streamable HTTP</span>
-<span class="key">Method:</span>    <span class="value">POST</span></div>
-    </div>
-
-    <h2>Remote Servers</h2>
-
-    <p>For deployed Pathfinder instances, replace <code>localhost:3001</code> with your server's URL:</p>
-
-    <div class="code-block">{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"docs"</span>: {
-      <span class="key">"type"</span>: <span class="value">"http"</span>,
-      <span class="key">"url"</span>: <span class="value">"https://docs.example.com/mcp"</span>
-    }
-  }
-}</div>
-
-    <p>Pathfinder handles session management automatically. Each MCP connection gets its own session with independent state (working directory, workspace, etc.).</p>
-
-    <h2>Verifying the Connection</h2>
-
-    <p>Once connected, your agent should see Pathfinder's tools in its available tools list. The exact tools depend on your <a href="/config">configuration</a> — typically a combination of search and bash tools.</p>
-
-    <p>Try asking your agent to run a simple command like <code>find / -name "*.md" | head -5</code> to verify the bash tool is working, or ask a question about your docs to test semantic search.</p>
-
-    <h2>Known Concerns</h2>
-
-    <h3>SSE Parsing Bugs in Some MCP Clients</h3>
-
-    <p>Some MCP clients have bugs handling SSE-formatted responses from Streamable HTTP endpoints. This can cause initialization failures, connection drops, or cryptic errors when connecting to Pathfinder's <code>/mcp</code> endpoint.</p>
-
-    <p>The most notable example is <strong>OpenAI Codex CLI</strong>, which uses the <code>rmcp</code> Rust SDK internally. That SDK's SSE parser does not correctly handle the <code>text/event-stream</code> content type that MCP servers typically return for single-message exchanges over Streamable HTTP.</p>
-
-    <h3>Pathfinder's Mitigation</h3>
-
-    <p>Pathfinder enables <code>enableJsonResponse: true</code> on its Streamable HTTP transport. This causes the server to return <code>Content-Type: application/json</code> instead of SSE-wrapped responses for single-message exchanges (i.e., requests where the server sends exactly one response and does not need to stream). This is fully compliant with the MCP specification, which states that servers MAY return either format for non-streaming responses.</p>
-
-    <p>This setting works around the client-side bugs transparently — no configuration needed on your end.</p>
-
-    <h3>stdio Bridge Workaround</h3>
-
-    <p>If you still encounter connection issues with a particular client, you can use <a href="https://github.com/anthropics/mcp-remote">mcp-remote</a> as a stdio bridge. This converts the HTTP transport into a local stdio pipe, which every MCP client supports reliably:</p>
-
-    <div class="code-block"><span class="comment"># Codex CLI — ~/.codex/config.toml</span>
-
-[<span class="key">mcp_servers.pathfinder</span>]
-<span class="key">command</span> = <span class="value">"npx"</span>
-<span class="key">args</span> = [<span class="value">"mcp-remote@latest"</span>, <span class="value">"--http"</span>, <span class="value">"--allow-http"</span>, <span class="value">"https://mcp.copilotkit.ai/mcp"</span>]</div>
-
-    <p>Replace the URL with your own Pathfinder instance's <code>/mcp</code> endpoint. The <code>--http</code> flag tells mcp-remote to use Streamable HTTP (not SSE), and <code>--allow-http</code> permits non-TLS connections if you're running locally.</p>
-
-  </main>
-  <aside class="page-toc" id="page-toc"></aside>
-</div>
-
-<footer class="docs-footer">
-  <div class="footer-inner">
-    <div class="footer-left"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a></div>
-    <ul class="footer-links">
-      <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank">GitHub</a></li>
-      <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank">npm</a></li>
-    </ul>
-  </div>
-</footer>
-<script src="/sidebar.js"></script>
-</body>
+    <footer class="docs-footer">
+      <div class="footer-inner">
+        <div class="footer-left">
+          <span class="prompt">$</span> pathfinder &middot;
+          <a
+            href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE"
+            target="_blank"
+            rel="noopener"
+            style="color: inherit; text-decoration: underline"
+            >Elastic License 2.0</a
+          >
+        </div>
+        <ul class="footer-links">
+          <li>
+            <a href="https://github.com/CopilotKit/pathfinder" target="_blank"
+              >GitHub</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.npmjs.com/package/@copilotkit/pathfinder"
+              target="_blank"
+              >npm</a
+            >
+          </li>
+        </ul>
+      </div>
+    </footer>
+    <script src="/sidebar.js"></script>
+  </body>
 </html>

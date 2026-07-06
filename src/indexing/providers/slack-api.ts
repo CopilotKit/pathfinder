@@ -77,8 +77,7 @@ export class SlackApiClient {
       );
 
       const rawMessages = (result as any).messages as
-        | SlackMessage[]
-        | undefined;
+        SlackMessage[] | undefined;
       if (rawMessages) {
         messages.push(...rawMessages);
       }
@@ -122,8 +121,7 @@ export class SlackApiClient {
       );
 
       const rawMessages = (result as any).messages as
-        | SlackMessage[]
-        | undefined;
+        SlackMessage[] | undefined;
       if (rawMessages) {
         messages.push(...rawMessages);
       }

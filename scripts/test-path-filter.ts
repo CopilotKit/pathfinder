@@ -2,20 +2,24 @@
 //
 // Usage: npx tsx scripts/test-path-filter.ts
 
-import { globToRegex, matchesPatterns, hasLowSemanticValue } from '../src/indexing/utils.js';
-import type { FileSourceConfig } from '../src/types.js';
+import {
+  globToRegex,
+  matchesPatterns,
+  hasLowSemanticValue,
+} from "../src/indexing/utils.js";
+import type { FileSourceConfig } from "../src/types.js";
 
 let passed = 0;
 let failed = 0;
 
 function assert(condition: boolean, description: string): void {
-    if (condition) {
-        console.log(`  PASS: ${description}`);
-        passed++;
-    } else {
-        console.error(`  FAIL: ${description}`);
-        failed++;
-    }
+  if (condition) {
+    console.log(`  PASS: ${description}`);
+    passed++;
+  } else {
+    console.error(`  FAIL: ${description}`);
+    failed++;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -23,18 +27,18 @@ function assert(condition: boolean, description: string): void {
 // ---------------------------------------------------------------------------
 
 function makeFileSourceConfig(
-    filePatterns: string[],
-    excludePatterns?: string[],
+  filePatterns: string[],
+  excludePatterns?: string[],
 ): FileSourceConfig {
-    return {
-        name: 'test',
-        type: 'code',
-        repo: 'https://github.com/test/test.git',
-        path: '.',
-        file_patterns: filePatterns,
-        exclude_patterns: excludePatterns,
-        chunk: { target_lines: 80, overlap_lines: 10 },
-    };
+  return {
+    name: "test",
+    type: "code",
+    repo: "https://github.com/test/test.git",
+    path: ".",
+    file_patterns: filePatterns,
+    exclude_patterns: excludePatterns,
+    chunk: { target_lines: 80, overlap_lines: 10 },
+  };
 }
 
 // Code source config — mirrors the real deploy/copilotkit-docs.yaml `code`
@@ -43,101 +47,227 @@ function makeFileSourceConfig(
 // demo/example and showcase apps, the Next.js build output, and generated
 // .d.ts declarations.
 const codeConfig = makeFileSourceConfig(
-    ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.py'],
-    [
-        'packages/v1/**',
-        'packages/v1-*/**',
-        '**/test/**',
-        '**/tests/**',
-        '**/__tests__/**',
-        '**/*.test.*',
-        '**/*.spec.*',
-        'examples/**',
-        'showcase/**',
-        '**/.next/**',
-        '**/*.d.ts',
-    ],
+  ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py"],
+  [
+    "packages/v1/**",
+    "packages/v1-*/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "examples/**",
+    "showcase/**",
+    "**/.next/**",
+    "**/*.d.ts",
+  ],
 );
 
 // Docs source config — mirrors the real `docs` source: only *.mdx, no excludes.
 // (The source path is showcase/shell-docs/src/content/docs/, so derived paths
 // live under that tree.)
-const docsConfig = makeFileSourceConfig(['**/*.mdx']);
+const docsConfig = makeFileSourceConfig(["**/*.mdx"]);
 
-console.log('=== Path Filter Tests ===\n');
+console.log("=== Path Filter Tests ===\n");
 
 // --- v1 exclusion ---
-console.log('--- v1 exclusion ---');
-assert(!matchesPatterns('packages/v1/runtime/src/index.ts', codeConfig), 'packages/v1/ excluded');
-assert(!matchesPatterns('packages/v1/react-core/src/hooks.ts', codeConfig), 'packages/v1/react-core excluded');
-assert(!matchesPatterns('packages/v1/react-ui/src/components/chat/Markdown.tsx', codeConfig), 'packages/v1/react-ui deep path excluded');
-assert(!matchesPatterns('packages/v1-compatibility/src/index.ts', codeConfig), 'packages/v1-* prefix excluded');
+console.log("--- v1 exclusion ---");
+assert(
+  !matchesPatterns("packages/v1/runtime/src/index.ts", codeConfig),
+  "packages/v1/ excluded",
+);
+assert(
+  !matchesPatterns("packages/v1/react-core/src/hooks.ts", codeConfig),
+  "packages/v1/react-core excluded",
+);
+assert(
+  !matchesPatterns(
+    "packages/v1/react-ui/src/components/chat/Markdown.tsx",
+    codeConfig,
+  ),
+  "packages/v1/react-ui deep path excluded",
+);
+assert(
+  !matchesPatterns("packages/v1-compatibility/src/index.ts", codeConfig),
+  "packages/v1-* prefix excluded",
+);
 
 // --- v2 included ---
-console.log('\n--- v2 included ---');
-assert(matchesPatterns('packages/v2/runtime/src/runtime.ts', codeConfig), 'packages/v2/ included');
-assert(matchesPatterns('packages/v2/react/src/hooks/useCopilotAction.ts', codeConfig), 'packages/v2 deep path included');
-assert(matchesPatterns('packages/shared/src/utils.ts', codeConfig), 'packages/shared included');
+console.log("\n--- v2 included ---");
+assert(
+  matchesPatterns("packages/v2/runtime/src/runtime.ts", codeConfig),
+  "packages/v2/ included",
+);
+assert(
+  matchesPatterns(
+    "packages/v2/react/src/hooks/useCopilotAction.ts",
+    codeConfig,
+  ),
+  "packages/v2 deep path included",
+);
+assert(
+  matchesPatterns("packages/shared/src/utils.ts", codeConfig),
+  "packages/shared included",
+);
 
 // --- test file exclusion ---
-console.log('\n--- test file exclusion ---');
-assert(!matchesPatterns('packages/v2/runtime/src/__tests__/runtime.test.ts', codeConfig), '__tests__ dir excluded');
-assert(!matchesPatterns('packages/v2/runtime/test/integration.ts', codeConfig), 'test/ dir excluded');
-assert(!matchesPatterns('packages/v2/runtime/tests/unit.ts', codeConfig), 'tests/ dir excluded');
-assert(!matchesPatterns('packages/v2/runtime/src/runtime.test.ts', codeConfig), '*.test.ts excluded');
-assert(!matchesPatterns('packages/v2/runtime/src/runtime.spec.ts', codeConfig), '*.spec.ts excluded');
-assert(!matchesPatterns('packages/v2/runtime/src/runtime.test.tsx', codeConfig), '*.test.tsx excluded');
-assert(!matchesPatterns('examples/with-agno/tests/test_agent.py', codeConfig), 'Python test dir excluded');
+console.log("\n--- test file exclusion ---");
+assert(
+  !matchesPatterns(
+    "packages/v2/runtime/src/__tests__/runtime.test.ts",
+    codeConfig,
+  ),
+  "__tests__ dir excluded",
+);
+assert(
+  !matchesPatterns("packages/v2/runtime/test/integration.ts", codeConfig),
+  "test/ dir excluded",
+);
+assert(
+  !matchesPatterns("packages/v2/runtime/tests/unit.ts", codeConfig),
+  "tests/ dir excluded",
+);
+assert(
+  !matchesPatterns("packages/v2/runtime/src/runtime.test.ts", codeConfig),
+  "*.test.ts excluded",
+);
+assert(
+  !matchesPatterns("packages/v2/runtime/src/runtime.spec.ts", codeConfig),
+  "*.spec.ts excluded",
+);
+assert(
+  !matchesPatterns("packages/v2/runtime/src/runtime.test.tsx", codeConfig),
+  "*.test.tsx excluded",
+);
+assert(
+  !matchesPatterns("examples/with-agno/tests/test_agent.py", codeConfig),
+  "Python test dir excluded",
+);
 
 // --- demo/example, showcase, build output, and generated decls excluded ---
-console.log('\n--- examples/showcase/.next/.d.ts exclusion ---');
-assert(!matchesPatterns('examples/with-agno/src/agent.py', codeConfig), 'examples/ src excluded');
-assert(!matchesPatterns('examples/coagents-research-canvas/ui/src/page.tsx', codeConfig), 'examples/ deep path excluded');
-assert(!matchesPatterns('showcase/shell-docs/src/lib/util.ts', codeConfig), 'showcase/ excluded');
-assert(!matchesPatterns('packages/v2/react/.next/server/app/page.js', codeConfig), '**/.next/** build output excluded');
-assert(!matchesPatterns('packages/v2/runtime/dist/index.d.ts', codeConfig), '**/*.d.ts generated decls excluded');
-assert(!matchesPatterns('packages/v2/runtime/src/types.d.ts', codeConfig), '.d.ts excluded even alongside sources');
+console.log("\n--- examples/showcase/.next/.d.ts exclusion ---");
+assert(
+  !matchesPatterns("examples/with-agno/src/agent.py", codeConfig),
+  "examples/ src excluded",
+);
+assert(
+  !matchesPatterns(
+    "examples/coagents-research-canvas/ui/src/page.tsx",
+    codeConfig,
+  ),
+  "examples/ deep path excluded",
+);
+assert(
+  !matchesPatterns("showcase/shell-docs/src/lib/util.ts", codeConfig),
+  "showcase/ excluded",
+);
+assert(
+  !matchesPatterns("packages/v2/react/.next/server/app/page.js", codeConfig),
+  "**/.next/** build output excluded",
+);
+assert(
+  !matchesPatterns("packages/v2/runtime/dist/index.d.ts", codeConfig),
+  "**/*.d.ts generated decls excluded",
+);
+assert(
+  !matchesPatterns("packages/v2/runtime/src/types.d.ts", codeConfig),
+  ".d.ts excluded even alongside sources",
+);
 
 // --- non-test files included ---
-console.log('\n--- non-test files included ---');
-assert(matchesPatterns('packages/v2/runtime/src/runtime.ts', codeConfig), 'normal src file included');
-assert(matchesPatterns('packages/shared/src/utils.ts', codeConfig), 'library package src included');
-assert(matchesPatterns('src/index.ts', codeConfig), 'root src file included');
+console.log("\n--- non-test files included ---");
+assert(
+  matchesPatterns("packages/v2/runtime/src/runtime.ts", codeConfig),
+  "normal src file included",
+);
+assert(
+  matchesPatterns("packages/shared/src/utils.ts", codeConfig),
+  "library package src included",
+);
+assert(matchesPatterns("src/index.ts", codeConfig), "root src file included");
 
 // --- docs (*.mdx only) ---
 // Paths reflect the current docs source tree: showcase/shell-docs/src/content/docs/
-console.log('\n--- docs (*.mdx only) ---');
-assert(matchesPatterns('showcase/shell-docs/src/content/docs/(root)/quickstart.mdx', docsConfig), 'docs included');
-assert(matchesPatterns('showcase/shell-docs/src/content/docs/reference/hooks.mdx', docsConfig), 'nested docs included (no code excludes on docs)');
-assert(!matchesPatterns('showcase/shell-docs/src/content/docs/reference/hooks.ts', docsConfig), 'ts file not matched by docs config');
+console.log("\n--- docs (*.mdx only) ---");
+assert(
+  matchesPatterns(
+    "showcase/shell-docs/src/content/docs/(root)/quickstart.mdx",
+    docsConfig,
+  ),
+  "docs included",
+);
+assert(
+  matchesPatterns(
+    "showcase/shell-docs/src/content/docs/reference/hooks.mdx",
+    docsConfig,
+  ),
+  "nested docs included (no code excludes on docs)",
+);
+assert(
+  !matchesPatterns(
+    "showcase/shell-docs/src/content/docs/reference/hooks.ts",
+    docsConfig,
+  ),
+  "ts file not matched by docs config",
+);
 
 // --- edge cases ---
-console.log('\n--- edge cases ---');
-assert(matchesPatterns('packages/v2/runtime/src/v1-compat.ts', codeConfig), 'file named v1-compat in v2 included');
-assert(!matchesPatterns('packages/v1/index.ts', codeConfig), 'packages/v1/ root file excluded');
-assert(matchesPatterns('v1-notes.ts', codeConfig), 'root file starting with v1 included (not under packages/v1/)');
+console.log("\n--- edge cases ---");
+assert(
+  matchesPatterns("packages/v2/runtime/src/v1-compat.ts", codeConfig),
+  "file named v1-compat in v2 included",
+);
+assert(
+  !matchesPatterns("packages/v1/index.ts", codeConfig),
+  "packages/v1/ root file excluded",
+);
+assert(
+  matchesPatterns("v1-notes.ts", codeConfig),
+  "root file starting with v1 included (not under packages/v1/)",
+);
 
 // --- glob specifics ---
-console.log('\n--- glob specifics ---');
-assert(!matchesPatterns('deeply/nested/test/file.ts', codeConfig), '**/test/** matches deep paths');
-assert(!matchesPatterns('a/b/c/__tests__/d.ts', codeConfig), '**/__tests__/** matches deep paths');
-assert(!matchesPatterns('foo.test.js', codeConfig), '**/*.test.* matches root level');
-assert(!matchesPatterns('dir/foo.spec.tsx', codeConfig), '**/*.spec.* matches in subdirs');
+console.log("\n--- glob specifics ---");
+assert(
+  !matchesPatterns("deeply/nested/test/file.ts", codeConfig),
+  "**/test/** matches deep paths",
+);
+assert(
+  !matchesPatterns("a/b/c/__tests__/d.ts", codeConfig),
+  "**/__tests__/** matches deep paths",
+);
+assert(
+  !matchesPatterns("foo.test.js", codeConfig),
+  "**/*.test.* matches root level",
+);
+assert(
+  !matchesPatterns("dir/foo.spec.tsx", codeConfig),
+  "**/*.spec.* matches in subdirs",
+);
 
 // --- globToRegex unit tests ---
-console.log('\n--- globToRegex unit tests ---');
-const mdxPattern = globToRegex('**/*.mdx');
-assert(mdxPattern.test('docs/quickstart.mdx'), '**/*.mdx matches nested mdx');
-assert(mdxPattern.test('quickstart.mdx'), '**/*.mdx matches root mdx');
-assert(!mdxPattern.test('quickstart.ts'), '**/*.mdx does not match .ts');
+console.log("\n--- globToRegex unit tests ---");
+const mdxPattern = globToRegex("**/*.mdx");
+assert(mdxPattern.test("docs/quickstart.mdx"), "**/*.mdx matches nested mdx");
+assert(mdxPattern.test("quickstart.mdx"), "**/*.mdx matches root mdx");
+assert(!mdxPattern.test("quickstart.ts"), "**/*.mdx does not match .ts");
 
-const v1Pattern = globToRegex('packages/v1/**');
-assert(v1Pattern.test('packages/v1/index.ts'), 'packages/v1/** matches file in v1');
-assert(v1Pattern.test('packages/v1/a/b/c.ts'), 'packages/v1/** matches deep file');
-assert(!v1Pattern.test('packages/v2/index.ts'), 'packages/v1/** does not match v2');
+const v1Pattern = globToRegex("packages/v1/**");
+assert(
+  v1Pattern.test("packages/v1/index.ts"),
+  "packages/v1/** matches file in v1",
+);
+assert(
+  v1Pattern.test("packages/v1/a/b/c.ts"),
+  "packages/v1/** matches deep file",
+);
+assert(
+  !v1Pattern.test("packages/v2/index.ts"),
+  "packages/v1/** does not match v2",
+);
 
 // --- hasLowSemanticValue tests ---
-console.log('\n--- hasLowSemanticValue ---');
+console.log("\n--- hasLowSemanticValue ---");
 
 // SVG icon content (high ratio of digits/dots/commas)
 const svgContent = `export const Icon = () => (
@@ -145,7 +275,10 @@ const svgContent = `export const Icon = () => (
     <path d="M5.39935802,0.75 C5.97670802,-0.25 7.42007802,-0.25 7.99742802,0.75 L13.193588,9.75 C13.770888,10.75 13.049288,12 11.894588,12 L1.50223802,12 C0.34753802,12 -0.37414898,10.75 0.20319802,9.75 L5.39935802,0.75 Z" />
   </svg>
 );`.repeat(20);
-assert(hasLowSemanticValue(svgContent), 'SVG icon content detected as low value');
+assert(
+  hasLowSemanticValue(svgContent),
+  "SVG icon content detected as low value",
+);
 
 // Normal TypeScript
 const tsContent = `import { useState, useEffect } from 'react';
@@ -166,19 +299,27 @@ export class CopilotProvider {
         return result;
     }
 }`.repeat(20);
-assert(!hasLowSemanticValue(tsContent), 'Normal TypeScript not flagged');
+assert(!hasLowSemanticValue(tsContent), "Normal TypeScript not flagged");
 
 // Minified JavaScript
-const minifiedContent = 'var a=0,b=1,c=2,d=3,e=4,f=5;'.repeat(300);
-assert(hasLowSemanticValue(minifiedContent), 'Minified JS detected as low value');
+const minifiedContent = "var a=0,b=1,c=2,d=3,e=4,f=5;".repeat(300);
+assert(
+  hasLowSemanticValue(minifiedContent),
+  "Minified JS detected as low value",
+);
 
 // Base64 encoded data
-const base64Content = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA' + 'ABCDEF0123456789+/='.repeat(500);
-assert(hasLowSemanticValue(base64Content), 'Base64 data detected as low value');
+const base64Content =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA" +
+  "ABCDEF0123456789+/=".repeat(500);
+assert(hasLowSemanticValue(base64Content), "Base64 data detected as low value");
 
 // Short files should never be flagged
-assert(!hasLowSemanticValue('1.2,3.4,5.6'), 'Short file not flagged (< 500 chars)');
-assert(!hasLowSemanticValue(''), 'Empty file not flagged');
+assert(
+  !hasLowSemanticValue("1.2,3.4,5.6"),
+  "Short file not flagged (< 500 chars)",
+);
+assert(!hasLowSemanticValue(""), "Empty file not flagged");
 
 // JSON config (moderate digits but under threshold)
 const jsonContent = `{
@@ -189,7 +330,7 @@ const jsonContent = `{
         "openai": "^4.80.0"
     }
 }`.repeat(30);
-assert(!hasLowSemanticValue(jsonContent), 'JSON config not flagged');
+assert(!hasLowSemanticValue(jsonContent), "JSON config not flagged");
 
 // Python code with some numbers
 const pythonContent = `def calculate_metrics(data):
@@ -197,7 +338,7 @@ const pythonContent = `def calculate_metrics(data):
     average = total / len(data)
     return {"total": total, "average": average, "count": len(data)}
 `.repeat(30);
-assert(!hasLowSemanticValue(pythonContent), 'Python code not flagged');
+assert(!hasLowSemanticValue(pythonContent), "Python code not flagged");
 
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);
