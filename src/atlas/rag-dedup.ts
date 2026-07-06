@@ -30,6 +30,15 @@
 // `GET /api/search` is LIVE on the server: lexical tsvector search over the
 // indexed chunks table, mounted alongside the atlas ratification routes and
 // authenticated with the same bearer (see src/server.ts / client.ts).
+//
+// Probe-query shape: because that endpoint is LEXICAL (tsvector) and AND-based,
+// the probe sends a SHORT, high-signal query — the candidate's distilled
+// `title` alone — NOT the full body. A full-body query ANDs hundreds of terms
+// and returns ZERO hits, which silently disabled the gate for long
+// (memory-sourced) facts (empty denominator ⇒ never marked). The overlap
+// DECISION is still computed against the FULL candidate token set — the short
+// query only FINDS the corpus passages; it does not weaken the overlap judgment
+// (see candidateProbeSource / candidateProbeQueryText below).
 
 import type { AtlasHttpClient, SearchHit } from "../atlas/client.js";
 import { RAG_CORPUS_OVERLAP_REF_PREFIX } from "../atlas/canonicalize.js";
@@ -150,8 +159,11 @@ export async function dedupAgainstRagCorpus(
       continue;
     }
 
-    // The query text sent over the network is truncated (URL-length safety);
-    // the containment denominator above is NOT — see candidateProbeQueryText.
+    // The query text sent over the network is a SHORT, high-signal query built
+    // from the distilled title (+ subsystem/claimSlugHint), not the full body —
+    // a full-body query returns 0 hits on the lexical endpoint. The containment
+    // denominator above is still the FULL candidate token set — see
+    // candidateProbeQueryText / candidateProbeSource.
     const probeQueryText = candidateProbeQueryText(cand);
     // Set iff the probe itself resolved this iteration — distinguishes a probe
     // failure (counts toward the fail-fast streak) from a post-probe failure
@@ -228,31 +240,70 @@ function candidateFullText(cand: Candidate): string {
   return `${cand.title}\n${cand.content}`.trim();
 }
 
-// The text we send to `client.search` over the wire. SAME surface as
-// candidateFullText, but truncated so the probe stays within `GET` query-string
-// limits — a large body would otherwise 414/400 and be swallowed by the
-// per-candidate try/catch (a silent no-op for the largest candidates), or — for
-// non-ASCII corpora — manufacture a 4xx PROBE-failure streak that trips the
-// consecutive fail-fast with an "endpoint down" misdiagnosis (see
-// MAX_PROBE_TEXT_ENCODED_BYTES). Truncation is therefore TWO-stage: the cheap
-// char slice first, then a proportional shrink until the WIRE-encoded length
-// (wireEncodedLength — the same URLSearchParams serialization client.search
-// produces) fits the byte budget (one pass usually lands it; a mixed-script
-// tail may take a second). This function must NEVER throw: it is called
-// OUTSIDE the per-candidate try (a throw here would unwind the whole harvest;
-// moving the call INSIDE would instead mis-count the throw as a probe failure
-// toward the fail-fast streak). So the slice is first sanitized to WELL-FORMED
-// UTF-16 — a lone surrogate already embedded mid-string in malformed upstream
-// title/content becomes U+FFFD — and cut points stay surrogate-safe (richText
-// precedent): a boundary inside an astral pair backs off one unit. A leading
-// slice is sufficient to *find* the overlapping corpus passage; the precision
-// of the overlap decision is then computed against the FULL candidate text
-// (candidateFullText), not this truncated query. Exported for the byte-bound
-// test (fragmentIdentity precedent).
+// The SHORT, high-signal text the probe query is built from — the candidate's
+// already-distilled `title`. This is what we send to the LEXICAL search
+// endpoint to FIND corpus passages; it is deliberately NOT candidateFullText (a
+// full body returns 0 hits on a tsvector engine — see candidateProbeQueryText).
+//
+// Title-ONLY, deliberately: the endpoint's tsvector query is AND-based (every
+// query term must appear in a chunk to match), so every EXTRA term can only
+// shrink the result set, never grow it. Appending the STRUCTURAL key components
+// (`subsystem` / `claimSlugHint`) — which are synthetic slugs like
+// `cpk-runtime`, rarely present verbatim in a prose chunk — ANDs the match down
+// to ZERO, re-introducing the very "0 hits ⇒ never marked" gap this fix closes
+// (verified against prod 2026-07-06: title alone → 5 hits, title+subsystem →
+// 0). The distilled title is by construction the short topical query the engine
+// returns strong hits for; keep the probe to exactly that. If a future
+// candidate has a weak/empty title, the sub-token floor (MIN_CANDIDATE_TOKENS,
+// measured over the FULL body) already short-circuits the probe — a missed
+// annotation, never a lost row.
+//
+// The schema requires `title` non-empty, so this is never empty for a real
+// candidate; the `.trim()` guards a whitespace-only pathological title (which
+// then falls to the MIN_CANDIDATE_TOKENS floor as above).
+function candidateProbeSource(cand: Candidate): string {
+  return cand.title.trim();
+}
+
+// The text we send to `client.search` over the wire. This is DELIBERATELY NOT
+// candidateFullText: `GET /api/search` is a LEXICAL tsvector search, and a
+// long, multi-hundred-token full-body query returns ZERO hits on that engine
+// (every extra term ANDs into the query, and a memory-sourced fact's full body
+// of ~500–2000+ chars has no single corpus chunk that satisfies all of them).
+// A full-body probe therefore silently disabled the gate for exactly the LONG
+// (memory-sourced) facts it most needs to catch: 0 hits ⇒ empty containment
+// denominator ⇒ never marked as overlap (confirmed empirically 2026-07-06 —
+// a genuine corpus duplicate wrapped in narrative prose came back NOVEL, while
+// the SAME candidate's distilled title returned the overlapping chunk).
+//
+// So the probe is a SHORT, high-signal query built from the candidate's
+// already-distilled `title` — the same short topical phrase a human would type
+// to find this fact, and precisely what the tsvector engine returns strong hits
+// for. The title ALONE (not + subsystem/claimSlugHint): the engine's query is
+// AND-based, so every extra synthetic-slug term ANDs the match down toward zero
+// (see candidateProbeSource). The overlap DECISION is still computed against
+// the FULL candidate token set (candidateFullText) in bestOverlap — this only
+// changes what we send to FIND candidate corpus passages, not how precisely we
+// judge the overlap.
+//
+// The char/byte-safety machinery below is retained: a title can still carry
+// malformed UTF-16 or non-ASCII that expands on the wire, and this function is
+// still called OUTSIDE the per-candidate try (a
+// throw here would unwind the whole harvest; moving the call INSIDE would
+// instead mis-count the throw as a probe failure toward the fail-fast streak).
+// So the query is first sanitized to WELL-FORMED UTF-16 — a lone surrogate
+// already embedded mid-string in a malformed upstream title becomes U+FFFD —
+// truncated to the char slice, then proportionally shrunk until the
+// WIRE-encoded length (wireEncodedLength — the same URLSearchParams
+// serialization client.search produces) fits the byte budget, with cut points
+// kept surrogate-safe (richText precedent): a boundary inside an astral pair
+// backs off one unit. In practice a distilled title is far under both bounds,
+// so no truncation fires; the bounds are belt-and-braces for a pathological
+// title. Exported for the byte-bound test (fragmentIdentity precedent).
 export function candidateProbeQueryText(cand: Candidate): string {
   let text = toWellFormedUtf16(
     trimLoneTrailingHighSurrogate(
-      candidateFullText(cand).slice(0, MAX_PROBE_TEXT_CHARS),
+      candidateProbeSource(cand).slice(0, MAX_PROBE_TEXT_CHARS),
     ),
   );
   let encodedLength = wireEncodedLength(text);

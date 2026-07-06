@@ -226,6 +226,67 @@ describe("dedupAgainstRagCorpus — verbatim overlap is MARKED, never dropped", 
   });
 });
 
+describe("dedupAgainstRagCorpus — a LONG candidate is probed by its distilled title, not its full body (lexical-endpoint regression)", () => {
+  it("marks a long candidate whose full-body query would return NOTHING but whose title query finds the overlapping corpus passage", async () => {
+    // Regression guard for the full-body-probe bug (fixed 2026-07-06): the live
+    // endpoint is `plainto_tsquery`, which ANDs every query lexeme. A long
+    // (memory-sourced) candidate body ANDs hundreds of terms and matches NO
+    // single chunk ⇒ 0 hits ⇒ empty denominator ⇒ the gate never marked the
+    // overlap. This stub reproduces that AND-based behavior deterministically:
+    // it returns the overlapping corpus hit ONLY for a SHORT query (the length
+    // of a distilled title), and 0 hits for a long full-body query. The gate
+    // must send the short title query, so the duplicate is found and MARKED.
+    const distilledTitle = "AWS AgentCore deployment posture";
+    // A long body (>500 chars) that genuinely restates an indexed corpus
+    // passage — this is the shape of a memory-sourced fact.
+    const longBody = `${distilledTitle} — ${"the runtime persists conversation memory across sessions and gates every tool call through a governance adapter so operators can review, approve, or redirect agent actions before they execute. ".repeat(6)}`;
+    const cand = makeCandidate({
+      canonical_key: "memory:cpk-runtime:agentcore-long",
+      subsystem: "cpk-runtime",
+      title: distilledTitle,
+      content: longBody,
+    });
+    // The corpus hit that overlaps the candidate body verbatim (title + body).
+    const corpusHit = verbatimHit(`${cand.title}\n${cand.content}`);
+
+    // Stub the AND-based lexical endpoint: a long query (a full body) matches
+    // nothing; a short query (the distilled title) returns the overlapping hit.
+    const SHORT_QUERY_MAX = 120;
+    const searchMock = vi.fn(async (q: { text: string }) =>
+      q.text.length <= SHORT_QUERY_MAX ? [corpusHit] : [],
+    );
+    const client = { search: searchMock } as unknown as AtlasHttpClient;
+
+    const out = await dedupAgainstRagCorpus([cand], { client });
+
+    // The gate sent the SHORT title query (well under the stub's cutoff), so the
+    // duplicate was found and MARKED — never dropped.
+    expect(searchMock).toHaveBeenCalledTimes(1);
+    expect(searchMock.mock.calls[0][0].text.length).toBeLessThanOrEqual(
+      SHORT_QUERY_MAX,
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].provenance.validated_against).toBeTruthy();
+    expect(out[0].evidence.some((e) => e.kind === "fused_from")).toBe(true);
+    expect(() => CandidateSchema.parse(out[0])).not.toThrow();
+  });
+
+  it("PROOF that the OLD full-body probe would have MISSED it: a full-body query against the same AND-based stub returns nothing", async () => {
+    // Companion to the above — pins WHY the fix is load-bearing. If the gate
+    // reverted to sending the full body, this same stub returns [] and the
+    // candidate would ride through UN-marked (the bug).
+    const distilledTitle = "AWS AgentCore deployment posture";
+    const longBody = `${distilledTitle} — ${"the runtime persists conversation memory across sessions and gates every tool call through a governance adapter. ".repeat(6)}`;
+    const fullBody = `${distilledTitle}\n${longBody}`;
+    const SHORT_QUERY_MAX = 120;
+    const stub = (text: string) => (text.length <= SHORT_QUERY_MAX ? [1] : []);
+    // The full body is long ⇒ the AND-based stub returns nothing (the bug).
+    expect(stub(fullBody)).toHaveLength(0);
+    // The distilled title is short ⇒ the stub returns the hit (the fix).
+    expect(stub(distilledTitle).length).toBeGreaterThan(0);
+  });
+});
+
 describe("dedupAgainstRagCorpus — batch + count invariant (NEVER drops)", () => {
   it("returns exactly as many candidates as it received (mixed overlap/no-overlap)", async () => {
     const overlapping = makeCandidate({
@@ -339,12 +400,13 @@ describe("dedupAgainstRagCorpus — the §6.2 duplication mark is rank-NEUTRAL",
   });
 });
 
-describe("dedupAgainstRagCorpus — long candidate bodies are truncated before the probe", () => {
-  it("bounds the probe text length so a huge body cannot blow the query-string limit", async () => {
-    // A candidate whose distilled body is far larger than any safe query-string
-    // budget. The probe text the gate sends must be truncated, not the full body.
-    const hugeContent = "lorem ipsum dolor sit amet ".repeat(2000); // ~54 KB
-    const cand = makeCandidate({ content: hugeContent });
+describe("dedupAgainstRagCorpus — a pathologically long title is truncated before the probe", () => {
+  it("bounds the probe text length so a huge title cannot blow the query-string limit", async () => {
+    // The probe query is the distilled TITLE, so the query-string budget applies
+    // to a pathologically long title. The probe text the gate sends must be
+    // truncated to a safe leading slice, not sent whole.
+    const hugeTitle = "lorem ipsum dolor sit amet ".repeat(2000); // ~54 KB
+    const cand = makeCandidate({ title: hugeTitle });
 
     let probedText = "";
     const searchMock = vi.fn(async (q: { text: string }) => {
@@ -359,10 +421,10 @@ describe("dedupAgainstRagCorpus — long candidate bodies are truncated before t
     expect(searchMock).toHaveBeenCalledTimes(1);
     // The probe text is bounded well under a typical URL limit (a leading slice
     // is sufficient for the containment heuristic). It must be far smaller than
-    // the ~54 KB body.
+    // the ~54 KB title.
     expect(probedText.length).toBeGreaterThan(0);
     expect(probedText.length).toBeLessThanOrEqual(2048);
-    expect(probedText.length).toBeLessThan(hugeContent.length);
+    expect(probedText.length).toBeLessThan(hugeTitle.length);
   });
 });
 
@@ -374,16 +436,19 @@ describe("dedupAgainstRagCorpus — probe truncation is byte-aware, not just cha
   // failure, and 5 consecutive non-ASCII candidates abort the run with an
   // "endpoint down" misdiagnosis. The probe text must bound the ENCODED
   // length, not the char count.
-
-  // ≥ MIN_CANDIDATE_TOKENS distinct ASCII tokens in the title (tokenSet only
-  // extracts [a-z0-9] runs — CJK contributes no tokens, and a token-poor
-  // candidate would skip the probe entirely), with the CJK bulk in content.
+  //
+  // The probe query is the distilled TITLE, so the byte-bound guard applies to a
+  // pathological (non-ASCII, over-long) TITLE. The CJK bulk therefore lives in
+  // the title here; ASCII tokens in content keep the candidate over the
+  // MIN_CANDIDATE_TOKENS floor (measured over the FULL body, so a token-poor
+  // title alone would otherwise skip the probe).
   function cjkCandidate(i: number): Candidate {
     return makeCandidate({
       canonical_key: `github-pr:cpk-runtime:cjk-${i}`,
-      title: `knowledge base duplicate detection probe ${i}`,
-      content:
-        `候補の重複検出は照合対象の本文全体で行う必要がある第${i}`.repeat(120), // ~3000 chars of BMP CJK — far past the 2048-char slice
+      title: `候補の重複検出は照合対象の本文全体で行う必要がある第${i}`.repeat(
+        120,
+      ), // ~3000 chars of BMP CJK — far past the 2048-char slice
+      content: `knowledge base duplicate detection probe ${i}`,
     });
   }
 
@@ -441,8 +506,11 @@ describe("dedupAgainstRagCorpus — probe truncation is byte-aware, not just cha
     // failure. The probe text must back off to a pair boundary (richText
     // surrogate-split precedent).
     const cand = makeCandidate({
-      title: "emoji heavy reaction thread distilled summary",
-      content: "😀".repeat(2000), // 4000 code units, all surrogate pairs
+      // The probe query is the TITLE, so the surrogate-boundary hazard lives
+      // there: an over-long emoji-heavy title. ASCII tokens in content keep the
+      // candidate over the MIN_CANDIDATE_TOKENS floor.
+      title: "😀".repeat(2000), // 4000 code units, all surrogate pairs
+      content: "emoji heavy reaction thread distilled summary",
     });
     let probedText = "";
     const searchMock = vi.fn(async (q: { text: string }) => {
@@ -464,11 +532,32 @@ describe("dedupAgainstRagCorpus — probe truncation is byte-aware, not just cha
     );
   });
 
-  it("candidateProbeQueryText leaves a short ASCII candidate untouched (no needless truncation)", async () => {
+  it("candidateProbeQueryText sends the distilled TITLE, not the full body (lexical-endpoint fix)", async () => {
+    // The probe query is the SHORT, high-signal distilled title — NOT the full
+    // title+body. The lexical `plainto_tsquery` endpoint ANDs every query
+    // lexeme, so a long full-body query returns 0 hits and the gate never marks
+    // a long (memory-sourced) duplicate; the title is the short topical query
+    // the engine returns strong hits for. (Regression guard for the
+    // full-body-probe bug fixed 2026-07-06.)
     const cand = makeCandidate();
-    expect(candidateProbeQueryText(cand)).toBe(
-      `${cand.title}\n${cand.content}`.trim(),
-    );
+    expect(candidateProbeQueryText(cand)).toBe(cand.title.trim());
+    // Explicitly NOT the full body: the content prose must not ride the query.
+    expect(candidateProbeQueryText(cand)).not.toContain(cand.content);
+  });
+
+  it("candidateProbeQueryText query is the TITLE ALONE — subsystem/claimSlugHint synthetic slugs are NOT appended (they AND the lexical match to zero)", async () => {
+    // The endpoint's tsquery is AND-based: appending the structural key
+    // components (synthetic slugs like `cpk-runtime`, rarely verbatim in a prose
+    // chunk) would AND the match down to zero, re-opening the same "0 hits ⇒
+    // never marked" gap (verified against prod: title alone → hits,
+    // title+subsystem → 0). Pin the probe to the title alone.
+    const cand = makeCandidate({
+      subsystem: "cpk-runtime",
+      title: "Two-layer shim forwards v1 calls to the v2 engine",
+    });
+    const probe = candidateProbeQueryText(cand);
+    expect(probe).toBe(cand.title.trim());
+    expect(probe).not.toContain("cpk-runtime");
   });
 });
 
@@ -479,13 +568,14 @@ describe("dedupAgainstRagCorpus — malformed upstream content (lone MID-STRING 
     // module's never-abort invariant; moving the call INSIDE the try would
     // instead mis-count the throw as a PROBE failure toward the fail-fast
     // streak). So the function must be throw-proof against malformed UTF-16
-    // already embedded in upstream title/content — not just at the slice
-    // boundary, which is all trimLoneTrailingHighSurrogate covers.
+    // already embedded in the upstream TITLE (the probe source) — not just at
+    // the slice boundary, which is all trimLoneTrailingHighSurrogate covers.
     const cand = makeCandidate({
       canonical_key: "github-pr:cpk-runtime:lone-surrogate",
-      title: "malformed upstream content carries a lone surrogate",
-      // A lone HIGH surrogate and a lone LOW surrogate, both mid-string.
-      content: "prose before \uD800 the gap \uDFFF prose after the surrogates",
+      // A lone HIGH surrogate and a lone LOW surrogate, both mid-string, in the
+      // TITLE (which is what the probe query is built from).
+      title: "prose before \uD800 the gap \uDFFF prose after the surrogates",
+      content: "malformed upstream title carries a lone surrogate",
     });
     let probedText = "";
     const searchMock = vi.fn(async (q: { text: string }) => {
@@ -516,16 +606,15 @@ describe("candidateProbeQueryText — the byte bound is measured with the WIRE e
     // `client.search` serializes the query with `new URLSearchParams({ text })`
     // (form-urlencoded) — NOT encodeURIComponent. The two diverge on
     // `! ' ( ) ~` (kept literal by encodeURIComponent = 1 char each, but
-    // percent-encoded on the wire = 3 chars each). Composition COMPUTED so the
-    // old encodeURIComponent measure stays ≤ MAX_PROBE_TEXT_ENCODED_BYTES (no
-    // shrink fires) while the real wire length blows ~3 KB past it:
-    //   sliced 2048 chars = title 33 (28 letters + 5 spaces) + "\n"
-    //                     + 1504 "!" + 510 CJK
-    //   encodeURIComponent: 28 + 5*3 + 3 + 1504*1 + 510*9 = 6140 ≤ 6144
-    //   wire (URLSearchParams): 28 + 5*1 + 3 + 1504*3 + 510*9 = 9138 > 6144
+    // percent-encoded on the wire = 3 chars each). The probe query is the
+    // distilled TITLE, so the pathological `!'()~`-dense mixed-script payload
+    // lives there. The 2048-char slice is 1504 "!" + 544 CJK; its wire length
+    // (1504*3 + 544*9 = 9408) blows well past MAX_PROBE_TEXT_ENCODED_BYTES, so
+    // the byte-aware shrink must fire and bring it within budget — and it must
+    // do so measured with the WIRE encoder, not encodeURIComponent.
     const cand = makeCandidate({
-      title: "bang paren tilde wire bound probe",
-      content: "!".repeat(1504) + "気".repeat(600),
+      title: "!".repeat(1504) + "気".repeat(600),
+      content: "bang paren tilde wire bound probe body tokens",
     });
 
     const probedText = candidateProbeQueryText(cand);
@@ -774,7 +863,9 @@ describe("dedupAgainstRagCorpus — a probe error never aborts the batch", () =>
     // subsequent candidate is still probed and (here) annotated.
     const flaky = makeCandidate({
       canonical_key: "github-pr:cpk-runtime:flaky-probe",
-      title: "Probe blows up for this one",
+      // The distinguishing token lives in the TITLE, since the probe query is
+      // the distilled title (not the body).
+      title: "Probe transiently fails for this one",
       content: "Prose whose corpus probe transiently fails.",
     });
     const overlapping = makeCandidate({
