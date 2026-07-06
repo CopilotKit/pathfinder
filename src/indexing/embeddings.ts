@@ -7,6 +7,65 @@ const MAX_BATCH_SIZE = 2048;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 
+// Assert a provider returned exactly one vector per input text, failing LOUD
+// with context on a shortfall. A provider/proxy that streams nothing (or a mock
+// returning `{ data: [] }`) yields a results array SHORTER than the input, so
+// `embed()`'s `result[0]` is `undefined` — a bogus vector that flows downstream
+// and crashes opaquely at the pgvector write (or silently persists garbage).
+// Every provider calls this at the end of embedBatch so the failure surfaces
+// HERE, at the boundary, naming the provider and the expected/actual counts.
+function assertEmbeddingCount(
+  provider: string,
+  expected: number,
+  results: number[][],
+): void {
+  if (results.length !== expected) {
+    throw new Error(
+      `[${provider}] embedding count mismatch: expected ${expected} vector(s) ` +
+        `for ${expected} input text(s), got ${results.length}. The embedding ` +
+        `provider returned an incomplete response.`,
+    );
+  }
+}
+
+// Assert every returned vector matches the configured `dimensions`, failing
+// LOUD with context on a mismatch. Ollama's /api/embed and transformers.js both
+// return the model's NATIVE-size vectors and ignore the configured dimensions,
+// so a model whose native size ≠ the configured dimensions (the size the
+// pgvector column is fixed to) silently produces mismatched vectors that only
+// blow up opaquely at the DB write. Validating HERE surfaces the mismatch at
+// the provider boundary, naming the expected/actual dimension.
+function assertEmbeddingDimensions(
+  provider: string,
+  expected: number,
+  results: number[][],
+): void {
+  for (const vec of results) {
+    if (vec.length !== expected) {
+      throw new Error(
+        `[${provider}] embedding dimension mismatch: configured for ${expected} ` +
+          `dimensions (the pgvector column size) but got ${vec.length}. This ` +
+          `model's native embedding size does not match the configured ` +
+          `dimensions; set embedding.dimensions to the model's native size or ` +
+          `choose a matching model.`,
+      );
+    }
+  }
+}
+
+// Whether an OpenAI embedding model accepts the `dimensions` request param.
+// Only the text-embedding-3-* family supports it; the older
+// text-embedding-ada-002 (and any other legacy model) REJECTS the param with
+// an HTTP 400 ("Unknown parameter: 'dimensions'"). Sending it unconditionally
+// hard-400s a non-default model, so the request must omit it for models that
+// don't support it. Prefix-matching the 3-* family (rather than an ada-002
+// denylist) is forward-safe: it opts NEW models IN only when they join the
+// dimension-configurable family, and defaults an unknown model to the safe
+// "omit" behavior.
+function modelSupportsDimensions(model: string): boolean {
+  return /^text-embedding-3-/.test(model);
+}
+
 // ── Provider interface ──────────────────────────────────────────────────────
 
 export interface EmbeddingProvider {
@@ -97,6 +156,14 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
       const batchResults = await this.embedWithRetry(chunks[i], i + 1);
       results.push(...batchResults);
     }
+    // Fail loud if the provider returned fewer vectors than texts (an empty /
+    // truncated response) — `embed()`'s result[0] would otherwise be undefined.
+    assertEmbeddingCount("openai", truncated.length, results);
+    // …and on a native-size vs configured-dimensions mismatch: a legacy model
+    // (text-embedding-ada-002) omits the `dimensions` param, and a proxy may
+    // ignore it, so a returned vector whose length ≠ the configured dimensions
+    // would only surface as an opaque pgvector write error.
+    assertEmbeddingDimensions("openai", this.dimensions, results);
     return results;
   }
 
@@ -109,7 +176,23 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
       const response = await this.client.embeddings.create({
         model: this.model,
         input: texts,
-        dimensions: this.dimensions,
+        // `dimensions` is only accepted by the text-embedding-3-* family;
+        // text-embedding-ada-002 (and other legacy models) 400 on it. Spread
+        // it in ONLY when the model supports it so a non-default model does
+        // not hard-fail on an unknown-param 400.
+        ...(modelSupportsDimensions(this.model)
+          ? { dimensions: this.dimensions }
+          : {}),
+        // Request a FLOAT array explicitly. The OpenAI SDK v4 defaults
+        // encoding_format to "base64"; a base64 response is decoded by the SDK
+        // into a Float32Array-backed number[]. Against a mock/proxy that returns
+        // a JSON float array while the SDK expects base64 (aimock's
+        // /v1/embeddings — see the S2 spike), the SDK MIS-DECODES the float array
+        // as base64 and yields a CORRUPT, wrong-length vector (1536 → 384).
+        // Asking for "float" makes the wire format unambiguous — correct against
+        // both the real API and any float-returning proxy, and more robust than
+        // relying on the base64 round-trip.
+        encoding_format: "float",
       });
 
       // OpenAI returns embeddings sorted by index, but sort explicitly to be safe
@@ -181,6 +264,12 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       const batchResult = await this.callOllamaEmbed(batches[i]);
       results.push(...batchResult);
     }
+    // Fail loud on an incomplete response (result[0] would be undefined)…
+    assertEmbeddingCount("ollama", texts.length, results);
+    // …and on a native-size vs configured-dimensions mismatch: Ollama returns
+    // the model's native size and ignores `dimensions`, so a size mismatch
+    // would only surface as an opaque pgvector write error.
+    assertEmbeddingDimensions("ollama", this.dimensions, results);
     return results;
   }
 
@@ -257,6 +346,12 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
       const vectors: number[][] = output.tolist();
       results.push(...vectors);
     }
+    // Fail loud on an incomplete response (result[0] would be undefined)…
+    assertEmbeddingCount("local", texts.length, results);
+    // …and on a native-size vs configured-dimensions mismatch: transformers.js
+    // returns the model's native size and ignores `dimensions`, so a size
+    // mismatch would only surface as an opaque pgvector write error.
+    assertEmbeddingDimensions("local", this.dimensions, results);
     return results;
   }
 
