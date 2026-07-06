@@ -36,14 +36,97 @@ export const KnowledgeType = z.enum([
   "gtm",
   "org-culture",
 ]);
-// The §7 gate set: behavior/architecture knowledge that stays `unverified` is
+// The §7 gate set: fact/behavior knowledge that stays `unverified` is
 // guilty-until-validated and is NOT approvable (spec §7 proof: the CopilotNext
 // case). Defined ONCE here, next to the KnowledgeType enum it ranges over —
 // canonicalize (approvable), validate (promotion gating), and artifact sync
 // (re-derived approvable) all import this set, so the three gate sites can
 // never silently drift.
+//
+// Defined as the ENUM-COMPLEMENT of the three exempt process/etiquette types
+// {process, operational, org-culture} — i.e. every KnowledgeType EXCEPT those.
+// The complement (rather than a hand-listed positive set) is drift-proof: a new
+// knowledge_type added to the enum defaults INTO the gated set unless it is
+// explicitly exempted, which is the safe direction for a guilty-until-validated
+// approvability gate. Kept as a single exported const so the three gate sites
+// can never diverge.
+const EXEMPT_KNOWLEDGE_TYPES: ReadonlySet<KnowledgeType> =
+  new Set<KnowledgeType>(["process", "operational", "org-culture"]);
 export const BEHAVIOR_KNOWLEDGE_TYPES: ReadonlySet<KnowledgeType> =
-  new Set<KnowledgeType>(["architecture", "design-rationale"]);
+  new Set<KnowledgeType>(
+    (KnowledgeType.options as KnowledgeType[]).filter(
+      (t) => !EXEMPT_KNOWLEDGE_TYPES.has(t),
+    ),
+  );
+
+// The A.1 distillation-gate verdict on a candidate's why-vs-what quality. Shared
+// here (rather than in distillation-gate.ts) so the LLM seam in llm.ts
+// (`judgeDistillation`), the gate module (S8), and any consumer narrow on the
+// SAME `kind` discriminant.
+export type DistillationVerdict =
+  | { kind: "distilled" }
+  | { kind: "rewritten"; title: string; content: string; reason: string }
+  | { kind: "restatement"; reason: string };
+
+// The A.2 restatement marker (O2): the ONE literal S8 (distillation-gate) EMITS
+// on a candidate the judge ruled a pure restatement, and S4 (validate) READS as
+// the hard `approvable=false` floor the grep recompute cannot lift. Exported
+// ONCE here so both slots import the SAME string — a duplicated magic value
+// would let both go green independently while the integration silently breaks.
+export const RESTATEMENT_MARKER = "distillation:restatement";
+
+// The rag-dedup NO-DELTA floor marker: the ONE literal the rag-dedup gate
+// (`applyDistillDelta`) EMITS on a candidate its distill-to-delta seam ruled a
+// pure corpus DUPLICATE (verdict `no-delta`, or a degenerate empty delta treated
+// as such — nothing net-new to re-seed), and S4 (validate) READS as a hard
+// `approvable=false` floor the source-verify recompute cannot lift. It is a
+// DEDICATED floor trace, DISTINCT from the generic RAG_CORPUS_OVERLAP_REF_PREFIX
+// annotation the gate stamps for EVERY overlap verdict (delta included): a
+// `delta` candidate keeps net-new content and stays approvable, so the overlap
+// annotation alone must NOT floor it — only this no-delta marker does. Modeled
+// on RESTATEMENT_MARKER and carried the SAME way (a validated_against token
+// and/or a `fused_from` evidence ref) so the reader recognizes both idioms.
+// Exported ONCE here so the emitter (rag-dedup) and the reader (validate) import
+// the SAME string — a duplicated magic value would let both go green
+// independently while the integration silently breaks.
+export const RAG_NO_DELTA_MARKER = "rag-dedup:no-delta";
+
+// ── RAG-dedup semantic types (Theme B) ────────────────────────────────────────
+
+// A single corpus passage returned by the SEMANTIC (pgvector cosine) retrieval
+// the rag-dedup gate runs against the already-indexed corpus. Shared here (not in
+// rag-dedup.ts) so the vectorSearch seam (harvest-cli wiring, db/queries), the
+// distill-to-delta LLM seam (llm.ts), and the gate itself narrow on the SAME
+// shape. `similarity` is cosine similarity in [0,1] (1 - cosine distance);
+// `content` is the passage prose the delta rewrite subtracts from the candidate.
+export interface CorpusHit {
+  // Cosine similarity in [0,1] (1 = identical direction). The gate's overlap
+  // oracle: a hit at/above the semantic threshold counts as corpus overlap.
+  similarity: number;
+  // The already-indexed passage prose. The distill-to-delta seam rewrites the
+  // candidate's content down to only the part this (and its sibling hits) do
+  // NOT already cover.
+  content: string;
+  // Stable reference for the overlapping corpus passage (source URL, synthetic
+  // id, or title). Prefixed with RAG_CORPUS_OVERLAP_REF_PREFIX when stamped.
+  ref?: string;
+  // Optional attribution passed through from the corpus row.
+  id?: number;
+  title?: string | null;
+  sourceUrl?: string | null;
+  sourceName?: string;
+}
+
+// The distill-to-delta LLM verdict on an overlapping candidate (Theme B fix (c)).
+// The seam rewrites an overlapping candidate's `content` down to its NET-NEW
+// delta (the part the corpus does not already cover), or reports that there is no
+// delta left — in which case the gate marks it `approvable=false` (NEVER drops).
+// A `no-overlap` verdict is the seam's own escape hatch when it judges the hits
+// non-overlapping after all (the gate treats it as a pass-through).
+export type DistillDeltaResult =
+  | { kind: "delta"; content: string; reason: string }
+  | { kind: "no-delta"; reason: string }
+  | { kind: "no-overlap" };
 
 export const ValidationStatus = z.enum([
   "unverified",
@@ -314,5 +397,9 @@ export function toSeedEntryRow(c: Candidate): UpsertAtlasSeedCandidateInput {
     content: c.content,
     provenance: c.provenance,
     evidence: c.evidence,
+    // C.1: persist the derived approvability snapshot as an audit-only field.
+    // The SQL column + per-row backfill migration lands in S10; here we only
+    // thread the value from the finalized Candidate onto the storage input.
+    approvable: c.approvable,
   };
 }
