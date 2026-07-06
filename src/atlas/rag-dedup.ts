@@ -1074,7 +1074,8 @@ function floorNoDelta(cand: Candidate): Candidate {
 function stripNoDeltaFloor(cand: Candidate): Candidate {
   const existing = cand.provenance.validated_against;
   const inValidatedAgainst =
-    existing !== undefined && markerAlreadyPresent(existing, RAG_NO_DELTA_MARKER);
+    existing !== undefined &&
+    markerAlreadyPresent(existing, RAG_NO_DELTA_MARKER);
   const inEvidence = cand.evidence.some(
     (e) => e.kind === "fused_from" && e.ref === RAG_NO_DELTA_MARKER,
   );

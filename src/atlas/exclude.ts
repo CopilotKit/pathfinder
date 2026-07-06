@@ -102,7 +102,9 @@ function containsCredential(candidate: Candidate): boolean {
 // pre-filter should guard it. Keyed on the credential vocabulary so any custom
 // cred rule (not just DEFAULT_EXCLUSION_RULES') is covered, while non-credential
 // english rules (e.g. customer-GTM) are left to the LLM alone.
-function isCredentialRule(rule: Extract<ExclusionRule, { kind: "english" }>): boolean {
+function isCredentialRule(
+  rule: Extract<ExclusionRule, { kind: "english" }>,
+): boolean {
   return /\b(credential|secret|api\s*key|access\s*token|\btoken\b|password)/i.test(
     rule.text,
   );

@@ -244,10 +244,13 @@ describe("validate-checkout FAIL-CLOSED contract (S19)", () => {
       /checkout dir cannot be read \(missing or unreadable\)/,
     );
     // The ENOENT cause survives for formatCliError's diagnosis.
-    expect((thrown as NodeJS.ErrnoException & { cause?: unknown }).cause).toBeDefined();
+    expect(
+      (thrown as NodeJS.ErrnoException & { cause?: unknown }).cause,
+    ).toBeDefined();
     expect(
       (
-        (thrown as { cause?: NodeJS.ErrnoException }).cause as NodeJS.ErrnoException
+        (thrown as { cause?: NodeJS.ErrnoException })
+          .cause as NodeJS.ErrnoException
       ).code,
     ).toBe("ENOENT");
   });
@@ -314,7 +317,8 @@ describe("validate-checkout FAIL-CLOSED contract (S19)", () => {
     );
     expect(
       (
-        (thrown as { cause?: NodeJS.ErrnoException }).cause as NodeJS.ErrnoException
+        (thrown as { cause?: NodeJS.ErrnoException })
+          .cause as NodeJS.ErrnoException
       ).code,
     ).toBe("ENOENT");
   });
@@ -362,6 +366,8 @@ describe("validate-checkout FAIL-CLOSED contract (S19)", () => {
 
     expect(returned).toBeUndefined();
     expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toMatch(/feature-registry file cannot be read/);
+    expect((thrown as Error).message).toMatch(
+      /feature-registry file cannot be read/,
+    );
   });
 });

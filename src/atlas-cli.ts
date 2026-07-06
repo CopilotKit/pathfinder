@@ -440,7 +440,9 @@ export function runPreflight(writeOut: WriteFn, writeErr: WriteFn): number {
   writeErr(
     `atlas preflight: missing required environment variables:\n${missing
       .map((m) => `  - ${m}`)
-      .join("\n")}\nSet them before starting the server or running a harvest.\n`,
+      .join(
+        "\n",
+      )}\nSet them before starting the server or running a harvest.\n`,
   );
   return 1;
 }

@@ -670,9 +670,8 @@ describe("atlas-harvest driver — artifact/run pipeline parity (FIX 1)", () => 
     // Cross-check against what the run --upsert path (enforceDistillation →
     // validate) produces for the same candidate + judge.
     const { promoteValidation } = await import("../atlas/validate.js");
-    const { enforceDistillation } = await import(
-      "../atlas/distillation-gate.js"
-    );
+    const { enforceDistillation } =
+      await import("../atlas/distillation-gate.js");
     const { canonicalize } = await import("../atlas/canonicalize.js");
     const { aggregate } = await import("../atlas/aggregate.js");
     const { finalizeClassification } = await import("../atlas/classify.js");
@@ -730,9 +729,8 @@ describe("atlas-harvest driver — artifact/run pipeline parity (FIX 1)", () => 
 
     // Cross-check against the run --upsert path (enforceDistillation → validate).
     const { promoteValidation } = await import("../atlas/validate.js");
-    const { enforceDistillation } = await import(
-      "../atlas/distillation-gate.js"
-    );
+    const { enforceDistillation } =
+      await import("../atlas/distillation-gate.js");
     const { canonicalize } = await import("../atlas/canonicalize.js");
     const { aggregate } = await import("../atlas/aggregate.js");
     const { finalizeClassification } = await import("../atlas/classify.js");
@@ -820,7 +818,8 @@ describe("atlas-harvest driver — artifact/upsert SEMANTIC rag-dedup parity (st
       path.join(os.tmpdir(), "atlas-harvest-semdedupco-"),
     );
     ({ LLMock: LLMockCtor } = await import("@copilotkit/aimock"));
-    ({ OpenAIDistiller: OpenAIDistillerCtor } = await import("../atlas/llm.js"));
+    ({ OpenAIDistiller: OpenAIDistillerCtor } =
+      await import("../atlas/llm.js"));
   });
 
   afterAll(async () => {
@@ -1049,9 +1048,9 @@ describe("atlas-harvest driver — artifact/upsert SEMANTIC rag-dedup parity (st
       expect(artifactCand.provenance.validated_against).toContain(
         "rag-corpus-overlap:https://example.test/corpus/shim",
       );
-      expect(
-        artifactCand.evidence.some((e) => e.kind === "fused_from"),
-      ).toBe(true);
+      expect(artifactCand.evidence.some((e) => e.kind === "fused_from")).toBe(
+        true,
+      );
       // PARITY: the same annotation reaches the upserted row.
       const rowValidatedAgainst = (
         row.provenance as { validated_against?: string }

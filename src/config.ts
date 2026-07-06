@@ -359,7 +359,9 @@ export function collectMissingRequiredEnv(): string[] {
   if (hasDiscordSource && !process.env.DISCORD_PUBLIC_KEY)
     missing.push("DISCORD_PUBLIC_KEY");
   if (hasDiscordTextChannels && !openaiApiKey)
-    missing.push("OPENAI_API_KEY (required for Discord text channel distillation)");
+    missing.push(
+      "OPENAI_API_KEY (required for Discord text channel distillation)",
+    );
 
   const hasNotionSource = sources.some((s) => s.type === "notion");
   if (hasNotionSource && !process.env.NOTION_TOKEN)

@@ -361,7 +361,9 @@ function isShowcaseGreen(ctx: ValidationContext, c: Candidate): boolean {
 // floor the validation weight for a restatement, keeping the rank consistent
 // with approvable=false. Reads BOTH carrier idioms (validated_against tokens
 // and a `fused_from` evidence ref), whole-token matched.
-export function hasRestatementMarker(c: Pick<Candidate, "provenance" | "evidence">): boolean {
+export function hasRestatementMarker(
+  c: Pick<Candidate, "provenance" | "evidence">,
+): boolean {
   return hasFloorMarker(c, RESTATEMENT_MARKER);
 }
 
@@ -384,9 +386,7 @@ function hasFloorMarker(
   ) {
     return true;
   }
-  return c.evidence.some(
-    (e) => e.kind === "fused_from" && e.ref === marker,
-  );
+  return c.evidence.some((e) => e.kind === "fused_from" && e.ref === marker);
 }
 
 // Promote a candidate through the validation ladder and enforce the binding

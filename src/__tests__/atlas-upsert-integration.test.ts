@@ -218,7 +218,9 @@ describe("Atlas harvest upsert integration (real PGlite)", () => {
         upsertAtlasSeedCandidate(toSeedEntryRow(candidate)),
       ).rejects.toThrow(/github-pr:runtime:zero-row-return/);
     } finally {
-      await db.exec("DROP TRIGGER __suppress_atlas_seed_insert_trg ON atlas_seed_entries;");
+      await db.exec(
+        "DROP TRIGGER __suppress_atlas_seed_insert_trg ON atlas_seed_entries;",
+      );
     }
   });
 
@@ -380,7 +382,9 @@ CREATE TABLE IF NOT EXISTS atlas_seed_entries (
 
     // The unverified behavior row comes out approvable=true — WRONG. This is the
     // silent blessing the per-row backfill must prevent.
-    expect(await approvableOf(db, UNVERIFIED_BEHAVIOR.canonical_key)).toBe(true);
+    expect(await approvableOf(db, UNVERIFIED_BEHAVIOR.canonical_key)).toBe(
+      true,
+    );
 
     await db.close();
   });

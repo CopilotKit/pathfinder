@@ -241,7 +241,9 @@ export async function processCandidatePipeline(
   //     RESTATEMENT_MARKER (the floor S4's validate reads → approvable=false), a
   //     salvageable claim is rewritten into why/how prose, a distilled claim
   //     passes untouched. NEVER drops; same-length output; input never mutated.
-  const distilled = await enforceDistillation(candidates, { judge: opts.judge });
+  const distilled = await enforceDistillation(candidates, {
+    judge: opts.judge,
+  });
 
   // 5. RAG-dedup gate — BEFORE validate (spec §4). Detects corpus overlap
   //    (lexical verbatim pre-filter + semantic pgvector retrieval) and RESOLVES
@@ -995,7 +997,10 @@ export async function runAtlasHarvestCli(
     )
     .option("--prior-run-id <id>", "Prior run id to seed exclusion rules from")
     .option("--notion-token <token>", "Notion integration token (NOTION_TOKEN)")
-    .option("--min-overlap <n>", "RAG-dedup overlap threshold in [0,1] (matches `run`)")
+    .option(
+      "--min-overlap <n>",
+      "RAG-dedup overlap threshold in [0,1] (matches `run`)",
+    )
     .option(
       "--url <url>",
       "Pathfinder base URL (for the rag-dedup search probe, matching `run`)",

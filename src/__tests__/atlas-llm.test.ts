@@ -653,7 +653,9 @@ describe("OpenAIDistiller constructor (API-key guard, no LLM calls)", () => {
     delete process.env.OPENAI_BASE_URL;
     expect(
       () =>
-        new OpenAIDistiller({ baseURL: "https://proxy.internal.example.com/v1" }),
+        new OpenAIDistiller({
+          baseURL: "https://proxy.internal.example.com/v1",
+        }),
     ).toThrow(/OPENAI_API_KEY/);
   });
 

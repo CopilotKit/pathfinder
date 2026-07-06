@@ -76,7 +76,8 @@ const DELIM_SALVAGE_TITLE = "PR #99 reworks the retry policy";
 const DELIM_SALVAGE_CONTENT =
   `${DELIM_SALVAGE_MARKER}: the retry policy was reworked because the old one ` +
   "hammered the gateway; the new one backs off.";
-const DELIM_REWRITE_TITLE = "Retry policy backs off to avoid hammering the gateway";
+const DELIM_REWRITE_TITLE =
+  "Retry policy backs off to avoid hammering the gateway";
 const DELIM_REWRITE_CONTENT =
   "The old retry policy hammered the gateway on failure. The new policy backs " +
   "off exponentially so a failure burst no longer overwhelms the gateway.";
@@ -318,7 +319,8 @@ const fixtures: Fixture[] = [
     response: {
       content: JSON.stringify({
         verdict: "distilled",
-        reason: "explains the cascading-failure mechanism and the budget's effect",
+        reason:
+          "explains the cascading-failure mechanism and the budget's effect",
       }),
     },
   },
@@ -649,7 +651,9 @@ describe("enforceDistillation (aimock-backed real judge)", () => {
     // The pre-existing unrelated token survives (we strip ONLY the marker).
     expect(tokens).toContain("other-token");
     // The salvage breadcrumb is present.
-    expect(tokens).toContain(`${REWRITTEN_FROM_RESTATEMENT_MARKER}:${FLIP_REASON}`);
+    expect(tokens).toContain(
+      `${REWRITTEN_FROM_RESTATEMENT_MARKER}:${FLIP_REASON}`,
+    );
     // No empty tokens accrued.
     expect(tokens.every((t) => t.length > 0)).toBe(true);
 
@@ -930,7 +934,9 @@ describe("enforceDistillation (aimock-backed real judge)", () => {
     const tokens = (gated.provenance.validated_against ?? "").split("; ");
     expect(tokens).not.toContain(RESTATEMENT_MARKER);
     expect(tokens).toContain("other-token");
-    expect(tokens).toContain(`${REWRITTEN_FROM_RESTATEMENT_MARKER}:${FLIP_REASON}`);
+    expect(tokens).toContain(
+      `${REWRITTEN_FROM_RESTATEMENT_MARKER}:${FLIP_REASON}`,
+    );
     expect(tokens.every((t) => t.length > 0)).toBe(true);
 
     const validated = await promoteValidation(gated, ctxOn(process.cwd()));

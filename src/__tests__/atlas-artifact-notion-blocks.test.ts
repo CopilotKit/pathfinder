@@ -175,7 +175,11 @@ function toDoResponse(
 ): ToDoBlockObjectResponse {
   return {
     type: "to_do",
-    to_do: { rich_text: richTextResponse(plainText), color: "default", checked },
+    to_do: {
+      rich_text: richTextResponse(plainText),
+      color: "default",
+      checked,
+    },
     parent: { type: "page_id", page_id: "p" },
     object: "block",
     id: "todo-id",
@@ -189,7 +193,9 @@ function toDoResponse(
   } as ToDoBlockObjectResponse;
 }
 
-function bulletResponse(plainText: string): BulletedListItemBlockObjectResponse {
+function bulletResponse(
+  plainText: string,
+): BulletedListItemBlockObjectResponse {
   return {
     type: "bulleted_list_item",
     bulleted_list_item: {
@@ -316,7 +322,9 @@ describe("notion-blocks — 100-run cap with explicit truncation marker", () => 
   it("does NOT truncate when the content fits in exactly 100 runs (boundary)", () => {
     // Exactly 100 full runs of content, no marker needed. Body = 100×2000 minus
     // the `thread: ` prefix so the rendered line is exactly 200000 chars.
-    const body = "q".repeat(RICH_TEXT_RUN_MAX * RICH_TEXT_MAX_RUNS - "thread: ".length);
+    const body = "q".repeat(
+      RICH_TEXT_RUN_MAX * RICH_TEXT_MAX_RUNS - "thread: ".length,
+    );
     const runs = evidenceBodyRuns(body);
     expect(runs).toHaveLength(RICH_TEXT_MAX_RUNS);
     // No truncation marker: the last run is real content.
@@ -331,7 +339,9 @@ describe("notion-blocks — degenerate rich-text inputs", () => {
   it("renders a candidate with an EMPTY title without throwing (marker + badge survive)", () => {
     const c = makeCandidate({ title: "" });
     const text = plainTextOf(candidateToDoBlock(c));
-    expect(text).toContain(`${CANONICAL_KEY_OPEN}${c.canonical_key}${CANONICAL_KEY_CLOSE}`);
+    expect(text).toContain(
+      `${CANONICAL_KEY_OPEN}${c.canonical_key}${CANONICAL_KEY_CLOSE}`,
+    );
     expect(text).toContain(flagBadge(c));
   });
 
@@ -350,28 +360,38 @@ describe("notion-blocks — degenerate rich-text inputs", () => {
 describe("notion-blocks — canonical-key marker (delimiter parse contract)", () => {
   it("extracts the key when the marker OPENS the text", () => {
     expect(
-      extractCanonicalKey(`${CANONICAL_KEY_OPEN}github-pr:cpk:x${CANONICAL_KEY_CLOSE} title`),
+      extractCanonicalKey(
+        `${CANONICAL_KEY_OPEN}github-pr:cpk:x${CANONICAL_KEY_CLOSE} title`,
+      ),
     ).toBe("github-pr:cpk:x");
   });
 
   it("tolerates ONLY leading whitespace before the marker", () => {
     expect(
-      extractCanonicalKey(`   ${CANONICAL_KEY_OPEN}k${CANONICAL_KEY_CLOSE} rest`),
+      extractCanonicalKey(
+        `   ${CANONICAL_KEY_OPEN}k${CANONICAL_KEY_CLOSE} rest`,
+      ),
     ).toBe("k");
   });
 
   it("returns null when the marker is MID-PROSE (a quoted key is not a record)", () => {
     expect(
-      extractCanonicalKey(`follow up on ${CANONICAL_KEY_OPEN}k${CANONICAL_KEY_CLOSE} later`),
+      extractCanonicalKey(
+        `follow up on ${CANONICAL_KEY_OPEN}k${CANONICAL_KEY_CLOSE} later`,
+      ),
     ).toBeNull();
   });
 
   it("returns null for an EMPTY marker (⟦atlas:⟧) — not an empty-key record", () => {
-    expect(extractCanonicalKey(`${CANONICAL_KEY_OPEN}${CANONICAL_KEY_CLOSE} x`)).toBeNull();
+    expect(
+      extractCanonicalKey(`${CANONICAL_KEY_OPEN}${CANONICAL_KEY_CLOSE} x`),
+    ).toBeNull();
   });
 
   it("returns null for an UNCLOSED marker (no close delimiter)", () => {
-    expect(extractCanonicalKey(`${CANONICAL_KEY_OPEN}github-pr:cpk:x no close`)).toBeNull();
+    expect(
+      extractCanonicalKey(`${CANONICAL_KEY_OPEN}github-pr:cpk:x no close`),
+    ).toBeNull();
   });
 
   it("returns null for empty text and for plain prose with no marker", () => {
@@ -383,7 +403,9 @@ describe("notion-blocks — canonical-key marker (delimiter parse contract)", ()
     // The parser stops at the first `⟧`; a key containing the close delimiter
     // truncates there (documents the first-close-wins behavior).
     expect(
-      extractCanonicalKey(`${CANONICAL_KEY_OPEN}a${CANONICAL_KEY_CLOSE}b${CANONICAL_KEY_CLOSE}`),
+      extractCanonicalKey(
+        `${CANONICAL_KEY_OPEN}a${CANONICAL_KEY_CLOSE}b${CANONICAL_KEY_CLOSE}`,
+      ),
     ).toBe("a");
   });
 });
@@ -398,7 +420,9 @@ describe("notion-blocks — rule-bullet delimiter tolerance", () => {
   };
 
   it("serializes a rule to `atlas-rule: <json>` with a single space", () => {
-    expect(ruleToBulletText(flagRule)).toBe(`atlas-rule: ${JSON.stringify(flagRule)}`);
+    expect(ruleToBulletText(flagRule)).toBe(
+      `atlas-rule: ${JSON.stringify(flagRule)}`,
+    );
   });
 
   it("parses the canonical serialized form back to the identical rule", () => {
@@ -406,19 +430,27 @@ describe("notion-blocks — rule-bullet delimiter tolerance", () => {
   });
 
   it("parses a NO-space hand-edit (`atlas-rule:{…}`)", () => {
-    expect(parseRuleFromText(`atlas-rule:${JSON.stringify(flagRule)}`)).toEqual(flagRule);
+    expect(parseRuleFromText(`atlas-rule:${JSON.stringify(flagRule)}`)).toEqual(
+      flagRule,
+    );
   });
 
   it("parses EXTRA whitespace after the colon", () => {
-    expect(parseRuleFromText(`atlas-rule:   ${JSON.stringify(flagRule)}`)).toEqual(flagRule);
+    expect(
+      parseRuleFromText(`atlas-rule:   ${JSON.stringify(flagRule)}`),
+    ).toEqual(flagRule);
   });
 
   it("parses a Notion-auto-capitalized prefix (`Atlas-rule:`) case-insensitively", () => {
-    expect(parseRuleFromText(`Atlas-rule: ${JSON.stringify(flagRule)}`)).toEqual(flagRule);
+    expect(
+      parseRuleFromText(`Atlas-rule: ${JSON.stringify(flagRule)}`),
+    ).toEqual(flagRule);
   });
 
   it("ignores a free-form bullet with NO rule prefix (returns null)", () => {
-    expect(parseRuleFromText("just a human bullet about the release")).toBeNull();
+    expect(
+      parseRuleFromText("just a human bullet about the release"),
+    ).toBeNull();
   });
 
   it("warns (not silently null) on a rule-prefixed bullet with malformed JSON", () => {
@@ -441,7 +473,9 @@ describe("notion-blocks — candidate ⇄ block round-trip", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("round-trips {canonicalKey, checked} through candidateToDoBlock → parseCheckboxState", () => {
-    const c = makeCandidate({ canonical_key: "github-pr:cpk-runtime:round-trip" });
+    const c = makeCandidate({
+      canonical_key: "github-pr:cpk-runtime:round-trip",
+    });
     // Build side gives a request block; simulate the fetched response by lifting
     // its rendered text into a to_do RESPONSE (the checkbox the lead checked).
     const built = candidateToDoBlock(c);
@@ -509,9 +543,21 @@ describe("notion-blocks — candidate ⇄ block round-trip", () => {
 describe("notion-blocks — buildCandidateBlocks structure", () => {
   it("groups by subsystem (alpha) with a heading, candidates ranked desc within a group", () => {
     const blocks = buildCandidateBlocks([
-      makeCandidate({ subsystem: "zeta", canonical_key: "k:zeta:1", rankScore: 1 }),
-      makeCandidate({ subsystem: "alpha", canonical_key: "k:alpha:lo", rankScore: 2 }),
-      makeCandidate({ subsystem: "alpha", canonical_key: "k:alpha:hi", rankScore: 9 }),
+      makeCandidate({
+        subsystem: "zeta",
+        canonical_key: "k:zeta:1",
+        rankScore: 1,
+      }),
+      makeCandidate({
+        subsystem: "alpha",
+        canonical_key: "k:alpha:lo",
+        rankScore: 2,
+      }),
+      makeCandidate({
+        subsystem: "alpha",
+        canonical_key: "k:alpha:hi",
+        rankScore: 9,
+      }),
     ]);
     // heading(alpha), todo(hi), todo(lo), heading(zeta), todo(1)
     expect((blocks[0] as { type: string }).type).toBe("heading_2");
@@ -523,7 +569,10 @@ describe("notion-blocks — buildCandidateBlocks structure", () => {
   });
 
   it("renders a non-approvable candidate as a NON-checkable callout note (not a to_do)", () => {
-    const c = makeCandidate({ approvable: false, canonical_key: "k:cpk:unverified" });
+    const c = makeCandidate({
+      approvable: false,
+      canonical_key: "k:cpk:unverified",
+    });
     const built = unverifiedNoteBlock(c);
     expect((built as { type: string }).type).toBe("callout");
     const text = plainTextOf(built);
@@ -548,7 +597,11 @@ describe("notion-blocks — coerceExclusionRule validation floor", () => {
 
   it("accepts a valid flag rule and a valid english rule", () => {
     expect(
-      coerceExclusionRule({ kind: "flag", dimension: "sensitivity", equals: "secret" }),
+      coerceExclusionRule({
+        kind: "flag",
+        dimension: "sensitivity",
+        equals: "secret",
+      }),
     ).toEqual({ kind: "flag", dimension: "sensitivity", equals: "secret" });
     expect(coerceExclusionRule({ kind: "english", text: "drop X" })).toEqual({
       kind: "english",
@@ -559,7 +612,11 @@ describe("notion-blocks — coerceExclusionRule validation floor", () => {
   it("warns and drops an out-of-enum flag `equals` (could never fire)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(
-      coerceExclusionRule({ kind: "flag", dimension: "sensitivity", equals: "secrt" }),
+      coerceExclusionRule({
+        kind: "flag",
+        dimension: "sensitivity",
+        equals: "secrt",
+      }),
     ).toBeNull();
     expect(warn).toHaveBeenCalledOnce();
   });

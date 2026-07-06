@@ -199,8 +199,7 @@ function mapSeedRow(row: Record<string, unknown>): AtlasSeedEntry {
     rejectedBy: (row.rejected_by as string | null) ?? null,
     rejectedAt: toDate(row.rejected_at, `rejected_at of ${ctx}`),
     rejectionReason: (row.rejection_reason as string | null) ?? null,
-    approvable:
-      row.approvable == null ? null : Boolean(row.approvable),
+    approvable: row.approvable == null ? null : Boolean(row.approvable),
     createdAt: toDate(row.created_at, `created_at of ${ctx}`) ?? new Date(0),
     updatedAt: toDate(row.updated_at, `updated_at of ${ctx}`) ?? new Date(0),
   };

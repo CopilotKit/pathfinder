@@ -1281,7 +1281,9 @@ describe("dedupAgainstRagCorpus — semantic (pgvector) dedup + distill-to-delta
       // The DEDICATED no-delta floor marker is stamped on BOTH carriers, so the
       // downstream validation gate can keep the duplicate non-approvable even
       // after its symbols source-verify (see the integration test below).
-      expect(out[0].provenance.validated_against).toContain(RAG_NO_DELTA_MARKER);
+      expect(out[0].provenance.validated_against).toContain(
+        RAG_NO_DELTA_MARKER,
+      );
       expect(
         out[0].evidence.some(
           (e) => e.kind === "fused_from" && e.ref === RAG_NO_DELTA_MARKER,
@@ -2133,7 +2135,9 @@ describe("dedupAgainstRagCorpus — semantic (pgvector) dedup + distill-to-delta
       expect(out[0].approvable).toBe(false);
       // The DEDICATED no-delta floor marker is stamped on BOTH carriers so the
       // downstream validation gate keeps the duplicate non-approvable.
-      expect(out[0].provenance.validated_against).toContain(RAG_NO_DELTA_MARKER);
+      expect(out[0].provenance.validated_against).toContain(
+        RAG_NO_DELTA_MARKER,
+      );
       expect(
         out[0].evidence.some(
           (e) => e.kind === "fused_from" && e.ref === RAG_NO_DELTA_MARKER,

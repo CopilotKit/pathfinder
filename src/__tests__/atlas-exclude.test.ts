@@ -543,7 +543,8 @@ describe("applyExclusions — deterministic credential pre-filter (D.2)", () => 
     // pre-filter is scoped to credential-oriented rules only.
     const hasToken = makeCandidate({
       title: "Unrelated note that happens to mention a token",
-      content: "Old rotated value was ghp_ABCDEFghijkl0123456789MNOPqrstuvWX01.",
+      content:
+        "Old rotated value was ghp_ABCDEFghijkl0123456789MNOPqrstuvWX01.",
       canonical_key: "agent-doc:core:tokenmention",
     });
 

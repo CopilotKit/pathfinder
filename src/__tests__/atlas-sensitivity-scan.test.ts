@@ -96,7 +96,11 @@ describe("scanSensitivity (shared regexes)", () => {
 
     it("flags a bare 'Bearer <opaque>' credential outside a header", () => {
       expect(
-        scanSensitivity("note", "", "auth with Bearer AbCdEf0123456789GhIjKlMn"),
+        scanSensitivity(
+          "note",
+          "",
+          "auth with Bearer AbCdEf0123456789GhIjKlMn",
+        ),
       ).toBe("secret");
     });
 
