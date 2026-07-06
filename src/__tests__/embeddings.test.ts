@@ -42,6 +42,16 @@ function fakeResponse(embeddings: number[][]) {
   };
 }
 
+/**
+ * A vector sized to the given dimensions (default 1536, the OpenAI provider
+ * default). The provider now asserts returned-vector length == configured
+ * dimensions, so fixtures whose exact contents aren't load-bearing use a
+ * correctly-sized vector to exercise the path under test.
+ */
+function dimVec(dimensions = 1536): number[] {
+  return Array.from({ length: dimensions }, () => 0.1);
+}
+
 describe("EmbeddingClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -51,7 +61,7 @@ describe("EmbeddingClient", () => {
   // ── Constructor defaults ────────────────────────────────────────────────
 
   it("uses default model and dimensions", async () => {
-    mockCreate.mockResolvedValue(fakeResponse([[1, 2, 3]]));
+    mockCreate.mockResolvedValue(fakeResponse([dimVec()]));
     const client = new EmbeddingClient("test-key");
     await client.embed("hello");
 
@@ -59,11 +69,12 @@ describe("EmbeddingClient", () => {
       model: "text-embedding-3-small",
       input: ["hello"],
       dimensions: 1536,
+      encoding_format: "float",
     });
   });
 
   it("accepts custom model and dimensions", async () => {
-    mockCreate.mockResolvedValue(fakeResponse([[1, 2]]));
+    mockCreate.mockResolvedValue(fakeResponse([dimVec(3072)]));
     const client = new EmbeddingClient(
       "test-key",
       "text-embedding-3-large",
@@ -75,14 +86,53 @@ describe("EmbeddingClient", () => {
       model: "text-embedding-3-large",
       input: ["hello"],
       dimensions: 3072,
+      encoding_format: "float",
     });
+  });
+
+  // ── `dimensions` is only sent for models that support it ─────────────────
+  //
+  // text-embedding-ada-002 does NOT accept the `dimensions` request param —
+  // OpenAI rejects it with an HTTP 400. Only the text-embedding-3-* family
+  // supports it. Sending it unconditionally hard-400s ada-002. The request
+  // must omit `dimensions` for a model that doesn't support it.
+
+  it("does NOT send `dimensions` for text-embedding-ada-002 (it 400s on that param)", async () => {
+    mockCreate.mockResolvedValue(fakeResponse([dimVec()]));
+    const client = new EmbeddingClient("test-key", "text-embedding-ada-002");
+    await client.embed("hello");
+
+    const calledWith = mockCreate.mock.calls[0][0];
+    expect(calledWith.model).toBe("text-embedding-ada-002");
+    expect(calledWith.input).toEqual(["hello"]);
+    expect(calledWith.encoding_format).toBe("float");
+    // The load-bearing assertion: no `dimensions` key on the request at all.
+    expect("dimensions" in calledWith).toBe(false);
+  });
+
+  it("still sends `dimensions` for the text-embedding-3-* family that supports it", async () => {
+    mockCreate.mockResolvedValue(fakeResponse([dimVec()]));
+    const small = new EmbeddingClient("test-key", "text-embedding-3-small");
+    await small.embed("hello");
+    expect(mockCreate.mock.calls[0][0].dimensions).toBe(1536);
+
+    mockCreate.mockClear();
+    mockCreate.mockResolvedValue(fakeResponse([dimVec(3072)]));
+    const large = new EmbeddingClient(
+      "test-key",
+      "text-embedding-3-large",
+      3072,
+    );
+    await large.embed("hello");
+    expect(mockCreate.mock.calls[0][0].dimensions).toBe(3072);
   });
 
   // ── embed (single text) ─────────────────────────────────────────────────
 
   it("returns a single embedding vector", async () => {
     mockCreate.mockResolvedValue(fakeResponse([[0.1, 0.2, 0.3]]));
-    const client = new EmbeddingClient("test-key");
+    // dimensions=3 so the returned 3-dim vector matches the configured size.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 3);
     const result = await client.embed("test text");
     expect(result).toEqual([0.1, 0.2, 0.3]);
   });
@@ -104,7 +154,8 @@ describe("EmbeddingClient", () => {
         [0, 0, 1],
       ]),
     );
-    const client = new EmbeddingClient("test-key");
+    // dimensions=3 so the returned 3-dim vectors match the configured size.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 3);
     const result = await client.embedBatch(["a", "b", "c"]);
     expect(result).toHaveLength(3);
     expect(result[0]).toEqual([1, 0, 0]);
@@ -119,7 +170,8 @@ describe("EmbeddingClient", () => {
         { index: 1, embedding: [0, 1, 0] },
       ],
     });
-    const client = new EmbeddingClient("test-key");
+    // dimensions=3 so the returned 3-dim vectors match the configured size.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 3);
     const result = await client.embedBatch(["a", "b", "c"]);
     expect(result[0]).toEqual([1, 0, 0]);
     expect(result[1]).toEqual([0, 1, 0]);
@@ -130,7 +182,9 @@ describe("EmbeddingClient", () => {
 
   it("truncates texts longer than 30,000 characters", async () => {
     mockCreate.mockResolvedValue(fakeResponse([[1]]));
-    const client = new EmbeddingClient("test-key");
+    // dimensions=1 so the returned 1-dim vector matches the configured size;
+    // this test asserts on the sent input length, not the returned vector.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 1);
     const longText = "x".repeat(50_000);
     await client.embedBatch([longText]);
 
@@ -140,7 +194,9 @@ describe("EmbeddingClient", () => {
 
   it("does not truncate texts under 30,000 characters", async () => {
     mockCreate.mockResolvedValue(fakeResponse([[1]]));
-    const client = new EmbeddingClient("test-key");
+    // dimensions=1 so the returned 1-dim vector matches the configured size;
+    // this test asserts on the sent input length, not the returned vector.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 1);
     const text = "x".repeat(29_999);
     await client.embedBatch([text]);
 
@@ -161,7 +217,9 @@ describe("EmbeddingClient", () => {
         fakeResponse(Array.from({ length: 2 }, () => [2])),
       );
 
-    const client = new EmbeddingClient("test-key");
+    // dimensions=1 so the returned 1-dim vectors match the configured size;
+    // this test asserts on batch counts and boundaries, not vector contents.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 1);
     const result = await client.embedBatch(texts);
 
     expect(mockCreate).toHaveBeenCalledTimes(2);
@@ -179,7 +237,8 @@ describe("EmbeddingClient", () => {
       .mockRejectedValueOnce(new (OpenAI as any).RateLimitError("rate limited"))
       .mockResolvedValueOnce(fakeResponse([[1, 2]]));
 
-    const client = new EmbeddingClient("test-key");
+    // dimensions=2 so the returned 2-dim vector matches the configured size.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 2);
     const result = await client.embed("retry me");
     expect(result).toEqual([1, 2]);
     expect(mockCreate).toHaveBeenCalledTimes(2);
@@ -190,7 +249,8 @@ describe("EmbeddingClient", () => {
       .mockRejectedValueOnce(new (OpenAI as any).InternalServerError("500"))
       .mockResolvedValueOnce(fakeResponse([[3, 4]]));
 
-    const client = new EmbeddingClient("test-key");
+    // dimensions=2 so the returned 2-dim vector matches the configured size.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 2);
     const result = await client.embed("retry internal");
     expect(result).toEqual([3, 4]);
     expect(mockCreate).toHaveBeenCalledTimes(2);
@@ -201,7 +261,8 @@ describe("EmbeddingClient", () => {
       .mockRejectedValueOnce(new (OpenAI as any).APIConnectionError("timeout"))
       .mockResolvedValueOnce(fakeResponse([[5, 6]]));
 
-    const client = new EmbeddingClient("test-key");
+    // dimensions=2 so the returned 2-dim vector matches the configured size.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 2);
     const result = await client.embed("retry connection");
     expect(result).toEqual([5, 6]);
     expect(mockCreate).toHaveBeenCalledTimes(2);
@@ -228,6 +289,66 @@ describe("EmbeddingClient", () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
+  // ── STRUCTURAL fix (4a): embed() length guard ────────────────────────────
+  //
+  // embed() returns embedBatch([text])[0]. When the provider returns an EMPTY
+  // (or short) response — a proxy/provider that streamed nothing, a mock that
+  // returned `{ data: [] }` — result[0] is `undefined`, which flows downstream
+  // as a bogus vector and crashes opaquely at the pgvector write (or worse,
+  // silently persists garbage). embed() must assert the batch returned exactly
+  // the requested count and fail LOUD with context.
+  it("throws a loud, contextful error when the provider returns an EMPTY response for a single embed", async () => {
+    // Provider responds with zero embeddings — result[0] would be undefined.
+    mockCreate.mockResolvedValue({ data: [] });
+    const client = new EmbeddingClient("test-key");
+    await expect(client.embed("hello")).rejects.toThrow(
+      /embed.*expected 1.*got 0/i,
+    );
+  });
+
+  it("throws when embedBatch gets fewer vectors back than texts sent", async () => {
+    // Two texts in, one vector back — a truncated provider response.
+    // Both fake vectors are sized to the configured dimensions so the count
+    // guard (not the dimension guard) is the one that fires.
+    mockCreate.mockResolvedValue(
+      fakeResponse([Array.from({ length: 1536 }, () => 0.1)]),
+    );
+    const client = new EmbeddingClient("test-key");
+    await expect(client.embedBatch(["a", "b"])).rejects.toThrow(
+      /expected 2.*got 1/i,
+    );
+  });
+
+  // ── STRUCTURAL fix: OpenAI provider dimension guard ──────────────────────
+  //
+  // For an OpenAI/proxy model where the `dimensions` request param is omitted
+  // (legacy text-embedding-ada-002) or ignored (a proxy that returns native-
+  // size vectors), the provider returns vectors whose length ≠ the configured
+  // `dimensions` (the size the pgvector column is fixed to). That mismatched
+  // vector otherwise flows silently into the pgvector write and crashes
+  // opaquely there instead of failing loud at the provider boundary. The
+  // OpenAI provider must fail LOUD, with context, on a dimension mismatch —
+  // matching its Ollama and local siblings.
+  it("throws a loud, contextful error when a returned vector's length != configured dimensions", async () => {
+    // Configured (default) for 1536 but the proxy returns a 384-dim vector — a
+    // mismatch the pgvector column would later reject with an opaque error.
+    mockCreate.mockResolvedValue(
+      fakeResponse([Array.from({ length: 384 }, () => 0.1)]),
+    );
+    const client = new EmbeddingClient("test-key");
+    await expect(client.embed("hello")).rejects.toThrow(
+      /dimension.*1536.*got 384/i,
+    );
+  });
+
+  it("accepts vectors whose length MATCHES the configured dimensions", async () => {
+    const vec = Array.from({ length: 1536 }, () => 0.1);
+    mockCreate.mockResolvedValue(fakeResponse([vec]));
+    const client = new EmbeddingClient("test-key");
+    const result = await client.embed("hello");
+    expect(result).toHaveLength(1536);
+  });
+
   it("uses exponential backoff delays", async () => {
     const sleepSpy = vi.spyOn(globalThis, "setTimeout");
     const error = new (OpenAI as any).RateLimitError("rate limited");
@@ -236,7 +357,9 @@ describe("EmbeddingClient", () => {
       .mockRejectedValueOnce(error)
       .mockResolvedValueOnce(fakeResponse([[1]]));
 
-    const client = new EmbeddingClient("test-key");
+    // dimensions=1 so the returned 1-dim vector matches the configured size;
+    // this test asserts on retry-backoff delays, not vector contents.
+    const client = new EmbeddingClient("test-key", "text-embedding-3-small", 1);
     await client.embed("backoff test");
 
     // setTimeout called for sleep: first retry 1000ms, second retry 2000ms

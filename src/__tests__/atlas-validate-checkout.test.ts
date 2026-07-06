@@ -22,6 +22,7 @@ import path from "node:path";
 import {
   locateCheckoutDir,
   loadFeatureRegistry,
+  loadValidationContext,
 } from "../atlas/validate-checkout.js";
 import { formatCliError } from "../atlas/harvest-cli.js";
 
@@ -197,5 +198,170 @@ describe("loadFeatureRegistry — deep shape validation (fix9 Y19)", () => {
     const registry = loadFeatureRegistry(file);
     expect(registry.categories).toHaveLength(2);
     expect(registry.categories[0]!.pills[0]!.id).toBe("agentic-chat");
+  });
+});
+
+// S19 (Theme E): FAIL-CLOSED contract for the clone/grep seam the §7 validation
+// gate depends on. `validate-checkout.ts` does no git and no grep itself — it
+// assembles the ValidationContext the gate greps against. The fail-closed
+// invariant at THIS seam: when the injected checkout is MISSING / UNREADABLE /
+// the wrong type (what a failed clone, an absent ref, or a stale/aborted grep
+// working tree looks like from disk), the helper must THROW rather than hand
+// back a context. A silently-empty or non-existent grep surface would make
+// EVERY candidate's validationTargets fail to match, marking them all
+// "unverified" — i.e. the gate would falsely source-verify NOTHING while
+// looking green-ish. So the contract is: fail closed (throw), never return.
+describe("validate-checkout FAIL-CLOSED contract (S19)", () => {
+  let tmp: string;
+
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-failclosed-"));
+  });
+
+  afterAll(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  // --- checkout dir: missing (failed clone / absent ref) ---
+  it("locateCheckoutDir THROWS (does not return a path) when the checkout dir is absent", () => {
+    const missing = path.join(tmp, "no-such-clone-dir");
+    // Guard the premise: the path really does not exist.
+    expect(fs.existsSync(missing)).toBe(false);
+
+    let thrown: unknown;
+    let returned: unknown;
+    try {
+      returned = locateCheckoutDir(missing);
+    } catch (e) {
+      thrown = e;
+    }
+
+    // Fail CLOSED: it must throw, never yield a (bogus) resolved path that
+    // downstream grep would treat as an empty-but-valid checkout.
+    expect(returned).toBeUndefined();
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(
+      /checkout dir cannot be read \(missing or unreadable\)/,
+    );
+    // The ENOENT cause survives for formatCliError's diagnosis.
+    expect((thrown as NodeJS.ErrnoException & { cause?: unknown }).cause).toBeDefined();
+    expect(
+      (
+        (thrown as { cause?: NodeJS.ErrnoException }).cause as NodeJS.ErrnoException
+      ).code,
+    ).toBe("ENOENT");
+  });
+
+  // --- checkout dir: exists but is a FILE, not a tree (wrong-type checkout) ---
+  it("locateCheckoutDir THROWS when the checkout path is a file, not a directory", () => {
+    const asFile = path.join(tmp, "clone-is-a-file");
+    fs.writeFileSync(asFile, "not a checkout\n", "utf-8");
+
+    let thrown: unknown;
+    let returned: unknown;
+    try {
+      returned = locateCheckoutDir(asFile);
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(returned).toBeUndefined();
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/is not a directory/);
+  });
+
+  // --- checkout dir: stat() errors (EIO / aborted grep working tree) ---
+  it("locateCheckoutDir fails CLOSED when statSync errors (EIO), never returning", () => {
+    const eio = Object.assign(new Error("EIO: i/o error, stat '/x'"), {
+      code: "EIO",
+    });
+    vi.spyOn(fs, "statSync").mockImplementation(() => {
+      throw eio;
+    });
+
+    let thrown: unknown;
+    let returned: unknown;
+    try {
+      returned = locateCheckoutDir("/some/checkout");
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(returned).toBeUndefined();
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).cause).toBe(eio);
+  });
+
+  // --- registry: missing file (absent ref / unpopulated checkout) ---
+  it("loadFeatureRegistry THROWS (does not return a registry) when the file is absent", () => {
+    const missing = path.join(tmp, "no-such-registry.json");
+    expect(fs.existsSync(missing)).toBe(false);
+
+    let thrown: unknown;
+    let returned: unknown;
+    try {
+      returned = loadFeatureRegistry(missing);
+    } catch (e) {
+      thrown = e;
+    }
+
+    // Fail CLOSED: never a silently-empty registry (which would make every
+    // claim non-showcase-verifiable, masking the config error).
+    expect(returned).toBeUndefined();
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(
+      /feature-registry file cannot be read \(missing or unreadable\)/,
+    );
+    expect(
+      (
+        (thrown as { cause?: NodeJS.ErrnoException }).cause as NodeJS.ErrnoException
+      ).code,
+    ).toBe("ENOENT");
+  });
+
+  // --- whole seam: loadValidationContext never returns a context if EITHER
+  //     artifact is bad (the single seam the harvest driver calls) ---
+  it("loadValidationContext fails CLOSED (no context) when the checkout dir is missing", () => {
+    const registry = path.join(tmp, "registry-ok.json");
+    fs.writeFileSync(
+      registry,
+      `${JSON.stringify({ categories: [] })}\n`,
+      "utf-8",
+    );
+
+    let thrown: unknown;
+    let returned: unknown;
+    try {
+      returned = loadValidationContext({
+        checkoutDir: path.join(tmp, "absent-clone"),
+        featureRegistryPath: registry,
+      });
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(returned).toBeUndefined();
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/checkout dir cannot be read/);
+  });
+
+  it("loadValidationContext fails CLOSED (no context) when the registry file is missing", () => {
+    const checkout = path.join(tmp, "real-checkout");
+    fs.mkdirSync(checkout, { recursive: true });
+
+    let thrown: unknown;
+    let returned: unknown;
+    try {
+      returned = loadValidationContext({
+        checkoutDir: checkout,
+        featureRegistryPath: path.join(tmp, "absent-registry.json"),
+      });
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(returned).toBeUndefined();
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/feature-registry file cannot be read/);
   });
 });

@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { LLMock } from "@copilotkit/aimock";
 import { notionAdapter } from "../atlas/adapters/notion.js";
 import type { NotionPageUnit } from "../atlas/adapters/notion.js";
 import { CandidateFragmentSchema } from "../atlas/types.js";
+import { OpenAIDistiller } from "../atlas/llm.js";
 import type { AdapterContext } from "../atlas/adapters/types.js";
 
 // ── Fixture loading ───────────────────────────────────────────────────────────
@@ -705,6 +707,229 @@ describe("notionAdapter", () => {
       const unit = loadUnit("single-decision-rrf-ranking.json");
       const [f] = await notionAdapter.extract(unit, CTX);
       expect(f.provenance.date).toBe("2026-03-30");
+    });
+  });
+
+  // ── validationTargets: cited symbols/paths make a fragment source-verifiable ──
+  //
+  // A notion decision that CITES a concrete repo-relative path or a code symbol
+  // gives validate.ts (S14) something to grep on origin/main. Those targets are
+  // lifted onto the fragment's `validationTargets` so the gate can source-verify
+  // and (only then) promote. A decision that cites nothing keeps an EMPTY
+  // target list by design — target-less prose stays unverified and falls to the
+  // human review page (the strict + prose-aware policy).
+  describe("validationTargets (cited symbols/paths)", () => {
+    it("lifts a cited repo-relative path into validationTargets", async () => {
+      const unit: NotionPageUnit = {
+        url: "https://www.notion.so/copilotkit/cited-path",
+        title: "ADR: RRF ranking lives in the search module",
+        subsystem: "search-ranking",
+        sections: [
+          {
+            heading: "Decision: Fuse ranks in src/atlas/rag-dedup.ts",
+            body: "We implement Reciprocal Rank Fusion in src/atlas/rag-dedup.ts so the overlap oracle stays in one place.",
+          },
+        ],
+      };
+      const [f] = await notionAdapter.extract(unit, CTX);
+      expect(f.validationTargets).toContain("src/atlas/rag-dedup.ts");
+    });
+
+    it("lifts a cited code symbol into validationTargets", async () => {
+      const unit: NotionPageUnit = {
+        url: "https://www.notion.so/copilotkit/cited-symbol",
+        title: "ADR: Canonical keying",
+        subsystem: "canonicalize",
+        sections: [
+          {
+            heading: "Decision: Key on claimSlug()",
+            body: "The canonical key is derived from the claimSlug() helper rather than the sourcetype prefix.",
+          },
+        ],
+      };
+      const [f] = await notionAdapter.extract(unit, CTX);
+      expect(f.validationTargets).toContain("claimSlug");
+    });
+
+    it("scans the section heading too (the persisted title may carry the citation)", async () => {
+      const unit: NotionPageUnit = {
+        url: "https://www.notion.so/copilotkit/cited-in-heading",
+        title: "ADR: Validation gate",
+        subsystem: "atlas",
+        sections: [
+          {
+            heading: "Decision: Gate promotion in src/atlas/validate.ts",
+            body: "Promotion is gated by the source-verify grep.",
+          },
+        ],
+      };
+      const [f] = await notionAdapter.extract(unit, CTX);
+      expect(f.validationTargets).toContain("src/atlas/validate.ts");
+    });
+
+    it("produces a contract-valid fragment with populated targets", async () => {
+      const unit: NotionPageUnit = {
+        url: "https://www.notion.so/copilotkit/cited-valid",
+        title: "ADR: Dedup",
+        subsystem: "atlas",
+        sections: [
+          {
+            heading: "Decision: dedup in src/atlas/rag-dedup.ts",
+            body: "See dedupAgainstRagCorpus() for the probe loop.",
+          },
+        ],
+      };
+      const [f] = await notionAdapter.extract(unit, CTX);
+      expect(() => CandidateFragmentSchema.parse(f)).not.toThrow();
+      expect(f.validationTargets).toContain("src/atlas/rag-dedup.ts");
+      expect(f.validationTargets).toContain("dedupAgainstRagCorpus");
+    });
+
+    it("emits distinct, deterministically-ordered targets (no duplicates)", async () => {
+      const unit: NotionPageUnit = {
+        url: "https://www.notion.so/copilotkit/cited-dedup-order",
+        title: "ADR: Paths",
+        subsystem: "atlas",
+        sections: [
+          {
+            heading: "Decision: touch src/atlas/canonicalize.ts",
+            body: "Both src/atlas/canonicalize.ts and src/atlas/aggregate.ts change; src/atlas/canonicalize.ts is mentioned twice.",
+          },
+        ],
+      };
+      const [f] = await notionAdapter.extract(unit, CTX);
+      // De-duped (canonicalize.ts appears twice in the source prose)...
+      expect(
+        f.validationTargets.filter((t) => t === "src/atlas/canonicalize.ts"),
+      ).toHaveLength(1);
+      // ...and sorted for deterministic fragment output.
+      expect(f.validationTargets).toStrictEqual(
+        [...f.validationTargets].sort(),
+      );
+    });
+
+    it("does NOT capture language keywords or prose runtime tokens as targets", async () => {
+      // Over-capture guard: `CITED_SYMBOL_RE` matched any `word(` — including
+      // language keywords (`if (x)`) — and `FILE_TARGET_RE` matched any dotted
+      // prose token ending in a known extension (`node.js`). Neither is a real
+      // cited code entity; both spuriously made a decision source-verifiable.
+      const unit: NotionPageUnit = {
+        url: "https://www.notion.so/copilotkit/over-capture",
+        title: "ADR: Runtime choice",
+        subsystem: "runtime",
+        sections: [
+          {
+            heading: "Decision: We use node.js",
+            body: "We use node.js as the runtime. if (x) { return early; } and we switch on the mode; for now this is fine.",
+          },
+        ],
+      };
+      const [f] = await notionAdapter.extract(unit, CTX);
+      expect(f.validationTargets).not.toContain("node.js");
+      expect(f.validationTargets).not.toContain("if");
+      expect(f.validationTargets).not.toContain("for");
+      expect(f.validationTargets).not.toContain("switch");
+      expect(f.validationTargets).not.toContain("return");
+      expect(f.validationTargets).toStrictEqual([]);
+    });
+
+    it("STILL captures a genuine cited path and a genuine cited call amid prose noise", async () => {
+      // The tightening must not throw out the baby: a real repo-relative path
+      // and a real call citation are still lifted even when prose keywords and
+      // runtime tokens surround them.
+      const unit: NotionPageUnit = {
+        url: "https://www.notion.so/copilotkit/genuine-amid-noise",
+        title: "ADR: Dedup lives in one place",
+        subsystem: "atlas",
+        sections: [
+          {
+            heading: "Decision: dedup in src/atlas/rag-dedup.ts",
+            body: "We run on node.js; if (corpus) { dedupAgainstRagCorpus(); } — the probe lives in src/atlas/rag-dedup.ts.",
+          },
+        ],
+      };
+      const [f] = await notionAdapter.extract(unit, CTX);
+      expect(f.validationTargets).toContain("src/atlas/rag-dedup.ts");
+      expect(f.validationTargets).toContain("dedupAgainstRagCorpus");
+      expect(f.validationTargets).not.toContain("node.js");
+      expect(f.validationTargets).not.toContain("if");
+    });
+
+    it("leaves target-less prose with an EMPTY validationTargets (stays unverified → human page)", async () => {
+      // A decision that cites no concrete symbol/path has nothing for the
+      // validation gate to grep, so it must stay unverified and fall to the
+      // human review page — NOT be silently promotable. This is the correct
+      // prose-aware behavior, not a regression.
+      const unit: NotionPageUnit = {
+        url: "https://www.notion.so/copilotkit/no-citation",
+        title: "ADR: Team norms",
+        subsystem: "process",
+        sections: [
+          {
+            heading: "Decision: We prefer small PRs",
+            body: "We keep pull requests small so review stays fast and focused.",
+          },
+        ],
+      };
+      const [f] = await notionAdapter.extract(unit, CTX);
+      expect(f.validationTargets).toStrictEqual([]);
+      // Target-less prose remains unverified (human-gated).
+      expect(f.provenance.classification.validation_status).toBe("unverified");
+    });
+  });
+
+  // ── aimock-routing guard (Theme E cheap check, folded from S20) ────────────────
+  //
+  // ORG RULE: any LLM-touching path in this repo routes through aimock, never a
+  // vi.fn / vi.mock stub. The notion adapter is a DETERMINISTIC derivation of the
+  // structured page (`ctx.llm` is unused) — it must make NO model call at all,
+  // even now that it extracts validationTargets (which is a pure regex lift, not
+  // an LLM call). This guard pins that: it installs a REAL `OpenAIDistiller`
+  // pointed at an in-process aimock server as `ctx.llm` (the only sanctioned LLM
+  // seam) and asserts extract produces its fragments while the aimock journal
+  // stays EMPTY — proving the adapter neither invokes the seam nor bypasses it
+  // with a hidden model call. If org-rule drift ever adds an LLM call here, it
+  // MUST go through this same aimock-backed seam (any request lands in
+  // `getRequests()`), so this test trips instead of a live-LLM leak reaching the
+  // suite. Using a real aimock distiller (not a stub) is itself the org-rule proof.
+  describe("notionAdapter.extract — aimock-routing guard", () => {
+    const mock = new LLMock({ port: 0, logLevel: "silent" });
+    let llmCtx: AdapterContext;
+
+    beforeAll(async () => {
+      await mock.start();
+      // A real distiller pointed at aimock IS the sanctioned `ctx.llm` seam — no
+      // vi.fn stub (org rule). No fixtures are registered: the adapter must not
+      // make a model call, so any request would 404 at aimock AND surface in the
+      // request journal — either way the guard trips.
+      const llm = new OpenAIDistiller({
+        baseURL: `${mock.url}/v1`,
+        apiKey: "mock",
+        now: () => new Date("2026-06-08T00:00:00.000Z"),
+      });
+      llmCtx = { now: new Date("2026-06-08T00:00:00.000Z"), llm };
+    });
+
+    afterAll(async () => {
+      await mock.stop();
+    });
+
+    beforeEach(() => {
+      mock.clearRequests();
+    });
+
+    it("derives fragments without touching the LLM seam (no aimock request)", async () => {
+      const unit = loadUnit("single-decision-rrf-ranking.json");
+      const fragments = await notionAdapter.extract(unit, llmCtx);
+
+      // The adapter still produces its derived fragment(s)...
+      expect(fragments.length).toBeGreaterThanOrEqual(1);
+      expect(fragments[0]?.sourcetype).toBe("notion-doc");
+      // ...and made ZERO calls to the aimock-backed LLM seam. Any hidden model
+      // call (org-rule drift) would route through this seam — landing a request
+      // in the journal — or bypass aimock entirely (banned). Either way the
+      // empty journal is the assertion that guards the seam.
+      expect(mock.getRequests()).toHaveLength(0);
     });
   });
 });

@@ -1578,7 +1578,10 @@ describe("config.ts", () => {
       warnSpy.mockRestore();
     });
 
-    it("treats whitespace-only PATHFINDER_CONSENT_HMAC_KEY as unset (dev fallback)", async () => {
+    it("fails loud on a set-but-whitespace-only PATHFINDER_CONSENT_HMAC_KEY (does NOT silently fall back)", async () => {
+      // A SET-but-all-empty value is INVALID, not unset: it must throw the
+      // ≥32-hex validation error rather than silently generating an ephemeral
+      // dev key (which masked an operator setting the var to garbage).
       process.env.NODE_ENV = "development";
       process.env.PATHFINDER_CONSENT_HMAC_KEY = "   ";
       mockedExistsSync.mockReturnValue(true);
@@ -1586,9 +1589,7 @@ describe("config.ts", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const { getConfig } = await freshImport();
-      const cfg = getConfig();
-      expect(cfg.oauthConsentHmacKeys).toHaveLength(1);
-      expect(cfg.oauthConsentHmacKeys[0]).toMatch(/^[0-9a-f]{64}$/);
+      expect(() => getConfig()).toThrow(/≥32 hex chars/);
       warnSpy.mockRestore();
     });
   });

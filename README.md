@@ -92,9 +92,40 @@ npx @copilotkit/pathfinder serve
 # Validate config, env vars, and source connectivity
 npx @copilotkit/pathfinder validate
 
+# List every missing required env var in one pass (Atlas CLI)
+# The `atlas` bin ships in the same package; --package selects it since the
+# bin name differs from the package name.
+npx --package @copilotkit/pathfinder atlas preflight
+
 # Docker with Postgres
 docker compose up
 ```
+
+## Required environment variables
+
+Requirements are conditional — a var is only required when the config or
+runtime mode actually needs it. Run
+`npx --package @copilotkit/pathfinder atlas preflight` to report every missing
+one in a single pass before starting the server.
+
+**Fatal at boot when `NODE_ENV=production`** (in development both are
+generated ephemerally with a warning):
+
+| Variable                      | Generate with          | Purpose                                                                          |
+| ----------------------------- | ---------------------- | -------------------------------------------------------------------------------- |
+| `MCP_JWT_SECRET`              | `openssl rand -hex 32` | Signs MCP session JWTs                                                            |
+| `PATHFINDER_CONSENT_HMAC_KEY` | `openssl rand -hex 32` | Signs the OAuth consent-screen nonce; comma-separate values to rotate keys       |
+
+**Source-gated** — required only when a matching source is configured:
+
+| Source type | Required variables                                                    |
+| ----------- | --------------------------------------------------------------------- |
+| `slack`     | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `OPENAI_API_KEY`           |
+| `discord`   | `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY` (+ `OPENAI_API_KEY` for text channels) |
+| `notion`    | `NOTION_TOKEN`                                                        |
+
+`DATABASE_URL` and `OPENAI_API_KEY` are required whenever search/knowledge/
+collect tools or semantic bash grep are configured.
 
 ## Switching from Mintlify?
 

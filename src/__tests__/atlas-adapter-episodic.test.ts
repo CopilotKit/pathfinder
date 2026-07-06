@@ -277,6 +277,15 @@ describe("episodic leaf adapter (aimock)", () => {
       async evaluateEnglishExclusionRule() {
         return { excluded: false };
       },
+      async judgeDistillation() {
+        return { kind: "distilled" as const };
+      },
+      async embed() {
+        return [0];
+      },
+      async distillDelta() {
+        return { kind: "no-overlap" as const };
+      },
     };
   }
 

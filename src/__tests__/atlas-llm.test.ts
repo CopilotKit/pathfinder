@@ -80,8 +80,8 @@ const EPISODIC_CASED_MODEL_OUTPUT = {
 
 // An UNRECOGNIZED sensitivity value: not a valid enum member even after
 // trim/lowercase. The distiller must NOT silently floor it to "internal"
-// (under-classification) — it warns and floors in the RESTRICTIVE direction
-// ("proprietary") so unclassifiable model judgments never leak.
+// (under-classification) — it warns and floors in the MOST restrictive
+// direction ("secret") so unclassifiable model judgments never leak.
 const UNRECOGNIZED_SENSITIVITY_MARKER = "UNRECOGNIZED-SENSITIVITY-WINDOW";
 const EPISODIC_UNRECOGNIZED_MODEL_OUTPUT = {
   title: "Vendor contract renewals are negotiated on a fiscal-Q3 cycle",
@@ -150,6 +150,13 @@ const EXCLUSION_KEEP_OUTPUT = {
 // bare string / null / array as the expected shape.
 const BARE_STRING_MARKER = "BARE-STRING-WINDOW";
 const NULL_JSON_MARKER = "NULL-JSON-WINDOW";
+
+// An embedding-input marker whose fixture returns a vector of the WRONG length
+// (not this.embeddingDimensions). embed() must SURFACE that (fail loud) rather
+// than pass a wrong-dimension vector downstream where it fails opaquely in
+// vectorSearch and is swallowed as a silent `semanticFailed`, degrading semantic
+// dedup invisibly. A distinct dimension count (7) pins "wrong length", not empty.
+const WRONG_DIM_EMBED_MARKER = "WRONG-DIM-EMBED-INPUT";
 
 const fixtures: Fixture[] = [
   // Episodic distillation — model returns a bare JSON string (valid JSON, wrong
@@ -269,6 +276,13 @@ const fixtures: Fixture[] = [
         reason: "  Candidate is a generic fact.  ",
       }),
     },
+  },
+  // Embedding — WRONG dimension: the "model" returns a 7-element vector even
+  // though embed() requested this.embeddingDimensions (1536). embed() must
+  // surface the mismatch (fail loud), not pass a wrong-length vector downstream.
+  {
+    match: { inputText: WRONG_DIM_EMBED_MARKER },
+    response: { embedding: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7] },
   },
 ];
 
@@ -392,7 +406,7 @@ describe("OpenAIDistiller (aimock)", () => {
       );
     });
 
-    it("WARNS and floors an unrecognized non-empty sensitivity to 'proprietary' (restrictive direction)", async () => {
+    it("WARNS and floors an unrecognized non-empty sensitivity to 'secret' (MOST restrictive direction)", async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         const fragment = await distiller.distillEpisodicWindow(
@@ -400,11 +414,12 @@ describe("OpenAIDistiller (aimock)", () => {
           { sourceName: "session-unrecognized", subsystem: "procurement" },
         );
 
-        // Unclassifiable ≠ harmless: floor in the RESTRICTIVE direction, never
-        // silently to "internal".
-        expect(fragment.provenance.classification.sensitivity).toBe(
-          "proprietary",
-        );
+        // Unclassifiable ≠ harmless: floor in the MOST restrictive direction
+        // (finding 5) — never silently to "internal", and not merely
+        // "proprietary". A sensitivity the model asserted but we cannot
+        // interpret must default to the most protective label so an
+        // unclassifiable secret can never leak past the exclusion rules.
+        expect(fragment.provenance.classification.sensitivity).toBe("secret");
         // The warning names the discarded value so the operator can see what
         // the model actually said.
         expect(warnSpy).toHaveBeenCalledWith(
@@ -507,6 +522,23 @@ describe("OpenAIDistiller (aimock)", () => {
     });
   });
 
+  describe("embed (dimension guard, fail-loud)", () => {
+    it("SURFACES a wrong-dimension embedding rather than passing it downstream silently", async () => {
+      // Bucket (a) finding: embed() only guarded against an empty/non-array
+      // vector, NOT a wrong-LENGTH one. A vector whose length !=
+      // this.embeddingDimensions would pass this guard, then fail opaquely in
+      // vectorSearch (a pgvector dimension mismatch) where the rag-dedup gate
+      // swallows it as a counted-but-generic `semanticFailed`, silently degrading
+      // semantic dedup. embed() must FAIL LOUD on the mismatch so a
+      // wrong-dimension embedding provider is a visible, diagnosable error at the
+      // source. aimock returns a 7-element vector for this input while embed
+      // requested 1536.
+      await expect(
+        distiller.embed(`text needing embedding ${WRONG_DIM_EMBED_MARKER}`),
+      ).rejects.toThrow(/dimension/i);
+    });
+  });
+
   describe("evaluateEnglishExclusionRule", () => {
     it("returns a typed excluded=true verdict with reason", async () => {
       const verdict = await distiller.evaluateEnglishExclusionRule(
@@ -603,5 +635,32 @@ describe("OpenAIDistiller constructor (API-key guard, no LLM calls)", () => {
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_BASE_URL;
     expect(() => new OpenAIDistiller({ apiKey: "sk-test" })).not.toThrow();
+  });
+
+  it("fails loud on a REAL (non-local) baseURL with a missing key — does NOT ship the 'mock' sentinel", () => {
+    // A real auth-requiring proxy configured via OPENAI_BASE_URL with the key
+    // forgotten must NOT silently default apiKey to "mock" (which surfaces as an
+    // opaque 401 downstream at the first model call). Only a CLEARLY-LOCAL /
+    // aimock baseURL may use the "mock" sentinel; an arbitrary real endpoint
+    // must fail loud at construction (fail-loud discipline).
+    delete process.env.OPENAI_API_KEY;
+    process.env.OPENAI_BASE_URL = "https://api.some-real-proxy.example.com/v1";
+    expect(() => new OpenAIDistiller()).toThrow(/OPENAI_API_KEY/);
+  });
+
+  it("fails loud on an explicit real https baseURL passed as an option with no key", () => {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_BASE_URL;
+    expect(
+      () =>
+        new OpenAIDistiller({ baseURL: "https://proxy.internal.example.com/v1" }),
+    ).toThrow(/OPENAI_API_KEY/);
+  });
+
+  it("still defaults to 'mock' for a localhost baseURL with no key (aimock case preserved)", () => {
+    // Regression guard: the local/aimock convenience must survive the fix.
+    delete process.env.OPENAI_API_KEY;
+    process.env.OPENAI_BASE_URL = "http://localhost:9/v1";
+    expect(() => new OpenAIDistiller()).not.toThrow();
   });
 });

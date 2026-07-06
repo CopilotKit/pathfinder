@@ -25,7 +25,7 @@ describe("LocalEmbeddingProvider", () => {
       tolist: () => [[0.1, 0.2, 0.3]],
     });
 
-    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 384);
+    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 3);
     await provider.embed("hello");
 
     expect(mockPipeline).toHaveBeenCalledWith(
@@ -39,7 +39,7 @@ describe("LocalEmbeddingProvider", () => {
       tolist: () => [[1, 2, 3]],
     });
 
-    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 384);
+    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 3);
     await provider.embed("first");
     await provider.embed("second");
 
@@ -52,7 +52,7 @@ describe("LocalEmbeddingProvider", () => {
       tolist: () => [[0.5, 0.6, 0.7]],
     });
 
-    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 384);
+    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 3);
     const result = await provider.embed("test");
     expect(result).toEqual([0.5, 0.6, 0.7]);
   });
@@ -66,7 +66,7 @@ describe("LocalEmbeddingProvider", () => {
       ],
     });
 
-    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 384);
+    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 2);
     const result = await provider.embedBatch(["a", "b", "c"]);
     expect(result).toHaveLength(3);
   });
@@ -87,6 +87,32 @@ describe("LocalEmbeddingProvider", () => {
     );
   });
 
+  // ── STRUCTURAL fix (4b): dimensions validated for Local provider ──────────
+  //
+  // transformers.js produces the model's NATIVE-size vectors; the configured
+  // `dimensions` was accepted but never applied or checked. A model whose native
+  // size ≠ the configured `dimensions` (the pgvector column size) silently emits
+  // mismatched vectors that only crash opaquely at the DB write. Fail LOUD on a
+  // dimension mismatch.
+  it("throws a loud, contextful error when a produced vector's length != configured dimensions", async () => {
+    // Configured for 384 but the extractor produces a 3-dim vector.
+    mockExtractor._call.mockResolvedValue({
+      tolist: () => [[0.1, 0.2, 0.3]],
+    });
+    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 384);
+    await expect(provider.embed("test")).rejects.toThrow(
+      /dimension.*384.*got 3/i,
+    );
+  });
+
+  it("accepts a produced vector whose length MATCHES the configured dimensions", async () => {
+    const vec = Array.from({ length: 384 }, () => 0.1);
+    mockExtractor._call.mockResolvedValue({ tolist: () => [vec] });
+    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 384);
+    const result = await provider.embed("test");
+    expect(result).toHaveLength(384);
+  });
+
   it("batches in groups of 32 for local inference", async () => {
     const texts = Array.from({ length: 50 }, (_, i) => `text-${i}`);
     mockExtractor._call
@@ -97,7 +123,7 @@ describe("LocalEmbeddingProvider", () => {
         tolist: () => Array.from({ length: 18 }, () => [2]),
       });
 
-    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 384);
+    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 1);
     const result = await provider.embedBatch(texts);
 
     expect(mockExtractor._call).toHaveBeenCalledTimes(2);
@@ -109,7 +135,7 @@ describe("LocalEmbeddingProvider", () => {
       tolist: () => [[1, 2, 3]],
     });
 
-    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 384);
+    const provider = new LocalEmbeddingProvider("Xenova/all-MiniLM-L6-v2", 3);
 
     // Fire two concurrent embed calls
     const [r1, r2] = await Promise.all([

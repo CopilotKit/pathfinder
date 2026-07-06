@@ -88,33 +88,38 @@ Every fragment file is ONE object of this shape:
 ```jsonc
 {
   "sourcetype": "memory | episodic | github-pr | github-issue | notion-doc | linear-doc | agent-doc | derived",
-  "subsystem": "<subsystem/saga slug>",          // required — must NOT contain ':' (canonical-key delimiter) or '⟦'/'⟧' (approval-marker delimiters); the schema hard-rejects all three
-  "claimSlugHint": "<optional claim slug>",        // optional
-  "source_name": "<logical source name>",          // required
+  "subsystem": "<subsystem/saga slug>", // required — must NOT contain ':' (canonical-key delimiter) or '⟦'/'⟧' (approval-marker delimiters); the schema hard-rejects all three
+  "claimSlugHint": "<optional claim slug>", // optional
+  "source_name": "<logical source name>", // required
   "repo_url": "<optional>",
   "ref": "<optional branch/ref>",
-  "title": "<DISTILLED claim — NOT a raw source title>",   // required
-  "content": "<why/how prose>",                    // required
-  "provenance": {                                   // required
-    "source": "<source label>",                    // required
+  "title": "<DISTILLED claim — NOT a raw source title>", // required
+  "content": "<why/how prose>", // required
+  "provenance": {
+    // required
+    "source": "<source label>", // required
     "url": "<optional>",
     "date": "<optional YYYY-MM-DD>",
     "commit": "<optional>",
     "version": "<optional>",
     "validated_against": "<optional free-text>",
-    "classification": {                             // required — all 7 dims
+    "classification": {
+      // required — all 7 dims
       "sensitivity": "public | internal | proprietary | secret",
       "knowledge_type": "architecture | design-rationale | root-cause | ownership | operational | protocol | security | process | product | gtm | org-culture",
-      "audience": "<free string, e.g. all-staff | engineering | gtm>",  // defaults to "all-staff"
+      "audience": "<free string, e.g. all-staff | engineering | gtm>", // defaults to "all-staff"
       "validation_status": "unverified | source-verified | showcase-verified",
       "confidence": "high | medium | low",
       "provenance_class": "primary | derived",
-      "freshness": { "as_of": "YYYY-MM-DD", "re_verify_by": "YYYY-MM-DD (optional)" }
-    }
+      "freshness": {
+        "as_of": "YYYY-MM-DD",
+        "re_verify_by": "YYYY-MM-DD (optional)",
+      },
+    },
   },
-  "evidence": [ /* zero or more, kind-discriminated — see below */ ],
-  "needsReview": false,                             // episodic ⇒ true
-  "validationTargets": [ "<symbol-or-repo-relative-path>", "..." ]
+  "evidence": [/* zero or more, kind-discriminated — see below */],
+  "needsReview": false, // episodic ⇒ true
+  "validationTargets": ["<symbol-or-repo-relative-path>", "..."],
 }
 ```
 
@@ -148,49 +153,96 @@ Rules the leaf must honor (the adapters enforce these — match them):
 These are the exact adapter input shapes (from `src/atlas/adapters/*.ts`).
 
 **memory** (`MemoryFileUnit`):
+
 ```jsonc
-{ "filename": "memory/feedback_nextjs_bundles_node_modules.md", "contents": "<full file: frontmatter + body>" }
+{
+  "filename": "memory/feedback_nextjs_bundles_node_modules.md",
+  "contents": "<full file: frontmatter + body>",
+}
 ```
 
 **github-pr** (`GitHubPullRequestUnit`):
+
 ```jsonc
 {
   "kind": "pull_request",
   "sourceName": "github-pr:CopilotKit/pathfinder#1746",
-  "repo": { "fullName": "CopilotKit/pathfinder", "cloneUrl": "https://github.com/CopilotKit/pathfinder.git", "defaultBranch": "main" },
-  "pullRequest": { "number": 1746, "title": "...", "body": "...", "htmlUrl": "https://github.com/.../pull/1746",
-                   "mergeCommitSha": "...", "baseRef": "main", "headRef": "...", "author": "...", "mergedBy": "..." },
-  "changedFiles": ["src/db/atlas.ts"], "linkedIssues": ["https://github.com/.../issues/1732"], "reviewThreads": ["..."]
+  "repo": {
+    "fullName": "CopilotKit/pathfinder",
+    "cloneUrl": "https://github.com/CopilotKit/pathfinder.git",
+    "defaultBranch": "main",
+  },
+  "pullRequest": {
+    "number": 1746,
+    "title": "...",
+    "body": "...",
+    "htmlUrl": "https://github.com/.../pull/1746",
+    "mergeCommitSha": "...",
+    "baseRef": "main",
+    "headRef": "...",
+    "author": "...",
+    "mergedBy": "...",
+  },
+  "changedFiles": ["src/db/atlas.ts"],
+  "linkedIssues": ["https://github.com/.../issues/1732"],
+  "reviewThreads": ["..."],
 }
 ```
 
 **github-issue** (`GitHubIssueUnit`):
+
 ```jsonc
 {
   "kind": "issue",
   "sourceName": "github-issue:CopilotKit/pathfinder#1732",
   "repo": { "fullName": "...", "cloneUrl": "...", "defaultBranch": "main" },
-  "issue": { "number": 1732, "title": "...", "body": "...", "htmlUrl": "...", "author": "...", "state": "closed" },
-  "linkedIssues": [], "reviewThreads": []
+  "issue": {
+    "number": 1732,
+    "title": "...",
+    "body": "...",
+    "htmlUrl": "...",
+    "author": "...",
+    "state": "closed",
+  },
+  "linkedIssues": [],
+  "reviewThreads": [],
 }
 ```
 
 **notion-doc** (`NotionPageUnit`):
+
 ```jsonc
 {
-  "url": "https://www.notion.so/...", "title": "Interrupts Proposal — Design Decisions",
-  "subsystem": "agui-protocol", "repo_url": "<optional>", "ref": "<optional>", "date": "2026-05-20",
-  "sections": [ { "heading": "Decision 1: Resume tokens are opaque", "body": "..." }, { "heading": "Context", "body": "..." } ]
+  "url": "https://www.notion.so/...",
+  "title": "Interrupts Proposal — Design Decisions",
+  "subsystem": "agui-protocol",
+  "repo_url": "<optional>",
+  "ref": "<optional>",
+  "date": "2026-05-20",
+  "sections": [
+    { "heading": "Decision 1: Resume tokens are opaque", "body": "..." },
+    { "heading": "Context", "body": "..." },
+  ],
 }
 ```
+
 (The adapter splits on decision headings: `Decision …`, `ADR …`, `N. …`. Non-decision sections like Context are page-level only.)
 
 **linear-doc** (`LinearDocUnit`):
+
 ```jsonc
 {
-  "url": "https://linear.app/...", "title": "...", "problem": "...", "why": "...",
-  "nonGoals": ["..."], "citedFiles": ["src/..."], "notionCrossLink": "<optional Notion url>",
-  "subsystem": "runtime", "area": "<optional>", "updatedAt": "2026-05-30", "knowledgeType": "ownership"
+  "url": "https://linear.app/...",
+  "title": "...",
+  "problem": "...",
+  "why": "...",
+  "nonGoals": ["..."],
+  "citedFiles": ["src/..."],
+  "notionCrossLink": "<optional Notion url>",
+  "subsystem": "runtime",
+  "area": "<optional>",
+  "updatedAt": "2026-05-30",
+  "knowledgeType": "ownership",
 }
 ```
 
@@ -198,25 +250,49 @@ These are the exact adapter input shapes (from `src/atlas/adapters/*.ts`).
 invariants (`needsReview: true`, `validation_status: "unverified"`,
 `provenance_class: "derived"`, `confidence: "low"` clamped, `sensitivity`
 floored at `"internal"` preserving any stronger signal):
+
 ```jsonc
-{ "convPath": "<session jsonl path or link>", "date": "2026-06-07", "text": "<raw transcript window>", "subsystem": "<optional hint>" }
+{
+  "convPath": "<session jsonl path or link>",
+  "date": "2026-06-07",
+  "text": "<raw transcript window>",
+  "subsystem": "<optional hint>",
+}
 ```
 
 **agent-doc / source-comment** (`SourceCommentUnit`):
+
 ```jsonc
 {
   "filePath": "packages/react-core/src/use-coagent-state-render-bridge.tsx",
-  "lineStart": 24, "lineEnd": 45,
-  "commentText": "<the design-block comment>", "codeRegion": "<the annotated code>",
-  "subsystem": "react-core", "repoUrl": "<optional>", "ref": "<optional>", "sourceUrl": "<optional GitHub blob #Lx-Ly>"
+  "lineStart": 24,
+  "lineEnd": 45,
+  "commentText": "<the design-block comment>",
+  "codeRegion": "<the annotated code>",
+  "subsystem": "react-core",
+  "repoUrl": "<optional>",
+  "ref": "<optional>",
+  "sourceUrl": "<optional GitHub blob #Lx-Ly>",
 }
 ```
 
 **derived / showcase** (`ShowcaseUnit`):
+
 ```jsonc
 {
-  "manifest": { "integration": "langgraph-python", "name": "LangGraph (Python)", "repo_url": "<optional>", "description": "<optional>", "features": ["agentic-chat", "gen-ui"] },
-  "registry": { "version": "1", "categories": [ { "id": "...", "pills": [ { "id": "agentic-chat", "status": "green" } ] } ] }
+  "manifest": {
+    "integration": "langgraph-python",
+    "name": "LangGraph (Python)",
+    "repo_url": "<optional>",
+    "description": "<optional>",
+    "features": ["agentic-chat", "gen-ui"],
+  },
+  "registry": {
+    "version": "1",
+    "categories": [
+      { "id": "...", "pills": [{ "id": "agentic-chat", "status": "green" }] },
+    ],
+  },
 }
 ```
 
@@ -290,8 +366,14 @@ symbol as a `validationTarget`:
     }
   },
   "evidence": [
-    { "kind": "changed_file", "path": "packages/react-core/src/use-coagent-state-render-bridge.tsx:24-45" },
-    { "kind": "fused_from", "ref": "source-comment:packages/react-core/src/use-coagent-state-render-bridge.tsx:24-45" }
+    {
+      "kind": "changed_file",
+      "path": "packages/react-core/src/use-coagent-state-render-bridge.tsx:24-45"
+    },
+    {
+      "kind": "fused_from",
+      "ref": "source-comment:packages/react-core/src/use-coagent-state-render-bridge.tsx:24-45"
+    }
   ],
   "needsReview": false,
   "validationTargets": ["useCoagentStateRenderBridge"]

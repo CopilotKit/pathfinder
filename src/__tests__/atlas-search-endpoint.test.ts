@@ -786,6 +786,10 @@ describe("atlas harvest E2E — full pipeline against the live /api/search route
       runsDir,
       upsert: true,
       ragClient: new AtlasHttpClient({ baseUrl, token: "secret" }),
+      // Pass-through distillation judge: this E2E asserts the rag-dedup/upsert
+      // path, not the why-vs-what gate (covered in atlas-distillation-gate.test.ts),
+      // so avoid constructing a real OpenAIDistiller (which needs an API key).
+      judge: { judge: async () => ({ kind: "distilled" as const }) },
       validationContext,
     }).finally(() => {
       // Capture-then-restore even if the run throws — mockRestore CLEARS
@@ -819,7 +823,7 @@ describe("atlas harvest E2E — full pipeline against the live /api/search route
     // BOTH provenance.validated_against and the fused_from evidence ref,
     // pointing at the seeded corpus chunk's source_url.
     const overlapping = pending.find(
-      (p) => p.canonicalKey === "github-pr:runtime:tools-before-stream",
+      (p) => p.canonicalKey === "claim:runtime:tools-before-stream",
     );
     expect(overlapping).toBeDefined();
     const marker = `${RAG_CORPUS_OVERLAP_REF_PREFIX}${OVERLAP_CHUNK_URL}`;
@@ -836,7 +840,7 @@ describe("atlas harvest E2E — full pipeline against the live /api/search route
     // The four non-overlapping candidates are NOT annotated (their probes
     // succeeded with no verbatim corpus hit — successes, not swallowed 404s).
     for (const row of pending) {
-      if (row.canonicalKey === "github-pr:runtime:tools-before-stream") {
+      if (row.canonicalKey === "claim:runtime:tools-before-stream") {
         continue;
       }
       const prov = row.provenance as { validated_against?: string };

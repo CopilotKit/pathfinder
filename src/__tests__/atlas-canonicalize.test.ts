@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  CANONICAL_KEY_PREFIX,
   canonicalize,
   claimSlug,
   recomputeRankScore,
@@ -8,6 +9,7 @@ import {
   BEHAVIOR_KNOWLEDGE_TYPES,
   CandidateSchema,
   parseCanonicalKey,
+  RAG_NO_DELTA_MARKER,
 } from "../atlas/types.js";
 import type {
   CandidateFragment,
@@ -70,7 +72,9 @@ function makeFragment(o: FragmentOverrides = {}): CandidateFragment {
 }
 
 describe("canonicalize — canonical_key assignment", () => {
-  it("assigns canonical_key in <sourcetype>:<subsystem>:<claim-slug> form", () => {
+  it("assigns canonical_key in <CANONICAL_KEY_PREFIX>:<subsystem>:<claim-slug> form (C.2)", () => {
+    // The first segment is a STABLE constant (CANONICAL_KEY_PREFIX), NOT the
+    // sourcetype — the canonical_key keys on claim identity (spec §C.2).
     const out = canonicalize([
       makeFragment({
         sourcetype: "github-pr",
@@ -80,10 +84,10 @@ describe("canonicalize — canonical_key assignment", () => {
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].canonical_key).toBe(
-      "github-pr:cpk-runtime:two-layer-shim-to-v2-engine",
+      `${CANONICAL_KEY_PREFIX}:cpk-runtime:two-layer-shim-to-v2-engine`,
     );
     const parts = parseCanonicalKey(out[0].canonical_key);
-    expect(parts.sourcetype).toBe("github-pr");
+    expect(parts.sourcetype).toBe(CANONICAL_KEY_PREFIX);
     expect(parts.subsystem).toBe("cpk-runtime");
     expect(parts.claimSlug).toBe("two-layer-shim-to-v2-engine");
   });
@@ -98,7 +102,8 @@ describe("canonicalize — canonical_key assignment", () => {
       }),
     ]);
     const parts = parseCanonicalKey(out[0].canonical_key);
-    expect(parts.sourcetype).toBe("notion-doc");
+    // First segment is the stable prefix, independent of the notion-doc source.
+    expect(parts.sourcetype).toBe(CANONICAL_KEY_PREFIX);
     expect(parts.subsystem).toBe("agui-protocol");
     // Slug is lower-kebab, punctuation stripped, words joined by '-'.
     expect(parts.claimSlug).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -150,7 +155,7 @@ describe("canonicalize — global dedup + supersession", () => {
     expect(out[0].content).toBe("NEW rationale");
     expect(out[0].provenance.date).toBe("2026-05-12");
     expect(out[0].canonical_key).toBe(
-      "github-pr:agui-adk:occ-concurrency-handling",
+      `${CANONICAL_KEY_PREFIX}:agui-adk:occ-concurrency-handling`,
     );
   });
 
@@ -172,20 +177,32 @@ describe("canonicalize — global dedup + supersession", () => {
     expect(out[0].content).toBe("NEW rationale");
   });
 
-  it("does NOT collapse fragments that differ in sourcetype (distinct canonical_key)", () => {
+  it("COLLAPSES fragments that differ ONLY in sourcetype (claim-identity keying, C.2)", () => {
+    // C.2: the canonical_key keys on claim identity (subsystem + claim slug),
+    // NOT the sourcetype prefix — so the SAME claim seen from two sources at the
+    // same subsystem+claim now shares ONE canonical_key and collapses via
+    // supersession. This is the deliberate cross-source-collision shift the C.2
+    // slot owns (spec §C.2): the whole point is that a claim's identity does not
+    // depend on which source it was harvested from. (Pre-C.2 these produced two
+    // keys `github-pr:…` / `notion-doc:…`; now both key on claim identity.)
     const a = makeFragment({
       sourcetype: "github-pr",
       subsystem: "agui-adk",
       claimSlugHint: "occ-concurrency-handling",
+      date: "2026-01-01",
+      content: "from github",
     });
     const b = makeFragment({
       sourcetype: "notion-doc",
       subsystem: "agui-adk",
       claimSlugHint: "occ-concurrency-handling",
+      date: "2026-05-12",
+      content: "from notion",
     });
     const out = canonicalize([a, b]);
-    expect(out).toHaveLength(2);
-    expect(new Set(out.map((c) => c.canonical_key)).size).toBe(2);
+    expect(out).toHaveLength(1);
+    // The survivor is the newer (superseding) fragment, regardless of source.
+    expect(out[0].content).toBe("from notion");
   });
 
   it("does NOT collapse fragments that differ in subsystem or claim", () => {
@@ -195,6 +212,77 @@ describe("canonicalize — global dedup + supersession", () => {
       makeFragment({ subsystem: "cpk-runtime", claimSlugHint: "claim-one" }),
     ]);
     expect(out).toHaveLength(3);
+  });
+});
+
+describe("canonicalize — canonical_key is stable across solo→fused re-keying (C.2)", () => {
+  it("a solo run and a later FUSED run for the same claim share ONE canonical_key", () => {
+    // The bug (spec §C.2): run 1 harvests a claim SOLO (sourcetype `memory`) and
+    // run 2 re-harvests it after it GAINS a fusing source (aggregate re-stamps
+    // sourcetype `derived`). Pre-fix, canonicalize built the key from sourcetype,
+    // so run 1 → `memory:<sub>:<slug>` and run 2 → `derived:<sub>:<slug>` never
+    // collided at the DB upsert → run 2 added a NEW pending row instead of
+    // superseding. Keying on claim identity (subsystem + claim slug) makes both
+    // runs resolve to the SAME canonical_key.
+    const [solo] = canonicalize([
+      makeFragment({
+        sourcetype: "memory",
+        subsystem: "agui-protocol",
+        claimSlugHint: "interrupt-resume-keying",
+        date: "2026-06-01",
+      }),
+    ]);
+    const [fused] = canonicalize([
+      makeFragment({
+        sourcetype: "derived",
+        subsystem: "agui-protocol",
+        claimSlugHint: "interrupt-resume-keying",
+        date: "2026-06-02",
+      }),
+    ]);
+    // Same claim identity → same canonical_key, so the upsert (ON CONFLICT
+    // canonical_key) supersedes run 1 instead of inserting a duplicate.
+    expect(solo.canonical_key).toBe(fused.canonical_key);
+  });
+
+  it("within one run, a solo and its fused twin for the same claim collapse to ONE row", () => {
+    // The intra-run projection of the same invariant: a solo `memory` fragment
+    // and a `derived` fused fragment for the same subsystem+claim now share a
+    // key, so canonicalize emits ONE candidate (the newer supersedes) rather
+    // than two rows that differ only by source prefix.
+    const solo = makeFragment({
+      sourcetype: "memory",
+      subsystem: "agui-protocol",
+      claimSlugHint: "interrupt-resume-keying",
+      date: "2026-06-01",
+      content: "SOLO",
+    });
+    const fused = makeFragment({
+      sourcetype: "derived",
+      subsystem: "agui-protocol",
+      claimSlugHint: "interrupt-resume-keying",
+      date: "2026-06-02",
+      content: "FUSED",
+    });
+    const out = canonicalize([solo, fused]);
+    expect(out).toHaveLength(1);
+    expect(out[0].content).toBe("FUSED");
+  });
+
+  it("the canonical_key still round-trips through parseCanonicalKey (subsystem recoverable)", () => {
+    // The key format stays 3-segment `<prefix>:<subsystem>:<claim-slug>` so
+    // sync.ts's subsystem recovery (parseCanonicalKey) keeps working — only the
+    // volatile sourcetype first segment is replaced by a stable constant.
+    const [c] = canonicalize([
+      makeFragment({
+        sourcetype: "memory",
+        subsystem: "agui-protocol",
+        claimSlugHint: "interrupt-resume-keying",
+      }),
+    ]);
+    const parts = parseCanonicalKey(c.canonical_key);
+    expect(parts.subsystem).toBe("agui-protocol");
+    expect(parts.claimSlug).toBe("interrupt-resume-keying");
   });
 });
 
@@ -374,6 +462,30 @@ describe("canonicalize — rank ordering", () => {
     expect(row("genuine").rankScore).toBeGreaterThan(row("bare").rankScore);
   });
 
+  it("a rag-dedup no-delta floor marker is rank-NEUTRAL (does not inflate evidence depth)", () => {
+    // The §6.2 no-delta gate stamps the RAG_NO_DELTA_MARKER floor as a fused_from
+    // evidence ref on a pure corpus DUPLICATE. That marker is a provenance floor
+    // trace, NOT corroboration for the claim — counting it would inflate the
+    // duplicate's rankScore so it OUT-RANKS its un-duplicated twin (the §6.2 rank
+    // inversion). It must be excluded from the evidence-depth count exactly like
+    // the rag-corpus-overlap: prefix already is.
+    const floored = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "floored",
+      evidence: [{ kind: "fused_from", ref: RAG_NO_DELTA_MARKER }],
+    });
+    const bare = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "bare-nd",
+      evidence: [],
+    });
+    const out = canonicalize([floored, bare]);
+    const row = (slug: string) =>
+      out.find((c) => c.canonical_key.endsWith(`:${slug}`))!;
+    // The floor marker must NOT count: the floored duplicate ties its bare twin.
+    expect(row("floored").rankScore).toBe(row("bare-nd").rankScore);
+  });
+
   it("ranks a more recent fact higher, all else equal", () => {
     const recent = makeFragment({
       subsystem: "s",
@@ -409,9 +521,9 @@ describe("canonicalize — deterministic ordering on rankScore ties", () => {
     expect(new Set(out.map((c) => c.rankScore)).size).toBe(1);
     // Tiebreak is canonical_key ascending.
     expect(out.map((c) => c.canonical_key)).toEqual([
-      "github-pr:s:alpha",
-      "github-pr:s:bravo",
-      "github-pr:s:charlie",
+      `${CANONICAL_KEY_PREFIX}:s:alpha`,
+      `${CANONICAL_KEY_PREFIX}:s:bravo`,
+      `${CANONICAL_KEY_PREFIX}:s:charlie`,
     ]);
   });
 });
@@ -795,20 +907,29 @@ describe("canonicalize — tie-break is codepoint order, not locale collation (f
     // The two candidates tie on rankScore (identical rank inputs).
     expect(new Set(out.map((c) => c.rankScore)).size).toBe(1);
     expect(out.map((c) => c.canonical_key)).toEqual([
-      "github-pr:Beta:k",
-      "github-pr:alpha:k",
+      `${CANONICAL_KEY_PREFIX}:Beta:k`,
+      `${CANONICAL_KEY_PREFIX}:alpha:k`,
     ]);
   });
 });
 
 describe("BEHAVIOR_KNOWLEDGE_TYPES — the §7 gate set has ONE definition (types.ts)", () => {
-  it("the exported set contains exactly architecture and design-rationale", () => {
+  it("the exported set is the enum-complement of the exempt process/etiquette types (A.4)", () => {
     // Pin the contract-level export: canonicalize (approvable), validate
     // (promotion gating), and artifact sync (re-derived approvable) all import
-    // this ONE set, so the three §7 gate sites can never silently drift.
+    // this ONE set, so the three §7 gate sites can never silently drift. A.4
+    // widened the gate to ALL fact/behavior types — the complement of the three
+    // exempt {process, operational, org-culture} types (spec §A.4) — so every
+    // falsifiable knowledge type is guilty-until-validated when unverified.
     expect([...BEHAVIOR_KNOWLEDGE_TYPES].sort()).toEqual([
       "architecture",
       "design-rationale",
+      "gtm",
+      "ownership",
+      "product",
+      "protocol",
+      "root-cause",
+      "security",
     ]);
   });
 });

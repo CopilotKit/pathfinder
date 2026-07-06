@@ -167,6 +167,39 @@ describe("GitHub webhook Atlas seed extraction", () => {
     expect(orchestrator.queueIncrementalReindex).not.toHaveBeenCalled();
   });
 
+  // BYTE-IDENTITY GATE (A.3): the webhook seed `content` is the ONE surface
+  // shared with the batch adapter (buildGitHubSeedContent). A.3 lifts the
+  // WHAT-metadata header off the BATCH content but MUST leave the webhook bytes
+  // untouched — the header, blank-line spacing, label order, and raw body must
+  // reproduce exactly. This locks the exact bytes so any drift in the shared
+  // helper (e.g. the batch-only lift accidentally reshaping the webhook path)
+  // fails loud here.
+  it("emits BYTE-IDENTICAL seed content for the webhook (WHAT-header + raw body)", async () => {
+    const { req, res } = mockReqRes(makePullRequestPayload());
+
+    await handler(req, res);
+
+    const EXPECTED_CONTENT = [
+      "# PR #42: Explain runtime architecture",
+      "",
+      "Repository: org/repo",
+      "Base branch: main",
+      "Head branch: feature/runtime-architecture",
+      "Merge commit: abc12345deadbeef",
+      "Author: octocat",
+      "Merged by: maintainer",
+      "URL: https://github.com/org/repo/pull/42",
+      "",
+      "The runtime now routes requests through the agent bridge.",
+    ].join("\n");
+
+    expect(mockUpsertAtlasSeedCandidate).toHaveBeenCalledTimes(1);
+    const arg = mockUpsertAtlasSeedCandidate.mock.calls[0][0] as {
+      content: string;
+    };
+    expect(arg.content).toBe(EXPECTED_CONTENT);
+  });
+
   it("ignores merged pull requests for repos without an Atlas source", async () => {
     mockGetServerConfig.mockReturnValue({
       ...makeServerConfig(),

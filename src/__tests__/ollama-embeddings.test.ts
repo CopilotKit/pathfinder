@@ -21,7 +21,7 @@ describe("OllamaEmbeddingProvider", () => {
 
     const provider = new OllamaEmbeddingProvider(
       "nomic-embed-text",
-      768,
+      3, // matches the 3-dim vector the mock returns (dimension guard)
       "http://localhost:11434",
     );
     const result = await provider.embed("hello world");
@@ -55,7 +55,7 @@ describe("OllamaEmbeddingProvider", () => {
 
     const provider = new OllamaEmbeddingProvider(
       "nomic-embed-text",
-      768,
+      2, // matches the 2-dim vectors the mock returns (dimension guard)
       "http://localhost:11434",
     );
     const result = await provider.embedBatch(["a", "b", "c"]);
@@ -109,7 +109,7 @@ describe("OllamaEmbeddingProvider", () => {
 
     const provider = new OllamaEmbeddingProvider(
       "m",
-      768,
+      1, // matches the 1-dim vector the mock returns (dimension guard)
       "http://localhost:11434/",
     );
     await provider.embed("test");
@@ -118,6 +118,46 @@ describe("OllamaEmbeddingProvider", () => {
       "http://localhost:11434/api/embed",
       expect.anything(),
     );
+  });
+
+  // ── STRUCTURAL fix (4b): dimensions validated for Ollama ──────────────────
+  //
+  // Ollama's /api/embed returns the model's NATIVE-size vectors and does not
+  // accept a `dimensions` request param — so the configured `dimensions` was
+  // accepted but NEVER applied or checked. A model whose native size ≠ the
+  // configured `dimensions` (which the pgvector column is sized to) silently
+  // produces mismatched vectors that only blow up opaquely at the DB write. The
+  // provider must fail LOUD, with context, on a dimension mismatch.
+  it("throws a loud, contextful error when a returned vector's length != configured dimensions", async () => {
+    // Configured for 768 but the model returns a 3-dim vector — a mismatch the
+    // pgvector column would later reject with an opaque error.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }), {
+        status: 200,
+      }),
+    );
+    const provider = new OllamaEmbeddingProvider(
+      "nomic-embed-text",
+      768,
+      "http://localhost:11434",
+    );
+    await expect(provider.embed("hello")).rejects.toThrow(
+      /dimension.*768.*got 3/i,
+    );
+  });
+
+  it("accepts vectors whose length MATCHES the configured dimensions", async () => {
+    const vec = Array.from({ length: 768 }, () => 0.1);
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ embeddings: [vec] }), { status: 200 }),
+    );
+    const provider = new OllamaEmbeddingProvider(
+      "nomic-embed-text",
+      768,
+      "http://localhost:11434",
+    );
+    const result = await provider.embed("hello");
+    expect(result).toHaveLength(768);
   });
 
   it("batches large inputs into groups of 512", async () => {
@@ -142,7 +182,7 @@ describe("OllamaEmbeddingProvider", () => {
 
     const provider = new OllamaEmbeddingProvider(
       "m",
-      768,
+      1, // matches the 1-dim vectors the mock returns (dimension guard)
       "http://localhost:11434",
     );
     const result = await provider.embedBatch(texts);
