@@ -27,6 +27,7 @@
 
 import type { AdapterContext, LeafAdapter } from "./types.js";
 import { scanSensitivity } from "./sensitivity-scan.js";
+import { extractValidationTargets } from "./validation-targets.js";
 import type { CandidateFragment, Provenance, Sensitivity } from "../types.js";
 
 // ── Unit shapes (assembled by the Tier-1 leaf agent from the GitHub API) ──────
@@ -110,7 +111,16 @@ export interface GitHubSeedContentParts {
   emptyBodyFallback?: string;
 }
 
-export function buildGitHubSeedContent(parts: GitHubSeedContentParts): string {
+// The WHAT-metadata header block (title line + Repository/branch/commit/author/
+// URL facts). Extracted from `buildGitHubSeedContent` as a standalone step so
+// the BATCH adapter (A.3) can keep this WHAT-metadata OUT of the seed `content`
+// (which must be pure why/how prose the distillation gate judges) while still
+// carrying the facts as provenance on the fragment. The WEBHOOK path re-inlines
+// it via `buildGitHubSeedContent` below, so its output stays BYTE-IDENTICAL. The
+// line ORDER and labels match the historic webhook block exactly.
+export function buildGitHubWhatHeader(
+  parts: Omit<GitHubSeedContentParts, "bodyText" | "emptyBodyFallback">,
+): string {
   return [
     `# ${parts.kindLabel} #${parts.number}: ${parts.title}`,
     "",
@@ -124,11 +134,22 @@ export function buildGitHubSeedContent(parts: GitHubSeedContentParts): string {
     parts.author ? `Author: ${parts.author}` : null,
     parts.mergedBy ? `Merged by: ${parts.mergedBy}` : null,
     `URL: ${parts.url}`,
-    "",
-    parts.bodyText ?? parts.emptyBodyFallback ?? EMPTY_BODY_FALLBACK,
   ]
     .filter((line): line is string => line != null)
     .join("\n");
+}
+
+export function buildGitHubSeedContent(parts: GitHubSeedContentParts): string {
+  // The webhook seed content is the WHAT-metadata header, one blank line, then
+  // the raw body. Composed from `buildGitHubWhatHeader` so the header assembly
+  // has ONE source of truth shared with the batch path (which uses the header
+  // for provenance, not content) — the join here reproduces the historic
+  // webhook bytes exactly (header + "\n\n" + body).
+  return [
+    buildGitHubWhatHeader(parts),
+    "",
+    parts.bodyText ?? parts.emptyBodyFallback ?? EMPTY_BODY_FALLBACK,
+  ].join("\n");
 }
 
 // ── body → why/how distillation (batch-only refinement) ───────────────────────
@@ -199,7 +220,44 @@ export function distillBodyToContent(body: string | null | undefined): string {
       continue;
     }
     if (inFence) {
+      // Unterminated-fence recovery for a fence opened OUTSIDE any dropped
+      // section. Left latched, `inFence` short-circuits the heading parse below
+      // all the way to EOF, so a later boilerplate heading would be silently
+      // KEPT (over-keep) and stripping would be disabled for the rest of the
+      // body. A markdown fence is a paragraph-level construct, so a BLANK line
+      // while such a fence is still open is the recovery boundary (mirroring
+      // the dropped-fence recovery below): treat the unterminated fence as
+      // ended here so heading parsing — and stripping — resumes for what
+      // follows. The deliberate tradeoff is the same rare over-keep as the
+      // dropped case: a real fence that legitimately contains an internal blank
+      // line and DOES later close ends early; but keeping stripping alive is
+      // the better failure than silently disabling it. This does not touch the
+      // dropped-section fence (tracked in `inDroppedFence`) — the s4 case where
+      // a fence INSIDE a dropped section drops its content is unaffected.
+      if (line.trim() === "") inFence = false;
       if (!droppingSection) kept.push(line);
+      continue;
+    }
+    // Unterminated-fence recovery. A fence that OPENED inside a dropped
+    // boilerplate section and is not closed before EOF would otherwise latch
+    // `droppingSection` to the end of the body — silently swallowing any REAL
+    // why/how prose that trails the last boilerplate section. A markdown fence
+    // is a paragraph-level construct, so a BLANK line while such a fence is
+    // still open is our recovery boundary: treat the unterminated fence as
+    // ended there and exit the drop, so trailing real prose is retained. The
+    // boilerplate section's own content (the fenced lines up to the blank
+    // line) is still stripped. The deliberate tradeoff — mirroring the
+    // heading-recovery over-keep already documented above — is that a
+    // boilerplate fence which legitimately contains an internal blank line and
+    // DOES later close would end the drop early; that shape is vanishingly
+    // rare in Test-plan/Checklist boilerplate, and losing real trailing prose
+    // (content loss) is the worse failure. A blank line while NOT inside a
+    // dropped fence keeps dropping (a normal multi-paragraph boilerplate
+    // section still runs to its next heading / EOF as before).
+    if (inDroppedFence && line.trim() === "") {
+      inDroppedFence = false;
+      droppingSection = false;
+      kept.push(line);
       continue;
     }
     const heading = parseMarkdownHeading(line);
@@ -281,6 +339,20 @@ function titleOrFallback(rawTitle: string, fallback: string): string {
 
 // ── Evidence builder (batch-only, kind-discriminated) ─────────────────────────
 
+// A.3: wrap the lifted WHAT-metadata header block as a provenance evidence
+// entry. The EvidenceItem union has no dedicated metadata kind (types.ts is the
+// frozen contract), so we carry the block on the free-text `thread` kind — the
+// only shape that survives `CandidateFragmentSchema.parse` (extra provenance
+// keys are stripped by Zod). This keeps the facts (Repository/branch/commit/
+// author/URL) queryable on the fragment after they leave `content`. The
+// sensitivity scan iterates `unit.reviewThreads`, NOT fragment evidence, so
+// this entry never perturbs the credential/GTM scan.
+function whatHeaderEvidence(
+  header: string,
+): CandidateFragment["evidence"][number] {
+  return { kind: "thread", body: header };
+}
+
 function buildEvidence(
   changedFiles: string[] | undefined,
   linkedIssues: string[] | undefined,
@@ -299,13 +371,37 @@ function buildEvidence(
   return evidence;
 }
 
+// ── Cited validation targets for the ISSUE path (files/paths in prose) ────────
+//
+// A PR carries a structured `changedFiles` list, so its `validationTargets` are
+// lifted directly (see extractPullRequest). An ISSUE has no such list — the
+// files it concerns are named in prose. A.4: lift the concrete repo-relative
+// PATHS + bare code/config filenames the issue cites (across its title +
+// distilled body + comment threads) so the validation gate (S14) has something
+// to grep on origin/main → source-verified → promotable. An issue that cites NO
+// file yields an empty list by design: target-less prose stays unverified and
+// falls to the human review page (same non-approvable-as-behavior posture the
+// PR path has when it carries no changedFiles). Pure deterministic regex lift —
+// no LLM. The lift is FILES-ONLY (issue prose names files, not bare calls) and
+// is factored into the shared `validation-targets` module (mirrors the
+// sensitivity-scan extraction) so the two file shapes mirror the memory/notion
+// siblings and the prose over-capture screen stays consistent across all three:
+//   • a repo-relative PATH (a "/"-bearing token ending in a code/config ext),
+//     which validate.ts treats as a path oracle (`isPathLike`);
+//   • a bare FILENAME with a code/config extension ("vitest.config.ts") — but a
+//     bare prose runtime token ("node.js"/"next.js") is screened out as prose.
+function extractIssueValidationTargets(text: string): string[] {
+  return extractValidationTargets(text, { files: true });
+}
+
 // First-pass classification for a GitHub-sourced fact. Merged PRs and issues are
 // primary, internal-by-default knowledge; the validate stage (S14) promotes the
 // validation_status and the classify stage (S11) normalizes the rest. We anchor
 // freshness to the injected clock so the adapter is deterministic under test.
 // `sensitivity` comes from the shared credential/GTM scan over title +
-// distilled body + verbatim review-thread bodies + linked-issue URLs (see the
-// call sites) — never hardcoded `internal`, so the
+// RAW body + verbatim review-thread bodies + linked-issue URLs (see the
+// call sites — the RAW body, not the distilled `content`, so a credential in a
+// stripped section still escalates) — never hardcoded `internal`, so the
 // deterministic DEFAULT_EXCLUSION_RULES layer (sensitivity ≥ proprietary) can
 // fire on a leaked credential / customer detail. Batch-side only; the webhook
 // path stamps no classification (B2).
@@ -350,8 +446,15 @@ function extractPullRequest(
   // buildGitHubSeedContent's output stays byte-identical (B2).
   const baseBranch = pr.baseRef?.trim() || null;
   const headBranch = pr.headRef?.trim() || null;
-  const distilledBody = distillBodyToContent(pr.body);
-  const content = buildGitHubSeedContent({
+  // A.3: the batch seed `content` is the DISTILLED why/how body ONLY — the
+  // WHAT-metadata header (Repository/branch/commit/author/URL) is NOT injected
+  // into content here (the distillation gate S8 judges why-vs-what, and a
+  // metadata header would inflate a bare restatement into looking substantive).
+  // The header facts are RETAINED as provenance on the fragment via
+  // `buildGitHubWhatHeader` below — relocated, not dropped (criterion 4). The
+  // webhook path is untouched: it still calls `buildGitHubSeedContent`.
+  const content = distillBodyToContent(pr.body);
+  const whatHeader = buildGitHubWhatHeader({
     kindLabel: "PR",
     number: pr.number,
     title: pr.title,
@@ -362,20 +465,23 @@ function extractPullRequest(
     author: pr.author ?? null,
     mergedBy: pr.mergedBy ?? null,
     url: pr.htmlUrl,
-    // distillBodyToContent never returns null (empty bodies already map to
-    // EMPTY_BODY_FALLBACK), so the batch path omits emptyBodyFallback.
-    bodyText: distilledBody,
   });
 
-  // Shared credential/GTM scan over what the fragment actually emits: the raw
-  // title, the distilled body, AND the verbatim reviewThread bodies +
+  // Shared credential/GTM scan over the RAW body — the full unstripped PR text
+  // — NOT the distilled `content`. distillBodyToContent strips whole sections
+  // (Test plan / Checklist / How to test / Screenshots) and HTML comments; a
+  // credential or customer-identifying detail living ONLY in a stripped section
+  // would be REMOVED before the scan saw it and the fragment would classify
+  // `internal`, dodging DEFAULT_EXCLUSION_RULES and leaking. memory.ts scans the
+  // raw body and notion.ts scans raw section bodies — this path matches them.
+  // The scan also covers the raw title and the verbatim reviewThread bodies +
   // linkedIssue URLs that buildEvidence renders into `thread`/`linked_issue`
   // evidence (and onto the approval page) — a credential pasted in a review
   // comment must not dodge the scan. Bare credential MENTIONS escalate too:
   // PR bodies are high-volume third-party text, so the over-flag direction
   // wins (the exclusion stage is the safety net).
   const scanHaystack = [
-    distilledBody,
+    pr.body ?? "",
     ...(unit.reviewThreads ?? []),
     ...(unit.linkedIssues ?? []),
   ].join("\n");
@@ -407,11 +513,19 @@ function extractPullRequest(
       ctx.now,
       sensitivity,
     ),
-    evidence: buildEvidence(
-      unit.changedFiles,
-      unit.linkedIssues,
-      unit.reviewThreads,
-    ),
+    // A.3: the WHAT-metadata header lifted off `content` is RETAINED here as a
+    // provenance evidence entry — the facts (Repository/branch/commit/author/
+    // URL) are relocated, not dropped. Prepended so it reads as the fragment's
+    // provenance banner ahead of the changed-file / linked-issue / thread
+    // evidence.
+    evidence: [
+      whatHeaderEvidence(whatHeader),
+      ...buildEvidence(
+        unit.changedFiles,
+        unit.linkedIssues,
+        unit.reviewThreads,
+      ),
+    ],
     needsReview: false,
     validationTargets: [...(unit.changedFiles ?? [])],
   };
@@ -422,8 +536,11 @@ function extractIssue(
   ctx: AdapterContext,
 ): CandidateFragment {
   const issue = unit.issue;
-  const distilledBody = distillBodyToContent(issue.body);
-  const content = buildGitHubSeedContent({
+  // A.3: batch seed `content` is the DISTILLED why/how body ONLY (no
+  // WHAT-metadata header); the header facts are retained as provenance below.
+  // See extractPullRequest for the rationale.
+  const content = distillBodyToContent(issue.body);
+  const whatHeader = buildGitHubWhatHeader({
     kindLabel: "Issue",
     number: issue.number,
     title: issue.title,
@@ -434,22 +551,29 @@ function extractIssue(
     author: issue.author ?? null,
     mergedBy: null,
     url: issue.htmlUrl,
-    // distillBodyToContent never returns null, so the batch path omits the
-    // fallback (see extractPullRequest).
-    bodyText: distilledBody,
   });
 
   // Shared credential/GTM scan — same rationale and same haystack rule as the
-  // PR path (the issue's comment threads + linked issues land in evidence
-  // verbatim too).
+  // PR path: scan the RAW body (never the distilled `content`, which strips
+  // Test plan / Checklist / How to test / Screenshots sections and HTML
+  // comments), plus the issue's comment threads + linked issues that land in
+  // evidence verbatim too.
   const scanHaystack = [
-    distilledBody,
+    issue.body ?? "",
     ...(unit.reviewThreads ?? []),
     ...(unit.linkedIssues ?? []),
   ].join("\n");
   const sensitivity = scanSensitivity(issue.title, "", scanHaystack, {
     bareCredentialMentions: true,
   });
+
+  // A.4: lift the files/paths this issue cites in prose (title + distilled body
+  // + comment threads) into validationTargets, so the validation gate (S14) has
+  // a concrete source-verification target. A target-less issue yields [] — it
+  // then stays unverified and human-gated (see the field comment below).
+  const validationTargets = extractIssueValidationTargets(
+    [issue.title, content, ...(unit.reviewThreads ?? [])].join("\n"),
+  );
 
   return {
     sourcetype: "github-issue",
@@ -462,14 +586,20 @@ function extractIssue(
     title: titleOrFallback(issue.title, `Issue #${issue.number}`),
     content,
     provenance: firstPassProvenance(issue.htmlUrl, null, ctx.now, sensitivity),
-    evidence: buildEvidence(undefined, unit.linkedIssues, unit.reviewThreads),
+    // A.3: WHAT-metadata header retained as a provenance evidence entry (see
+    // extractPullRequest).
+    evidence: [
+      whatHeaderEvidence(whatHeader),
+      ...buildEvidence(undefined, unit.linkedIssues, unit.reviewThreads),
+    ],
     needsReview: false,
-    // Issues ship NO validationTargets (unlike PRs, which carry changedFiles):
-    // the validation gate (S14) has nothing to grep and can never promote an
-    // issue fragment — it is non-approvable-as-behavior BY DESIGN until a
-    // human adds targets. Same posture notion.ts documents at its emission
-    // site.
-    validationTargets: [],
+    // A.4: unlike a PR (which carries a structured `changedFiles` list), an
+    // issue's files live in prose — lifted above via
+    // `extractIssueValidationTargets`. An issue that cites NO file keeps an
+    // empty list: the validation gate (S14) then has nothing to grep and can
+    // never promote it — non-approvable-as-behavior BY DESIGN until a human adds
+    // targets. Same posture notion.ts documents at its emission site.
+    validationTargets,
   };
 }
 

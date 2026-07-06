@@ -107,6 +107,14 @@ const RunManifestSchema = z.object({
   updatedAt: z.string(),
   fragmentCount: z.number(),
   ruleSet: z.array(ExclusionRuleSchema),
+  // Run-completion marker (C.4). Present ONLY once a run's upsert loop has
+  // finished successfully; their ABSENCE is the signal that a run is
+  // partial/aborted (crashed mid-upsert, or a preview/dry-run that never
+  // persisted). `completedAt` is the ISO-8601 stamp taken after the last
+  // upsert; `upsertedCount` is the number of rows actually written. Optional
+  // so a legitimately-incomplete manifest round-trips instead of failing loud.
+  completedAt: z.string().optional(),
+  upsertedCount: z.number().optional(),
 });
 
 // Thrown by `readManifest` when the on-disk manifest exists but is corrupt
@@ -132,6 +140,13 @@ export interface RunManifest {
   fragmentCount: number;
   // The run's final exclusion-rule set, for next-run seeding (§11.5).
   ruleSet: ExclusionRule[];
+  // Run-completion marker (C.4). Set ONLY on a successful upsert: `completedAt`
+  // is the ISO-8601 stamp taken after the upsert loop, `upsertedCount` the
+  // number of rows written. When BOTH are absent the run did not complete a
+  // persist (crashed mid-upsert, or a preview/dry-run) — that absence is how a
+  // partial run is told apart from a completed one.
+  completedAt?: string;
+  upsertedCount?: number;
 }
 
 // What a manifest write accepts. `createdAt`/`updatedAt` are managed by the store
@@ -302,12 +317,22 @@ export class RunStore {
       existing = undefined;
     }
     const iso = now.toISOString();
+    // The completion-marker fields (C.4) are threaded through ONLY when the
+    // caller supplies them, so an incomplete run's manifest omits the keys
+    // entirely (their absence is the "did not complete" signal) rather than
+    // carrying an explicit `undefined`.
     const manifest: RunManifest = {
       runId,
       createdAt: existing?.createdAt ?? iso,
       updatedAt: iso,
       fragmentCount: input.fragmentCount,
       ruleSet: input.ruleSet,
+      ...(input.completedAt !== undefined
+        ? { completedAt: input.completedAt }
+        : {}),
+      ...(input.upsertedCount !== undefined
+        ? { upsertedCount: input.upsertedCount }
+        : {}),
     };
     fs.mkdirSync(this.runDir(runId), { recursive: true });
     fs.writeFileSync(

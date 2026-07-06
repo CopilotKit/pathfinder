@@ -22,6 +22,7 @@
 //     → aggregate                         (Tier-2 cluster/dedup/fuse)
 //     → finalizeClassification (per frag) (normalize the 7-dim flag-set)
 //     → canonicalize                      (Tier-3 key/dedup/supersede/rank)
+//     → enforceDistillation               (A.1 why-vs-what gate — BEFORE rag-dedup)
 //     → dedupAgainstRagCorpus             (RAG-dedup gate — BEFORE validate)
 //     → promoteValidation (per candidate) (validation gate; rankScore recomputed after)
 //     → toSeedEntryRow → upsertAtlasSeedCandidate  (only when --upsert; --dry-run writes NOTHING)
@@ -53,13 +54,23 @@ import { aggregate } from "./aggregate.js";
 import { finalizeClassification } from "./classify.js";
 import { canonicalize, recomputeRankScore } from "./canonicalize.js";
 import { dedupAgainstRagCorpus, type RagDedupContext } from "./rag-dedup.js";
+import {
+  enforceDistillation,
+  type DistillationJudge,
+} from "./distillation-gate.js";
 import { promoteValidation, type ValidationContext } from "./validate.js";
 import { loadValidationContext } from "./validate-checkout.js";
-import { toSeedEntryRow, type Candidate } from "./types.js";
+import {
+  toSeedEntryRow,
+  type Candidate,
+  type CorpusHit,
+  type DistillDeltaResult,
+} from "./types.js";
 import {
   RunStore,
   CorruptRunManifestError,
   type RunManifest,
+  type ExclusionRule,
 } from "./run-store.js";
 import { AtlasHttpClient } from "./client.js";
 import { generateApprovalArtifact } from "./artifact/generate.js";
@@ -68,6 +79,7 @@ import { OpenAIDistiller, type LlmDistiller } from "./llm.js";
 
 // ── Storage layer (EXISTING, origin/main) ──────────────────────────────────────
 import { upsertAtlasSeedCandidate } from "../db/atlas.js";
+import { searchChunks } from "../db/queries.js";
 
 // ── Registry assembly (THE single place the map is populated) ───────────────────
 
@@ -113,11 +125,35 @@ export interface RunHarvestOptions {
   // The Atlas HTTP client whose `search` the rag-dedup gate probes. Required —
   // the CLI builds one from baseUrl/token; tests inject a mocked client.
   ragClient: Pick<AtlasHttpClient, "search">;
-  // Minimum corpus-overlap similarity for the rag-dedup gate (forwarded).
+  // Minimum LEXICAL (verbatim) corpus-overlap similarity for the rag-dedup gate
+  // pre-filter (forwarded to RagDedupContext.minOverlap).
   minOverlap?: number;
+  // NET-NEW (Theme B) semantic-dedup seams — top-level, NOT part of `deps`
+  // (which carries only the deterministic dedup/validate transform seams).
+  // `embed`/`distillDelta` are LLM seams and `vectorSearch` is a DB seam, so
+  // like `judge` they are wired separately. When omitted, `runHarvest` defaults
+  // to a real OpenAIDistiller-backed embed/distillDelta (honors OPENAI_BASE_URL)
+  // and a searchChunks-backed vectorSearch; tests inject fixtures.
+  //
+  // Embed a text into a dense vector for the semantic probe.
+  embed?: (text: string) => Promise<number[]>;
+  // Cosine top-k retrieval over the corpus vector index.
+  vectorSearch?: (vector: number[], k: number) => Promise<CorpusHit[]>;
+  // Rewrite an overlapping candidate's content to its net-new delta.
+  distillDelta?: (
+    cand: Candidate,
+    overlaps: CorpusHit[],
+  ) => Promise<DistillDeltaResult>;
   // The validation context (read-only origin/main checkout + feature registry).
   // Required — the CLI assembles it from disk; tests inject a fixture context.
   validationContext: ValidationContext;
+  // The A.1 distillation-gate judge (why-vs-what). NET-NEW top-level field, NOT
+  // part of `deps` (which carries only the dedup/validate pipeline seams): the
+  // gate's judge is an LLM seam, not a deterministic transform, so it is wired
+  // separately. When omitted, `runHarvest` defaults to a real OpenAIDistiller-
+  // backed judge (honors OPENAI_BASE_URL so tests can redirect to aimock);
+  // tests inject a fixture judge here.
+  judge?: DistillationJudge;
   // Testing seam (see RunHarvestDeps).
   deps?: RunHarvestDeps;
 }
@@ -132,6 +168,183 @@ export interface RunHarvestResult {
   upsertedCount: number;
 }
 
+// ── The SHARED candidate-processing pipeline ────────────────────────────────────
+//
+// The single ordered candidate-transform sequence — aggregate → classify →
+// canonicalize → distillation gate → rag-dedup → validate → re-rank — that BOTH
+// the `run --upsert` path (runHarvest) and the approval-artifact path
+// (buildArtifactCandidates) MUST run to produce IDENTICAL candidates. It is
+// extracted into ONE function so the two callers are byte-identical by
+// construction: they cannot diverge on which stages run or in what order.
+//
+// This is a ROOT-CAUSE fix for a recurring class of bug: the artifact path kept
+// re-deriving its own copy of these stages and drifting from the upsert path
+// (first it skipped the distillation gate; then, once that was added, it still
+// skipped rag-dedup). Because the Theme-B SEMANTIC rag-dedup is NO LONGER
+// mark-only — `applyDistillDelta` REWRITES `content` on a delta verdict and sets
+// `approvable=false` on a no-delta verdict, both fields the approval page binds
+// to — any path that skips rag-dedup renders content/approvable that differs
+// from what `run --upsert` persists. Sharing the pipeline makes that class of
+// divergence structurally impossible: there is only one pipeline.
+//
+// It reads fragments off disk, runs every substantive transform (each of which
+// lives in its own module — this only wires them in the spec §4 order), and
+// returns the fully-processed candidates. Persistence (upsert) and manifest
+// bookkeeping are the CALLER's concern (runHarvest does them; the artifact path
+// only renders) — this function writes NOTHING to the DB, so it is safe to call
+// on both a --dry-run/preview and the artifact path.
+export interface ProcessCandidatePipelineOptions {
+  // The run id whose fragments are read from `<runsDir>/<runId>/fragments/*.json`.
+  runId: string;
+  // Root directory of the run corpora. Defaults to `./runs`.
+  runsDir?: string;
+  // The RunStore the fragments are read through. Injectable so a caller that
+  // already built one (runHarvest, for its manifest work) shares the SAME store.
+  store: RunStore;
+  // The A.1 distillation-gate judge (why-vs-what).
+  judge: DistillationJudge;
+  // The live RAG-corpus lexical probe (rag-dedup pre-filter).
+  ragClient: Pick<AtlasHttpClient, "search">;
+  // Lexical verbatim-overlap threshold for the rag-dedup pre-filter.
+  minOverlap?: number;
+  // Theme-B semantic-dedup seams.
+  embed: (text: string) => Promise<number[]>;
+  vectorSearch: (vector: number[], k: number) => Promise<CorpusHit[]>;
+  distillDelta: (
+    cand: Candidate,
+    overlaps: CorpusHit[],
+  ) => Promise<DistillDeltaResult>;
+  // The validation context (read-only origin/main checkout + feature registry).
+  validationContext: ValidationContext;
+  // Testing seams: override the deterministic dedup/validate transforms. Default
+  // to the real dedupAgainstRagCorpus / promoteValidation.
+  dedup?: (cands: Candidate[], ctx: RagDedupContext) => Promise<Candidate[]>;
+  validate?: (cand: Candidate, ctx: ValidationContext) => Promise<Candidate>;
+}
+
+export async function processCandidatePipeline(
+  opts: ProcessCandidatePipelineOptions,
+): Promise<Candidate[]> {
+  const dedup = opts.dedup ?? dedupAgainstRagCorpus;
+  const validate = opts.validate ?? promoteValidation;
+
+  // 1. Read the Tier-1 fragment corpus off disk.
+  const fragments = opts.store.readFragments(opts.runId);
+
+  // 2-4. Tier-2 aggregate → finalize classification → Tier-3 canonicalize.
+  const candidates = canonicalize(
+    aggregate(fragments).map((f) => finalizeClassification(f)),
+  );
+
+  // 4b. Distillation gate (A.1) — BETWEEN canonicalize and rag-dedup. Judges each
+  //     candidate's why-vs-what quality: a pure WHAT restatement is stamped with
+  //     RESTATEMENT_MARKER (the floor S4's validate reads → approvable=false), a
+  //     salvageable claim is rewritten into why/how prose, a distilled claim
+  //     passes untouched. NEVER drops; same-length output; input never mutated.
+  const distilled = await enforceDistillation(candidates, { judge: opts.judge });
+
+  // 5. RAG-dedup gate — BEFORE validate (spec §4). Detects corpus overlap
+  //    (lexical verbatim pre-filter + semantic pgvector retrieval) and RESOLVES
+  //    it via distill-to-delta. It is NO LONGER mark-only: on a SEMANTIC overlap
+  //    a delta verdict REWRITES `content` and a no-delta verdict sets
+  //    `approvable=false` (applyDistillDelta) — both fields the approval decision
+  //    binds to. It NEVER drops. Running it HERE, on the SHARED pipeline, is what
+  //    keeps the artifact's content/approvable identical to what `run --upsert`
+  //    persists.
+  //
+  //    Pre-embed cost signal (spec §B fix (d)): the vector probe embeds each
+  //    candidate that survives the lexical pre-filter — one embedding call
+  //    apiece. Emit the estimated upper bound now that candidateCount is known,
+  //    so a large run's embedding spend is visible before it is incurred.
+  if (distilled.length > 0) {
+    console.warn(
+      `[rag-dedup] semantic dedup will embed up to ${distilled.length} candidate(s) ` +
+        `(one /v1/embeddings call each for candidates surviving the lexical pre-filter)`,
+    );
+  }
+  const ragCtx: RagDedupContext = {
+    client: opts.ragClient,
+    ...(opts.minOverlap !== undefined ? { minOverlap: opts.minOverlap } : {}),
+    embed: opts.embed,
+    vectorSearch: opts.vectorSearch,
+    distillDelta: opts.distillDelta,
+  };
+  const deduped = await dedup(distilled, ragCtx);
+
+  // 6. Validation gate — promote validation_status + enforce approvability.
+  //    validate can PROMOTE validation_status — the DOMINANT rank weight — so
+  //    recompute each candidate's rankScore afterwards: the ARTIFACT path
+  //    (generate's §11.1 per-subsystem sort) is what orders by the promoted
+  //    value rather than the stale canonicalize-time one, and the run path
+  //    stays symmetric with it. One freshness snapshot for the whole phase
+  //    (matching canonicalize's own hoist) — a per-call Date.now() default
+  //    would let epsilon clock skew across iterations jitter the relative
+  //    ordering (fix11 AA12).
+  const validated: Candidate[] = [];
+  const now = Date.now();
+  for (const cand of deduped) {
+    validated.push(
+      recomputeRankScore(await validate(cand, opts.validationContext), now),
+    );
+  }
+  return validated;
+}
+
+// The seams the shared pipeline needs that BOTH callers default IDENTICALLY when
+// left unset: the distillation-gate judge and the Theme-B semantic-dedup
+// embed/vectorSearch/distillDelta. Injected by tests; left unset in production so
+// the real OpenAIDistiller / searchChunks defaults below are wired. Extracting
+// the DEFAULTING here (rather than duplicating it in runHarvest and
+// buildArtifactCandidates) is part of the same anti-divergence guarantee: the
+// two callers cannot default a seam differently, because they don't default it
+// themselves — this one resolver does. Production leaves them unset → the real
+// OpenAIDistiller-backed judge/embed/distillDelta (honoring OPENAI_BASE_URL) and
+// the searchChunks-backed vectorSearch; the lazy `buildLlm()` per-call keeps a
+// preview/dry-run that never reaches the gate (empty corpus) from needing an
+// OpenAI key. `dedup`/`validate` are deterministic-transform testing seams,
+// passed through unchanged.
+interface SharedPipelineSeamOverrides {
+  judge?: DistillationJudge;
+  embed?: (text: string) => Promise<number[]>;
+  vectorSearch?: (vector: number[], k: number) => Promise<CorpusHit[]>;
+  distillDelta?: (
+    cand: Candidate,
+    overlaps: CorpusHit[],
+  ) => Promise<DistillDeltaResult>;
+  dedup?: (cands: Candidate[], ctx: RagDedupContext) => Promise<Candidate[]>;
+  validate?: (cand: Candidate, ctx: ValidationContext) => Promise<Candidate>;
+}
+
+function resolveSharedPipelineSeams(overrides: SharedPipelineSeamOverrides): {
+  judge: DistillationJudge;
+  embed: (text: string) => Promise<number[]>;
+  vectorSearch: (vector: number[], k: number) => Promise<CorpusHit[]>;
+  distillDelta: (
+    cand: Candidate,
+    overlaps: CorpusHit[],
+  ) => Promise<DistillDeltaResult>;
+  dedup?: (cands: Candidate[], ctx: RagDedupContext) => Promise<Candidate[]>;
+  validate?: (cand: Candidate, ctx: ValidationContext) => Promise<Candidate>;
+} {
+  return {
+    judge: overrides.judge ?? {
+      judge: (c) => buildLlm().judgeDistillation(c),
+    },
+    embed: overrides.embed ?? ((text: string) => buildLlm().embed(text)),
+    vectorSearch: overrides.vectorSearch ?? defaultVectorSearch,
+    distillDelta:
+      overrides.distillDelta ??
+      ((cand: Candidate, overlaps: CorpusHit[]) =>
+        buildLlm().distillDelta({
+          title: cand.title,
+          content: cand.content,
+          overlaps: overlaps.map((h) => ({ content: h.content })),
+        })),
+    ...(overrides.dedup ? { dedup: overrides.dedup } : {}),
+    ...(overrides.validate ? { validate: overrides.validate } : {}),
+  };
+}
+
 // Run the deterministic harvest pipeline over a run directory of fragments and
 // (optionally) write the resulting candidates as `pending` atlas_seed_entries.
 // Pure orchestration: every substantive transform lives in its own module; this
@@ -140,10 +353,9 @@ export async function runHarvest(
   opts: RunHarvestOptions,
 ): Promise<RunHarvestResult> {
   const runsDir = opts.runsDir ?? path.resolve("runs");
-  const dedup = opts.deps?.dedup ?? dedupAgainstRagCorpus;
-  const validate = opts.deps?.validate ?? promoteValidation;
 
-  // 1. Read the Tier-1 fragment corpus off disk.
+  // 1. Read the Tier-1 fragment corpus off disk. The SAME RunStore is threaded
+  //    through to the shared pipeline below, so both read the identical corpus.
   const store = new RunStore(runsDir);
   const fragments = store.readFragments(opts.runId);
 
@@ -152,7 +364,11 @@ export async function runHarvest(
   //     is preserved, never clobbered. A corrupt prior manifest must not wedge
   //     the harvest: treat it as "no prior" and let writeManifest's repair path
   //     (which warns, naming the path) overwrite it. SKIPPED entirely on
-  //     --dry-run, which writes NOTHING (not even the manifest).
+  //     --dry-run, which writes NOTHING (not even the manifest). The resolved
+  //     `ruleSet` is captured so the run-completion marker write (step 7b) can
+  //     re-persist it unchanged rather than re-reading a possibly-just-written
+  //     manifest.
+  let manifestRuleSet: ExclusionRule[] = [];
   if (!opts.dryRun) {
     let prior: RunManifest | undefined;
     try {
@@ -161,48 +377,36 @@ export async function runHarvest(
       if (!(err instanceof CorruptRunManifestError)) throw err;
       prior = undefined;
     }
+    manifestRuleSet = prior?.ruleSet ?? [];
     store.writeManifest(opts.runId, {
       fragmentCount: fragments.length,
-      ruleSet: prior?.ruleSet ?? [],
+      ruleSet: manifestRuleSet,
     });
   }
 
-  // 2. Tier-2 aggregate (cluster/dedup/fuse).
-  const aggregated = aggregate(fragments);
-
-  // 3. Finalize the classification flag-set per fragment.
-  const finalized = aggregated.map((f) => finalizeClassification(f));
-
-  // 4. Tier-3 canonicalize (key/dedup/supersede/rank).
-  const candidates = canonicalize(finalized);
-
-  // 5. RAG-dedup gate — BEFORE validate (spec §4). Marks/annotates corpus
-  //    overlaps; NEVER drops. The rag-dedup ctx carries the live search probe.
-  const ragCtx: RagDedupContext = {
-    client: opts.ragClient,
+  // 2-6. The SHARED candidate-processing pipeline (aggregate → classify →
+  //      canonicalize → distillation gate → rag-dedup → validate → re-rank).
+  //      This is the IDENTICAL sequence buildArtifactCandidates runs — they call
+  //      the SAME function, so the artifact's candidates cannot diverge from the
+  //      rows this path upserts. Seams (judge / rag-dedup / semantic / validate)
+  //      are resolved via the shared resolver so both callers default them the
+  //      SAME way. The SAME RunStore is threaded in so both read one corpus.
+  const validated = await processCandidatePipeline({
+    runId: opts.runId,
+    ...(opts.runsDir ? { runsDir: opts.runsDir } : {}),
+    store,
+    ragClient: opts.ragClient,
     ...(opts.minOverlap !== undefined ? { minOverlap: opts.minOverlap } : {}),
-  };
-  const deduped = await dedup(candidates, ragCtx);
-
-  // 6. Validation gate — promote validation_status + enforce approvability.
-  //    validate can PROMOTE validation_status — the DOMINANT rank weight — so
-  //    recompute each candidate's rankScore afterwards: the ARTIFACT path
-  //    (generate's §11.1 per-subsystem sort) is what orders by the promoted
-  //    value rather than the stale canonicalize-time one. The seed-row upsert
-  //    in step 7 persists NO rankScore (toSeedEntryRow carries none) — what
-  //    it persists from this phase is validate's status promotion; the
-  //    recompute here keeps the run path symmetric with the artifact path's
-  //    own re-rank. One freshness snapshot for the whole phase (matching
-  //    canonicalize's own hoist) — a per-call Date.now() default would let
-  //    epsilon clock skew across iterations jitter the relative ordering
-  //    (fix11 AA12).
-  const validated: Candidate[] = [];
-  const now = Date.now();
-  for (const cand of deduped) {
-    validated.push(
-      recomputeRankScore(await validate(cand, opts.validationContext), now),
-    );
-  }
+    validationContext: opts.validationContext,
+    ...resolveSharedPipelineSeams({
+      ...(opts.judge ? { judge: opts.judge } : {}),
+      ...(opts.embed ? { embed: opts.embed } : {}),
+      ...(opts.vectorSearch ? { vectorSearch: opts.vectorSearch } : {}),
+      ...(opts.distillDelta ? { distillDelta: opts.distillDelta } : {}),
+      ...(opts.deps?.dedup ? { dedup: opts.deps.dedup } : {}),
+      ...(opts.deps?.validate ? { validate: opts.deps.validate } : {}),
+    }),
+  });
 
   // 7. Persist — only when --upsert AND not --dry-run.
   let upsertedCount = 0;
@@ -212,6 +416,24 @@ export async function runHarvest(
       await upsertAtlasSeedCandidate(toSeedEntryRow(cand));
       upsertedCount += 1;
     }
+  }
+
+  // 7b. Run-completion marker (C.4) — stamp `completedAt` + the `upsertedCount`
+  //     just written into the manifest, but ONLY after a successful upsert. Its
+  //     absence is the signal that a run is partial/aborted (crashed mid-upsert)
+  //     or was a preview/dry-run that never persisted — so a preview run (no
+  //     `--upsert`) and a `--dry-run` leave NO marker. `fragmentCount`/`ruleSet`
+  //     are re-persisted unchanged (the marker never clobbers them), and
+  //     `writeManifest` preserves `createdAt` and advances `updatedAt`. Written
+  //     via the same `writeManifest` seam, so a re-run is idempotent: it simply
+  //     re-stamps a fresh `completedAt`/`upsertedCount` over the prior marker.
+  if (willWrite) {
+    store.writeManifest(opts.runId, {
+      fragmentCount: fragments.length,
+      ruleSet: manifestRuleSet,
+      completedAt: new Date().toISOString(),
+      upsertedCount,
+    });
   }
 
   return {
@@ -232,24 +454,51 @@ export interface BuildArtifactCandidatesOptions {
   // artifact MUST run the identical validation stage as `run --upsert` so the
   // rendered `approvable`/`validation_status` matches the upserted rows.
   validationContext: ValidationContext;
-  // Testing seam: override the validate step (defaults to promoteValidation).
+  // The live RAG-corpus lexical probe. The artifact MUST run the SAME rag-dedup
+  // gate `run --upsert` runs: the Theme-B semantic dedup REWRITES `content` and
+  // sets `approvable=false` (applyDistillDelta), so skipping it would diverge the
+  // artifact's content/approvable from the rows the approval page promises to
+  // match. Required — the CLI's `artifact` command builds it from --url/--token
+  // exactly as `run` does; tests inject a search stub.
+  ragClient: Pick<AtlasHttpClient, "search">;
+  // Lexical verbatim-overlap threshold for the rag-dedup pre-filter (matches
+  // `run`'s --min-overlap).
+  minOverlap?: number;
+  // Theme-B semantic-dedup seams. Wired exactly like `runHarvest`: injected by
+  // tests, else defaulted to the real OpenAIDistiller (embed/distillDelta) and a
+  // searchChunks-backed vectorSearch, via the SAME shared resolver runHarvest
+  // uses — so the two paths default them identically.
+  embed?: (text: string) => Promise<number[]>;
+  vectorSearch?: (vector: number[], k: number) => Promise<CorpusHit[]>;
+  distillDelta?: (
+    cand: Candidate,
+    overlaps: CorpusHit[],
+  ) => Promise<DistillDeltaResult>;
+  // Testing seams: override the deterministic dedup/validate transforms
+  // (default to dedupAgainstRagCorpus / promoteValidation).
+  dedup?: (cands: Candidate[], ctx: RagDedupContext) => Promise<Candidate[]>;
   validate?: (cand: Candidate, ctx: ValidationContext) => Promise<Candidate>;
+  // The A.1 distillation-gate judge (why-vs-what). Wired exactly like
+  // `runHarvest`'s `judge`: injected by tests, else a real OpenAIDistiller-
+  // backed judge (honors OPENAI_BASE_URL). The artifact MUST run the SAME
+  // distillation gate `run --upsert` runs, or a restatement/rewritten candidate
+  // diverges from the rows the approval page promises to match.
+  judge?: DistillationJudge;
 }
 
-// Build the ranked candidate set the approval artifact renders, running the
-// SAME validation stage as the `run` pipeline (aggregate → classify →
-// canonicalize → validate). The rag-dedup gate is intentionally skipped here: it
-// is MARK-ONLY (annotates provenance/evidence; never changes `approvable` or
-// `validation_status`, see rag-dedup.ts), so omitting it does NOT diverge the
-// GATE fields the approval decision binds to (`approvable`/`validation_status`)
-// from what `run --upsert` writes. NOTE: rag-dedup's annotations (the
-// `validated_against` marker and the `fused_from` corpus-evidence item — rank-neutral:
-// the evidence ref is prefixed and filtered from evidence depth, so rankScore is
-// unaffected) DO reach the upserted rows but NOT this
-// artifact — the provenance/evidence rendered inline on the page is the
-// pre-rag-dedup view. The validation gate,
-// which DOES set `approvable`/`validation_status`, MUST run — so the artifact the
-// lead approves reflects the same pipeline stage as the upserted rows.
+// Build the ranked candidate set the approval artifact renders. It runs the
+// EXACT SAME candidate-processing pipeline as `run --upsert` — by calling the
+// SHARED `processCandidatePipeline` both paths use (aggregate → classify →
+// canonicalize → distillation gate → rag-dedup → validate → re-rank) — so the
+// rendered content / approvable / validation_status are IDENTICAL to the rows
+// `run --upsert` persists, by construction. This is the root-cause fix for the
+// recurring divergence: the two paths cannot drift on which stages run or in
+// what order, because there is only ONE pipeline. In particular the rag-dedup
+// gate now RUNS here (it used to be skipped): the Theme-B semantic dedup is no
+// longer mark-only — `applyDistillDelta` REWRITES `content` on a delta verdict
+// and floors `approvable=false` on a no-delta verdict, both of which the
+// approval page binds to. The artifact never writes DB rows itself — persistence
+// is `run --upsert`'s job; this only reads fragments and renders.
 export async function buildArtifactCandidates(
   opts: BuildArtifactCandidatesOptions,
 ): Promise<Candidate[]> {
@@ -265,26 +514,27 @@ export async function buildArtifactCandidates(
         "`run --upsert` writes.",
     );
   }
-  const validate = opts.validate ?? promoteValidation;
   const runsDir = opts.runsDir ?? path.resolve("runs");
   const store = new RunStore(runsDir);
-  const fragments = store.readFragments(opts.runId);
-  const candidates = canonicalize(
-    aggregate(fragments).map((f) => finalizeClassification(f)),
-  );
-  // Re-rank after validation, exactly like `runHarvest` step 6: a promoted
-  // validation_status (the dominant rank weight) must be reflected in the
-  // rankScore the artifact's per-subsystem groups sort by (§11.1). One
-  // freshness snapshot for the whole phase, matching canonicalize's own
-  // hoist (fix11 AA12).
-  const validated: Candidate[] = [];
-  const now = Date.now();
-  for (const cand of candidates) {
-    validated.push(
-      recomputeRankScore(await validate(cand, opts.validationContext), now),
-    );
-  }
-  return validated;
+  // Delegate to the SHARED pipeline — identical to runHarvest's steps 2-6.
+  // Seams (judge / semantic-dedup / dedup / validate) default via the SAME
+  // resolver runHarvest uses, so neither path can default a seam differently.
+  return processCandidatePipeline({
+    runId: opts.runId,
+    ...(opts.runsDir ? { runsDir: opts.runsDir } : {}),
+    store,
+    ragClient: opts.ragClient,
+    ...(opts.minOverlap !== undefined ? { minOverlap: opts.minOverlap } : {}),
+    validationContext: opts.validationContext,
+    ...resolveSharedPipelineSeams({
+      ...(opts.judge ? { judge: opts.judge } : {}),
+      ...(opts.embed ? { embed: opts.embed } : {}),
+      ...(opts.vectorSearch ? { vectorSearch: opts.vectorSearch } : {}),
+      ...(opts.distillDelta ? { distillDelta: opts.distillDelta } : {}),
+      ...(opts.dedup ? { dedup: opts.dedup } : {}),
+      ...(opts.validate ? { validate: opts.validate } : {}),
+    }),
+  });
 }
 
 // ── min-overlap parsing ─────────────────────────────────────────────────────────
@@ -385,6 +635,25 @@ function buildLlm(): LlmDistiller {
   return new OpenAIDistiller();
 }
 
+// Default vectorSearch seam: cosine top-k retrieval over the SAME chunks corpus
+// the indexer writes (db/queries.ts:searchChunks), mapped to the CorpusHit shape
+// the rag-dedup gate + distill-to-delta consume. `similarity` is 1 - cosine
+// distance in [0,1] (searchChunks already coerces it to a finite number).
+async function defaultVectorSearch(
+  vector: number[],
+  k: number,
+): Promise<CorpusHit[]> {
+  const rows = await searchChunks(vector, k);
+  return rows.map((r) => ({
+    similarity: r.similarity,
+    content: r.content,
+    id: r.id,
+    title: r.title,
+    sourceUrl: r.source_url,
+    sourceName: r.source_name,
+  }));
+}
+
 interface RunCliOptions {
   runId?: string;
   runsDir?: string;
@@ -451,6 +720,12 @@ interface ArtifactCliOptions {
   notionToken?: string;
   checkout?: string;
   featureRegistry?: string;
+  // The artifact now runs the SAME rag-dedup gate as `run` (see
+  // buildArtifactCandidates), so it needs the SAME live-endpoint credentials
+  // (--url/--token) and the SAME --min-overlap knob `run` takes.
+  url?: string;
+  token?: string;
+  minOverlap?: string;
 }
 
 async function artifactCommand(
@@ -497,16 +772,24 @@ async function artifactCommand(
     featureRegistryPath: options.featureRegistry,
   });
 
-  // Re-run the deterministic pipeline THROUGH the validation gate (the same
-  // stage `run` applies) to obtain the ranked candidates the artifact lists.
-  // rag-dedup is mark-only and never changes approvable/validation_status, so it
-  // is intentionally skipped here. The artifact never writes DB rows itself.
+  // Re-run the deterministic pipeline to obtain the ranked candidates the
+  // artifact lists. buildArtifactCandidates calls the SHARED
+  // processCandidatePipeline that `run --upsert` uses, so the rendered
+  // content / approvable / validation_status match the rows the lead's
+  // approval will upsert — INCLUDING the rag-dedup gate (whose Theme-B
+  // semantic dedup rewrites content / floors approvable). That gate needs the
+  // live RAG-corpus probe, so build the SAME HTTP client `run` does and pass
+  // the SAME --min-overlap knob. The artifact never writes DB rows itself.
   const runsDir = options.runsDir ?? path.resolve("runs");
   const store = new RunStore(runsDir);
   const candidates = await buildArtifactCandidates({
     runId: options.runId,
     runsDir,
     validationContext,
+    ragClient: buildHttpClient(options),
+    ...(options.minOverlap !== undefined
+      ? { minOverlap: parseMinOverlap(options.minOverlap) }
+      : {}),
   });
 
   const artifact = await generateApprovalArtifact({
@@ -712,6 +995,12 @@ export async function runAtlasHarvestCli(
     )
     .option("--prior-run-id <id>", "Prior run id to seed exclusion rules from")
     .option("--notion-token <token>", "Notion integration token (NOTION_TOKEN)")
+    .option("--min-overlap <n>", "RAG-dedup overlap threshold in [0,1] (matches `run`)")
+    .option(
+      "--url <url>",
+      "Pathfinder base URL (for the rag-dedup search probe, matching `run`)",
+    )
+    .option("--token <token>", "Bearer token (ANALYTICS_TOKEN, matching `run`)")
     .action(async (options: ArtifactCliOptions) => {
       await artifactCommand(options, writeOut);
     });

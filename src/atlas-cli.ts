@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runAtlasHarvestCli } from "./atlas/harvest-cli.js";
+import { collectMissingRequiredEnv } from "./config.js";
 
 const DEFAULT_TOOL = "atlas-search";
 const DEFAULT_FEEDBACK_TOOL = "submit-feedback";
@@ -259,8 +260,7 @@ export function buildFeedbackArguments(
 
 function printToolText(message: JsonRpcMessage, write: WriteFn): void {
   const result = message.result as
-    | { content?: Array<{ type?: string; text?: string }> }
-    | undefined;
+    { content?: Array<{ type?: string; text?: string }> } | undefined;
   const content = Array.isArray(result?.content) ? result.content : [];
   const textItems = content
     .map((item) => item.text)
@@ -420,6 +420,31 @@ async function feedback(
   await callTool(options.tool, toolArguments, options, write);
 }
 
+/**
+ * Env preflight — enumerate EVERY missing required environment variable in
+ * one pass and report them before any harvest/search work runs. Intentionally
+ * lives here in atlas-cli.ts (NOT a harvest-cli subcommand) so it stays off
+ * the harvest-cli serialization chain.
+ *
+ * Fails-loud with a non-zero exit when anything is missing so an operator
+ * running `atlas preflight` in a deploy check sees the full list up front —
+ * unlike server boot, which throws on the first failing group. Returns 0 and
+ * prints an OK line when the environment is fully configured.
+ */
+export function runPreflight(writeOut: WriteFn, writeErr: WriteFn): number {
+  const missing = collectMissingRequiredEnv();
+  if (missing.length === 0) {
+    writeOut("atlas preflight: OK — all required environment variables set.\n");
+    return 0;
+  }
+  writeErr(
+    `atlas preflight: missing required environment variables:\n${missing
+      .map((m) => `  - ${m}`)
+      .join("\n")}\nSet them before starting the server or running a harvest.\n`,
+  );
+  return 1;
+}
+
 export async function runAtlasCli(
   argv: string[] = process.argv.slice(2),
   io: AtlasCliIo = {},
@@ -493,6 +518,17 @@ export async function runAtlasCli(
       await feedback(query, options, writeOut);
     });
 
+  let preflightExitCode: number | undefined;
+  program
+    .command("preflight")
+    .description(
+      "Report every missing required environment variable in one pass " +
+        "(fatal-in-production keys + source-gated tokens) before running the server or a harvest",
+    )
+    .action(() => {
+      preflightExitCode = runPreflight(writeOut, writeErr);
+    });
+
   // The harvest DRIVER (src/atlas/harvest-cli.ts) as a registered verb.
   // Execution is handled by the pre-parse short-circuit at the top of
   // runAtlasCli (which forwards the raw tail verbatim, leading `--`
@@ -520,7 +556,7 @@ export async function runAtlasCli(
 
   try {
     await program.parseAsync(argv, { from: "user" });
-    return harvestExitCode ?? 0;
+    return preflightExitCode ?? harvestExitCode ?? 0;
   } catch (error) {
     if (error instanceof CommanderError) {
       return error.exitCode;
