@@ -69,6 +69,45 @@ export const DEFAULT_EXCLUSION_RULES: ExclusionRule[] = [
   },
 ];
 
+// ── Deterministic credential pre-filter (D.2, fail-restrictive) ─────────────────
+//
+// The english credential rule is judged by the LLM, whose prompt biases toward
+// UNDER-exclusion (a leak risk). To make the credential net FAIL-RESTRICTIVE we
+// run a deterministic regex over the candidate's text BEFORE the LLM: if a
+// recognizable credential shape is present, the candidate is dropped with NO LLM
+// call — so a leaked secret is excluded even when the model under-flags it. This
+// is a belt-and-suspenders floor UNDER the (now fail-restrictive) LLM judgment,
+// never a replacement for it: a clean candidate falls through to the LLM as
+// before, and the LLM's fail-CLOSED error behavior is untouched.
+
+// Recognizable high-confidence credential shapes. Anchored to the token PREFIX
+// (provider-issued, unmistakable) or the PEM armor — deliberately narrow to avoid
+// dropping prose that merely discusses credentials (that ambiguity is the LLM's
+// job). Case-sensitive where the real tokens are (sk-/ghp_/AKIA), matching how
+// the providers actually emit them.
+const CREDENTIAL_PATTERNS: RegExp[] = [
+  /\bsk-[A-Za-z0-9]{20,}\b/, // OpenAI-style secret key
+  /\bghp_[A-Za-z0-9]{20,}\b/, // GitHub personal access token
+  /\bAKIA[A-Z0-9]{16}\b/, // AWS access key id
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/, // PEM private-key armor
+];
+
+// True when the candidate's title or content carries a recognizable credential.
+function containsCredential(candidate: Candidate): boolean {
+  const haystack = `${candidate.title}\n${candidate.content}`;
+  return CREDENTIAL_PATTERNS.some((re) => re.test(haystack));
+}
+
+// True when a plain-English rule is credential-oriented — i.e. the deterministic
+// pre-filter should guard it. Keyed on the credential vocabulary so any custom
+// cred rule (not just DEFAULT_EXCLUSION_RULES') is covered, while non-credential
+// english rules (e.g. customer-GTM) are left to the LLM alone.
+function isCredentialRule(rule: Extract<ExclusionRule, { kind: "english" }>): boolean {
+  return /\b(credential|secret|api\s*key|access\s*token|\btoken\b|password)/i.test(
+    rule.text,
+  );
+}
+
 // ── Flag-rule evaluation (pure, no LLM) ─────────────────────────────────────────
 
 // True when the candidate's classification value at `dimension` equals the
@@ -113,6 +152,16 @@ export async function applyExclusions(
           break;
         }
         continue;
+      }
+
+      // Credential english rules get a deterministic regex FLOOR first: a
+      // recognizable credential shape drops the candidate with NO LLM call, so a
+      // leaked secret is excluded even when the (conservative) model under-flags
+      // it (D.2 fail-restrictive). Non-credential english rules skip this and go
+      // straight to the LLM, and a clean candidate falls through to the LLM below.
+      if (isCredentialRule(rule) && containsCredential(candidate)) {
+        matchedRule = rule;
+        break;
       }
 
       // english rule → LLM judgment over the candidate's salient fields.

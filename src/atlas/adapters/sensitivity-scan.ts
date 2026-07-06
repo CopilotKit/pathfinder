@@ -15,9 +15,11 @@
 // signal (a named party tied to commercial terms) → `proprietary`.
 //
 // Callers: memory.ts (the original — its behavior is pinned by its sensitivity
-// suite and must stay byte-identical), github.ts and linear.ts (batch
-// first-pass classification over title + distilled body; the webhook path is
-// untouched — B2 byte-equivalence), source-comment.ts (title + raw comment +
+// suite and must stay byte-identical), github.ts (batch first-pass
+// classification over title + RAW body + review-thread/linked-issue evidence —
+// the RAW body, not the distilled `content`, so a credential in a stripped
+// section still escalates) and linear.ts (batch first-pass classification; the
+// webhook path is untouched — B2 byte-equivalence), source-comment.ts (title + raw comment +
 // annotated code region — the likeliest credential carrier in the fleet, and
 // the only adapter that self-stamps source-verified/high). notion.ts keeps its own page-haystack
 // `classifyFirstPass` for knowledge_type and the customer-identifying secret
@@ -54,8 +56,31 @@ export const CREDENTIAL_SIGNAL: RegExp[] = [
   // `pass:` is common English prose ("make the tests pass: …") and must not
   // escalate.
   /\bpass(?:word|wd)\s*[:=]/i,
-  // PEM private-key block.
+  // PEM private-key block. Key-type header varies (RSA / EC / OPENSSH / DSA /
+  // none) — the fence itself IS the credential, so accept any BEGIN…PRIVATE
+  // KEY variant.
   /-----BEGIN(?:\s+[A-Z0-9]+)*\s+PRIVATE KEY-----/i,
+  // A credential can arrive WITHOUT an assignment shape. The following catch
+  // the same class of embedded raw credential the assignment patterns miss;
+  // all are context-qualified (require the credential-shaped prefix AND an
+  // opaque, credential-length value) so ordinary prose does not over-flag.
+  // Escalate-only: they can only raise sensitivity to `secret`.
+  //
+  // `Authorization: Bearer <opaque>` / a bare `Bearer <opaque>` — the classic
+  // API-request credential carrier. An opaque ≥16-char run is required so a
+  // capitalized "Bearer bonds" or "the bearer of this note" (short following
+  // word) does NOT trip.
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/i,
+  // Well-known high-entropy provider token prefixes (embedded raw credential
+  // even without any keyword). GitHub PATs (`ghp_`/`gho_`/`ghs_`/`ghu_`/`ghr_`
+  // + a long run, or the newer `github_pat_` form) and `sk-` provider secret
+  // keys. The long opaque body is what distinguishes a real token from prose.
+  /\bgh[opsur]_[A-Za-z0-9]{20,}/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/,
+  /\bsk-[A-Za-z0-9-]{16,}/,
+  // AWS access-key id: literal `AKIA` + 16 upper-alnum chars. The fixed prefix
+  // + fixed length is specific enough that "AWS" in prose never matches.
+  /\bAKIA[0-9A-Z]{16}\b/,
 ];
 
 // Customer-identifying / GTM signals → escalate to `proprietary`. Mirrors the
