@@ -289,12 +289,24 @@ function blockPlainText(block: BlockObjectResponse): string {
   return richText.map((r) => r.plain_text ?? "").join("");
 }
 
-// The prose under a candidate's to_do — the provenance callout + evidence
-// bullets `provenanceAndEvidenceChildren` rendered at generate time (plus
-// anything the lead added by hand). This is the real candidate CONTENT an
-// english rule must judge (§11): a clean-titled candidate whose body reveals
-// e.g. a credential is only catchable here. Empty for a childless row (a
-// hand-typed checkbox) — the caller then falls back to title-only content.
+// The prose under a candidate's to_do — the distilled candidate BODY plus the
+// provenance callout + evidence bullets `provenanceAndEvidenceChildren` rendered
+// at generate time (plus anything the lead added by hand). This is the real
+// candidate CONTENT an english rule must judge (§11): a clean-titled candidate
+// whose body reveals e.g. a credential is only catchable here. Empty for a
+// childless row (a hand-typed checkbox) — the caller then falls back to
+// title-only content.
+//
+// The distilled body does NOT sit at depth-1: S16 renders it inside a `toggle`
+// ("Content (why/how)") whose PARAGRAPH children carry the prose (the to_do's
+// direct children are that toggle plus the provenance/evidence blocks — see
+// candidateToDoBlock). So the extractor must DESCEND one level into a toggle to
+// reach the body it re-checks; a depth-1-only read would capture the toggle's
+// static "Content (why/how)" label and MISS the body — the very §11 gate bypass
+// this exists to close. The toggle's own label is deliberately SKIPPED (never
+// folded into the prose), so the constant never enters the english-rule /
+// credential-floor payload. Non-toggle children (callouts, bullets) stay at
+// depth-1 exactly as before.
 //
 // A marker-bearing child is NOT prose, whatever its block TYPE: a nested
 // marker to_do is a CANDIDATE in its own right (the recursive discovery walk
@@ -303,18 +315,36 @@ function blockPlainText(block: BlockObjectResponse): string {
 // block) is a machine record. Folding either's text into the parent's content
 // would leak the `⟦atlas:…⟧` machine marker into the english-rule payload, so
 // the filter keys on the marker itself (extractCanonicalKey), not on
-// to_do-ness.
+// to_do-ness. The same marker filter is applied to a toggle's descended
+// paragraph grandchildren.
 async function fetchChildProse(
   notion: Client,
   block: BlockObjectResponse,
 ): Promise<string> {
   if (!block.has_children) return "";
   const children = await readAllBlocks(notion, block.id);
-  return children
-    .filter((child) => extractCanonicalKey(blockPlainText(child)) === null)
-    .map((child) => blockPlainText(child).trim())
-    .filter((text) => text !== "")
-    .join("\n");
+  const parts: string[] = [];
+  for (const child of children) {
+    if (child.type === "toggle") {
+      // The distilled body lives in the toggle's PARAGRAPH grandchildren. Skip
+      // the toggle's own label ("Content (why/how)") — fold only its children,
+      // applying the same marker filter so a hand-nested marker block never
+      // leaks the `⟦atlas:…⟧` machine marker into the payload. A toggle with no
+      // children contributes nothing.
+      if (!child.has_children) continue;
+      const grandchildren = await readAllBlocks(notion, child.id);
+      for (const gc of grandchildren) {
+        if (extractCanonicalKey(blockPlainText(gc)) !== null) continue;
+        const text = blockPlainText(gc).trim();
+        if (text !== "") parts.push(text);
+      }
+      continue;
+    }
+    if (extractCanonicalKey(blockPlainText(child)) !== null) continue;
+    const text = blockPlainText(child).trim();
+    if (text !== "") parts.push(text);
+  }
+  return parts.join("\n");
 }
 
 // A neutral classification used when a checkbox carries no parseable badge (e.g.

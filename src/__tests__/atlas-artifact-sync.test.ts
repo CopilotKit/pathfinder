@@ -252,6 +252,89 @@ function candidateAsFetchedToDo(
   return toDoResponse(text, checked, opts);
 }
 
+// A generic fetched-block response of any text-bearing type — every such block
+// carries its rich_text under its own type key (paragraph, toggle, callout, …),
+// which is exactly the shape `blockPlainText`/`fetchChildProse` read back.
+function textBlockResponse(
+  type: string,
+  plainText: string,
+  opts: { id?: string; hasChildren?: boolean } = {},
+): BlockObjectResponse {
+  return {
+    type,
+    [type]: {
+      rich_text: [
+        {
+          type: "text",
+          plain_text: plainText,
+          href: null,
+          annotations: {
+            bold: false,
+            italic: false,
+            strikethrough: false,
+            underline: false,
+            code: false,
+            color: "default",
+          },
+          text: { content: plainText, link: null },
+        },
+      ],
+      color: "default",
+    },
+    parent: { type: "page_id", page_id: "p" },
+    object: "block",
+    id: opts.id ?? `${type}-${Math.random().toString(36).slice(2)}`,
+    created_time: "2026-06-08T00:00:00.000Z",
+    created_by: { object: "user", id: "u" },
+    last_edited_time: "2026-06-08T00:00:00.000Z",
+    last_edited_by: { object: "user", id: "u" },
+    has_children: opts.hasChildren ?? false,
+    in_trash: false,
+    archived: false,
+  } as unknown as BlockObjectResponse;
+}
+
+// Convert the REAL request-block subtree S16 builds (`candidateToDoBlock`'s
+// children — a `toggle` whose paragraph grandchildren hold the distilled body,
+// plus the provenance callout / evidence bullets) into the fetched-back Notion
+// response tree, wiring each block's own children into a `children` map keyed by
+// a synthesized id. This mirrors EXACTLY how the page round-trips: build →
+// (human edit) → fetch, so `fetchChildProse` sees the same toggle→paragraph
+// indirection it must descend through. Returns the top-level response blocks and
+// the id→children map to feed `makeMockNotion`.
+function requestChildrenAsFetched(
+  requestChildren: unknown[],
+  idPrefix: string,
+): {
+  blocks: BlockObjectResponse[];
+  childrenMap: Record<string, BlockObjectResponse[]>;
+} {
+  const childrenMap: Record<string, BlockObjectResponse[]> = {};
+  let counter = 0;
+  const convert = (req: unknown): BlockObjectResponse => {
+    const b = req as Record<string, unknown> & { type: string };
+    const type = b.type;
+    const data = b[type] as {
+      rich_text?: Array<{ text?: { content?: string } }>;
+      children?: unknown[];
+    };
+    const plainText = (data.rich_text ?? [])
+      .map((r) => r.text?.content ?? "")
+      .join("");
+    const id = `${idPrefix}-${type}-${counter++}`;
+    const grandchildren = data.children ?? [];
+    const response = textBlockResponse(type, plainText, {
+      id,
+      hasChildren: grandchildren.length > 0,
+    });
+    if (grandchildren.length > 0) {
+      childrenMap[id] = grandchildren.map(convert);
+    }
+    return response;
+  };
+  return { blocks: requestChildren.map(convert), childrenMap };
+}
+
 // ── Mock Notion client whose blocks.children.list returns a fixed page ───────
 
 interface MockNotion {
@@ -591,6 +674,145 @@ describe("syncApprovalArtifact (S17)", () => {
       }),
       ACTOR,
     );
+  });
+
+  it("descends into the 'Content (why/how)' toggle so a body-only credential is caught (real round-trip, §11)", async () => {
+    // The REAL round-trip: S16 renders the distilled body inside a `toggle`
+    // ("Content (why/how)") whose PARAGRAPH grandchildren carry the prose
+    // (candidateToDoBlock → toggle → paragraphs), NOT as a direct child of the
+    // to_do. The title here is clean, but the body paragraph carries a GitHub
+    // PAT-shaped token (ghp_ + 36 alnum) the deterministic credential floor must
+    // catch. `fetchChildProse` must DESCEND into the toggle to reach it — a
+    // depth-1-only read would capture the toggle's static "Content (why/how)"
+    // label and MISS the body, wrongly approving a leaked-credential row.
+    const bodyToken = `ghp_${"a1b2c3d4e5".repeat(4).slice(0, 36)}`;
+    expect(bodyToken).toMatch(/^ghp_[A-Za-z0-9]{36}$/);
+    const bodyDirty = makeCandidate({
+      canonical_key: "github-pr:cpk-runtime:toggle-body-credential",
+      title: "Rotate the deploy pipeline settings",
+      content: `The deploy runbook pasted a live token: ${bodyToken} into the log stream.`,
+    });
+
+    // The SHIPPED credential english rule (fail-restrictive deterministic floor;
+    // no LLM needed for the credential shape) — mirrors DEFAULT_EXCLUSION_RULES.
+    const credentialRule: ExclusionRule = {
+      kind: "english",
+      text: "Exclude anything that contains or reveals credentials, secret API keys, access tokens, passwords, or other sensitive secret values.",
+    };
+
+    // Build the candidate's REAL child tree and echo it back as the fetched
+    // toggle→paragraph response tree, wired into the children map.
+    const todoId = "todo-toggle-body-credential";
+    const requestBlock = candidateToDoBlock(bodyDirty) as unknown as Record<
+      string,
+      { children?: unknown[] }
+    >;
+    const requestChildren = requestBlock.to_do?.children ?? [];
+    const { blocks: childBlocks, childrenMap } = requestChildrenAsFetched(
+      requestChildren,
+      todoId,
+    );
+
+    const { client: notion } = makeMockNotion(
+      [
+        bulletResponse(ruleToBulletText(credentialRule)),
+        candidateAsFetchedToDo(bodyDirty, true, {
+          id: todoId,
+          hasChildren: true,
+        }),
+      ],
+      {
+        children: {
+          [todoId]: childBlocks,
+          ...childrenMap,
+        },
+      },
+    );
+    const { client, approve, reject } = makeMockHttpClient();
+
+    const result = await syncApprovalArtifact({
+      notion,
+      pageId: "page-toggle-body-credential",
+      client,
+      actor: ACTOR,
+      llm,
+    });
+
+    // The body credential is caught → candidate EXCLUDED (never approved).
+    expect(result.excluded).toEqual([
+      "github-pr:cpk-runtime:toggle-body-credential",
+    ]);
+    expect(result.approved).toEqual([]);
+    expect(approve).not.toHaveBeenCalled();
+    expect(reject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canonicalKey: "github-pr:cpk-runtime:toggle-body-credential",
+      }),
+      ACTOR,
+    );
+  });
+
+  it("does NOT leak the 'Content (why/how)' toggle LABEL into the reconstructed content", async () => {
+    // The toggle's own rich_text is a static UI label — it must never enter the
+    // english-rule payload (it would pollute every judgment and could even
+    // accidentally match a rule). The extractor folds the toggle's PARAGRAPH
+    // grandchildren, skipping the toggle label itself. Observed via the aimock
+    // journal: the reconstructed content carries the body prose ("bodyzzz") but
+    // NOT the "Content (why/how)" label.
+    mock.clearRequests();
+    const c = makeCandidate({
+      canonical_key: "github-pr:cpk-runtime:toggle-label-leak",
+      title: "A clean claim about bodyzzz retention",
+      content: "why/how prose about bodyzzz that should ride, label should not",
+    });
+    const keepRule: ExclusionRule = {
+      kind: "english",
+      text: "Exclude rows that reveal customer contract values.",
+    };
+
+    const todoId = "todo-toggle-label-leak";
+    const requestBlock = candidateToDoBlock(c) as unknown as Record<
+      string,
+      { children?: unknown[] }
+    >;
+    const requestChildren = requestBlock.to_do?.children ?? [];
+    const { blocks: childBlocks, childrenMap } = requestChildrenAsFetched(
+      requestChildren,
+      todoId,
+    );
+
+    const { client: notion } = makeMockNotion(
+      [
+        bulletResponse(ruleToBulletText(keepRule)),
+        candidateAsFetchedToDo(c, true, { id: todoId, hasChildren: true }),
+      ],
+      { children: { [todoId]: childBlocks, ...childrenMap } },
+    );
+    const { client } = makeMockHttpClient();
+
+    const result = await syncApprovalArtifact({
+      notion,
+      pageId: "page-toggle-label-leak",
+      client,
+      actor: ACTOR,
+      llm,
+    });
+
+    expect(result.approved).toEqual([
+      "github-pr:cpk-runtime:toggle-label-leak",
+    ]);
+    const entry = mock
+      .getRequests()
+      .find((r) => JSON.stringify(r.body ?? {}).includes("bodyzzz"));
+    expect(entry).toBeDefined();
+    const userMessage = String(
+      entry!.body!.messages.find((m) => m.role === "user")?.content ?? "",
+    );
+    const payload = JSON.parse(userMessage) as {
+      candidate: { content: string };
+    };
+    expect(payload.candidate.content).toContain("bodyzzz");
+    expect(payload.candidate.content).not.toContain("Content (why/how)");
   });
 
   it("falls back to title-only content for a checked row with no child blocks", async () => {
