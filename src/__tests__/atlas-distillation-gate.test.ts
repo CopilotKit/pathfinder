@@ -171,7 +171,47 @@ const FLIP_DISTILLED_TO_RESTATEMENT_CONTENT =
   `${FLIP_DISTILLED_TO_RESTATEMENT_MARKER}: the PR bumps the http client ` +
   "dependency to the latest patch release.";
 
+// PRESERVE-SPECIFICS gate-plumbing guard (companion to the real-LLM eval in
+// atlas-distillation-rewrite-eval.test.ts): an admin-ops-style candidate whose
+// MOCKED judge returns a `rewritten` verdict that RETAINS every concrete token.
+// This locks the CONTRACT that the gate flows the judge's rewrite content/title
+// through INTACT — it is a replay, so it stays green regardless of the prompt
+// (it is the plumbing guard, NOT the prompt proof). The prompt proof lives in
+// the opt-in real-LLM eval.
+const PRESERVE_MARKER = "PRESERVE-SPECIFICS-CASE";
+const PRESERVE_TITLE = `PR #412 (${PRESERVE_MARKER}): unify admin auth on ANALYTICS_TOKEN`;
+const PRESERVE_CONTENT =
+  `${PRESERVE_MARKER}: adds a POST /admin/:op endpoint, validates the ` +
+  "ANALYTICS_TOKEN header with timingSafeEqual, returns 202/400/401/503, and " +
+  "sets trust_proxy fail-closed. Removes the old PATHFINDER_ADMIN_TOKEN.";
+// The judge's rewrite: sharpened WHY prose that RETAINS every concrete token
+// (the post-fix behavior the real-LLM eval proves the prompt now produces).
+const PRESERVE_REWRITE_TITLE =
+  "POST /admin/:op unifies admin auth on ANALYTICS_TOKEN, timing-safe";
+const PRESERVE_REWRITE_CONTENT =
+  "The POST /admin/:op endpoint validates the ANALYTICS_TOKEN header with " +
+  "timingSafeEqual so a wrong token cannot be told apart by response timing; it " +
+  "returns 202 on success, 400 on a malformed body, 401 on a bad token, and 503 " +
+  "when overloaded. trust_proxy is fail-closed: an unresolved forwarded client " +
+  "IP is rejected. Collapsing PATHFINDER_ADMIN_TOKEN into ANALYTICS_TOKEN leaves " +
+  "operators one credential and one auth path to audit.";
+
 const fixtures: Fixture[] = [
+  // PRESERVE-SPECIFICS plumbing guard: rewritten verdict retaining the tokens.
+  {
+    match: {
+      systemMessage: DISTILL_SYSTEM_MARKER,
+      userMessage: PRESERVE_MARKER,
+    },
+    response: {
+      content: JSON.stringify({
+        verdict: "rewritten",
+        reason: "sharpened the WHY while keeping every endpoint/code/symbol",
+        title: PRESERVE_REWRITE_TITLE,
+        content: PRESERVE_REWRITE_CONTENT,
+      }),
+    },
+  },
   // Salvageable → rewritten (gated on the salvage marker in the user payload).
   {
     match: {
@@ -622,6 +662,36 @@ describe("enforceDistillation (aimock-backed real judge)", () => {
       ctxOn(process.cwd()),
     );
     expect(validated.approvable).toBe(true);
+  });
+
+  it("rewritten verdict flows the judge's specifics-preserving rewrite through INTACT (PRESERVE-SPECIFICS plumbing guard)", async () => {
+    // Companion to the opt-in real-LLM eval: that eval proves the PROMPT makes a
+    // real model retain concrete tokens on a rewrite; THIS aimock replay locks
+    // the GATE-PLUMBING contract — whatever content/title the judge returns on a
+    // `rewritten` verdict is what enforceDistillation swaps in, verbatim. So when
+    // the judge returns a specifics-preserving rewrite, the concrete tokens
+    // survive the gate.
+    const cand = makeCandidate({
+      title: PRESERVE_TITLE,
+      content: PRESERVE_CONTENT,
+      knowledge_type: "security",
+    });
+
+    const [gated] = await enforceDistillation([cand], { judge });
+
+    // Title/content are swapped for the judge's specifics-preserving rewrite.
+    expect(gated.title).toBe(PRESERVE_REWRITE_TITLE);
+    expect(gated.content).toBe(PRESERVE_REWRITE_CONTENT);
+    // The concrete verifiable detail flows through the gate intact.
+    expect(gated.content).toContain("POST /admin/:op");
+    expect(gated.content).toContain("timingSafeEqual");
+    expect(gated.content).toMatch(/\b401\b/);
+    expect(gated.content).toContain("trust_proxy");
+    expect(gated.title).toContain("POST /admin/:op");
+    // Salvage breadcrumb, not the restatement floor.
+    expect(gated.provenance.validated_against ?? "").toContain(
+      REWRITTEN_FROM_RESTATEMENT_MARKER,
+    );
   });
 
   it("restatement→rewritten flip strips a PRIOR run's stale RESTATEMENT_MARKER so validate no longer floors the salvage", async () => {
