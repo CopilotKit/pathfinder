@@ -16,17 +16,15 @@
 // into generic WHY prose ("unified authentication enhances security"), dropping
 // every concrete identifier. The fix teaches the judge to RETAIN every
 // endpoint/status-code/symbol/config on a rewrite (or fall back to `distilled`
-// pass-through when it cannot). So the assertion is: whatever the verdict, the
-// returned content must still carry the source's concrete tokens.
+// pass-through when it cannot). So the contract is: a concrete-mechanism claim
+// is acceptably handled EITHER as `rewritten` whose content still carries the
+// source's concrete tokens, OR as `distilled` pass-through (which by definition
+// keeps the original intact) — but NEVER as `restatement` (which would drop it).
 
 import { describe, expect, it } from "vitest";
 
 import { OpenAIDistiller } from "../atlas/llm.js";
 import type { DistillationJudgeInput } from "../atlas/llm.js";
-
-// The model the code actually uses (OpenAIDistiller's DEFAULT_MODEL). Pinned so
-// the eval exercises the real judge path, not some other model.
-const JUDGE_MODEL = "gpt-4o-mini";
 
 // An admin-ops-style fragment carrying dense concrete verifiable detail: an
 // endpoint route, four HTTP status codes, a named crypto symbol, a config key,
@@ -62,26 +60,39 @@ describe.skipIf(!process.env.OPENAI_API_KEY)(
   "judgeDistillation REWRITE branch preserves concrete specifics (real LLM)",
   () => {
     it("a rewritten verdict RETAINS endpoints/status-codes/symbols/config (or falls back to distilled pass-through)", async () => {
-      // No baseURL → the REAL OpenAI API (honors OPENAI_API_KEY). temp 0 and the
-      // pinned model make this as reproducible as a real model allows.
-      const distiller = new OpenAIDistiller({ model: JUDGE_MODEL });
+      // No baseURL → the REAL OpenAI API (honors OPENAI_API_KEY). No `model`
+      // option → the distiller resolves its own unexported DEFAULT_MODEL, exactly
+      // as production does. This deliberately AVOIDS pinning a duplicated model
+      // literal in the test: a duplicated pin could silently drift from the source
+      // default and make the eval exercise a different model than production. By
+      // deferring to the distiller's default we exercise whatever production runs,
+      // with zero drift surface. (temp 0 keeps it as reproducible as a real model
+      // allows.)
+      const distiller = new OpenAIDistiller();
 
       const verdict = await distiller.judgeDistillation(ADMIN_OPS_INPUT);
 
+      // The semantic contract for a dense concrete-mechanism claim: it is
+      // acceptably handled EITHER as `rewritten` (whose content must retain every
+      // specific) OR as `distilled` pass-through (which by definition keeps the
+      // ORIGINAL content untouched). A `restatement` would DROP the fragment with
+      // no salvage — wrong for this input — so that outcome must fail loud.
+      //
+      // This assertion runs regardless of which verdict the model returns and is
+      // NOT implied by any enclosing guard: if a future regression routed this
+      // claim to `restatement`, it fails here. (Re-checking tokens on the static
+      // ADMIN_OPS_INPUT.content, or asserting `kind === "distilled"` inside a
+      // `kind === "distilled"` branch, would both be tautologies that verify
+      // nothing about the model's output.)
+      expect(["rewritten", "distilled"]).toContain(verdict.kind);
+
       if (verdict.kind === "rewritten") {
-        // The failure surface: on a rewrite the concrete detail must survive.
+        // The failure surface: on a rewrite the concrete detail must survive in
+        // the model's OWN returned content (a distilled verdict carries no content
+        // of its own — it is a pure pass-through signal — so there is nothing to
+        // token-check there, and the pass-through preserves the original by
+        // construction).
         expectSpecificsRetained(verdict.content);
-      } else if (verdict.kind === "distilled") {
-        // Acceptable pass: `distilled` is pure pass-through — the gate keeps the
-        // ORIGINAL content, which by construction carries all the specifics. This
-        // is the "prefer distilled over a lossy rewrite" fallback the fix adds.
-        expectSpecificsRetained(ADMIN_OPS_INPUT.content);
-      } else {
-        // A `restatement` verdict would DROP this fragment (no salvage), which is
-        // wrong for a dense concrete-mechanism claim — fail loud.
-        throw new Error(
-          `expected distilled or rewritten for a concrete-mechanism claim, got ${verdict.kind}`,
-        );
       }
     });
   },

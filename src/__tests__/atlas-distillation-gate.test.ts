@@ -517,6 +517,9 @@ describe("enforceDistillation (aimock-backed real judge)", () => {
   });
 
   beforeEach(() => {
+    // Defensive/no-op for these fixtures: aimock only consults match counts for
+    // sequenceIndex fixtures, and every fixture here matches on message content
+    // (no sequenceIndex). Kept so adding a sequenced fixture later stays correct.
     mock.resetMatchCounts();
   });
 
