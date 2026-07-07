@@ -32,6 +32,16 @@ import { createEmbeddingProvider } from "../indexing/embeddings.js";
 import type { EmbeddingProvider } from "../indexing/embeddings.js";
 import type { EmbeddingConfig } from "../types.js";
 
+/**
+ * A vector sized to the given dimensions (default 1536, the OpenAI provider
+ * default). The provider now asserts returned-vector length == configured
+ * dimensions, so fixtures whose exact contents aren't load-bearing use a
+ * correctly-sized vector to exercise the path under test.
+ */
+function dimVec(dimensions = 1536): number[] {
+  return Array.from({ length: dimensions }, () => 0.1);
+}
+
 describe("createEmbeddingProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -51,8 +61,9 @@ describe("createEmbeddingProvider", () => {
   });
 
   it("OpenAIEmbeddingProvider.embed calls OpenAI API", async () => {
+    const embedding = dimVec(1536);
     mockCreate.mockResolvedValue({
-      data: [{ index: 0, embedding: [0.1, 0.2] }],
+      data: [{ index: 0, embedding }],
     });
     const config: EmbeddingConfig = {
       provider: "openai",
@@ -61,11 +72,12 @@ describe("createEmbeddingProvider", () => {
     };
     const provider = createEmbeddingProvider(config, "test-key");
     const result = await provider.embed("hello");
-    expect(result).toEqual([0.1, 0.2]);
+    expect(result).toEqual(embedding);
     expect(mockCreate).toHaveBeenCalledWith({
       model: "text-embedding-3-small",
       input: ["hello"],
       dimensions: 1536,
+      encoding_format: "float",
     });
   });
 

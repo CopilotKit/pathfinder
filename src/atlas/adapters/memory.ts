@@ -22,9 +22,11 @@ import { parse as parseYaml } from "yaml";
 import type {
   CandidateFragment,
   Classification,
+  KnowledgeType,
   Provenance,
 } from "../types.js";
 import { scanSensitivity } from "./sensitivity-scan.js";
+import { extractValidationTargets } from "./validation-targets.js";
 import type { AdapterContext, LeafAdapter } from "./types.js";
 
 // ── Input unit ────────────────────────────────────────────────────────────────
@@ -201,13 +203,40 @@ function isoDate(now: Date): string {
 // merely names "API keys" in prose keeps its original, context-qualified
 // behavior.
 
+// ── Per-note knowledge_type inference (close the operational leak, §7 / A.4) ──────
+//
+// The blanket `operational` default was a §7 gate LEAK: `operational` is an
+// EXEMPT knowledge_type (not in BEHAVIOR_KNOWLEDGE_TYPES), so an UNVERIFIED
+// reference_/project_ FACT (a stack inventory, an ownership record, a config
+// fact) sailed through the approvability gate as auto-approvable. But those two
+// prefixes ARE durable company facts — the memory note IS the authored source of
+// record (PRIMARY provenance). They must carry a GATED knowledge_type so that,
+// while still `unverified`, canonicalize's approvability gate renders them
+// `approvable=false` (guilty-until-validated).
+//
+// Per-prefix classification (the prefix already encodes the KEEP/DROP + fact-vs-
+// process semantics the module keys on everywhere else):
+//   reference_/project_ → `architecture` (a GATED behavior/fact type). A durable
+//     "how the system is / where things live / who owns what" fact is exactly the
+//     §7-gated class: it must be source-verified before it is approvable.
+//   feedback_ (kept)     → `operational` (EXEMPT). A KEPT feedback note is
+//     agent-facing operational/process why-how (that is the KEEP predicate);
+//     genuine process knowledge stays auto-approvable, so closing the leak does
+//     not over-gate it.
+function knowledgeTypeFor(prefix: Prefix | undefined): KnowledgeType {
+  return prefix === "reference_" || prefix === "project_"
+    ? "architecture"
+    : "operational";
+}
+
 // ── First-pass classification ────────────────────────────────────────────────────
 //
 // Conservative defaults: memory facts are `internal` (never public) until the
 // validate stage promotes them, `unverified` (S14 promotes), `medium`
 // confidence (a deliberately-recorded fact, not a guess). reference_/project_
 // are PRIMARY (the memory note IS the authored source of record); feedback_
-// notes are DERIVED. knowledge_type defaults to the catch-all `operational`.
+// notes are DERIVED. knowledge_type is inferred PER NOTE (see knowledgeTypeFor):
+// reference_/project_ facts are GATED, feedback_ process-notes stay `operational`.
 // Sensitivity is the conservative `internal` baseline UNLESS the credential /
 // customer-identifying scan escalates it (defense-in-depth, mirroring notion.ts).
 function firstPassClassification(
@@ -219,7 +248,7 @@ function firstPassClassification(
     prefix === "reference_" || prefix === "project_" ? "primary" : "derived";
   return {
     sensitivity,
-    knowledge_type: "operational",
+    knowledge_type: knowledgeTypeFor(prefix),
     audience: "all-staff",
     validation_status: "unverified",
     confidence: "medium",
@@ -227,6 +256,21 @@ function firstPassClassification(
     freshness: { as_of: isoDate(now) },
   };
 }
+
+// ── validationTargets extraction (files/paths a reviewer can grep-verify) ─────────
+//
+// A memory FACT that cites a concrete file/path gives validate.ts something to
+// source-verify against the checkout (validate.ts probes each target as a symbol
+// grep OR a repo-relative path). The lift is FILES-ONLY here (memory prose names
+// files, not bare calls) and is factored into the shared `validation-targets`
+// module (mirrors the sensitivity-scan extraction) so the two file shapes —
+//   • a repo-relative path with a directory segment ("src/db/atlas.ts")
+//   • a bare filename with a code/config extension ("vitest.config.ts")
+// — and the prose over-capture screen (a bare "node.js"/"next.js" is prose, not
+// a file) stay consistent with the notion/github siblings. Only file-shaped
+// tokens are extracted — never bare English words or prose runtime names — so a
+// target-less prose note (a team norm, an etiquette rule) yields [], keeping it
+// unverifiable and therefore (as a gated fact) not auto-approvable.
 
 // ── Adapter ──────────────────────────────────────────────────────────────────────
 
@@ -303,6 +347,15 @@ export const memoryAdapter: LeafAdapter<MemoryFileUnit> = {
       classification: firstPassClassification(prefix, ctx.now, sensitivity),
     };
 
+    // Populate validationTargets from any file/path the note cites (across
+    // name/description/body), so a fact note gives validate.ts a concrete
+    // source-verification target. A target-less note yields [] — as a gated
+    // fact it then stays unverifiable and not auto-approvable.
+    const validationTargets = extractValidationTargets(
+      `${name}\n${description}\n${body}`,
+      { files: true },
+    );
+
     const fragment: CandidateFragment = {
       sourcetype: "memory",
       subsystem: slug,
@@ -314,7 +367,7 @@ export const memoryAdapter: LeafAdapter<MemoryFileUnit> = {
       provenance,
       evidence: [],
       needsReview: false,
-      validationTargets: [],
+      validationTargets,
     };
 
     return [fragment];

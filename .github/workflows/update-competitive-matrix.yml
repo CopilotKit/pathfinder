@@ -1,7 +1,7 @@
 name: Update Competitive Matrix
 on:
   schedule:
-    - cron: '0 9 * * 1'  # Monday 9am UTC
+    - cron: "0 9 * * 1" # Monday 9am UTC
   workflow_dispatch:
 
 permissions: {}
@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version: "22"
       - run: npm ci
       - run: npx tsx scripts/update-competitive-matrix.ts --summary /tmp/matrix-summary.md
       - name: Check for changes

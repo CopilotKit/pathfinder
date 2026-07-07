@@ -1,12 +1,12 @@
 {
-    "name": "pathfinder",
-    "display_name": "Pathfinder",
-    "description": "The knowledge server for AI agents — index docs, code, Notion, Slack, and Discord",
-    "version": "1.6.2",
-    "mcp_servers": {
-        "pathfinder": {
-            "type": "http",
-            "url": "${PATHFINDER_URL}/mcp"
-        }
+  "name": "pathfinder",
+  "display_name": "Pathfinder",
+  "description": "The knowledge server for AI agents — index docs, code, Notion, Slack, and Discord",
+  "version": "1.6.2",
+  "mcp_servers": {
+    "pathfinder": {
+      "type": "http",
+      "url": "${PATHFINDER_URL}/mcp"
     }
+  }
 }

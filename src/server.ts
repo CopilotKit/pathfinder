@@ -213,14 +213,11 @@ export function assertWebhookRawBodyOrder(routeName: string): RequestHandler {
 }
 
 let webhookHandler:
-  | ((req: Request, res: Response) => Promise<GitHubWebhookResult>)
-  | null = null;
+  ((req: Request, res: Response) => Promise<GitHubWebhookResult>) | null = null;
 let slackWebhookHandler:
-  | ((req: Request, res: Response) => Promise<void>)
-  | null = null;
+  ((req: Request, res: Response) => Promise<void>) | null = null;
 let discordWebhookHandler:
-  | ((req: Request, res: Response) => Promise<void>)
-  | null = null;
+  ((req: Request, res: Response) => Promise<void>) | null = null;
 let orchestratorRef: IndexingOrchestrator | null = null;
 const startedAt = new Date();
 const bashInstances = new Map<string, Bash>();

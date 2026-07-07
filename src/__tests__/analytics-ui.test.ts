@@ -558,8 +558,7 @@ describe("analytics dashboard UI — dynamic window labels", () => {
     const preset = Array.from(
       dom.window.document.querySelectorAll(".preset[data-days]"),
     ).find((el) => el.getAttribute("data-days") === String(days)) as
-      | HTMLElement
-      | undefined;
+      HTMLElement | undefined;
     preset!.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
     );
@@ -711,8 +710,7 @@ describe("analytics dashboard UI — daily bar click drills down", () => {
       const barChart = [...chartInstances]
         .reverse()
         .find((c) => c.type === "bar") as
-        | (typeof chartInstances)[number]
-        | undefined;
+        (typeof chartInstances)[number] | undefined;
       expect(barChart).toBeDefined();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const labels = (barChart as any).data.labels as string[];
@@ -1935,8 +1933,7 @@ describe("analytics dashboard UI — daily chart drill-down malformed-day reject
     const barChart = [...chartInstances]
       .reverse()
       .find((c) => c.type === "bar") as
-      | (typeof chartInstances)[number]
-      | undefined;
+      (typeof chartInstances)[number] | undefined;
     expect(barChart).toBeDefined();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const labels = (barChart as any).data.labels as string[];
@@ -2071,8 +2068,7 @@ describe("analytics dashboard UI — fetchJson stale-401 generation guard", () =
     // valid token and gen=2 kicks off. When it finally resolves, the
     // guard must detect the stale generation and early-return.
     let resolveStale401:
-      | ((v: { status: number; body: unknown }) => void)
-      | null = null;
+      ((v: { status: number; body: unknown }) => void) | null = null;
     const stale401Pending = new Promise<{ status: number; body: unknown }>(
       (resolve) => {
         resolveStale401 = resolve;
@@ -2659,8 +2655,7 @@ describe("analytics dashboard UI — URL persistence parity", () => {
     const barChart = [...chartInstances]
       .reverse()
       .find((c) => c.type === "bar") as
-      | (typeof chartInstances)[number]
-      | undefined;
+      (typeof chartInstances)[number] | undefined;
     expect(barChart).toBeDefined();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const labels = (barChart as any).data.labels as string[];
@@ -3181,8 +3176,7 @@ describe("analytics dashboard UI — data availability label", () => {
     const preset = Array.from(
       dom.window.document.querySelectorAll(".preset[data-days]"),
     ).find((el) => el.getAttribute("data-days") === String(days)) as
-      | HTMLElement
-      | undefined;
+      HTMLElement | undefined;
     preset!.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
     );

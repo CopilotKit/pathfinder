@@ -63,9 +63,7 @@ export interface SseHandlerDeps {
    * late binding in server.ts (the limiter is constructed during startServer()).
    */
   ipLimiter:
-    | IpSessionLimiter
-    | undefined
-    | (() => IpSessionLimiter | undefined);
+    IpSessionLimiter | undefined | (() => IpSessionLimiter | undefined);
   /**
    * Factory for a per-session MCP server. Receives the originating GET /sse
    * request so the factory can read per-session request context (e.g. the
@@ -79,9 +77,7 @@ export interface SseHandlerDeps {
    * shape so tests can pass minimal stubs.
    */
   workspaceManager:
-    | WorkspaceManagerLike
-    | undefined
-    | (() => WorkspaceManagerLike | undefined);
+    WorkspaceManagerLike | undefined | (() => WorkspaceManagerLike | undefined);
   /**
    * Session state manager (bash tool per-session shell state). Optional.
    * Accepts either a direct instance or a getter for late binding, matching
@@ -90,8 +86,7 @@ export interface SseHandlerDeps {
    * per-session shell state doesn't leak when SSE sessions end.
    */
   sessionStateManager?:
-    | SessionStateManagerLike
-    | (() => SessionStateManagerLike | undefined);
+    SessionStateManagerLike | (() => SessionStateManagerLike | undefined);
   /**
    * Retry-After hint surfaced in rate-limit rejections. Optional — defaults
    * to 60 seconds. Server.ts injects something derived from session TTL.

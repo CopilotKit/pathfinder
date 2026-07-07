@@ -105,6 +105,7 @@ Run `node dist/index.js` from the built checkout with this environment:
 | `PORT`              | `3001`                                               |                                                                                                                        |
 | `NODE_ENV`          | `production`                                         | **Required to exercise the 401 path** — in dev mode `bearerTokenAuth` bypasses the token check for localhost requests  |
 | `MCP_JWT_SECRET`    | random (`openssl rand -hex 32`)                      | **Required whenever `NODE_ENV=production`** — startup is fatal without it. The two settings travel together            |
+| `PATHFINDER_CONSENT_HMAC_KEY` | random (`openssl rand -hex 32`)            | **Also required whenever `NODE_ENV=production`** — signs the OAuth consent-nonce; startup is fatal without it. Comma-separate values to rotate (all accepted on verify) |
 
 On macOS, daemonize via Python — `nohup` + `disown` dies with a spawning
 subagent shell, and **`env=env` must be passed explicitly** (omitting it
@@ -123,6 +124,7 @@ env.update({
   'PORT': '3001',
   'NODE_ENV': 'production',
   'MCP_JWT_SECRET': secrets.token_hex(32),
+  'PATHFINDER_CONSENT_HMAC_KEY': secrets.token_hex(32),
 })
 log = open('<sandbox>/server.log', 'ab')
 p = subprocess.Popen(['node', 'dist/index.js'],
@@ -219,7 +221,7 @@ creating it just matches the run-store layout.
 
 ## 5. Dry-run + upsert
 
-Dry-run needs only the bearer and the base URL:
+Dry-run needs the bearer, the base URL, and — like every `harvest run` invocation — the `--checkout` and `--feature-registry` flags (both are hard-required before `--dry-run` is even read):
 
 ```
 ANALYTICS_TOKEN=sandbox-smoke PATHFINDER_BASE_URL=http://localhost:3001 \
@@ -257,12 +259,16 @@ curl -s -H "Authorization: Bearer sandbox-smoke" "http://localhost:3001/api/atla
 #   → {"candidates":[ ...pending rows... ]}
 ```
 
-Approve one by canonical key:
+Approve one by canonical key. The key's first segment is a **stable constant**
+(`claim`), not the fragment's `sourcetype` — canonicalize stamps every
+`canonical_key` as `claim:<subsystem>:<claim-slug>` (see `CANONICAL_KEY_PREFIX`
+in `src/atlas/canonicalize.ts`), so the key for the Step-4 fragment is
+`claim:sandbox-database:sandbox-db-runs-on-5433`:
 
 ```
 curl -s -X POST -H "Authorization: Bearer sandbox-smoke" -H "X-Atlas-Actor: sandbox" \
   -H "Content-Type: application/json" \
-  -d '{"canonicalKey":"memory:sandbox-database:sandbox-db-runs-on-5433"}' \
+  -d '{"canonicalKey":"claim:sandbox-database:sandbox-db-runs-on-5433"}' \
   "http://localhost:3001/api/atlas/candidates/approve"
 #   → 200 {"candidate":{...,"status":"approved","approvedBy":"sandbox",...},"reindexQueued":true}
 ```
@@ -335,8 +341,10 @@ rm -rf <sandbox>
 - **Localhost bearer bypass.** With `NODE_ENV` unset, `bearerTokenAuth` skips
   the token check for localhost requests, so the 401-without-bearer check
   cannot be validated. Set `NODE_ENV=production` — and remember that
-  production mode makes `MCP_JWT_SECRET` mandatory (fatal at startup
-  otherwise).
+  production mode makes **both** `MCP_JWT_SECRET` **and**
+  `PATHFINDER_CONSENT_HMAC_KEY` mandatory (fatal at startup otherwise). Run
+  `node dist/atlas-cli.js preflight` to list every missing required var in one
+  pass before starting the server.
 - **Unknown-source warning on approve.** The auto-queued reindex for a
   candidate whose `source_name` isn't in the config logs
   `source-reindex: source "..." not found in config`. Harmless; the explicit

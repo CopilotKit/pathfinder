@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { memoryAdapter } from "../atlas/adapters/memory.js";
 import type { MemoryFileUnit } from "../atlas/adapters/memory.js";
 import type { AdapterContext } from "../atlas/adapters/types.js";
+import { canonicalize } from "../atlas/canonicalize.js";
 
 // Fixture memory files live under fixtures/atlas/memory/. Each is a real-shaped
 // memory file (YAML frontmatter: name/description/type/originSessionId + body).
@@ -365,6 +366,217 @@ describe("memory leaf adapter", () => {
       await expect(memoryAdapter.extract(unit, ctx)).rejects.toThrow(
         /\[atlas\/adapters\/memory\].*empty slug.*reference_\.md/,
       );
+    });
+  });
+
+  describe("per-note knowledge_type inference (close the operational leak, §7 / A.4)", () => {
+    // A reference_/project_ memory note IS a durable company FACT (a
+    // component/stack inventory, an ownership record, a config fact). Blanket-
+    // defaulting it to `operational` (an EXEMPT knowledge_type) let an
+    // UNVERIFIED fact sail through the §7 approvability gate — the leak this
+    // slot closes. Such a note must carry a GATED (BEHAVIOR_KNOWLEDGE_TYPES)
+    // knowledge_type so that, while it is still `unverified`, canonicalize's
+    // real approvability gate renders it `approvable=false`.
+
+    it("a reference_ FACT note (stack inventory) is NOT auto-approvable while unverified", async () => {
+      const unit: MemoryFileUnit = {
+        filename: "reference_stack_inventory.md",
+        contents: [
+          "---",
+          "name: Service stack inventory",
+          "type: reference",
+          "---",
+          "The API service runs Node 20 with Postgres 15 and Redis 7.",
+          "The frontend is a Next.js app deployed on Railway.",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      // Still unverified at intake (validate promotes later).
+      expect(fragment.provenance.classification.validation_status).toBe(
+        "unverified",
+      );
+      // The knowledge_type must be a GATED behavior/fact type, NOT the exempt
+      // `operational` blanket default.
+      expect(fragment.provenance.classification.knowledge_type).not.toBe(
+        "operational",
+      );
+      // Drive the REAL approvability gate (canonicalize.isApprovable): an
+      // unverified fact/behavior note must NOT be approvable.
+      const [candidate] = canonicalize([fragment]);
+      expect(candidate.approvable).toBe(false);
+    });
+
+    it("a project_ FACT note is NOT auto-approvable while unverified", async () => {
+      const [fragment] = await memoryAdapter.extract(
+        loadUnit("project_agentcore_upstream_pr.md"),
+        ctx,
+      );
+      expect(fragment.provenance.classification.knowledge_type).not.toBe(
+        "operational",
+      );
+      const [candidate] = canonicalize([fragment]);
+      expect(candidate.approvable).toBe(false);
+    });
+
+    it("a genuinely operational feedback_ how-to note STAYS exempt (approvable)", async () => {
+      // A KEPT feedback_ note is agent-facing operational/process why-how — it
+      // belongs in the EXEMPT bucket and must remain auto-approvable so that
+      // closing the leak does not over-gate genuine process knowledge.
+      const [fragment] = await memoryAdapter.extract(
+        loadUnit("feedback_nextjs_bundles_node_modules.md"),
+        ctx,
+      );
+      expect(fragment.provenance.classification.knowledge_type).toBe(
+        "operational",
+      );
+      const [candidate] = canonicalize([fragment]);
+      expect(candidate.approvable).toBe(true);
+    });
+  });
+
+  describe("validationTargets population from cited files/paths (A.4)", () => {
+    it("populates validationTargets from a repo-relative path named in the body", async () => {
+      const unit: MemoryFileUnit = {
+        filename: "reference_atlas_schema.md",
+        contents: [
+          "---",
+          "name: Atlas seed schema location",
+          "type: reference",
+          "---",
+          "The seed-candidate upsert lives in `src/db/atlas.ts`; the row shape is in `src/atlas/types.ts`.",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      expect(fragment.validationTargets).toContain("src/db/atlas.ts");
+      expect(fragment.validationTargets).toContain("src/atlas/types.ts");
+    });
+
+    it("captures an absolute-path citation with full directory context", async () => {
+      // Regression: CITED_PATH_RE's lookbehind (?<![\w/.-]) once included "/",
+      // so an absolute-path citation like `/src/db/atlas.ts` never matched as a
+      // PATH target — the lift degraded to the bare filename `atlas.ts`, losing
+      // the directory context validate.ts's path oracle needs to resolve the
+      // target against the checkout.
+      const unit: MemoryFileUnit = {
+        filename: "reference_atlas_abs_path.md",
+        contents: [
+          "---",
+          "name: Atlas seed schema absolute location",
+          "type: reference",
+          "---",
+          "The seed-candidate upsert lives in `/src/db/atlas.ts` in the checkout.",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      expect(fragment.validationTargets).toContain("/src/db/atlas.ts");
+      expect(fragment.validationTargets).not.toContain("atlas.ts");
+    });
+
+    it("populates validationTargets from a bare filename cited in the body", async () => {
+      const unit: MemoryFileUnit = {
+        filename: "reference_config_file.md",
+        contents: [
+          "---",
+          "name: Config file",
+          "type: reference",
+          "---",
+          "Runtime config is read from `vitest.config.ts` at startup.",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      expect(fragment.validationTargets).toContain("vitest.config.ts");
+    });
+
+    it("does NOT capture prose runtime tokens (node.js / next.js) as file targets", async () => {
+      // Over-capture guard: FILE_TARGET_RE matched any dotted prose token
+      // ending in a known extension, so plain prose like "node.js"/"next.js"
+      // became a bogus file target that could spuriously source-verify.
+      const unit: MemoryFileUnit = {
+        filename: "reference_runtime.md",
+        contents: [
+          "---",
+          "name: Runtime stack",
+          "type: reference",
+          "---",
+          "We run on node.js and the frontend uses next.js for SSR.",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      expect(fragment.validationTargets).not.toContain("node.js");
+      expect(fragment.validationTargets).not.toContain("next.js");
+      expect(fragment.validationTargets).toEqual([]);
+    });
+
+    it("STILL captures a genuine cited path amid prose runtime tokens", async () => {
+      // The tightening must not drop real citations: a repo-relative path is
+      // still lifted even when a prose runtime token sits alongside it.
+      const unit: MemoryFileUnit = {
+        filename: "reference_dedup.md",
+        contents: [
+          "---",
+          "name: Dedup location",
+          "type: reference",
+          "---",
+          "We run on node.js; the probe lives in `src/atlas/rag-dedup.ts`.",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      expect(fragment.validationTargets).toContain("src/atlas/rag-dedup.ts");
+      expect(fragment.validationTargets).not.toContain("node.js");
+    });
+
+    it("leaves validationTargets empty when the note names no file/path", async () => {
+      const unit: MemoryFileUnit = {
+        filename: "reference_no_paths.md",
+        contents: [
+          "---",
+          "name: Team norm",
+          "type: reference",
+          "---",
+          "The team prefers small, reviewable pull requests over large ones.",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      expect(fragment.validationTargets).toEqual([]);
+    });
+
+    it("does NOT lift a bogus symbol target from prose (files-only caller)", async () => {
+      // Files-only over-capture guard: memory calls the shared lift in
+      // FILES-ONLY mode ({ files: true }), so a `word(` fragment in prose
+      // must NOT become a symbol target. `undefined ?? true` used to leave
+      // the symbol lift on, minting a bogus `logic` target that could
+      // spuriously source-verify a fragment.
+      const unit: MemoryFileUnit = {
+        filename: "reference_retry.md",
+        contents: [
+          "---",
+          "name: Retry behaviour",
+          "type: reference",
+          "---",
+          "We reworked the retry logic (backoff now caps at 30s).",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      expect(fragment.validationTargets).not.toContain("logic");
+      expect(fragment.validationTargets).toEqual([]);
+    });
+
+    it("STILL captures a genuine cited path when prose also carries a `word(`", async () => {
+      // The files-only tightening must not drop real file citations even when
+      // a symbol-shaped `word(` sits alongside in the prose.
+      const unit: MemoryFileUnit = {
+        filename: "reference_retry_path.md",
+        contents: [
+          "---",
+          "name: Retry location",
+          "type: reference",
+          "---",
+          "The retry logic (backoff) lives in `src/atlas/rag-dedup.ts`.",
+        ].join("\n"),
+      };
+      const [fragment] = await memoryAdapter.extract(unit, ctx);
+      expect(fragment.validationTargets).toContain("src/atlas/rag-dedup.ts");
+      expect(fragment.validationTargets).not.toContain("logic");
     });
   });
 

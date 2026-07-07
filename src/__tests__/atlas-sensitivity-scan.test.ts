@@ -71,6 +71,92 @@ describe("scanSensitivity (shared regexes)", () => {
     });
   });
 
+  // ADVERSARIAL near-miss block (S18). The module docstring claims it catches
+  // "an embedded API key / token / password / private-key block". The
+  // assignment-shaped patterns above catch `key=…` forms, but a credential can
+  // also arrive WITHOUT an assignment: inside an `Authorization: Bearer …`
+  // header, or as a bare high-entropy provider token (`ghp_…`, `sk-…`, an AWS
+  // `AKIA…` id). Those are the SAME class of embedded raw credential and must
+  // ALSO escalate to `secret` — not slip to `internal` and dodge the
+  // DEFAULT_EXCLUSION_RULES layer. These are near-misses: the leak vector is a
+  // real credential the detector previously recognized only in canonical
+  // assignment shape. All escalate-only (can never downgrade).
+  describe("adversarial near-miss credentials → secret (S18)", () => {
+    it("flags a Bearer token in an Authorization header (no assignment)", () => {
+      // A JWT-shaped bearer credential — the classic API-request carrier. No
+      // `key=`/`token=` assignment, so the assignment patterns miss it.
+      expect(
+        scanSensitivity(
+          "note",
+          "",
+          "curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVC.payloadpart.signaturepart'",
+        ),
+      ).toBe("secret");
+    });
+
+    it("flags a bare 'Bearer <opaque>' credential outside a header", () => {
+      expect(
+        scanSensitivity(
+          "note",
+          "",
+          "auth with Bearer AbCdEf0123456789GhIjKlMn",
+        ),
+      ).toBe("secret");
+    });
+
+    it("flags a bare provider PAT prefix (embedded raw credential)", () => {
+      // Constructed so the literal never appears in prose analysis tooling.
+      const pat = "g" + "hp_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+      expect(scanSensitivity("note", "", `deploy key ${pat} rotate soon`)).toBe(
+        "secret",
+      );
+    });
+
+    it("flags a bare 'sk-' provider secret-key prefix", () => {
+      const sk = "sk-" + "proj-" + "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+      expect(scanSensitivity("note", "", `using ${sk} for calls`)).toBe(
+        "secret",
+      );
+    });
+
+    it("flags a bare AWS access-key id (AKIA…)", () => {
+      const akia = "AKIA" + "IOSFODNN7EXAMPLE";
+      expect(scanSensitivity("note", "", `${akia} is our access key`)).toBe(
+        "secret",
+      );
+    });
+
+    it("flags a private-key block regardless of the key-type header variant", () => {
+      // EC / OPENSSH variants, not just RSA — the fence is the credential.
+      expect(
+        scanSensitivity(
+          "note",
+          "",
+          "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----",
+        ),
+      ).toBe("secret");
+    });
+
+    it("does NOT over-flag ordinary prose that merely says 'bearer' or 'aws'", () => {
+      // Guard the escalate-only patterns against benign prose: "bearer" without
+      // an opaque credential value, and "AWS" without an AKIA id, stay internal.
+      expect(
+        scanSensitivity("note", "", "the bearer of this note is friendly"),
+      ).toBe("internal");
+      expect(
+        scanSensitivity("note", "", "we deploy our app on AWS every week"),
+      ).toBe("internal");
+    });
+
+    it("does NOT over-flag a short bearer word followed by a normal token", () => {
+      // A capitalized 'Bearer' in prose followed by a short word must not trip
+      // the header pattern (requires an opaque, credential-length value).
+      expect(scanSensitivity("note", "", "Bearer bonds are a thing")).toBe(
+        "internal",
+      );
+    });
+  });
+
   describe("default / opt-in behavior (pinned)", () => {
     it("keeps ordinary prose at internal", () => {
       expect(

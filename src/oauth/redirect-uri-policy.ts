@@ -35,8 +35,7 @@ const MAX_URIS = 10;
 
 export type PolicyResult = { ok: true } | { ok: false; reason: string };
 export type PolicyArrayResult =
-  | { ok: true }
-  | { ok: false; reason: string; index: number };
+  { ok: true } | { ok: false; reason: string; index: number };
 
 /**
  * Loopback hosts get the http-scheme exception. The literal forms

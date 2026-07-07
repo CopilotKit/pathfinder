@@ -149,20 +149,25 @@ let cachedConfig: Config | null = null;
  */
 function parseConsentHmacKeys(nodeEnv: string): string[] {
   const raw = process.env.PATHFINDER_CONSENT_HMAC_KEY?.trim() ?? "";
-  if (raw.length > 0) {
+  // A SET-but-all-empty value (e.g. "," or "   ") is INVALID, not missing:
+  // it must fail loud with the ≥32-hex error rather than falling through to
+  // the "required in production" throw or silent ephemeral-key generation in
+  // dev. We distinguish set-but-empty from truly-unset by testing the raw env
+  // var's presence, so an explicitly-set garbage value never slips through.
+  const isSet = (process.env.PATHFINDER_CONSENT_HMAC_KEY ?? "").length > 0;
+  if (isSet) {
     const keys = raw
       .split(",")
       .map((k) => k.trim())
       .filter((k) => k.length > 0);
-    for (const k of keys) {
-      if (!/^[0-9a-fA-F]{32,}$/.test(k)) {
-        throw new Error(
-          "PATHFINDER_CONSENT_HMAC_KEY entries must be ≥32 hex chars each. " +
-            "Generate with: openssl rand -hex 32 (comma-separated for rotation).",
-        );
-      }
+    // Empty (all-blank) OR any entry failing the ≥32-hex floor is invalid.
+    if (keys.length === 0 || keys.some((k) => !/^[0-9a-fA-F]{32,}$/.test(k))) {
+      throw new Error(
+        "PATHFINDER_CONSENT_HMAC_KEY entries must be ≥32 hex chars each. " +
+          "Generate with: openssl rand -hex 32 (comma-separated for rotation).",
+      );
     }
-    if (keys.length > 0) return keys;
+    return keys;
   }
   if (nodeEnv === "production") {
     throw new Error(
@@ -203,6 +208,12 @@ function parseConfig(): Config {
   const slackBotToken = process.env.SLACK_BOT_TOKEN ?? "";
   const slackSigningSecret = process.env.SLACK_SIGNING_SECRET ?? "";
   if (hasSlackSource && !slackBotToken) missing.push("SLACK_BOT_TOKEN");
+  // SLACK_SIGNING_SECRET verifies inbound Slack request signatures; a Slack
+  // source cannot authenticate its webhook without it, so require it at boot
+  // rather than reading-but-ignoring (which previously let a mis-provisioned
+  // Slack source boot silently and fail only on the first inbound request).
+  if (hasSlackSource && !slackSigningSecret)
+    missing.push("SLACK_SIGNING_SECRET");
   if (hasSlackSource && !openaiApiKey)
     missing.push("OPENAI_API_KEY (required for Slack distillation)");
 
@@ -263,7 +274,7 @@ function parseConfig(): Config {
     databaseUrl,
     openaiApiKey: openaiApiKey ?? "",
     githubToken: process.env.GITHUB_TOKEN || "",
-    githubWebhookSecret: githubWebhookSecret!,
+    githubWebhookSecret,
     port,
     nodeEnv,
     logLevel: process.env.LOG_LEVEL || "info",
@@ -294,6 +305,104 @@ export const config = new Proxy({} as Config, {
     return getConfig()[prop as keyof Config];
   },
 });
+
+/**
+ * Non-throwing preflight: enumerate EVERY missing required environment
+ * variable in one pass so an operator can fix them all at once.
+ *
+ * `parseConfig` / `getConfig` intentionally fail-loud on the FIRST failing
+ * group (the `missing` array is only populated for the source-gated tokens,
+ * and MCP_JWT_SECRET / PATHFINDER_CONSENT_HMAC_KEY each throw on their own
+ * before that array is even inspected). That first-throw behavior is right
+ * for the server boot path, but useless for an operator who wants the full
+ * list up front. This helper walks the SAME predicates without short-
+ * circuiting and returns the complete set (empty when the environment is
+ * fully configured). It reads the server config to decide which source-gated
+ * tokens are required, exactly like `parseConfig`.
+ *
+ * Production-only keys (MCP_JWT_SECRET, PATHFINDER_CONSENT_HMAC_KEY) are
+ * flagged only when NODE_ENV=production, mirroring the dev/prod policy in
+ * `resolveJwtSecret` and `parseConsentHmacKeys` — in non-production both are
+ * generated ephemerally, so their absence is not a preflight failure.
+ */
+export function collectMissingRequiredEnv(): string[] {
+  const missing: string[] = [];
+
+  const needsRag = hasSearchTools() || hasKnowledgeTools();
+  const needsEmbedding = needsRag || hasBashSemanticSearch();
+  const needsDb = needsEmbedding || hasCollectTools();
+
+  if (!process.env.DATABASE_URL && needsDb) missing.push("DATABASE_URL");
+
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  const embeddingProvider = getServerConfig().embedding?.provider;
+  const needsOpenAI =
+    needsEmbedding && (!embeddingProvider || embeddingProvider === "openai");
+  if (!openaiApiKey && needsOpenAI) missing.push("OPENAI_API_KEY");
+
+  const sources = getServerConfig().sources;
+  const hasSlackSource = sources.some((s) => s.type === "slack");
+  if (hasSlackSource && !process.env.SLACK_BOT_TOKEN)
+    missing.push("SLACK_BOT_TOKEN");
+  if (hasSlackSource && !process.env.SLACK_SIGNING_SECRET)
+    missing.push("SLACK_SIGNING_SECRET");
+  if (hasSlackSource && !openaiApiKey)
+    missing.push("OPENAI_API_KEY (required for Slack distillation)");
+
+  const hasDiscordSource = sources.some((s) => s.type === "discord");
+  const hasDiscordTextChannels = sources.some(
+    (s) =>
+      isDiscordSourceConfig(s) && s.channels.some((c) => c.type === "text"),
+  );
+  if (hasDiscordSource && !process.env.DISCORD_BOT_TOKEN)
+    missing.push("DISCORD_BOT_TOKEN");
+  if (hasDiscordSource && !process.env.DISCORD_PUBLIC_KEY)
+    missing.push("DISCORD_PUBLIC_KEY");
+  if (hasDiscordTextChannels && !openaiApiKey)
+    missing.push(
+      "OPENAI_API_KEY (required for Discord text channel distillation)",
+    );
+
+  const hasNotionSource = sources.some((s) => s.type === "notion");
+  if (hasNotionSource && !process.env.NOTION_TOKEN)
+    missing.push("NOTION_TOKEN");
+
+  // Production-only fatal-at-boot keys. Mirror resolveJwtSecret /
+  // parseConsentHmacKeys: required only in production, generated ephemerally
+  // otherwise.
+  if ((process.env.NODE_ENV || "development") === "production") {
+    const jwt = process.env.MCP_JWT_SECRET;
+    if (!jwt || jwt.length === 0) {
+      missing.push("MCP_JWT_SECRET (required in production)");
+    } else if (Buffer.byteLength(jwt, "utf8") < 16) {
+      missing.push("MCP_JWT_SECRET (must be at least 16 bytes)");
+    }
+
+    // Distinguish truly-unset (missing) from set-but-empty/invalid so the
+    // preflight report matches parseConsentHmacKeys: an operator who set the
+    // var to garbage (e.g. "," or "   ") must see the ≥32-hex INVALID message,
+    // not the "required in production" MISSING one.
+    const consentSet =
+      (process.env.PATHFINDER_CONSENT_HMAC_KEY ?? "").length > 0;
+    const consent = process.env.PATHFINDER_CONSENT_HMAC_KEY?.trim() ?? "";
+    const consentKeys = consent
+      .split(",")
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
+    if (!consentSet) {
+      missing.push("PATHFINDER_CONSENT_HMAC_KEY (required in production)");
+    } else if (
+      consentKeys.length === 0 ||
+      consentKeys.some((k) => !/^[0-9a-fA-F]{32,}$/.test(k))
+    ) {
+      missing.push(
+        "PATHFINDER_CONSENT_HMAC_KEY (entries must be ≥32 hex chars each)",
+      );
+    }
+  }
+
+  return missing;
+}
 
 // ── YAML server configuration ─────────────────────────────────────────────────
 
@@ -472,8 +581,7 @@ export function getServerConfig(): ServerConfig {
  */
 export function getAnalyticsConfig(): AnalyticsConfig | undefined {
   return (getServerConfig() as Record<string, unknown>).analytics as
-    | AnalyticsConfig
-    | undefined;
+    AnalyticsConfig | undefined;
 }
 
 /**

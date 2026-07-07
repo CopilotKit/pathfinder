@@ -95,8 +95,12 @@
   function applyTab(container, tab) {
     var tabCli = container.querySelector(".tab-cli");
     var tabDocker = container.querySelector(".tab-docker");
-    var btnCli = container.querySelector('.cli-docker-tab-bar button[data-tab="cli"]');
-    var btnDocker = container.querySelector('.cli-docker-tab-bar button[data-tab="docker"]');
+    var btnCli = container.querySelector(
+      '.cli-docker-tab-bar button[data-tab="cli"]',
+    );
+    var btnDocker = container.querySelector(
+      '.cli-docker-tab-bar button[data-tab="docker"]',
+    );
     if (!tabCli || !tabDocker || !btnCli || !btnDocker) return;
 
     if (tab === "docker") {

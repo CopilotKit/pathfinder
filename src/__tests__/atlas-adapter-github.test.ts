@@ -6,6 +6,7 @@ import {
   githubAdapter,
   distillBodyToContent,
   type GitHubPrOrIssueUnit,
+  type GitHubPullRequestUnit,
 } from "../atlas/adapters/github.js";
 import {
   CandidateFragmentSchema,
@@ -32,6 +33,21 @@ function loadFixture(name: string): GitHubPrOrIssueUnit {
 }
 
 const ctx: AdapterContext = { now: new Date("2026-06-08T00:00:00.000Z") };
+
+// A.3: the WHAT-metadata header the batch adapter lifts off `content` is
+// retained as a provenance `thread`-kind evidence entry (the WHAT-header block
+// begins with the `# <kind> #N:` title line). Extract that entry's body so the
+// relocation can be asserted positively.
+function whatHeaderBody(fragment: CandidateFragment): string {
+  const entry = fragment.evidence.find(
+    (e): e is { kind: "thread"; body: string } =>
+      e.kind === "thread" && /^# (?:PR|Issue) #\d+:/.test(e.body),
+  );
+  if (entry == null) {
+    throw new Error("no WHAT-header provenance evidence entry on fragment");
+  }
+  return entry.body;
+}
 
 describe("githubAdapter — batch PR + issue leaf adapter", () => {
   it("declares the github-pr sourcetype", () => {
@@ -173,6 +189,132 @@ describe("githubAdapter — batch PR + issue leaf adapter", () => {
       expect(fragment.provenance.date).toBe("2026-06-08");
       expect(fragment.provenance.date).toBe(asOf);
     });
+
+    // ── validationTargets: cited files/paths make an issue source-verifiable ──
+    //
+    // Unlike a PR (which carries `changedFiles`), an issue has no structured
+    // file list — its files are cited in prose. A.4: lift concrete repo-relative
+    // paths + bare code/config filenames the issue names (across title +
+    // distilled body + comment threads) into `validationTargets` so the
+    // validation gate (S14) has something to grep on origin/main → promotable.
+    // Target-less issue prose keeps an EMPTY list by design (it then stays
+    // unverified and human-gated — same posture as the PR path with no files).
+    describe("validationTargets (cited files/paths)", () => {
+      // A minimal issue unit whose body cites concrete files.
+      function issueUnit(body: string): GitHubPrOrIssueUnit {
+        return {
+          kind: "issue",
+          sourceName: "atlas",
+          repo: {
+            fullName: "CopilotKit/copilotkit",
+            cloneUrl: "https://github.com/CopilotKit/copilotkit.git",
+            defaultBranch: "main",
+          },
+          issue: {
+            number: 1290,
+            title: "Retry logic is duplicated across provider adapters",
+            body,
+            htmlUrl: "https://github.com/CopilotKit/copilotkit/issues/1290",
+            author: "reporter",
+            state: "closed",
+          },
+        };
+      }
+
+      it("lifts a cited repo-relative path into validationTargets", async () => {
+        const unit = issueUnit(
+          "The retry loop in src/atlas/rag-dedup.ts drifted from the one in " +
+            "src/db/atlas.ts and they no longer agree.",
+        );
+        const [fragment] = await githubAdapter.extract(unit, ctx);
+        expect(fragment.validationTargets).toContain("src/atlas/rag-dedup.ts");
+        expect(fragment.validationTargets).toContain("src/db/atlas.ts");
+      });
+
+      it("lifts a bare code/config filename cited in the body", async () => {
+        const unit = issueUnit(
+          "The backoff constant lives in vitest.config.ts and needs updating.",
+        );
+        const [fragment] = await githubAdapter.extract(unit, ctx);
+        expect(fragment.validationTargets).toContain("vitest.config.ts");
+      });
+
+      it("does NOT return a copy aliased to the unit's changedFiles input array (defensive copy)", async () => {
+        // A PR carries a STRUCTURAL source array (`unit.changedFiles`) that the
+        // fragment's validationTargets are lifted from — the aliasing risk this
+        // test names. (The issue path has no persistent source array; its
+        // targets are lifted from prose into a fresh set.) Mirror the showcase
+        // suite: assert the returned array is a COPY, then MUTATE it and prove
+        // the source array is unchanged — a mere `push()`-doesn't-throw check is
+        // vacuously true for any non-frozen array and cannot fail for aliasing.
+        const unit = loadFixture("pr.json");
+        // pr.json is a PR unit — `changedFiles` is a PR-only field on the union.
+        const prUnit = unit as GitHubPullRequestUnit;
+        const before = [...(prUnit.changedFiles ?? [])];
+        const [fragment] = await githubAdapter.extract(unit, ctx);
+        // The fragment must carry a COPY, never the unit's array by reference.
+        expect(fragment.validationTargets).not.toBe(prUnit.changedFiles);
+        fragment.validationTargets.push("mutated.ts");
+        // Mutating the returned array must not corrupt the unit's source array.
+        expect(prUnit.changedFiles).toEqual(before);
+      });
+
+      it("does NOT capture prose runtime tokens (node.js / next.js) as file targets", async () => {
+        // Over-capture guard: ISSUE_FILE_TARGET_RE matched any dotted prose
+        // token ending in a known extension, so prose like "node.js"/"next.js"
+        // became a bogus file target that could spuriously source-verify.
+        const unit = issueUnit(
+          "We run on node.js and the frontend uses next.js — nothing else changed.",
+        );
+        const [fragment] = await githubAdapter.extract(unit, ctx);
+        expect(fragment.validationTargets).not.toContain("node.js");
+        expect(fragment.validationTargets).not.toContain("next.js");
+        expect(fragment.validationTargets).toStrictEqual([]);
+      });
+
+      it("STILL captures a genuine cited path amid prose runtime tokens", async () => {
+        // The tightening must not drop real citations: a repo-relative path is
+        // still lifted even when a prose runtime token sits alongside it.
+        const unit = issueUnit(
+          "We run on node.js; the drift is in src/atlas/rag-dedup.ts.",
+        );
+        const [fragment] = await githubAdapter.extract(unit, ctx);
+        expect(fragment.validationTargets).toContain("src/atlas/rag-dedup.ts");
+        expect(fragment.validationTargets).not.toContain("node.js");
+      });
+
+      it("leaves target-less issue prose with an EMPTY validationTargets (stays unverified → human page)", async () => {
+        // The stock fixture body is pure why/how prose that names no file.
+        const unit = loadFixture("issue.json");
+        const [fragment] = await githubAdapter.extract(unit, ctx);
+        expect(fragment.validationTargets).toStrictEqual([]);
+      });
+
+      it("does NOT lift a bogus symbol target from prose (files-only caller)", async () => {
+        // Files-only over-capture guard: github calls the shared lift in
+        // FILES-ONLY mode ({ files: true }), so a `word(` fragment in prose
+        // must NOT become a symbol target. `undefined ?? true` used to leave
+        // the symbol lift on, minting a bogus `logic` target that could
+        // spuriously source-verify a fragment.
+        const unit = issueUnit(
+          "The retry logic (backoff caps at 30s) regressed after the merge.",
+        );
+        const [fragment] = await githubAdapter.extract(unit, ctx);
+        expect(fragment.validationTargets).not.toContain("logic");
+        expect(fragment.validationTargets).toStrictEqual([]);
+      });
+
+      it("STILL captures a genuine cited path when prose also carries a `word(`", async () => {
+        // The files-only tightening must not drop real file citations even
+        // when a symbol-shaped `word(` sits alongside in the prose.
+        const unit = issueUnit(
+          "The retry logic (backoff) drift is in src/atlas/rag-dedup.ts.",
+        );
+        const [fragment] = await githubAdapter.extract(unit, ctx);
+        expect(fragment.validationTargets).toContain("src/atlas/rag-dedup.ts");
+        expect(fragment.validationTargets).not.toContain("logic");
+      });
+    });
   });
 });
 
@@ -296,6 +438,72 @@ describe("distillBodyToContent — the NARROW shared helper (B2)", () => {
     expect(out).not.toContain("```bash");
   });
 
+  it("retains trailing real prose after a LAST boilerplate section whose unclosed fence would otherwise swallow it to EOF (S4)", () => {
+    // Content-loss bucket (a): the last boilerplate section (`## Test plan`)
+    // contains an UNCLOSED fence and is followed by REAL why/how prose with NO
+    // subsequent heading. Without the unterminated-fence recovery, the open
+    // dropped fence latches `droppingSection` to EOF and every trailing line —
+    // real body prose — is silently discarded from the distilled content. The
+    // blank-line boundary ends the unterminated fence and exits the drop.
+    const body =
+      "Intro why prose.\n" +
+      "\n" +
+      "## Test plan\n" +
+      "```bash\n" + // unclosed — no closing fence, no following heading
+      "npm test\n" +
+      "\n" + // paragraph break → recovery boundary
+      "This trailing paragraph is REAL why/how prose that must survive.\n" +
+      "It explains the rationale for the change.";
+    const out = distillBodyToContent(body);
+    // The trailing real prose survives …
+    expect(out).toContain(
+      "This trailing paragraph is REAL why/how prose that must survive.",
+    );
+    expect(out).toContain("It explains the rationale for the change.");
+    expect(out).toContain("Intro why prose.");
+    // … while the boilerplate section's fenced content is still stripped.
+    expect(out).not.toContain("npm test");
+    expect(out).not.toContain("```bash");
+    expect(out).not.toContain("## Test plan");
+  });
+
+  it("still drops a whole no-fence boilerplate section that runs to EOF (S4 no-regression)", () => {
+    // The recovery is scoped to an OPEN dropped fence only: an ordinary
+    // multi-paragraph boilerplate section (no fence) still runs to its next
+    // heading / EOF, so a blank line inside it must NOT end the drop.
+    const body =
+      "Intro why prose.\n\n## Test plan\n\n- [x] ran the suite\n\nStill boilerplate detail.";
+    const out = distillBodyToContent(body);
+    expect(out).toContain("Intro why prose.");
+    expect(out).not.toContain("ran the suite");
+    expect(out).not.toContain("Still boilerplate detail.");
+    expect(out).not.toContain("## Test plan");
+  });
+
+  it("keeps stripping boilerplate after an UNTERMINATED fence opened OUTSIDE a dropped section (F2)", () => {
+    // Over-KEEP bucket (a): a fence opens in the REAL content (outside any
+    // dropped section) and is never closed before EOF. That latches
+    // `inFence = true` all the way to EOF, so the `if (inFence)` branch
+    // short-circuits heading parsing and every subsequent line — including a
+    // later boilerplate heading that SHOULD be stripped — is silently kept.
+    const body =
+      "Real rationale prose.\n" +
+      "```sh\n" + // opens outside any dropped section, never closed
+      "echo build\n" +
+      "\n" + // paragraph break → recovery boundary for the open fence
+      "## Test plan\n" + // a REAL boilerplate heading that MUST still drop
+      "- [x] ran the suite\n" +
+      "boilerplate detail line";
+    const out = distillBodyToContent(body);
+    // The real prose and the fenced content up to the recovery boundary survive.
+    expect(out).toContain("Real rationale prose.");
+    expect(out).toContain("echo build");
+    // The boilerplate section after the unterminated fence still drops.
+    expect(out).not.toContain("## Test plan");
+    expect(out).not.toContain("ran the suite");
+    expect(out).not.toContain("boilerplate detail line");
+  });
+
   it("does NOT invert fence parity when a fence opens inside a dropped section and a `#` line ends the drop (Z1)", () => {
     // The fix9 heading-recovery left a latent parity inversion: a fence that
     // OPENS inside a dropped section does not toggle `inFence`, so a `#` line
@@ -412,13 +620,20 @@ describe("ref + branch-label whitespace normalization (V35)", () => {
     expect(fragment.ref).toBe("main");
   });
 
-  it("emits TRIMMED branch labels in content for padded base/head refs", async () => {
+  it("emits TRIMMED branch labels in the WHAT-header provenance for padded base/head refs", async () => {
     const unit = loadFixture("pr.json");
     prFields(unit).baseRef = " main ";
     prFields(unit).headRef = " feature/agent-bridge ";
     const [fragment] = await githubAdapter.extract(unit, ctx);
-    expect(fragment.content).toMatch(/^Base branch: main$/m);
-    expect(fragment.content).toMatch(/^Head branch: feature\/agent-bridge$/m);
+    // A.3: the WHAT-metadata header (branch labels et al.) lives on provenance
+    // evidence, NOT in the distilled `content`. The trim normalization still
+    // applies before the label is rendered.
+    const header = whatHeaderBody(fragment);
+    expect(header).toMatch(/^Base branch: main$/m);
+    expect(header).toMatch(/^Head branch: feature\/agent-bridge$/m);
+    // …and the trimmed labels must NOT bleed back into the seed content.
+    expect(fragment.content).not.toContain("Base branch:");
+    expect(fragment.content).not.toContain("Head branch:");
   });
 
   it("falls back to the default branch for a whitespace-only baseRef and emits NO dangling branch labels", async () => {
@@ -428,10 +643,66 @@ describe("ref + branch-label whitespace normalization (V35)", () => {
     const [fragment] = await githubAdapter.extract(unit, ctx);
     expect(fragment.ref).toBe("main");
     // A whitespace-only branch is "no branch" — the truthy guard inside the
-    // shared builder must see null, never a padded-whitespace string, so no
-    // dangling "Base branch: " / "Head branch: " label line is emitted.
+    // WHAT-header builder must see null, never a padded-whitespace string, so
+    // no dangling "Base branch: " / "Head branch: " label line is emitted in
+    // the header provenance (or, a fortiori, in content).
+    const header = whatHeaderBody(fragment);
+    expect(header).not.toContain("Base branch:");
+    expect(header).not.toContain("Head branch:");
     expect(fragment.content).not.toContain("Base branch:");
     expect(fragment.content).not.toContain("Head branch:");
+  });
+
+  // ── A.3: WHAT-metadata header lifted off `content` ──────────────────────────
+  //
+  // The batch seed `content` must be the DISTILLED why/how prose ONLY — the
+  // WHAT-metadata header (Repository/branch/commit/author/URL) inflated a bare
+  // restatement into looking substantive to the distillation gate (S8). A.3
+  // relocates it: OUT of `content`, ONTO provenance evidence (relocated, not
+  // dropped — criterion 4).
+  it("does NOT inject the WHAT-metadata header into the PR seed content", async () => {
+    const unit = loadFixture("pr.json");
+    const [fragment] = await githubAdapter.extract(unit, ctx);
+    expect(fragment.content).not.toContain("Repository:");
+    expect(fragment.content).not.toContain("URL:");
+    expect(fragment.content).not.toContain("Base branch:");
+    expect(fragment.content).not.toContain("Head branch:");
+    expect(fragment.content).not.toContain("Merge commit:");
+    expect(fragment.content).not.toContain("Author:");
+    expect(fragment.content).not.toContain("Merged by:");
+    // The `# PR #N: <title>` header line is webhook-only; the batch content
+    // must not carry it either.
+    expect(fragment.content).not.toMatch(/^# PR #/m);
+  });
+
+  it("does NOT inject the WHAT-metadata header into the issue seed content", async () => {
+    const unit = loadFixture("issue.json");
+    const [fragment] = await githubAdapter.extract(unit, ctx);
+    expect(fragment.content).not.toContain("Repository:");
+    expect(fragment.content).not.toContain("URL:");
+    expect(fragment.content).not.toContain("Author:");
+    expect(fragment.content).not.toMatch(/^# Issue #/m);
+  });
+
+  it("POSITIVELY retains the WHAT-metadata facts on the PR fragment as provenance (relocated, not dropped)", async () => {
+    const unit = loadFixture("pr.json");
+    const [fragment] = await githubAdapter.extract(unit, ctx);
+    const header = whatHeaderBody(fragment);
+    // Every fact the header carried must survive the lift — a regression that
+    // DROPS the facts (rather than relocating them) fails here.
+    expect(header).toMatch(/^# PR #1337: /m);
+    expect(header).toMatch(/^Repository: CopilotKit\/copilotkit$/m);
+    expect(header).toMatch(
+      /^URL: https:\/\/github\.com\/CopilotKit\/copilotkit\/pull\/1337$/m,
+    );
+    expect(header).toMatch(/^Merge commit: feedface1234567890abcdef$/m);
+    // The header is carried as evidence, so the facts remain queryable on the
+    // fragment after they leave `content`.
+    expect(
+      fragment.evidence.some(
+        (e) => e.kind === "thread" && /^Repository:/m.test(e.body),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -510,6 +781,57 @@ describe("first-pass sensitivity scan (shared credential/GTM scan)", () => {
       "https://internal.example.com/runbook?api_key=abcdef0123456789",
     ];
     const [fragment] = await githubAdapter.extract(unit, ctx);
+    expect(fragment.provenance.classification.sensitivity).toBe("secret");
+  });
+
+  // The scan must run over the RAW body — the full unstripped PR/issue text —
+  // NOT the DISTILLED `content` that distillBodyToContent produces. A credential
+  // that lives ONLY inside a section distillBodyToContent strips (Test plan /
+  // Checklist / How to test / Screenshots) or inside an HTML comment is REMOVED
+  // before it reaches the distilled `content`; scanning `content` would classify
+  // such a fragment `internal` and it would dodge DEFAULT_EXCLUSION_RULES and
+  // leak. memory.ts and notion.ts scan the raw body/section — github must too.
+  it("escalates a PR whose ONLY credential sits inside a stripped 'Test plan' section", async () => {
+    const unit = loadFixture("pr.json");
+    (unit as { pullRequest: { body?: string | null } }).pullRequest.body =
+      "Routine refactor of the provider registry.\n\n" +
+      "## Test plan\n\n" +
+      "- Run the suite with ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 exported.";
+    const [fragment] = await githubAdapter.extract(unit, ctx);
+    // The credential is gone from the distilled content …
+    expect(fragment.content).not.toContain("ghp_");
+    // … but it MUST still be detected off the raw body and escalated.
+    expect(fragment.provenance.classification.sensitivity).toBe("secret");
+  });
+
+  it("escalates a PR whose ONLY credential sits inside an HTML comment", async () => {
+    const unit = loadFixture("pr.json");
+    (unit as { pullRequest: { body?: string | null } }).pullRequest.body =
+      "Routine refactor of the provider registry.\n\n" +
+      "<!-- deploy note: api_key=sk-live-abcdef0123456789 -->";
+    const [fragment] = await githubAdapter.extract(unit, ctx);
+    expect(fragment.content).not.toContain("sk-live");
+    expect(fragment.provenance.classification.sensitivity).toBe("secret");
+  });
+
+  it("escalates an ISSUE whose ONLY credential sits inside a stripped 'Checklist' section", async () => {
+    const unit = loadFixture("issue.json");
+    (unit as { issue: { body?: string | null } }).issue.body =
+      "The provider registry occasionally drops a retry.\n\n" +
+      "## Checklist\n\n" +
+      "- [ ] rotate api_key=sk-live-abcdef0123456789 after deploy";
+    const [fragment] = await githubAdapter.extract(unit, ctx);
+    expect(fragment.content).not.toContain("sk-live");
+    expect(fragment.provenance.classification.sensitivity).toBe("secret");
+  });
+
+  it("escalates an ISSUE whose ONLY credential sits inside an HTML comment", async () => {
+    const unit = loadFixture("issue.json");
+    (unit as { issue: { body?: string | null } }).issue.body =
+      "The provider registry occasionally drops a retry.\n\n" +
+      "<!-- ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -->";
+    const [fragment] = await githubAdapter.extract(unit, ctx);
+    expect(fragment.content).not.toContain("ghp_");
     expect(fragment.provenance.classification.sensitivity).toBe("secret");
   });
 });

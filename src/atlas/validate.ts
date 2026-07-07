@@ -33,7 +33,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { lookupPill } from "./adapters/showcase.js";
 import type { FeatureRegistry, PillStatus } from "./adapters/showcase.js";
-import { BEHAVIOR_KNOWLEDGE_TYPES } from "./types.js";
+import {
+  BEHAVIOR_KNOWLEDGE_TYPES,
+  RAG_NO_DELTA_MARKER,
+  RESTATEMENT_MARKER,
+} from "./types.js";
 import type { Candidate, ValidationStatus } from "./types.js";
 
 // Context handed to the gate: WHERE to source-verify (a read-only origin/main
@@ -74,8 +78,9 @@ function isPathLike(target: string): boolean {
 
 // Symbol-style targets shorter than this can never source-verify: a 1-2 char
 // needle ("id", "ui") is a common WHOLE identifier token tree-wide — even the
-// token-bounded matcher (`matchesSymbolToken`) hits it everywhere — so it
-// would falsely promote candidates, defeating the §7 validation gate.
+// declaration-aware matcher (`declaresSymbol`) would hit a `const id = …`
+// somewhere — so it would falsely promote candidates, defeating the §7
+// validation gate.
 const MIN_SYMBOL_TARGET_LEN = 3;
 
 // Files larger than this are never worth reading per-target/per-candidate: a
@@ -84,20 +89,69 @@ const MIN_SYMBOL_TARGET_LEN = 3;
 // Skipping them keeps the source-verify scan bounded.
 const MAX_GREP_FILE_BYTES = 2 * 1024 * 1024; // 2 MiB
 
+// Source-verify greps ONLY real code files. A `validationTarget` symbol is a
+// code declaration (function/const/class/…); a DECL_RE hit inside a `.md`,
+// `.json`, `.txt` or other non-code fixture (a doc snippet, a JSON key, a
+// changelog entry) is NOT a source declaration and must not promote a candidate
+// past §7 — the same fail-safe direction as SKIP_DIRS (vendored/build trees are
+// not project source). Extensions are matched lowercased; a file with no
+// extension (LICENSE, Makefile, a bare `README`) is never a code declaration
+// site and is skipped. Kept as a positive allowlist (rather than a deny-list of
+// doc extensions) so a NEW doc/data extension defaults OUT of the grep surface
+// — the safe direction for a guilty-until-validated gate.
+const CODE_FILE_EXTENSIONS = new Set([
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".py",
+  ".go",
+  ".rs",
+  ".java",
+  ".kt",
+  ".rb",
+  ".c",
+  ".h",
+  ".cc",
+  ".cpp",
+  ".hpp",
+  ".cs",
+  ".swift",
+  ".php",
+  ".scala",
+]);
+
+function isCodeFile(name: string): boolean {
+  return CODE_FILE_EXTENSIONS.has(path.extname(name).toLowerCase());
+}
+
+// A source-verify match must be a DECLARATION of the needle, not any mention of
+// it. Mirrors the `DECL_RE` shape in `adapters/source-comment.ts:182` (the same
+// producer/consumer pair — that module EXTRACTS declared symbols, this one
+// VERIFIES them) so the two stay in lockstep: a symbol that appears only inside
+// a `//`/`#`/JSDoc comment, a string literal, or another symbol's body (a call
+// site, an import) is NOT a declaration and must not source-verify — that was
+// the §7 bypass (a `root-cause` claim naming a symbol that exists only in a
+// prose comment would falsely promote). `<needle>` is escaped and pinned as a
+// whole identifier token; the leading `\b` and the trailing identifier-boundary
+// lookahead prevent matching a longer declared name that merely starts with the
+// needle (e.g. `TwoLayerShim` must not satisfy a `Two` needle).
+function declaresSymbol(text: string, needle: string): boolean {
+  const re = new RegExp(
+    `\\b(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?` +
+      `(?:function|const|let|var|class|interface|type|enum)\\s+` +
+      `${escapeRegExp(needle)}(?![A-Za-z0-9_$])`,
+  );
+  return re.test(text);
+}
+
 // Escape a string for safe interpolation into a RegExp.
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// Match `needle` as a whole identifier token in `text` — bounded on both sides
-// by a non-identifier character (or start/end of input). Avoids the substring
-// false positives that a raw `text.includes(needle)` produces (e.g. "Two"
-// spuriously matching "TwoLayerShim", or "state" matching "stateful").
-function matchesSymbolToken(text: string, needle: string): boolean {
-  const re = new RegExp(
-    `(?<![A-Za-z0-9_$])${escapeRegExp(needle)}(?![A-Za-z0-9_$])`,
-  );
-  return re.test(text);
 }
 
 // Does `target` exist as a file/dir path inside the checkout? Used for
@@ -173,8 +227,9 @@ function triageGrepWalkError(err: unknown, target: string): void {
 }
 
 // Real recursive filesystem grep: walk `dir` and return true as soon as ANY
-// regular file's text contains `needle` as a whole identifier token (NOT a raw
-// substring — see `matchesSymbolToken`). Files larger than `MAX_GREP_FILE_BYTES`
+// CODE file (per CODE_FILE_EXTENSIONS — a `.md`/`.json` fixture is skipped)
+// DECLARES `needle` (per `declaresSymbol` — a mere mention in a comment, string,
+// or call site does NOT count). Files larger than `MAX_GREP_FILE_BYTES`
 // (lockfiles/bundles/fixtures) are skipped before reading; a failed DESCENDANT
 // entry is triaged by errno (`triageGrepWalkError`: fd exhaustion throws,
 // ENOENT skips quietly, anything else warns + skips). The ROOT is stricter: an
@@ -207,6 +262,10 @@ function grepTreeForSymbol(
       continue;
     }
     if (!entry.isFile()) continue;
+    // Only code files carry a source DECLARATION — a DECL_RE hit inside a
+    // `.md`/`.json`/`.txt` fixture is doc/data prose, not project source, and
+    // must not source-verify (see CODE_FILE_EXTENSIONS).
+    if (!isCodeFile(entry.name)) continue;
     let text: string;
     try {
       // Skip oversized files (lockfiles/bundles/fixtures) before reading them
@@ -217,7 +276,9 @@ function grepTreeForSymbol(
       triageGrepWalkError(err, full);
       continue;
     }
-    if (matchesSymbolToken(text, needle)) return true;
+    // Definition-aware: the needle must be DECLARED here, not merely mentioned
+    // (a comment / string / call site does not source-verify).
+    if (declaresSymbol(text, needle)) return true;
   }
   return false;
 }
@@ -245,7 +306,8 @@ function anyTargetFound(ctx: ValidationContext, targets: string[]): boolean {
       continue;
     }
     // Symbol-style target: skip trivially short/common needles (they can never
-    // source-verify) and match the rest on identifier word boundaries.
+    // source-verify) and source-verify the rest only where a CODE file DECLARES
+    // the symbol (definition-aware; comments/strings/call sites don't count).
     if (target.length < MIN_SYMBOL_TARGET_LEN) continue;
     if (grepTreeForSymbol(root, target)) return true;
   }
@@ -277,6 +339,54 @@ function isShowcaseGreen(ctx: ValidationContext, c: Candidate): boolean {
     if (found) matched.push(found.status);
   }
   return matched.length > 0 && matched.every((s) => s === "green");
+}
+
+// The A.2 restatement floor: S8's distillation-gate stamps `RESTATEMENT_MARKER`
+// on a candidate the LLM judge ruled a pure restatement of already-indexed
+// content. It follows the SAME carrier idiom the rag-dedup overlap gate uses —
+// the marker is written to `provenance.validated_against` (a `"; "`-joined token
+// list) and/or as a `fused_from` evidence ref — so this reader checks BOTH,
+// matching whole `"; "`-delimited tokens (never a substring: one marker could be
+// a prefix of another). A restatement carries no NEW verifiable claim, so its
+// symbols happening to grep-verify must NOT lift `approvable` — the marker is a
+// hard `approvable=false` floor the source-verify recompute cannot override.
+//
+// Exported (rather than kept module-private) because the SAME floor must reach
+// the RANK path: canonicalize's rankScore is dominated by VALIDATION_WEIGHT
+// [validation_status], and this gate PROMOTES validation_status even for a
+// restatement (the status is display-truth — the symbols really do exist). If
+// the rank read that promoted status, a restatement would OUT-RANK a genuine
+// claim purely on the validation weight, surfacing restatement noise above real
+// why/how in the ranked artifact. `computeRankScore` imports this predicate to
+// floor the validation weight for a restatement, keeping the rank consistent
+// with approvable=false. Reads BOTH carrier idioms (validated_against tokens
+// and a `fused_from` evidence ref), whole-token matched.
+export function hasRestatementMarker(
+  c: Pick<Candidate, "provenance" | "evidence">,
+): boolean {
+  return hasFloorMarker(c, RESTATEMENT_MARKER);
+}
+
+// Whether the candidate carries a DEDICATED floor marker `marker` on EITHER
+// carrier idiom an upstream gate uses: a whole `"; "`-delimited token in
+// `provenance.validated_against`, or a `fused_from` evidence ref. Whole-token /
+// whole-ref matched (never a substring — one marker could be a prefix of
+// another). Shared by the RESTATEMENT_MARKER reader (above) and the composed
+// approvability floor (below), which check the two dedicated floor markers the
+// upstream gates emit: distillation's RESTATEMENT_MARKER and rag-dedup's
+// RAG_NO_DELTA_MARKER.
+function hasFloorMarker(
+  c: Pick<Candidate, "provenance" | "evidence">,
+  marker: string,
+): boolean {
+  const validatedAgainst = c.provenance.validated_against;
+  if (
+    validatedAgainst &&
+    validatedAgainst.split("; ").some((tok) => tok === marker)
+  ) {
+    return true;
+  }
+  return c.evidence.some((e) => e.kind === "fused_from" && e.ref === marker);
 }
 
 // Promote a candidate through the validation ladder and enforce the binding
@@ -312,7 +422,44 @@ export async function promoteValidation(
   const isBehavior = BEHAVIOR_KNOWLEDGE_TYPES.has(
     c.provenance.classification.knowledge_type,
   );
-  const approvable = !(isBehavior && promoted === "unverified");
+  // The status-derived rule (canonicalize's isApprovable, recomputed here from
+  // the PROMOTED status): a behavior/architecture fact still unverified after
+  // promotion is not approvable; everything else clears this rule. This is what
+  // LIFTS canonicalize's own pre-validation floor once the gate promotes an
+  // unverified behavior fact — that floor is nothing more than this same rule
+  // applied at intake, and re-deriving it from the promoted status is the whole
+  // point of the recompute.
+  const clearsValidationRule = !(isBehavior && promoted === "unverified");
+
+  // COMPOSE upstream FLOORS — the recompute must never RAISE approvability above
+  // a value an upstream GATE (not canonicalize's status rule) already floored it
+  // to. Two gates floor approvability for reasons the promoted status alone
+  // cannot see, and EACH stamps a DEDICATED floor marker so the floor survives
+  // this recompute:
+  //
+  //   - RESTATEMENT_MARKER (S8 distillation gate): a pure restatement of
+  //     already-indexed content carries no NEW verifiable claim.
+  //   - RAG_NO_DELTA_MARKER (rag-dedup no-delta gate): a pure corpus DUPLICATE
+  //     with nothing net-new to re-seed (applyDistillDelta's no-delta floor).
+  //
+  // The old recompute honored ONLY the restatement marker, so a no-delta
+  // duplicate whose symbols grep-verify was clobbered back to approvable=true —
+  // silently defeating dedup's "duplicates aren't approvable" guarantee. The
+  // structural fix is to compose ALL dedicated floor markers GENERALLY. A
+  // dedicated marker is unambiguous: unlike the generic corpus-overlap
+  // ANNOTATION (stamped for EVERY overlap verdict, delta included, where the
+  // candidate stays approvable), a floor marker is emitted ONLY when the gate
+  // truly floors — so it fires the floor regardless of the incoming flag, and
+  // canonicalize's pure status-rule floor (which stamps NO marker, e.g. an
+  // unverified behavior fact) carries no floor here and is still LIFTED by
+  // `clearsValidationRule` on promotion, preserving the successfully-validated-
+  // behavior path. Any FUTURE gate that floors approvability just adds its
+  // dedicated marker to this set.
+  const upstreamFloored =
+    hasFloorMarker(c, RESTATEMENT_MARKER) ||
+    hasFloorMarker(c, RAG_NO_DELTA_MARKER);
+
+  const approvable = clearsValidationRule && !upstreamFloored;
 
   return {
     ...c,

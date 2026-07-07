@@ -15,11 +15,12 @@
 // with the same `yaml` dep the repo uses, exercising the real parse path. Paths
 // resolve relative to this test file (hermetic, cwd-independent).
 
-import { describe, it, expect } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { LLMock } from "@copilotkit/aimock";
 import {
   showcaseAdapter,
   lookupPill,
@@ -28,6 +29,7 @@ import {
   type ShowcaseUnit,
 } from "../atlas/adapters/showcase.js";
 import type { AdapterContext } from "../atlas/adapters/types.js";
+import { OpenAIDistiller } from "../atlas/llm.js";
 import { CandidateFragmentSchema } from "../atlas/types.js";
 
 const fixturesDir = path.join(
@@ -412,5 +414,58 @@ describe("showcaseAdapter.extract — empty manifest", () => {
     const unit: ShowcaseUnit = { manifest, registry: loadRegistry() };
     const fragments = await showcaseAdapter.extract(unit, ctx);
     expect(fragments).toEqual([]);
+  });
+});
+
+// ── aimock-routing guard (Theme E cheap check) ─────────────────────────────────
+//
+// ORG RULE: any LLM-touching path in this repo routes through aimock, never a
+// vi.fn / vi.mock stub. The showcase adapter is a PURE derivation of the manifest
+// + feature registry — it hard-codes NO distilled fragment and must make NO model
+// call at all (`ctx.llm` is unused). This guard pins that: it installs a REAL
+// `OpenAIDistiller` pointed at an in-process aimock server as `ctx.llm` (the only
+// sanctioned LLM seam) and asserts extract produces its derived fragment while the
+// aimock journal stays EMPTY — proving the adapter neither invokes the seam nor
+// bypasses it with a hidden hardcoded distill call. If org-rule drift ever adds an
+// LLM call here, it MUST go through this same aimock-backed seam (any request lands
+// in `getRequests()`), so this test trips instead of a live-LLM leak reaching the
+// suite. Using a real aimock distiller (not a stub) is itself the org-rule proof.
+describe("showcaseAdapter.extract — aimock-routing guard", () => {
+  const mock = new LLMock({ port: 0, logLevel: "silent" });
+  let llmCtx: AdapterContext;
+
+  beforeAll(async () => {
+    await mock.start();
+    // A real distiller pointed at aimock IS the sanctioned `ctx.llm` seam — no
+    // vi.fn stub (org rule). No fixtures are registered: the adapter must not
+    // make a model call, so any request would 404 at aimock AND surface in the
+    // request journal — either way the guard trips.
+    const llm = new OpenAIDistiller({
+      baseURL: `${mock.url}/v1`,
+      apiKey: "mock",
+      now: () => new Date("2026-06-08T00:00:00.000Z"),
+    });
+    llmCtx = { now: new Date("2026-06-08T00:00:00.000Z"), llm };
+  });
+
+  afterAll(async () => {
+    await mock.stop();
+  });
+
+  beforeEach(() => {
+    mock.clearRequests();
+  });
+
+  it("derives the fragment without touching the LLM seam (no aimock request)", async () => {
+    const fragments = await showcaseAdapter.extract(loadUnit(), llmCtx);
+
+    // The adapter still produces its derived fragment...
+    expect(fragments).toHaveLength(1);
+    expect(fragments[0]?.sourcetype).toBe("derived");
+    // ...and made ZERO calls to the aimock-backed LLM seam. A hardcoded distilled
+    // fragment (org-rule drift) would either route through this seam — landing a
+    // request in the journal — or bypass aimock entirely (banned). Either way the
+    // empty journal is the assertion that guards the seam.
+    expect(mock.getRequests()).toHaveLength(0);
   });
 });

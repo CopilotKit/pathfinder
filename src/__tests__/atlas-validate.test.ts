@@ -29,7 +29,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promoteValidation } from "../atlas/validate.js";
 import type { ValidationContext } from "../atlas/validate.js";
-import { CandidateSchema } from "../atlas/types.js";
+import { recomputeRankScore } from "../atlas/canonicalize.js";
+import {
+  CandidateSchema,
+  RAG_NO_DELTA_MARKER,
+  RESTATEMENT_MARKER,
+} from "../atlas/types.js";
 import type {
   Candidate,
   Classification,
@@ -217,10 +222,27 @@ describe("promoteValidation — §7 worked proof (CopilotNext: 0 hits)", () => {
     expect(out.approvable).toBe(false);
   });
 
-  it("a NON-behavior candidate (e.g. product) that stays unverified REMAINS approvable", async () => {
-    // The binding rule only fires for architecture / design-rationale facts.
+  it("a product candidate that stays unverified is NOT approvable (S1 widened the gate set)", async () => {
+    // S1 widened BEHAVIOR_KNOWLEDGE_TYPES to the enum-complement of
+    // {process, operational, org-culture}, so `product` is now GATED: an
+    // unverified product fact is a guilty-until-validated claim and is NOT
+    // auto-approvable. (Previously the gate fired only for
+    // architecture/design-rationale; this asserts the NEW correct behavior.)
     const candidate = makeCandidate({
       knowledge_type: "product",
+      validationTargets: ["CopilotNext"],
+    });
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe("unverified");
+    expect(out.approvable).toBe(false);
+  });
+
+  it("an EXEMPT process/operational candidate that stays unverified REMAINS approvable", async () => {
+    // The three exempt process/etiquette types {process, operational,
+    // org-culture} are OUT of the gate set: an unverified operational note is
+    // still auto-approvable.
+    const candidate = makeCandidate({
+      knowledge_type: "operational",
       validationTargets: ["CopilotNext"],
     });
     const out = await promoteValidation(candidate, ctx);
@@ -463,7 +485,23 @@ describe("promoteValidation — approvable is RECOMPUTED from the promoted statu
     expect(out.approvable).toBe(false);
   });
 
-  it("a non-behavior candidate keeps approvable=true even when it stays unverified", async () => {
+  it("an EXEMPT operational candidate keeps approvable=true even when it stays unverified", async () => {
+    // S1 widened the gate set to the enum-complement of the three exempt types;
+    // an unverified `operational` note is still exempt → approvable stays true.
+    const candidate = makeCandidate({
+      knowledge_type: "operational",
+      validation_status: "unverified",
+      validationTargets: ["CopilotNext"],
+      approvable: true,
+    });
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe("unverified");
+    expect(out.approvable).toBe(true);
+  });
+
+  it("a now-gated product candidate that stays unverified is recomputed approvable=false", async () => {
+    // A product fact enters approvable=true from canonicalize but is now in the
+    // widened gate set; staying unverified recomputes it to non-approvable.
     const candidate = makeCandidate({
       knowledge_type: "product",
       validation_status: "unverified",
@@ -472,7 +510,7 @@ describe("promoteValidation — approvable is RECOMPUTED from the promoted statu
     });
     const out = await promoteValidation(candidate, ctx);
     expect(out.provenance.classification.validation_status).toBe("unverified");
-    expect(out.approvable).toBe(true);
+    expect(out.approvable).toBe(false);
   });
 });
 
@@ -777,6 +815,520 @@ describe("promoteValidation — SKIP_DIRS path targets never source-verify (fix8
     expect(out.provenance.classification.validation_status).toBe(
       "source-verified",
     );
+  });
+});
+
+describe("promoteValidation — definition-aware grep (A.4): mention ≠ declaration", () => {
+  // The source-verify grep must promote ONLY when a CODE file DECLARES the
+  // needle. A symbol that appears only inside a comment (or a string literal /
+  // call site) is NOT a declaration — it is prose about a symbol, not proof the
+  // symbol exists in the tree — and must not source-verify (the §7 bypass a
+  // root-cause claim naming a comment-only symbol would exploit).
+  let tmpRoot: string;
+
+  beforeAll(() => {
+    tmpRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "atlas-validate-defaware-"),
+    );
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+    // The needle `CommentOnlySymbol` appears ONLY inside a comment — never as a
+    // declaration. A definition-aware grep must not source-verify it.
+    fs.writeFileSync(
+      path.join(tmpRoot, "src", "note.ts"),
+      "// This module relates to CommentOnlySymbol but never declares it.\n" +
+        "export const somethingElse = 1;\n",
+    );
+    // A genuine declaration to prove the grep still promotes real ones.
+    fs.writeFileSync(
+      path.join(tmpRoot, "src", "real.ts"),
+      "export function ActuallyDeclaredSymbol(): void {}\n",
+    );
+  });
+
+  afterAll(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function tmpCtx(): ValidationContext {
+    return { checkoutDir: tmpRoot, featureRegistry };
+  }
+
+  it("a symbol that appears ONLY in a comment does NOT source-verify", async () => {
+    const candidate = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["CommentOnlySymbol"],
+    });
+    const out = await promoteValidation(candidate, tmpCtx());
+    expect(out.provenance.classification.validation_status).toBe("unverified");
+    // Architecture fact staying unverified → not approvable.
+    expect(out.approvable).toBe(false);
+  });
+
+  it("a genuinely DECLARED symbol still source-verifies (definition-aware regression)", async () => {
+    const candidate = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["ActuallyDeclaredSymbol"],
+    });
+    const out = await promoteValidation(candidate, tmpCtx());
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+  });
+});
+
+describe("promoteValidation — code-file-extension allowlist (A.4): docs/data don't source-verify", () => {
+  // A DECL_RE-shaped hit inside a `.md`/`.json`/`.txt` fixture is doc/data
+  // prose, not project source. Only real code files (CODE_FILE_EXTENSIONS) may
+  // source-verify a symbol target.
+  let tmpRoot: string;
+
+  beforeAll(() => {
+    tmpRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "atlas-validate-extallow-"),
+    );
+    // A `.md` file whose text is EXACTLY a TS-style declaration (DECL_RE would
+    // match its shape), but a `.md` is not a code file → must not source-verify.
+    fs.writeFileSync(
+      path.join(tmpRoot, "DESIGN.md"),
+      "# Design\n\n```ts\nexport class MarkdownOnlyDeclSymbol {}\n```\n",
+    );
+    // A `.json` fixture that happens to contain the declaration text too.
+    fs.writeFileSync(
+      path.join(tmpRoot, "data.json"),
+      '{ "note": "export const JsonOnlyDeclSymbol = 1;" }\n',
+    );
+    // A real code file with a genuine declaration (control).
+    fs.mkdirSync(path.join(tmpRoot, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpRoot, "src", "real.ts"),
+      "export const RealCodeDeclSymbol = 1;\n",
+    );
+  });
+
+  afterAll(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function tmpCtx(): ValidationContext {
+    return { checkoutDir: tmpRoot, featureRegistry };
+  }
+
+  it("a symbol declared only inside a .md fixture does NOT source-verify", async () => {
+    const candidate = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["MarkdownOnlyDeclSymbol"],
+    });
+    const out = await promoteValidation(candidate, tmpCtx());
+    expect(out.provenance.classification.validation_status).toBe("unverified");
+    expect(out.approvable).toBe(false);
+  });
+
+  it("a symbol appearing only inside a .json fixture does NOT source-verify", async () => {
+    const candidate = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["JsonOnlyDeclSymbol"],
+    });
+    const out = await promoteValidation(candidate, tmpCtx());
+    expect(out.provenance.classification.validation_status).toBe("unverified");
+  });
+
+  it("a symbol declared in a real .ts code file still source-verifies", async () => {
+    const candidate = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["RealCodeDeclSymbol"],
+    });
+    const out = await promoteValidation(candidate, tmpCtx());
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+  });
+});
+
+describe("promoteValidation — RESTATEMENT_MARKER is a hard approvable=false floor (A.2)", () => {
+  // The A.1 distillation gate (S8) stamps RESTATEMENT_MARKER on a candidate its
+  // LLM judge ruled a pure restatement of already-indexed content. Such a
+  // candidate carries no NEW verifiable claim, so it must be approvable=false
+  // even if its symbols grep-verify — the marker is a floor the source-verify
+  // recompute cannot lift. S4 reads the SAME imported literal S8 emits (O2), via
+  // the same carrier idioms rag-dedup uses: provenance.validated_against and/or
+  // a `fused_from` evidence ref.
+
+  function withValidatedAgainst(c: Candidate, marker: string): Candidate {
+    return {
+      ...c,
+      provenance: {
+        ...c.provenance,
+        validated_against: marker,
+      },
+    };
+  }
+
+  it("a restatement candidate (validated_against marker) with grep-verifiable symbols is approvable=false", async () => {
+    // `TwoLayerShim` IS declared in the shared fixture checkout → would normally
+    // source-verify and (as an architecture fact) become approvable=true. The
+    // restatement marker pins approvable=false regardless.
+    const base = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const candidate = withValidatedAgainst(base, RESTATEMENT_MARKER);
+    const out = await promoteValidation(candidate, ctx);
+    // The grep still promotes the status (the marker only gates approvability).
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    expect(out.approvable).toBe(false);
+  });
+
+  it("the marker is recognized among other '; '-joined validated_against tokens", async () => {
+    const base = makeCandidate({
+      knowledge_type: "product",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const candidate = withValidatedAgainst(
+      base,
+      `rag-corpus-overlap:some-ref; ${RESTATEMENT_MARKER}`,
+    );
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.approvable).toBe(false);
+  });
+
+  it("the marker is recognized via a fused_from evidence ref", async () => {
+    const base = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const candidate: Candidate = {
+      ...base,
+      evidence: [{ kind: "fused_from", ref: RESTATEMENT_MARKER }],
+    };
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    expect(out.approvable).toBe(false);
+  });
+
+  it("a NON-restatement candidate (marker absent) with grep-verifiable symbols stays approvable=true", async () => {
+    // Control: without the marker, a source-verified architecture fact is
+    // approvable — the floor only fires when the marker is present.
+    const candidate = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    expect(out.approvable).toBe(true);
+  });
+
+  it("a validated_against overlap marker that is NOT the restatement marker does not gate approvability", async () => {
+    // Whole-token match, not substring: an unrelated marker must not trip the
+    // floor.
+    const base = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const candidate = withValidatedAgainst(base, "rag-corpus-overlap:some-ref");
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.approvable).toBe(true);
+  });
+});
+
+describe("promoteValidation — composes the rag-dedup no-delta floor (dedicated marker)", () => {
+  // The rag-dedup no-delta gate floors a pure corpus-DUPLICATE candidate to
+  // `approvable=false` (nothing net-new to re-seed) and stamps a DEDICATED floor
+  // marker RAG_NO_DELTA_MARKER (via applyDistillDelta) on BOTH carriers:
+  // provenance.validated_against and a `fused_from` evidence ref — the SAME dual
+  // idiom RESTATEMENT_MARKER uses. Before this fix, promoteValidation RECOMPUTED
+  // `approvable` purely from the promoted status and honored ONLY the restatement
+  // marker, so a no-delta duplicate whose symbols grep-verify was clobbered back
+  // to approvable=true — silently defeating dedup's "duplicates aren't
+  // approvable" guarantee. The structural fix COMPOSES all dedicated floor
+  // markers: the recompute may LOWER approvability but must never RAISE it above
+  // a value an upstream GATE already floored it to. A dedicated marker is
+  // unambiguous — unlike the generic corpus-overlap ANNOTATION (stamped for every
+  // overlap verdict, delta included, where the candidate stays approvable) — so
+  // it fires the floor regardless of the incoming flag, while a pure canonicalize
+  // status-rule floor (no marker) is still lifted on promotion.
+
+  // The generic `rag-corpus-overlap:` annotation annotateOverlap stamps for EVERY
+  // overlap verdict (delta INCLUDED) — present on a no-delta duplicate too, but
+  // NOT itself a floor signal.
+  const OVERLAP_REF = "rag-corpus-overlap:https://example.com/pr/1";
+
+  // Shape a candidate exactly as rag-dedup's no-delta path leaves it: the
+  // approvable=false floor, the generic overlap annotation, AND the dedicated
+  // RAG_NO_DELTA_MARKER floor marker — on both carriers.
+  function asNoDeltaDuplicate(c: Candidate): Candidate {
+    return {
+      ...c,
+      approvable: false,
+      provenance: {
+        ...c.provenance,
+        validated_against: `${OVERLAP_REF}; ${RAG_NO_DELTA_MARKER}`,
+      },
+      evidence: [
+        ...c.evidence,
+        { kind: "fused_from", ref: OVERLAP_REF },
+        { kind: "fused_from", ref: RAG_NO_DELTA_MARKER },
+      ],
+    };
+  }
+
+  it("a no-delta corpus-duplicate whose symbols grep-verify stays approvable=false", async () => {
+    // `TwoLayerShim` IS declared in the fixture checkout → source-verifies →
+    // an architecture fact would normally recompute to approvable=true. The
+    // dedicated no-delta floor marker must survive the recompute.
+    const candidate = asNoDeltaDuplicate(
+      makeCandidate({
+        knowledge_type: "architecture",
+        validationTargets: ["TwoLayerShim"],
+      }),
+    );
+    const out = await promoteValidation(candidate, ctx);
+    // Status still promotes (display truth — the symbol really exists).
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    // The upstream floor survives — NOT clobbered back to true.
+    expect(out.approvable).toBe(false);
+  });
+
+  it("the no-delta floor is recognized via the fused_from evidence ref alone", async () => {
+    // rag-dedup carries the marker on BOTH validated_against and a fused_from
+    // evidence ref; the reader must recognize either. Here only the evidence ref
+    // carries it.
+    const base = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const candidate: Candidate = {
+      ...base,
+      approvable: false,
+      evidence: [{ kind: "fused_from", ref: RAG_NO_DELTA_MARKER }],
+    };
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.approvable).toBe(false);
+  });
+
+  it("a no-delta duplicate mapping to a GREEN pill (showcase-verifies) still stays approvable=false", async () => {
+    // Even the strongest verification tier must not raise approvability above an
+    // upstream floor.
+    const candidate = asNoDeltaDuplicate(
+      makeCandidate({
+        knowledge_type: "product",
+        title: "agentic-chat",
+        validationTargets: ["agentic-chat"],
+      }),
+    );
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe(
+      "showcase-verified",
+    );
+    expect(out.approvable).toBe(false);
+  });
+
+  it("a restatement marker floors even with incoming approvable=true (unconditional dedicated floor)", async () => {
+    // The distillation gate stamps RESTATEMENT_MARKER but does NOT pre-set
+    // `approvable`, so a restatement typically arrives approvable=true. The
+    // dedicated marker is the floor — it fires regardless of the incoming flag
+    // even though its symbols grep-verify (preserving the original restatement
+    // floor).
+    const base = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+      approvable: true, // distillation gate leaves the flag untouched
+    });
+    const candidate: Candidate = {
+      ...base,
+      provenance: { ...base.provenance, validated_against: RESTATEMENT_MARKER },
+    };
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    expect(out.approvable).toBe(false);
+  });
+
+  it("an ANNOTATED delta (overlap annotation, NO no-delta marker) is NOT floored", async () => {
+    // A `delta` verdict carries the SAME generic overlap annotation as a no-delta
+    // duplicate (annotateOverlap runs for every overlap verdict) but keeps its
+    // net-new content and does NOT get the dedicated no-delta marker. It also
+    // inherits canonicalize's status-rule floor (approvable=false, unverified
+    // architecture) — which the gate must LIFT on promotion. The generic overlap
+    // annotation alone must NOT floor it: a source-verified architecture delta
+    // remains approvable.
+    const base = makeCandidate({
+      knowledge_type: "architecture",
+      validation_status: "unverified",
+      validationTargets: ["TwoLayerShim"],
+      approvable: false, // canonicalize status-rule floor, carried by the delta
+    });
+    const candidate: Candidate = {
+      ...base,
+      provenance: { ...base.provenance, validated_against: OVERLAP_REF },
+      evidence: [...base.evidence, { kind: "fused_from", ref: OVERLAP_REF }],
+    };
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    expect(out.approvable).toBe(true);
+  });
+
+  it("a canonicalize status-rule floor (approvable=false, NO marker) is LIFTED on promotion", async () => {
+    // The load-bearing preserved path: canonicalize floors an unverified
+    // behavior fact to approvable=false PURELY from the status rule (no marker).
+    // Once the gate promotes it (source-verifies), that floor must LIFT —
+    // otherwise every genuinely-validated behavior fact stays permanently
+    // non-checkable. The composed floor must NOT clobber this.
+    const candidate = makeCandidate({
+      knowledge_type: "architecture",
+      validation_status: "unverified",
+      validationTargets: ["TwoLayerShim"],
+      approvable: false, // canonicalize status-rule floor, NO upstream marker
+    });
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    expect(out.approvable).toBe(true);
+  });
+});
+
+describe("promoteValidation — a restatement floor also floors the rank contribution (A.2)", () => {
+  // The dominant rank factor (canonicalize's VALIDATION_WEIGHT) is derived from
+  // validation_status. A RESTATEMENT-floored candidate (approvable=false) whose
+  // symbols happen to grep-verify has its status promoted to source-verified —
+  // but it carries NO new verifiable claim, so it must NOT gain rank from that
+  // promotion. Otherwise the restatement out-ranks a GENUINE claim purely on the
+  // validation-status weight, surfacing restatement noise above real why/how in
+  // the ranked artifact. The floor on approvable must extend to the rank
+  // contribution: a restatement-floored candidate ranks as if unverified.
+
+  function withValidatedAgainst(c: Candidate, marker: string): Candidate {
+    return {
+      ...c,
+      provenance: { ...c.provenance, validated_against: marker },
+    };
+  }
+
+  const NOW = new Date("2026-06-09").getTime();
+
+  it("a source-verified RESTATEMENT does NOT out-rank a genuine source-verified claim on the validation weight", async () => {
+    // Both candidates source-verify (their symbol `TwoLayerShim` /
+    // `upsertAtlasSeedCandidate` is declared in the fixture checkout) and share
+    // every other rank input (same date, confidence, provenance_class, evidence).
+    // The ONLY difference is the restatement marker on one of them. A restatement
+    // must not rank AT OR ABOVE a genuine claim — its promoted status must not
+    // lift its rank.
+    const genuine = recomputeRankScore(
+      await promoteValidation(
+        makeCandidate({
+          knowledge_type: "architecture",
+          validationTargets: ["upsertAtlasSeedCandidate"],
+        }),
+        ctx,
+      ),
+      NOW,
+    );
+    const restatement = recomputeRankScore(
+      await promoteValidation(
+        withValidatedAgainst(
+          makeCandidate({
+            knowledge_type: "architecture",
+            validationTargets: ["TwoLayerShim"],
+          }),
+          RESTATEMENT_MARKER,
+        ),
+        ctx,
+      ),
+      NOW,
+    );
+
+    // Both promote to source-verified for DISPLAY truth (the symbols do exist).
+    expect(genuine.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    expect(restatement.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    // But the restatement is approvable=false and must NOT out-rank the genuine
+    // claim: its rank contribution is floored to the unverified weight.
+    expect(restatement.approvable).toBe(false);
+    expect(restatement.rankScore).toBeLessThan(genuine.rankScore);
+  });
+
+  it("a restatement floored to the unverified rank weight ranks like an unverified genuine claim", async () => {
+    // A restatement that grep-verifies must rank NO HIGHER than a genuine claim
+    // that stays unverified (both should get the unverified validation weight).
+    const genuineUnverified = recomputeRankScore(
+      await promoteValidation(
+        makeCandidate({
+          knowledge_type: "operational", // exempt → stays approvable even unverified
+          validationTargets: ["CopilotNext"], // not in the tree → stays unverified
+        }),
+        ctx,
+      ),
+      NOW,
+    );
+    const restatement = recomputeRankScore(
+      await promoteValidation(
+        withValidatedAgainst(
+          makeCandidate({
+            knowledge_type: "operational",
+            validationTargets: ["TwoLayerShim"], // grep-verifies
+          }),
+          RESTATEMENT_MARKER,
+        ),
+        ctx,
+      ),
+      NOW,
+    );
+
+    expect(genuineUnverified.provenance.classification.validation_status).toBe(
+      "unverified",
+    );
+    expect(restatement.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    // Same rank inputs otherwise; the restatement's floored validation weight
+    // must equal the unverified genuine claim's — never exceed it.
+    expect(restatement.rankScore).toBeLessThanOrEqual(
+      genuineUnverified.rankScore,
+    );
+  });
+
+  it("a NON-restatement source-verified claim keeps its full (promoted) rank weight", async () => {
+    // Control: without the marker, a source-verified claim DOES benefit from the
+    // promotion — it out-ranks an unverified twin. The floor fires ONLY for
+    // restatements.
+    const sourceVerified = recomputeRankScore(
+      await promoteValidation(
+        makeCandidate({
+          knowledge_type: "operational",
+          validationTargets: ["TwoLayerShim"],
+        }),
+        ctx,
+      ),
+      NOW,
+    );
+    const unverified = recomputeRankScore(
+      await promoteValidation(
+        makeCandidate({
+          knowledge_type: "operational",
+          validationTargets: ["CopilotNext"],
+        }),
+        ctx,
+      ),
+      NOW,
+    );
+    expect(sourceVerified.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    expect(sourceVerified.rankScore).toBeGreaterThan(unverified.rankScore);
   });
 });
 

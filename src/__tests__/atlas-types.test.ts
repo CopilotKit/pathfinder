@@ -4,13 +4,21 @@ import {
   CandidateSchema,
   ProvenanceSchema,
   EvidenceItemSchema,
+  KnowledgeType,
+  BEHAVIOR_KNOWLEDGE_TYPES,
+  RESTATEMENT_MARKER,
   buildCanonicalKey,
   parseCanonicalKey,
   mostRestrictiveSensitivity,
   compareDatesDesc,
   toSeedEntryRow,
 } from "../atlas/types.js";
-import type { Candidate, Sensitivity } from "../atlas/types.js";
+import type {
+  Candidate,
+  Sensitivity,
+  KnowledgeType as KnowledgeTypeT,
+  DistillationVerdict,
+} from "../atlas/types.js";
 // Type-only import: this slot has NO runtime DB. The `satisfies` assertions in
 // the toSeedEntryRow tests prove (at COMPILE time) that the harvest output
 // conforms to the REAL storage-layer input shape.
@@ -708,5 +716,123 @@ describe("toSeedEntryRow (compile-time conformance to UpsertAtlasSeedCandidateIn
     );
     const seedRow: UpsertAtlasSeedCandidateInput = toSeedEntryRow(candidate);
     expect(seedRow.canonicalKey).toBe(ROW_12_1.canonical_key);
+  });
+});
+
+// ── S1 (Theme A.4 set-extension): BEHAVIOR_KNOWLEDGE_TYPES is the §7 gate set ──
+// The extended set is the ENUM-COMPLEMENT of the three exempt process/etiquette
+// types {process, operational, org-culture}. Defining it as the complement (all
+// KnowledgeType values MINUS the exempt three) is drift-proof: adding a new
+// knowledge_type to the enum defaults it INTO the gated set unless it is
+// explicitly exempted, which is the safe direction for a guilty-until-validated
+// approvability gate.
+describe("BEHAVIOR_KNOWLEDGE_TYPES (§7 gate set = enum-complement of the exempt three)", () => {
+  const EXEMPT: KnowledgeTypeT[] = ["process", "operational", "org-culture"];
+  const EXPECTED_GATED: KnowledgeTypeT[] = [
+    "architecture",
+    "design-rationale",
+    "root-cause",
+    "ownership",
+    "protocol",
+    "security",
+    "product",
+    "gtm",
+  ];
+
+  it("contains exactly the eight gated fact/behavior types", () => {
+    expect([...BEHAVIOR_KNOWLEDGE_TYPES].sort()).toEqual(
+      [...EXPECTED_GATED].sort(),
+    );
+  });
+
+  it("includes every gated type", () => {
+    for (const t of EXPECTED_GATED) {
+      expect(BEHAVIOR_KNOWLEDGE_TYPES.has(t)).toBe(true);
+    }
+  });
+
+  it("excludes each of the three exempt process/etiquette types", () => {
+    for (const t of EXEMPT) {
+      expect(BEHAVIOR_KNOWLEDGE_TYPES.has(t)).toBe(false);
+    }
+  });
+
+  it("is the exact enum-complement of the exempt three (drift-proof)", () => {
+    const allTypes = KnowledgeType.options as KnowledgeTypeT[];
+    const complement = allTypes.filter((t) => !EXEMPT.includes(t)).sort();
+    expect([...BEHAVIOR_KNOWLEDGE_TYPES].sort()).toEqual(complement);
+    // Every enum value is accounted for: gated ∪ exempt = all 11.
+    expect(BEHAVIOR_KNOWLEDGE_TYPES.size + EXEMPT.length).toBe(allTypes.length);
+  });
+});
+
+// ── S1 (Theme A.1): DistillationVerdict discriminated union narrows on `kind` ──
+describe("DistillationVerdict (A.1 judge output union)", () => {
+  it("narrows on `kind` for each variant (compile + runtime)", () => {
+    const distilled: DistillationVerdict = { kind: "distilled" };
+    const rewritten: DistillationVerdict = {
+      kind: "rewritten",
+      title: "distilled why",
+      content: "the why prose",
+      reason: "extracted the rationale",
+    };
+    const restatement: DistillationVerdict = {
+      kind: "restatement",
+      reason: "just restates the what",
+    };
+
+    // Runtime exercise of the compile-time narrowing.
+    for (const v of [distilled, rewritten, restatement]) {
+      switch (v.kind) {
+        case "distilled":
+          expect(v.kind).toBe("distilled");
+          break;
+        case "rewritten":
+          expect(v.title).toBe("distilled why");
+          expect(v.content).toBe("the why prose");
+          expect(v.reason).toBe("extracted the rationale");
+          break;
+        case "restatement":
+          expect(v.reason).toBe("just restates the what");
+          break;
+        default: {
+          // Exhaustiveness: every kind is handled above.
+          const _exhaustive: never = v;
+          throw new Error(
+            `unreachable verdict: ${JSON.stringify(_exhaustive)}`,
+          );
+        }
+      }
+    }
+  });
+});
+
+// ── S1 (O2): RESTATEMENT_MARKER is the ONE shared literal S8 emits + S4 reads ──
+describe("RESTATEMENT_MARKER (O2 shared literal)", () => {
+  it("exports the exact restatement marker literal", () => {
+    expect(RESTATEMENT_MARKER).toBe("distillation:restatement");
+  });
+});
+
+// ── S1 (Theme C.1): approvable is a persisted field on the storage input, and
+//    toSeedEntryRow threads it through from the Candidate ──────────────────────
+describe("toSeedEntryRow persists the C.1 approvable field", () => {
+  it("threads candidate.approvable onto the storage input", () => {
+    const candidate: Candidate = CandidateSchema.parse({
+      ...rowToCandidateInput(ROW_12_1),
+      approvable: false,
+    });
+    const seedRow: UpsertAtlasSeedCandidateInput = toSeedEntryRow(candidate);
+    expect(seedRow.approvable).toBe(false);
+    expect(seedRow.approvable).toBe(candidate.approvable);
+  });
+
+  it("carries approvable=true through for an approvable candidate", () => {
+    const candidate: Candidate = CandidateSchema.parse(
+      rowToCandidateInput(ROW_12_5),
+    );
+    const seedRow = toSeedEntryRow(candidate);
+    expect(seedRow.approvable).toBe(true);
+    expect(seedRow.approvable).toBe(candidate.approvable);
   });
 });

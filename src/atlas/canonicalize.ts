@@ -3,8 +3,13 @@
 // The top tier of the harvest pipeline (spec §4, §9.1). It takes the
 // aggregator's CandidateFragment[] and turns each into a finalized Candidate by:
 //
-//   1. assigning a canonical_key = <sourcetype>:<subsystem>:<claim-slug>
-//      (the claim-slug is derived from claimSlugHint, falling back to the title),
+//   1. assigning a canonical_key = <CANONICAL_KEY_PREFIX>:<subsystem>:<claim-slug>
+//      (the claim-slug is derived from claimSlugHint, falling back to the title).
+//      The first segment is a STABLE CONSTANT — NOT the fragment's sourcetype —
+//      so a claim keys on its IDENTITY (subsystem + claim), independent of which
+//      source it was harvested from or whether it was fused (spec §C.2). This is
+//      what makes the key stable across a solo→fused re-key across runs (see
+//      CANONICAL_KEY_PREFIX below and the cross-source-collision note there),
 //   2. GLOBAL DEDUP + SUPERSESSION — fragments that collapse to the same
 //      canonical_key are reduced to ONE survivor: the SUPERSEDING (newest, by
 //      provenance.date) fragment (§9.1 canonical statement),
@@ -22,13 +27,39 @@ import {
   BEHAVIOR_KNOWLEDGE_TYPES,
   buildCanonicalKey,
   dateToEpochMs,
+  RAG_NO_DELTA_MARKER,
 } from "./types.js";
+import { hasRestatementMarker } from "./validate.js";
 import type {
   Candidate,
   CandidateFragment,
   Confidence,
   ValidationStatus,
 } from "./types.js";
+
+// The STABLE first segment of every canonical_key (spec §C.2). The canonical_key
+// keys on CLAIM IDENTITY — subsystem + claim slug — NOT on the fragment's
+// sourcetype. Using a source-independent constant here (rather than
+// `fragment.sourcetype`) is the whole fix: aggregate re-stamps a claim's
+// sourcetype `derived` the moment it fuses, so a sourcetype-derived key flipped
+// `memory:<sub>:<slug>` → `derived:<sub>:<slug>` between a solo run and a later
+// fused run — two keys that never collided at the DB upsert (ON CONFLICT
+// canonical_key, db/atlas.ts), so run 2 inserted a DUPLICATE pending row instead
+// of superseding run 1. A constant prefix collapses both to one key.
+//
+// The key format stays 3-segment `<prefix>:<subsystem>:<claim-slug>` so
+// parseCanonicalKey keeps recovering the subsystem (the MIDDLE segment) for
+// sync.ts's exclusion-rule matching — only the volatile first segment changed.
+//
+// CROSS-SOURCE COLLISION (the deliberate blast radius, spec §C.2 note): because
+// the prefix no longer carries source semantics, two fragments at the SAME
+// subsystem+claim but DIFFERENT sourcetypes (e.g. an unfused github-pr and an
+// unfused notion-doc stating the same claim) now share ONE canonical_key and
+// collapse via supersession — where they previously produced two distinct keys.
+// This is intended: a claim's identity does not depend on which source observed
+// it. The full claim-id redesign remains out of scope; this is the targeted
+// duplication fix.
+export const CANONICAL_KEY_PREFIX = "claim";
 
 // ── Claim-slug derivation ─────────────────────────────────────────────────────
 
@@ -157,19 +188,26 @@ function recency(fragment: CandidateFragment, now: number): number {
 // bounded boost (1 + log1p(count)) so a single strong fact is never buried under
 // a weakly-corroborated one purely on evidence count.
 //
-// Rank-neutral §6.2 duplication marks: the rag-dedup gate annotates a candidate
-// whose prose is already indexed in the RAG corpus by appending a `fused_from`
-// evidence item whose ref carries RAG_CORPUS_OVERLAP_REF_PREFIX. That item is
-// an AUDIT annotation about the corpus, not corroboration for the claim —
-// counting it would make a corpus DUPLICATE outrank its un-duplicated twin
-// (inverting §6.2). Filter it out of the depth count; genuine fused_from refs
-// (aggregator provenance — canonical-key-shaped) still count.
+// Rank-neutral §6.2 duplication marks: the rag-dedup gate stamps TWO kinds of
+// `fused_from` evidence on a corpus-overlapping candidate, neither of which is
+// corroboration for the claim — counting either would make a corpus DUPLICATE
+// outrank its un-duplicated twin (inverting §6.2). Filter BOTH out of the depth
+// count; genuine fused_from refs (aggregator provenance — canonical-key-shaped)
+// still count.
+//
+//   1. RAG_CORPUS_OVERLAP_REF_PREFIX: an AUDIT annotation about the corpus,
+//      appended on EVERY overlap verdict (delta included).
+//   2. RAG_NO_DELTA_MARKER: the DEDICATED no-delta floor trace, stamped as a
+//      fused_from ref on a pure corpus duplicate (rag-dedup's floorNoDelta). It
+//      is a provenance floor, not evidence — the SAME constant the emitter and
+//      validate reader import, so the exclusion can never drift from the stamp.
 function evidenceDepth(fragment: CandidateFragment): number {
   const corroborating = fragment.evidence.filter(
     (e) =>
       !(
         e.kind === "fused_from" &&
-        e.ref.startsWith(RAG_CORPUS_OVERLAP_REF_PREFIX)
+        (e.ref.startsWith(RAG_CORPUS_OVERLAP_REF_PREFIX) ||
+          e.ref === RAG_NO_DELTA_MARKER)
       ),
   );
   return 1 + Math.log1p(corroborating.length);
@@ -184,11 +222,24 @@ export const RAG_CORPUS_OVERLAP_REF_PREFIX = "rag-corpus-overlap:";
 
 function computeRankScore(fragment: CandidateFragment, now: number): number {
   const { validation_status, confidence } = fragment.provenance.classification;
+  // A RESTATEMENT-floored candidate (approvable=false; see validate.ts) carries
+  // no NEW verifiable claim. The validate gate still PROMOTES its
+  // validation_status when its symbols grep-verify (the status is display-truth
+  // — the symbols really do exist), but that promotion must NOT lift the rank:
+  // otherwise the restatement would OUT-RANK a genuine claim purely on the
+  // dominant validation weight, surfacing restatement noise above real why/how
+  // in the ranked artifact (§11.1). Floor the validation weight to `unverified`
+  // for a restatement, consistent with its approvable=false floor — the SAME
+  // predicate the approvability floor uses, so status-display and rank can never
+  // drift apart.
+  const validationWeight = hasRestatementMarker(fragment)
+    ? VALIDATION_WEIGHT.unverified
+    : VALIDATION_WEIGHT[validation_status];
   return (
     sourceStrength(fragment) *
     recency(fragment, now) *
     evidenceDepth(fragment) *
-    VALIDATION_WEIGHT[validation_status] *
+    validationWeight *
     CONFIDENCE_WEIGHT[confidence]
   );
 }
@@ -266,7 +317,10 @@ export function canonicalize(fragments: CandidateFragment[]): Candidate[] {
   const survivors = new Map<string, CandidateFragment>();
   for (const fragment of fragments) {
     const key = buildCanonicalKey(
-      fragment.sourcetype,
+      // STABLE first segment (spec §C.2): key on claim identity, NOT sourcetype,
+      // so a solo→fused re-key resolves to the same key and run 2 supersedes
+      // rather than duplicating. See CANONICAL_KEY_PREFIX for the blast radius.
+      CANONICAL_KEY_PREFIX,
       fragment.subsystem,
       deriveClaimSlug(fragment),
     );

@@ -58,6 +58,7 @@ import type { AtlasHttpClient } from "../atlas/client.js";
 import type {
   Candidate,
   CandidateFragment,
+  CorpusHit,
   ValidationStatus,
 } from "../atlas/types.js";
 import type { FeatureRegistry } from "../atlas/adapters/showcase.js";
@@ -79,6 +80,7 @@ import {
   runAtlasHarvestCli,
   type RunHarvestDeps,
 } from "../atlas/harvest-cli.js";
+import type { DistillationJudge } from "../atlas/distillation-gate.js";
 
 // The sync MODULE is mocked file-wide: the sync-summary CLI test below asserts
 // only the driver's output plumbing — sync's own enactment semantics live in
@@ -197,6 +199,30 @@ function makeSearchClient(): {
   return { client, search };
 }
 
+// A pass-through distillation judge: rules every candidate `distilled` (a
+// no-op). Injected into `runHarvest` in the tests below that exercise
+// NON-distillation concerns (upsert/manifest/dedup-ordering) so the pipeline
+// does not construct a real OpenAIDistiller (which would need an API key). The
+// distillation gate's own behavior is covered in atlas-distillation-gate.test.ts.
+const passThroughJudge: DistillationJudge = {
+  judge: async () => ({ kind: "distilled" }),
+};
+
+// No-op semantic-dedup seams (Theme B). Injected alongside `passThroughJudge`
+// into the tests that exercise NON-dedup concerns (upsert/manifest/ordering) so
+// `runHarvest` does not construct a real OpenAIDistiller for the embed/distill
+// default (which would need an API key). vectorSearch returns no hits ⇒ the
+// semantic path finds no overlap ⇒ every candidate passes through unchanged,
+// preserving these suites' pre-Theme-B pass-through expectations. The semantic
+// gate's own behavior is covered in atlas-rag-dedup.test.ts. `embed`/
+// `distillDelta` are inert here (vectorSearch's empty result short-circuits
+// before distill), but supplied so no default OpenAIDistiller is constructed.
+const passThroughSemanticDedup = {
+  embed: async () => [0],
+  vectorSearch: async () => [],
+  distillDelta: async () => ({ kind: "no-overlap" as const }),
+};
+
 describe("atlas-harvest driver — registry assembly", () => {
   it("assembles a registry resolving every CandidateFragment sourcetype", () => {
     const registry = buildLeafAdapterRegistry();
@@ -279,6 +305,8 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       runsDir,
       upsert: true,
       ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
 
@@ -289,12 +317,84 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
     const pending = await listPendingAtlasSeedCandidates();
     expect(pending.map((p) => p.canonicalKey).sort()).toEqual(
       [
-        "github-pr:indexer:incremental-reindex",
-        "github-pr:runtime:tools-before-stream",
+        "claim:indexer:incremental-reindex",
+        "claim:runtime:tools-before-stream",
       ].sort(),
     );
     // All rows are pending.
     expect(pending.every((p) => p.status === "pending")).toBe(true);
+  });
+
+  it("stamps a completion marker (completedAt + upsertedCount) on a successful upsert", async () => {
+    // A successful --upsert run must leave a manifest that DISTINGUISHES a
+    // completed run from a partial/aborted one: the completion marker
+    // (`completedAt` timestamp + the `upsertedCount` actually written) is stamped
+    // AFTER the upsert loop finishes. Absence of the marker signals an incomplete
+    // run. The marker never clobbers the manifest's fragmentCount/ruleSet.
+    const runId = "run-completion-marker";
+    seedRunDir(runsDir, runId, [
+      fragment(),
+      fragment({
+        subsystem: "indexer",
+        claimSlugHint: "incremental-reindex",
+        title: "Indexer reindexes only changed sources",
+        content: "The indexer diffs the state token to reindex incrementally.",
+      }),
+    ]);
+
+    const { client } = makeSearchClient();
+    const before = Date.now();
+    const result = await runHarvest({
+      runId,
+      runsDir,
+      upsert: true,
+      ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
+      validationContext: emptyValidationContext(checkoutDir),
+    });
+    const after = Date.now();
+
+    expect(result.upsertedCount).toBe(2);
+
+    const manifest = new RunStore(runsDir).readManifest(runId);
+    expect(manifest).toBeDefined();
+    // The pre-upsert manifest fields survive.
+    expect(manifest!.fragmentCount).toBe(2);
+    expect(manifest!.ruleSet).toEqual([]);
+    // The completion marker is present and matches what was written.
+    expect(manifest!.upsertedCount).toBe(2);
+    expect(manifest!.completedAt).toBeDefined();
+    const completedAtMs = Date.parse(manifest!.completedAt!);
+    expect(Number.isNaN(completedAtMs)).toBe(false);
+    expect(completedAtMs).toBeGreaterThanOrEqual(before);
+    expect(completedAtMs).toBeLessThanOrEqual(after);
+  });
+
+  it("leaves NO completion marker on a preview (no --upsert) run — partial-state is distinguishable", async () => {
+    // A preview run reaches the manifest write (step 1b) but never upserts, so it
+    // must NOT carry a completion marker — the marker's absence is what lets an
+    // operator tell a completed run from one that stopped before persisting.
+    const runId = "run-no-marker-preview";
+    seedRunDir(runsDir, runId, [fragment()]);
+
+    const { client } = makeSearchClient();
+    const result = await runHarvest({
+      runId,
+      runsDir,
+      ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
+      validationContext: emptyValidationContext(checkoutDir),
+    });
+
+    expect(result.upsertedCount).toBe(0);
+    const manifest = new RunStore(runsDir).readManifest(runId);
+    expect(manifest).toBeDefined();
+    expect(manifest!.fragmentCount).toBe(1);
+    // No upsert happened → no completion marker.
+    expect(manifest!.completedAt).toBeUndefined();
+    expect(manifest!.upsertedCount).toBeUndefined();
   });
 
   it("--dry-run writes NOTHING to the database", async () => {
@@ -308,6 +408,8 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       upsert: true,
       dryRun: true,
       ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
 
@@ -328,6 +430,8 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       runId,
       runsDir,
       ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
 
@@ -364,6 +468,8 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       runId,
       runsDir,
       ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
       deps,
     });
@@ -394,6 +500,8 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       runsDir,
       upsert: true,
       ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
 
@@ -459,11 +567,20 @@ describe("atlas-harvest driver — artifact/run pipeline parity (FIX 1)", () => 
 
     const ctx = emptyValidationContext(checkoutDir);
 
-    // The artifact candidate set (post-validation).
+    // The artifact candidate set (post-validation). A pass-through distillation
+    // judge + no-op rag-dedup seams are injected so the artifact path does not
+    // construct a real OpenAIDistiller — the distillation gate's OWN behavior is
+    // exercised in the dedicated parity tests above and the SEMANTIC-dedup parity
+    // in the dedicated aimock suite below; this test isolates the validate-stage
+    // parity, so rag-dedup is a no-op here (empty search + empty vectorSearch).
+    const { client: parityClient } = makeSearchClient();
     const artifactCands = await buildArtifactCandidates({
       runId,
       runsDir,
       validationContext: ctx,
+      judge: passThroughJudge,
+      ragClient: parityClient,
+      ...passThroughSemanticDedup,
     });
     expect(artifactCands).toHaveLength(1);
 
@@ -495,17 +612,458 @@ describe("atlas-harvest driver — artifact/run pipeline parity (FIX 1)", () => 
     );
   });
 
+  it("runs the distillation gate — a restatement renders approvable=false, matching what run --upsert persists", async () => {
+    // The distillation gate (enforceDistillation) runs on the run/upsert path
+    // between canonicalize and validate: a `restatement` verdict stamps
+    // RESTATEMENT_MARKER, which validate reads as a hard approvable=false floor.
+    // The artifact path MUST run the SAME gate so the approval page's approvable
+    // matches what `run --upsert` persists — otherwise a restatement renders
+    // approvable=true on the page while the upsert writes approvable=false.
+    const runId = "run-distill-restatement";
+    const symbolFile = path.join(checkoutDir, "src", "runtime", "stream.ts");
+    fs.mkdirSync(path.dirname(symbolFile), { recursive: true });
+    fs.writeFileSync(symbolFile, "export const drainToolQueue = () => {};\n");
+
+    // A behavior fact WITH a resolvable validationTarget: without the gate it
+    // source-verifies and stays approvable=true; the restatement marker is the
+    // ONLY thing that floors it to approvable=false, so it isolates the gate.
+    seedRunDir(runsDir, runId, [
+      fragment({
+        provenance: {
+          source: "github-pr",
+          url: "https://github.com/CopilotKit/pathfinder/pull/42",
+          date: "2026-06-01",
+          classification: {
+            sensitivity: "public",
+            knowledge_type: "architecture",
+            audience: "all-staff",
+            validation_status: "unverified",
+            confidence: "high",
+            provenance_class: "primary",
+            freshness: { as_of: "2026-06-01" },
+          },
+        },
+        validationTargets: ["drainToolQueue"],
+      }),
+    ]);
+
+    // A judge that rules EVERY candidate a pure restatement.
+    const restatementJudge: DistillationJudge = {
+      judge: async () => ({ kind: "restatement", reason: "pure WHAT" }),
+    };
+
+    const ctx = emptyValidationContext(checkoutDir);
+
+    // Artifact path — with the SAME judge the run path uses. No-op rag-dedup
+    // seams isolate the distillation-gate parity this test targets.
+    const { client: restatementClient } = makeSearchClient();
+    const artifactCands = await buildArtifactCandidates({
+      runId,
+      runsDir,
+      validationContext: ctx,
+      judge: restatementJudge,
+      ragClient: restatementClient,
+      ...passThroughSemanticDedup,
+    });
+    expect(artifactCands).toHaveLength(1);
+
+    // Cross-check against what the run --upsert path (enforceDistillation →
+    // validate) produces for the same candidate + judge.
+    const { promoteValidation } = await import("../atlas/validate.js");
+    const { enforceDistillation } =
+      await import("../atlas/distillation-gate.js");
+    const { canonicalize } = await import("../atlas/canonicalize.js");
+    const { aggregate } = await import("../atlas/aggregate.js");
+    const { finalizeClassification } = await import("../atlas/classify.js");
+    const { RunStore } = await import("../atlas/run-store.js");
+    const fragments = new RunStore(runsDir).readFragments(runId);
+    const canon = canonicalize(
+      aggregate(fragments).map((f) => finalizeClassification(f)),
+    );
+    const distilled = await enforceDistillation(canon, {
+      judge: restatementJudge,
+    });
+    const runCand = await promoteValidation(distilled[0]!, ctx);
+
+    // The run path floors the restatement to approvable=false.
+    expect(runCand.approvable).toBe(false);
+    // The artifact path MUST match — this is the divergence the fix closes.
+    expect(artifactCands[0]!.approvable).toBe(runCand.approvable);
+    expect(artifactCands[0]!.approvable).toBe(false);
+  });
+
+  it("runs the distillation gate — a rewritten candidate carries the salvaged prose, matching what run --upsert persists", async () => {
+    // A `rewritten` verdict swaps the candidate's title/content for the judge's
+    // why/how rewrite on the run/upsert path. The artifact must render the SAME
+    // rewritten prose the upsert persists, not the pre-gate original.
+    const runId = "run-distill-rewritten";
+    const REWRITTEN_TITLE = "Why the runtime drains the tool queue first";
+    const REWRITTEN_CONTENT =
+      "Draining the queue before the terminal message prevents partial tool " +
+      "state from leaking to the client — the ordering is the safety invariant.";
+
+    seedRunDir(runsDir, runId, [fragment()]);
+
+    const rewriteJudge: DistillationJudge = {
+      judge: async () => ({
+        kind: "rewritten",
+        title: REWRITTEN_TITLE,
+        content: REWRITTEN_CONTENT,
+        reason: "salvaged into why/how prose",
+      }),
+    };
+
+    const ctx = emptyValidationContext(checkoutDir);
+
+    // No-op rag-dedup seams isolate the distillation-gate rewrite parity here.
+    const { client: rewriteClient } = makeSearchClient();
+    const artifactCands = await buildArtifactCandidates({
+      runId,
+      runsDir,
+      validationContext: ctx,
+      judge: rewriteJudge,
+      ragClient: rewriteClient,
+      ...passThroughSemanticDedup,
+    });
+    expect(artifactCands).toHaveLength(1);
+
+    // Cross-check against the run --upsert path (enforceDistillation → validate).
+    const { promoteValidation } = await import("../atlas/validate.js");
+    const { enforceDistillation } =
+      await import("../atlas/distillation-gate.js");
+    const { canonicalize } = await import("../atlas/canonicalize.js");
+    const { aggregate } = await import("../atlas/aggregate.js");
+    const { finalizeClassification } = await import("../atlas/classify.js");
+    const { RunStore } = await import("../atlas/run-store.js");
+    const fragments = new RunStore(runsDir).readFragments(runId);
+    const canon = canonicalize(
+      aggregate(fragments).map((f) => finalizeClassification(f)),
+    );
+    const distilled = await enforceDistillation(canon, { judge: rewriteJudge });
+    const runCand = await promoteValidation(distilled[0]!, ctx);
+
+    // The run path adopts the salvaged prose.
+    expect(runCand.title).toBe(REWRITTEN_TITLE);
+    expect(runCand.content).toBe(REWRITTEN_CONTENT);
+    // The artifact path MUST match — this is the divergence the fix closes.
+    expect(artifactCands[0]!.title).toBe(runCand.title);
+    expect(artifactCands[0]!.content).toBe(runCand.content);
+    expect(artifactCands[0]!.title).toBe(REWRITTEN_TITLE);
+    expect(artifactCands[0]!.content).toBe(REWRITTEN_CONTENT);
+  });
+
   it("buildArtifactCandidates fails loud when the validation context is missing", async () => {
     const runId = "run-parity-2";
     seedRunDir(runsDir, runId, [fragment()]);
+    const { client } = makeSearchClient();
     await expect(
       buildArtifactCandidates({
         runId,
         runsDir,
+        ragClient: client,
         // @ts-expect-error intentionally omit validationContext
         validationContext: undefined,
       }),
     ).rejects.toThrow();
+  });
+});
+
+// ── STRUCTURAL parity: the artifact runs the SAME rag-dedup gate as --upsert ──
+//
+// ROOT-CAUSE regression guard. The artifact-candidate path (buildArtifactCandidates)
+// and the upsert path (runHarvest --upsert) now share ONE pipeline
+// (processCandidatePipeline), so the rag-dedup gate runs on BOTH. Before the
+// structural fix the artifact path SKIPPED rag-dedup — which was harmless while
+// rag-dedup was mark-only, but the Theme-B SEMANTIC dedup now REWRITES `content`
+// (delta verdict, applyDistillDelta) and FLOORS `approvable=false` (no-delta
+// verdict). So a candidate the semantic gate rewrites/floors on the upsert path
+// would render its PRE-dedup content + approvable on the approval page — the
+// exact divergence this suite pins shut.
+//
+// Both paths are driven with the SAME seams: a lexical search stub returning a
+// hit at LOW containment (survives the pre-filter), a vectorSearch stub pinning
+// the cosine ABOVE the semantic threshold (so the semantic path fires), and a
+// REAL OpenAIDistiller pointed at an in-process aimock (org rule: never a vi.fn
+// for the LLM call). The upserted row is read back from real PGlite and compared
+// field-for-field to the artifact candidate.
+describe("atlas-harvest driver — artifact/upsert SEMANTIC rag-dedup parity (structural)", () => {
+  let db: PGlite;
+  let runsDir: string;
+  let checkoutDir: string;
+  let LLMockCtor: typeof import("@copilotkit/aimock").LLMock;
+  let OpenAIDistillerCtor: typeof import("../atlas/llm.js").OpenAIDistiller;
+
+  // A corpus passage and a PARAPHRASE of it: they share almost no [a-z0-9]
+  // tokens, so the lexical containment stays below the verbatim threshold (the
+  // candidate survives the lexical pre-filter) and only the SEMANTIC layer
+  // catches the overlap — the exact case rag-dedup's rewrite path exists for.
+  const CORPUS_PASSAGE =
+    "The runtime keeps a thin v1 compatibility shim that forwards calls into " +
+    "the v2 engine so existing apps run unchanged.";
+  const PARAPHRASE =
+    "Legacy applications continue operating without modification because a " +
+    "lightweight adapter relays first-generation requests onto the newer core.";
+  const DELTA_MARKER = "SEMANTIC-DELTA-WINDOW";
+  const DELTA_CONTENT =
+    `${DELTA_MARKER}: the adapter additionally records a per-call migration ` +
+    "metric the v2 core does not, so operators can track legacy traffic decay.";
+
+  beforeAll(async () => {
+    db = new PGlite();
+    await db.waitReady;
+    await db.exec(extractAtlasDdl());
+    __setPoolForTesting(poolFromPglite(db));
+    runsDir = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-harvest-semdedup-"));
+    checkoutDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "atlas-harvest-semdedupco-"),
+    );
+    ({ LLMock: LLMockCtor } = await import("@copilotkit/aimock"));
+    ({ OpenAIDistiller: OpenAIDistillerCtor } =
+      await import("../atlas/llm.js"));
+  });
+
+  afterAll(async () => {
+    __resetPoolForTesting();
+    await db.close();
+    fs.rmSync(runsDir, { recursive: true, force: true });
+    fs.rmSync(checkoutDir, { recursive: true, force: true });
+  });
+
+  beforeEach(async () => {
+    await db.query("DELETE FROM atlas_cache_pages");
+    await db.query("DELETE FROM atlas_seed_entries");
+  });
+
+  // A single fragment whose content is the paraphrase — a semantic (not lexical)
+  // corpus duplicate. Given a resolvable validationTarget it source-verifies and
+  // stays approvable=true UNLESS the semantic gate rewrites/floors it.
+  function paraphraseFragment(): CandidateFragment {
+    const symbolFile = path.join(checkoutDir, "src", "runtime", "shim.ts");
+    fs.mkdirSync(path.dirname(symbolFile), { recursive: true });
+    fs.writeFileSync(symbolFile, "export const forwardToV2 = () => {};\n");
+    return fragment({
+      claimSlugHint: "v1-compat-shim",
+      title: "Legacy app compatibility via a relay adapter",
+      content: PARAPHRASE,
+      provenance: {
+        source: "github-pr",
+        url: "https://github.com/CopilotKit/pathfinder/pull/99",
+        date: "2026-06-01",
+        classification: {
+          sensitivity: "public",
+          knowledge_type: "architecture",
+          audience: "all-staff",
+          validation_status: "unverified",
+          confidence: "high",
+          provenance_class: "primary",
+          freshness: { as_of: "2026-06-01" },
+        },
+      },
+      validationTargets: ["forwardToV2"],
+    });
+  }
+
+  // A lexical search stub returning the corpus passage as a hit. Containment of
+  // the paraphrase's tokens against it is well below 0.8 → survives the
+  // pre-filter and routes into the semantic layer.
+  function lexicalClient(): Pick<AtlasHttpClient, "search"> {
+    return {
+      search: vi.fn(async () => [
+        {
+          content: CORPUS_PASSAGE,
+          id: 7,
+          title: "Indexed v1→v2 shim passage",
+          sourceUrl: "https://example.test/corpus/shim",
+          sourceName: "docs",
+        },
+      ]),
+    } as unknown as Pick<AtlasHttpClient, "search">;
+  }
+
+  // A vectorSearch seam pinning the cosine ABOVE the semantic threshold so the
+  // semantic path decides overlap deterministically (the DB boundary).
+  function vectorSearchAbove(similarity = 0.95) {
+    return vi.fn(async () => [
+      {
+        similarity,
+        content: CORPUS_PASSAGE,
+        id: 7,
+        title: "Indexed v1→v2 shim passage",
+        sourceUrl: "https://example.test/corpus/shim",
+        sourceName: "docs",
+      },
+    ]);
+  }
+
+  it("a semantic-dedup REWRITE renders identically on the artifact and the upserted row (delta verdict)", async () => {
+    const runId = "run-semdedup-delta";
+    seedRunDir(runsDir, runId, [paraphraseFragment()]);
+
+    const mock = new LLMockCtor({ port: 0, logLevel: "silent" });
+    // The DELTA distiller sees the paraphrase and returns net-new delta prose.
+    mock.addFixture({
+      match: {
+        systemMessage: "knowledge-DELTA distiller",
+        userMessage: PARAPHRASE,
+      },
+      response: {
+        content: JSON.stringify({
+          verdict: "delta",
+          reason: "the migration metric is not covered by the corpus passage",
+          content: DELTA_CONTENT,
+        }),
+      },
+    });
+    await mock.start();
+    try {
+      const distiller = new OpenAIDistillerCtor({
+        baseURL: `${mock.url}/v1`,
+        apiKey: "mock",
+      });
+      // The SAME seams for both paths — this is the parity contract.
+      const seams = {
+        ragClient: lexicalClient(),
+        embed: (t: string) => distiller.embed(t),
+        vectorSearch: vectorSearchAbove(),
+        distillDelta: (c: Candidate, overlaps: CorpusHit[]) =>
+          distiller.distillDelta({
+            title: c.title,
+            content: c.content,
+            overlaps: overlaps.map((h) => ({ content: h.content })),
+          }),
+      };
+      const ctx = emptyValidationContext(checkoutDir);
+
+      // Artifact path (renders from fully-processed candidates; writes nothing).
+      const artifactCands = await buildArtifactCandidates({
+        runId,
+        runsDir,
+        validationContext: ctx,
+        judge: passThroughJudge,
+        ...seams,
+        vectorSearch: vectorSearchAbove(),
+      });
+      expect(artifactCands).toHaveLength(1);
+      const artifactCand = artifactCands[0]!;
+
+      // Upsert path — SAME seams. Reads the persisted row back from PGlite.
+      await runHarvest({
+        runId,
+        runsDir,
+        upsert: true,
+        validationContext: ctx,
+        judge: passThroughJudge,
+        ...seams,
+        vectorSearch: vectorSearchAbove(),
+      });
+      const pending = await listPendingAtlasSeedCandidates();
+      expect(pending).toHaveLength(1);
+      const row = pending[0]!;
+
+      // The gate REWROTE content to the net-new delta on BOTH paths.
+      expect(artifactCand.content).toBe(DELTA_CONTENT);
+      // PARITY: artifact content === upserted-row content (was DIVERGENT before
+      // the structural fix — artifact skipped rag-dedup and rendered PARAPHRASE).
+      expect(artifactCand.content).toBe(row.content);
+      // A delta remains → still approvable on both paths.
+      expect(artifactCand.approvable).toBe(true);
+      expect(row.approvable).toBe(true);
+      expect(artifactCand.approvable).toBe(row.approvable);
+    } finally {
+      await mock.stop();
+    }
+  });
+
+  it("a semantic overlap annotates provenance/evidence identically on artifact and upserted row (no-delta)", async () => {
+    // A no-delta verdict keeps content intact but STILL annotates the overlap
+    // (validated_against marker + fused_from evidence) — the rank-neutral
+    // corpus-overlap trail rag-dedup stamps. Before the structural fix the
+    // artifact SKIPPED rag-dedup, so the artifact carried NO such annotation
+    // while the upserted row did — divergent. The shared pipeline makes the
+    // annotation appear identically on both. (approvable is NOT asserted here:
+    // promoteValidation recomputes it from the promoted validation_status after
+    // rag-dedup, so the no-delta floor's visibility is a separate validate-order
+    // concern; this test pins the annotation + content parity the gate owns.)
+    const runId = "run-semdedup-nodelta";
+    seedRunDir(runsDir, runId, [paraphraseFragment()]);
+
+    const mock = new LLMockCtor({ port: 0, logLevel: "silent" });
+    // A no-delta verdict: the paraphrase adds nothing net-new over the corpus.
+    mock.addFixture({
+      match: {
+        systemMessage: "knowledge-DELTA distiller",
+        userMessage: PARAPHRASE,
+      },
+      response: {
+        content: JSON.stringify({
+          verdict: "no-delta",
+          reason: "fully covered by the indexed corpus passage",
+        }),
+      },
+    });
+    await mock.start();
+    try {
+      const distiller = new OpenAIDistillerCtor({
+        baseURL: `${mock.url}/v1`,
+        apiKey: "mock",
+      });
+      const seams = {
+        ragClient: lexicalClient(),
+        embed: (t: string) => distiller.embed(t),
+        distillDelta: (c: Candidate, overlaps: CorpusHit[]) =>
+          distiller.distillDelta({
+            title: c.title,
+            content: c.content,
+            overlaps: overlaps.map((h) => ({ content: h.content })),
+          }),
+      };
+      const ctx = emptyValidationContext(checkoutDir);
+
+      const artifactCands = await buildArtifactCandidates({
+        runId,
+        runsDir,
+        validationContext: ctx,
+        judge: passThroughJudge,
+        ...seams,
+        vectorSearch: vectorSearchAbove(),
+      });
+      expect(artifactCands).toHaveLength(1);
+      const artifactCand = artifactCands[0]!;
+
+      await runHarvest({
+        runId,
+        runsDir,
+        upsert: true,
+        validationContext: ctx,
+        judge: passThroughJudge,
+        ...seams,
+        vectorSearch: vectorSearchAbove(),
+      });
+      const pending = await listPendingAtlasSeedCandidates();
+      expect(pending).toHaveLength(1);
+      const row = pending[0]!;
+
+      // The semantic overlap was ANNOTATED on the artifact (was ABSENT before
+      // the fix — the artifact skipped rag-dedup entirely).
+      expect(artifactCand.provenance.validated_against).toContain(
+        "rag-corpus-overlap:https://example.test/corpus/shim",
+      );
+      expect(artifactCand.evidence.some((e) => e.kind === "fused_from")).toBe(
+        true,
+      );
+      // PARITY: the same annotation reaches the upserted row.
+      const rowValidatedAgainst = (
+        row.provenance as { validated_against?: string }
+      ).validated_against;
+      expect(rowValidatedAgainst).toBe(
+        artifactCand.provenance.validated_against,
+      );
+      // no-delta keeps content intact — identical on both paths.
+      expect(artifactCand.content).toBe(PARAPHRASE);
+      expect(artifactCand.content).toBe(row.content);
+    } finally {
+      await mock.stop();
+    }
   });
 });
 
@@ -686,6 +1244,8 @@ describe("atlas-harvest driver — run manifest (V80)", () => {
       runId,
       runsDir,
       ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
 
@@ -709,6 +1269,8 @@ describe("atlas-harvest driver — run manifest (V80)", () => {
       runId,
       runsDir,
       ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
 
@@ -733,6 +1295,8 @@ describe("atlas-harvest driver — run manifest (V80)", () => {
         runId,
         runsDir,
         ragClient: client,
+        judge: passThroughJudge,
+        ...passThroughSemanticDedup,
         validationContext: emptyValidationContext(checkoutDir),
       });
       expect(result.fragmentCount).toBe(1);
@@ -755,6 +1319,8 @@ describe("atlas-harvest driver — run manifest (V80)", () => {
       runsDir,
       dryRun: true,
       ragClient: client,
+      judge: passThroughJudge,
+      ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
 
@@ -812,11 +1378,18 @@ describe("atlas-harvest driver — post-validate re-rank (V57)", () => {
           }
         : cand;
 
+    const { client: rerankClient } = makeSearchClient();
     const cands = await buildArtifactCandidates({
       runId,
       runsDir,
       validationContext: emptyValidationContext(checkoutDir),
       validate: validateStub,
+      // Pass-through distillation judge so this re-rank test does not construct a
+      // real OpenAIDistiller (the gate's behavior is covered by the parity tests).
+      judge: passThroughJudge,
+      // No-op rag-dedup seams keep this re-rank test isolated to the rank stage.
+      ragClient: rerankClient,
+      ...passThroughSemanticDedup,
     });
 
     const promoted = cands.find((c) =>
@@ -1027,7 +1600,17 @@ describe("atlas-harvest driver — artifact without --prior-run-id warns (X12)",
   let registryPath: string;
   const runId = "run-artifact-warn";
 
-  beforeAll(() => {
+  // The `artifact` CLI command runs buildArtifactCandidates for real, which now
+  // runs the distillation gate (the same one `run --upsert` runs) and — with no
+  // judge injection point on the CLI — constructs a real OpenAIDistiller-backed
+  // judge. Per the org rule we point it at an in-process aimock server (never a
+  // vi.fn stub for the model call) rather than a real API. The fragment's
+  // content is already a why/how claim, so the fixture returns the `distilled`
+  // verdict (keep as-is). These tests only assert the driver's warn plumbing;
+  // aimock keeps the LLM seam honest without a real key.
+  let mock: import("@copilotkit/aimock").LLMock;
+
+  beforeAll(async () => {
     runsDir = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-artifact-warn-"));
     checkoutDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "atlas-artifact-warnco-"),
@@ -1035,11 +1618,27 @@ describe("atlas-harvest driver — artifact without --prior-run-id warns (X12)",
     registryPath = path.join(checkoutDir, "feature-registry.json");
     fs.writeFileSync(registryPath, `${JSON.stringify({ categories: [] })}\n`);
     seedRunDir(runsDir, runId, [fragment()]);
+
+    const { LLMock } = await import("@copilotkit/aimock");
+    mock = new LLMock({ port: 0, logLevel: "silent" });
+    // The distillation judge sees the WHY-vs-WHAT system prompt; the fragment is
+    // a distilled claim, so respond with the `distilled` verdict for any user
+    // message under that system prompt.
+    mock.addFixture({
+      match: { systemMessage: "WHY-vs-WHAT judge" },
+      response: { content: JSON.stringify({ verdict: "distilled" }) },
+    });
+    await mock.start();
+    process.env.OPENAI_BASE_URL = `${mock.url}/v1`;
+    process.env.OPENAI_API_KEY = "mock";
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     fs.rmSync(runsDir, { recursive: true, force: true });
     fs.rmSync(checkoutDir, { recursive: true, force: true });
+    await mock.stop();
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
   });
 
   afterEach(() => {
@@ -1062,6 +1661,16 @@ describe("atlas-harvest driver — artifact without --prior-run-id warns (X12)",
       registryPath,
       "--notion-token",
       "notion-token",
+      // The artifact command now runs the SAME rag-dedup gate as `run`, so it
+      // builds an HTTP client for the lexical probe — which requires a bearer
+      // token. Point --url at an unroutable port so the probe fails fast (a
+      // single blip, well under the soft-disable streak): the candidate rides
+      // through un-annotated and the semantic path is never reached (so no DB
+      // pool is needed). These tests only assert the driver's warn plumbing.
+      "--token",
+      "test-analytics-token",
+      "--url",
+      "http://127.0.0.1:1",
       ...extra,
     ];
   }
@@ -1100,6 +1709,13 @@ describe("atlas-harvest driver — artifact without --prior-run-id warns (X12)",
     );
 
     expect(code).toBe(0);
-    expect(warn).not.toHaveBeenCalled();
+    // The ADVISORY --prior-run-id warn must not fire when the flag IS provided.
+    // (Other, unrelated warns may fire — the artifact now runs the rag-dedup
+    // gate, whose lexical probe against the deliberately-unroutable --url fails
+    // fast and emits a run-level probe-metric warn; that is expected here and is
+    // not what this test guards.)
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("--prior-run-id not provided"),
+    );
   });
 });

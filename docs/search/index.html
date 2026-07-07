@@ -1,391 +1,842 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Search Features — Pathfinder</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="How semantic search works in Pathfinder — qmd, related files, grep-miss suggestions, and search configuration.">
-<meta property="og:type" content="article">
-<meta property="og:url" content="https://pathfinder.copilotkit.dev/search">
-<meta property="og:title" content="Search Features — Pathfinder">
-<meta property="og:description" content="Semantic search, qmd, related files, and grep-miss suggestions.">
-<meta property="og:image" content="https://pathfinder.copilotkit.dev/og-image.svg">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Search Features — Pathfinder">
-<meta name="twitter:description" content="Semantic search, qmd, related files, and grep-miss suggestions.">
-<meta name="twitter:image" content="https://pathfinder.copilotkit.dev/og-image.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root {
-    --bg-deep: #0a0a0f;
-    --bg-surface: #111118;
-    --bg-card: #16161f;
-    --border: #222233;
-    --text-primary: #e8e8f0;
-    --text-secondary: #8888a0;
-    --text-dim: #555570;
-    --accent: #00ccff;
-    --accent-dim: #00aadd;
-    --accent-glow: rgba(0,204,255,0.15);
-    --blue: #4488ff;
-    --purple: #aa66ff;
-    --warning: #ffaa00;
-    --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
-    --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
-}
-* { margin:0; padding:0; box-sizing:border-box; }
-html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 16px; }
-body { background: var(--bg-deep); color: var(--text-primary); font-family: var(--sans); line-height: 1.6; overflow-x:hidden; }
-code, pre, kbd { font-feature-settings: "liga" 0, "calt" 0; }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Search Features — Pathfinder</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta
+      name="description"
+      content="How semantic search works in Pathfinder — qmd, related files, grep-miss suggestions, and search configuration."
+    />
+    <meta property="og:type" content="article" />
+    <meta
+      property="og:url"
+      content="https://pathfinder.copilotkit.dev/search"
+    />
+    <meta property="og:title" content="Search Features — Pathfinder" />
+    <meta
+      property="og:description"
+      content="Semantic search, qmd, related files, and grep-miss suggestions."
+    />
+    <meta
+      property="og:image"
+      content="https://pathfinder.copilotkit.dev/og-image.svg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Search Features — Pathfinder" />
+    <meta
+      name="twitter:description"
+      content="Semantic search, qmd, related files, and grep-miss suggestions."
+    />
+    <meta
+      name="twitter:image"
+      content="https://pathfinder.copilotkit.dev/og-image.svg"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-deep: #0a0a0f;
+        --bg-surface: #111118;
+        --bg-card: #16161f;
+        --border: #222233;
+        --text-primary: #e8e8f0;
+        --text-secondary: #8888a0;
+        --text-dim: #555570;
+        --accent: #00ccff;
+        --accent-dim: #00aadd;
+        --accent-glow: rgba(0, 204, 255, 0.15);
+        --blue: #4488ff;
+        --purple: #aa66ff;
+        --warning: #ffaa00;
+        --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+        --sans: "Instrument Sans", -apple-system, system-ui, sans-serif;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-size: 16px;
+      }
+      body {
+        background: var(--bg-deep);
+        color: var(--text-primary);
+        font-family: var(--sans);
+        line-height: 1.6;
+        overflow-x: hidden;
+      }
+      code,
+      pre,
+      kbd {
+        font-feature-settings:
+          "liga" 0,
+          "calt" 0;
+      }
 
-/* Noise overlay */
-body::before { content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:9999;
-    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-}
+      /* Noise overlay */
+      body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 9999;
+        background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      }
 
-/* Container */
-.container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+      /* Container */
+      .container {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 2rem;
+      }
 
-/* Top Nav */
-.top-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1rem 0;
-    background: rgba(10,10,15,0.85); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border-bottom: 1px solid var(--border); }
-.top-nav .nav-inner { max-width: 1400px; margin: 0 auto; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; }
-.nav-brand { display: flex; align-items: center; gap: 0.75rem; font-family: var(--mono); font-weight: 600; font-size: 1rem; color: var(--text-primary); text-decoration: none; }
-.nav-brand span { color: var(--accent); }
-.nav-links { display: flex; align-items: center; gap: 2rem; list-style: none; }
-.nav-links a { color: var(--text-secondary); font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: color 0.2s; }
-.nav-links a:hover { color: var(--text-primary); text-decoration: none; }
-.nav-links .gh-link, .nav-links .gh-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 0.2s, background 0.2s; }
-.nav-links .gh-link:hover, .nav-links .gh-btn:hover { border-color: var(--text-dim); background: var(--bg-card); }
+      /* Top Nav */
+      .top-nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        padding: 1rem 0;
+        background: rgba(10, 10, 15, 0.85);
+        backdrop-filter: blur(20px) saturate(1.4);
+        -webkit-backdrop-filter: blur(20px) saturate(1.4);
+        border-bottom: 1px solid var(--border);
+      }
+      .top-nav .nav-inner {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 0 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .nav-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 1rem;
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-brand span {
+        color: var(--accent);
+      }
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+        list-style: none;
+      }
+      .nav-links a {
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .nav-links a:hover {
+        color: var(--text-primary);
+        text-decoration: none;
+      }
+      .nav-links .gh-link,
+      .nav-links .gh-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      .nav-links .gh-link:hover,
+      .nav-links .gh-btn:hover {
+        border-color: var(--text-dim);
+        background: var(--bg-card);
+      }
 
-/* Docs Layout */
-:root { --sidebar-width: 260px; }
-.docs-layout {
-    display: flex;
-    margin-top: 57px;
-    min-height: calc(100vh - 57px);
-}
+      /* Docs Layout */
+      :root {
+        --sidebar-width: 260px;
+      }
+      .docs-layout {
+        display: flex;
+        margin-top: 57px;
+        min-height: calc(100vh - 57px);
+      }
 
-/* Left Sidebar */
-.sidebar {
-    position: fixed;
-    top: 57px;
-    left: 0;
-    width: var(--sidebar-width);
-    height: calc(100vh - 57px);
-    overflow-y: auto;
-    background: var(--bg-surface);
-    border-right: 1px solid var(--border);
-    padding: 1.5rem 0;
-    z-index: 50;
-}
-.sidebar-section { padding: 0 1.25rem; margin-bottom: 1.5rem; }
-.sidebar-section h3 {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-dim);
-    margin-bottom: 0.5rem;
-    padding: 0 0.5rem;
-}
-.sidebar-section a {
-    display: block;
-    padding: 0.35rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s;
-}
-.sidebar-section a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
-.sidebar-section a.active { color: var(--accent); background: var(--accent-glow); }
+      /* Left Sidebar */
+      .sidebar {
+        position: fixed;
+        top: 57px;
+        left: 0;
+        width: var(--sidebar-width);
+        height: calc(100vh - 57px);
+        overflow-y: auto;
+        background: var(--bg-surface);
+        border-right: 1px solid var(--border);
+        padding: 1.5rem 0;
+        z-index: 50;
+      }
+      .sidebar-section {
+        padding: 0 1.25rem;
+        margin-bottom: 1.5rem;
+      }
+      .sidebar-section h3 {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--text-dim);
+        margin-bottom: 0.5rem;
+        padding: 0 0.5rem;
+      }
+      .sidebar-section a {
+        display: block;
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .sidebar-section a:hover {
+        color: var(--text-primary);
+        background: var(--bg-card);
+        text-decoration: none;
+      }
+      .sidebar-section a.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
 
-/* Main Content */
-.docs-content {
-    margin-left: var(--sidebar-width);
-    padding: 3rem 3rem;
-    max-width: calc(100vw - var(--sidebar-width) - 240px);
-    min-width: 0;
-}
-.docs-content h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 1rem; }
-.docs-content h1 .accent { color: var(--accent); }
-.docs-content .lead { font-size: 1.1rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 2rem; }
-.docs-content h2 { font-size: 1.5rem; font-weight: 600; margin-top: 3rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); scroll-margin-top: 80px; }
-.docs-content h3 { font-size: 1.15rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; scroll-margin-top: 80px; }
-.docs-content p { color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem; }
-.docs-content ul, .docs-content ol { color: var(--text-secondary); margin-bottom: 1rem; padding-left: 1.5rem; }
-.docs-content li { margin-bottom: 0.35rem; line-height: 1.6; }
-.docs-content li strong { color: var(--text-primary); }
-.docs-content a { color: var(--accent); text-decoration: none; }
-.docs-content a:hover { text-decoration: underline; }
+      /* Main Content */
+      .docs-content {
+        margin-left: var(--sidebar-width);
+        padding: 3rem 3rem;
+        max-width: calc(100vw - var(--sidebar-width) - 240px);
+        min-width: 0;
+      }
+      .docs-content h1 {
+        font-size: 2.25rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        margin-bottom: 1rem;
+      }
+      .docs-content h1 .accent {
+        color: var(--accent);
+      }
+      .docs-content .lead {
+        font-size: 1.1rem;
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 2rem;
+      }
+      .docs-content h2 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-top: 3rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--border);
+        scroll-margin-top: 80px;
+      }
+      .docs-content h3 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin-top: 2rem;
+        margin-bottom: 0.75rem;
+        scroll-margin-top: 80px;
+      }
+      .docs-content p {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 1rem;
+      }
+      .docs-content ul,
+      .docs-content ol {
+        color: var(--text-secondary);
+        margin-bottom: 1rem;
+        padding-left: 1.5rem;
+      }
+      .docs-content li {
+        margin-bottom: 0.35rem;
+        line-height: 1.6;
+      }
+      .docs-content li strong {
+        color: var(--text-primary);
+      }
+      .docs-content a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .docs-content a:hover {
+        text-decoration: underline;
+      }
 
-/* Page TOC (right sidebar) */
-.page-toc {
-    position: fixed;
-    top: 80px;
-    right: 1rem;
-    width: 200px;
-    max-height: calc(100vh - 100px);
-    overflow-y: auto;
-    font-size: 0.78rem;
-}
-.page-toc-label {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-dim);
-    padding: 0 0.5rem;
-    margin-bottom: 0.75rem;
-}
-.page-toc a {
-    display: block;
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
-    color: var(--text-secondary);
-    font-size: 0.78rem;
-    line-height: 1.4;
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s;
-}
-.page-toc a:hover { color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
-.page-toc a.active { color: var(--accent); background: var(--accent-glow); }
-.page-toc a.toc-h3 { padding-left: 1.5rem; font-size: 0.72rem; color: var(--text-dim); }
-@media (max-width: 1200px) { .page-toc { display: none; } }
+      /* Page TOC (right sidebar) */
+      .page-toc {
+        position: fixed;
+        top: 80px;
+        right: 1rem;
+        width: 200px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+        font-size: 0.78rem;
+      }
+      .page-toc-label {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--text-dim);
+        padding: 0 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      .page-toc a {
+        display: block;
+        padding: 0.3rem 0.5rem;
+        border-radius: 4px;
+        color: var(--text-secondary);
+        font-size: 0.78rem;
+        line-height: 1.4;
+        text-decoration: none;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .page-toc a:hover {
+        color: var(--text-primary);
+        background: var(--bg-card);
+        text-decoration: none;
+      }
+      .page-toc a.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
+      .page-toc a.toc-h3 {
+        padding-left: 1.5rem;
+        font-size: 0.72rem;
+        color: var(--text-dim);
+      }
+      @media (max-width: 1200px) {
+        .page-toc {
+          display: none;
+        }
+      }
 
-/* Sidebar toggle (mobile) */
-.sidebar-toggle {
-    display: none;
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 1.25rem;
-    cursor: pointer;
-    padding: 0.25rem;
-}
+      /* Sidebar toggle (mobile) */
+      .sidebar-toggle {
+        display: none;
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 1.25rem;
+        cursor: pointer;
+        padding: 0.25rem;
+      }
 
-/* Code blocks */
-.code-block { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; margin-bottom: 16px; color: var(--text-primary); white-space: pre; }
-.code-block .comment { color: var(--text-dim); }
-.code-block .key { color: var(--warning); }
-.code-block .value { color: var(--blue); }
-.code-block .cmd { color: var(--accent); }
+      /* Code blocks */
+      .code-block {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px 20px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.7;
+        overflow-x: auto;
+        margin-bottom: 16px;
+        color: var(--text-primary);
+        white-space: pre;
+      }
+      .code-block .comment {
+        color: var(--text-dim);
+      }
+      .code-block .key {
+        color: var(--warning);
+      }
+      .code-block .value {
+        color: var(--blue);
+      }
+      .code-block .cmd {
+        color: var(--accent);
+      }
 
-/* Inline code */
-.docs-content code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: var(--mono); font-size: 0.85em; }
+      /* Inline code */
+      .docs-content code {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.15rem 0.4rem;
+        font-family: var(--mono);
+        font-size: 0.85em;
+      }
 
-/* Env table (reused for search params) */
-.env-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
-.env-table th { padding: 12px 16px; text-align: left; border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 500; }
-.env-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
-.env-table td code { font-size: 12px; }
+      /* Env table (reused for search params) */
+      .env-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+        margin-bottom: 24px;
+      }
+      .env-table th {
+        padding: 12px 16px;
+        text-align: left;
+        border-bottom: 2px solid var(--border);
+        color: var(--text-secondary);
+        font-weight: 500;
+      }
+      .env-table td {
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-secondary);
+      }
+      .env-table td code {
+        font-size: 12px;
+      }
 
-/* Footer */
-.docs-footer {
-    margin-left: var(--sidebar-width);
-    padding: 3rem 4rem;
-    max-width: 860px;
-    border-top: 1px solid var(--border);
-}
-.docs-footer .footer-inner { display: flex; justify-content: space-between; align-items: center; }
-.footer-left { font-family: var(--mono); font-size: 0.8rem; color: var(--text-dim); }
-.footer-left .prompt { color: var(--accent); }
-.footer-links { display: flex; gap: 2rem; list-style: none; }
-.footer-links a { color: var(--text-dim); font-size: 0.85rem; text-decoration: none; transition: color 0.2s; }
-.footer-links a:hover { color: var(--text-primary); text-decoration: none; }
+      /* Footer */
+      .docs-footer {
+        margin-left: var(--sidebar-width);
+        padding: 3rem 4rem;
+        max-width: 860px;
+        border-top: 1px solid var(--border);
+      }
+      .docs-footer .footer-inner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .footer-left {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        color: var(--text-dim);
+      }
+      .footer-left .prompt {
+        color: var(--accent);
+      }
+      .footer-links {
+        display: flex;
+        gap: 2rem;
+        list-style: none;
+      }
+      .footer-links a {
+        color: var(--text-dim);
+        font-size: 0.85rem;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .footer-links a:hover {
+        color: var(--text-primary);
+        text-decoration: none;
+      }
 
-/* Responsive: Tablet */
-@media (max-width: 768px) {
-    .docs-footer { margin-left: 0; padding: 1.5rem; }
-    .env-table { font-size: 12px; }
-    .env-table th, .env-table td { padding: 8px 10px; }
-    .nav-links { gap: 1rem; }
-    .article h2 { font-size: 22px; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
-}
+      /* Responsive: Tablet */
+      @media (max-width: 768px) {
+        .docs-footer {
+          margin-left: 0;
+          padding: 1.5rem;
+        }
+        .env-table {
+          font-size: 12px;
+        }
+        .env-table th,
+        .env-table td {
+          padding: 8px 10px;
+        }
+        .nav-links {
+          gap: 1rem;
+        }
+        .article h2 {
+          font-size: 22px;
+        }
+        .code-block {
+          font-size: 11px;
+          padding: 12px 14px;
+        }
+      }
 
-/* Responsive */
-@media (max-width: 1024px) {
-    .docs-content { padding: 2rem; margin-left: var(--sidebar-width); margin-right: 0; }
-}
-@media (max-width: 768px) {
-    .sidebar-toggle { display: block; }
-    .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
-    .sidebar.open { transform: translateX(0); }
-    .docs-content { margin-left: 0; padding: 1.5rem; }
-    .nav-links a:not(.gh-link) { display: none; }
-}
-@media (max-width: 480px) {
-    .docs-content h1 { font-size: 1.75rem; }
-    .docs-content .lead { font-size: 0.95rem; }
-    .code-block { font-size: 11px; padding: 12px 14px; }
-}
-</style>
-<script src="/pixels.js" defer></script>
-</head>
-<body>
+      /* Responsive */
+      @media (max-width: 1024px) {
+        .docs-content {
+          padding: 2rem;
+          margin-left: var(--sidebar-width);
+          margin-right: 0;
+        }
+      }
+      @media (max-width: 768px) {
+        .sidebar-toggle {
+          display: block;
+        }
+        .sidebar {
+          transform: translateX(-100%);
+          transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .sidebar.open {
+          transform: translateX(0);
+        }
+        .docs-content {
+          margin-left: 0;
+          padding: 1.5rem;
+        }
+        .nav-links a:not(.gh-link) {
+          display: none;
+        }
+      }
+      @media (max-width: 480px) {
+        .docs-content h1 {
+          font-size: 1.75rem;
+        }
+        .docs-content .lead {
+          font-size: 0.95rem;
+        }
+        .code-block {
+          font-size: 11px;
+          padding: 12px 14px;
+        }
+      }
+    </style>
+    <script src="/pixels.js" defer></script>
+  </head>
+  <body>
+    <nav class="top-nav">
+      <div class="nav-inner">
+        <div style="display: flex; align-items: center; gap: 1rem">
+          <button
+            class="sidebar-toggle"
+            onclick="
+              document.querySelector('.sidebar').classList.toggle('open')
+            "
+            aria-label="Toggle sidebar"
+          >
+            &#9776;
+          </button>
+          <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
+        </div>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
+          <li>
+            <a
+              href="https://github.com/CopilotKit/pathfinder"
+              class="gh-btn"
+              target="_blank"
+              ><svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+              >
+                <path
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+                />
+              </svg>
+              GitHub</a
+            >
+          </li>
+        </ul>
+      </div>
+    </nav>
 
-<nav class="top-nav">
-  <div class="nav-inner">
-    <div style="display: flex; align-items: center; gap: 1rem">
-      <button class="sidebar-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')" aria-label="Toggle sidebar">&#9776;</button>
-      <a href="/" class="nav-brand"><span>$</span> pathfinder</a>
-    </div>
-    <ul class="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="/usage" style="color: var(--accent)">Docs</a></li>
-      <li><a href="https://github.com/CopilotKit/pathfinder" class="gh-btn" target="_blank"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a></li>
-    </ul>
-  </div>
-</nav>
+    <div class="docs-layout">
+      <aside class="sidebar" id="sidebar"></aside>
 
-<div class="docs-layout">
-  <aside class="sidebar" id="sidebar"></aside>
+      <main class="docs-content">
+        <h1>Search <span class="accent">Features</span></h1>
+        <p class="lead">
+          Semantic search, filesystem exploration, and the commands that bridge
+          them.
+        </p>
 
-  <main class="docs-content">
-    <h1>Search <span class="accent">Features</span></h1>
-    <p class="lead">Semantic search, filesystem exploration, and the commands that bridge them.</p>
+        <h2>How Semantic Search Works</h2>
 
-    <h2>How Semantic Search Works</h2>
+        <p>
+          Pathfinder uses a three-stage pipeline to answer conceptual questions
+          about your docs:
+        </p>
 
-    <p>Pathfinder uses a three-stage pipeline to answer conceptual questions about your docs:</p>
+        <ol>
+          <li>
+            <strong>Indexing</strong> — Your docs are chunked (split into
+            segments based on headings, functions, or token counts) and each
+            chunk is converted into a high-dimensional vector using OpenAI's
+            embedding model.
+          </li>
+          <li>
+            <strong>Storage</strong> — Vectors are stored in PostgreSQL using
+            the pgvector extension, which provides efficient approximate
+            nearest-neighbor search.
+          </li>
+          <li>
+            <strong>Retrieval</strong> — When an agent searches, the query is
+            embedded using the same model, then compared against stored vectors
+            using cosine similarity. The most similar chunks are returned,
+            ranked by score (0-1).
+          </li>
+        </ol>
 
-    <ol>
-        <li><strong>Indexing</strong> — Your docs are chunked (split into segments based on headings, functions, or token counts) and each chunk is converted into a high-dimensional vector using OpenAI's embedding model.</li>
-        <li><strong>Storage</strong> — Vectors are stored in PostgreSQL using the pgvector extension, which provides efficient approximate nearest-neighbor search.</li>
-        <li><strong>Retrieval</strong> — When an agent searches, the query is embedded using the same model, then compared against stored vectors using cosine similarity. The most similar chunks are returned, ranked by score (0-1).</li>
-    </ol>
+        <p>
+          This means agents can ask "how do I handle authentication?" and find
+          the relevant docs even if they never contain the word "authentication"
+          — because the meaning is captured in the vector representation.
+        </p>
 
-    <p>This means agents can ask "how do I handle authentication?" and find the relevant docs even if they never contain the word "authentication" — because the meaning is captured in the vector representation.</p>
+        <h2>qmd</h2>
 
-    <h2>qmd</h2>
+        <p>
+          When <code>grep_strategy</code> is set to <code>vector</code> or
+          <code>hybrid</code> in your bash tool config, Pathfinder exposes a
+          <code>qmd</code> command inside the bash sandbox. This is a semantic
+          search command that agents can use alongside regular shell tools.
+        </p>
 
-    <p>When <code>grep_strategy</code> is set to <code>vector</code> or <code>hybrid</code> in your bash tool config, Pathfinder exposes a <code>qmd</code> command inside the bash sandbox. This is a semantic search command that agents can use alongside regular shell tools.</p>
+        <div class="code-block">
+          <span class="cmd">$</span> qmd "how do I handle errors"
+          /docs/guides/error-handling.mdx (0.94) /docs/reference/hooks.mdx
+          (0.87) /docs/guides/streaming.mdx (0.81)
+        </div>
 
-    <div class="code-block"><span class="cmd">$</span> qmd "how do I handle errors"
-/docs/guides/error-handling.mdx (0.94)
-/docs/reference/hooks.mdx (0.87)
-/docs/guides/streaming.mdx (0.81)</div>
+        <p>
+          <code>qmd</code> returns file paths ranked by semantic similarity,
+          with scores in parentheses. Higher scores mean stronger matches.
+        </p>
 
-    <p><code>qmd</code> returns file paths ranked by semantic similarity, with scores in parentheses. Higher scores mean stronger matches.</p>
+        <h3>qmd vs grep</h3>
 
-    <h3>qmd vs grep</h3>
+        <p>
+          Use <code>grep</code> when you know the exact text you're looking for
+          — function names, config keys, error messages. Use
+          <code>qmd</code> when you need to find docs by concept or meaning.
+        </p>
 
-    <p>Use <code>grep</code> when you know the exact text you're looking for — function names, config keys, error messages. Use <code>qmd</code> when you need to find docs by concept or meaning.</p>
+        <div class="code-block">
+          <span class="comment"># Find exact string matches</span>
+          <span class="cmd">$</span> grep -rl "useAction" /docs
+          /docs/hooks/useAction.mdx /docs/guides/actions.mdx
 
-    <div class="code-block"><span class="comment"># Find exact string matches</span>
-<span class="cmd">$</span> grep -rl "useAction" /docs
-/docs/hooks/useAction.mdx
-/docs/guides/actions.mdx
+          <span class="comment"># Find conceptually related docs</span>
+          <span class="cmd">$</span> qmd "how to trigger server-side actions
+          from the frontend" /docs/hooks/useAction.mdx (0.92)
+          /docs/guides/actions.mdx (0.88) /docs/guides/server-actions.mdx (0.79)
+        </div>
 
-<span class="comment"># Find conceptually related docs</span>
-<span class="cmd">$</span> qmd "how to trigger server-side actions from the frontend"
-/docs/hooks/useAction.mdx (0.92)
-/docs/guides/actions.mdx (0.88)
-/docs/guides/server-actions.mdx (0.79)</div>
+        <p>
+          Regular <code>grep</code> passes through to real bash unchanged — it
+          is never intercepted or replaced.
+        </p>
 
-    <p>Regular <code>grep</code> passes through to real bash unchanged — it is never intercepted or replaced.</p>
+        <h2>Related Files</h2>
 
-    <h2>Related Files</h2>
+        <p>
+          The <code>related</code> command finds semantically similar files
+          across all indexed sources. Give it a file path, and it returns the
+          closest matches by content similarity.
+        </p>
 
-    <p>The <code>related</code> command finds semantically similar files across all indexed sources. Give it a file path, and it returns the closest matches by content similarity.</p>
+        <div class="code-block">
+          <span class="cmd">$</span> related /docs/guides/auth.mdx
+          /docs/reference/auth-config.mdx (0.91) /docs/guides/middleware.mdx
+          (0.84) /docs/guides/sessions.mdx (0.78) /docs/reference/jwt.mdx (0.72)
+        </div>
 
-    <div class="code-block"><span class="cmd">$</span> related /docs/guides/auth.mdx
-/docs/reference/auth-config.mdx (0.91)
-/docs/guides/middleware.mdx (0.84)
-/docs/guides/sessions.mdx (0.78)
-/docs/reference/jwt.mdx (0.72)</div>
+        <p>
+          This is useful for discovering related documentation that agents might
+          not find through directory browsing alone — especially across
+          different source repositories.
+        </p>
 
-    <p>This is useful for discovering related documentation that agents might not find through directory browsing alone — especially across different source repositories.</p>
+        <h2>Grep-Miss Suggestions</h2>
 
-    <h2>Grep-Miss Suggestions</h2>
+        <p>
+          When an agent runs <code>grep</code> and gets no results, Pathfinder
+          automatically appends a hint suggesting <code>qmd</code> as an
+          alternative. This nudges agents toward semantic search when
+          exact-match grep fails, without forcing a workflow change.
+        </p>
 
-    <p>When an agent runs <code>grep</code> and gets no results, Pathfinder automatically appends a hint suggesting <code>qmd</code> as an alternative. This nudges agents toward semantic search when exact-match grep fails, without forcing a workflow change.</p>
+        <div class="code-block">
+          <span class="cmd">$</span> grep -rl "authentication flow" /docs
+          <span class="comment"># (no results)</span>
+          <span class="comment"
+            ># Hint: No matches found. Try `qmd "authentication flow"` for
+            semantic search.</span
+          >
+        </div>
 
-    <div class="code-block"><span class="cmd">$</span> grep -rl "authentication flow" /docs
-<span class="comment"># (no results)</span>
-<span class="comment"># Hint: No matches found. Try `qmd "authentication flow"` for semantic search.</span></div>
+        <p>
+          The hint only appears when grep returns zero results and a search tool
+          is configured for the same source. It does not appear when grep finds
+          matches.
+        </p>
 
-    <p>The hint only appears when grep returns zero results and a search tool is configured for the same source. It does not appear when grep finds matches.</p>
+        <h2>Search Tool Parameters</h2>
 
-    <h2>Search Tool Parameters</h2>
+        <p>
+          When agents call the search tool directly (not via <code>qmd</code>),
+          these parameters are available:
+        </p>
 
-    <p>When agents call the search tool directly (not via <code>qmd</code>), these parameters are available:</p>
-
-    <table class="env-table">
-        <thead>
+        <table class="env-table">
+          <thead>
             <tr>
-                <th>Parameter</th>
-                <th>Type</th>
-                <th>Default</th>
-                <th>Description</th>
+              <th>Parameter</th>
+              <th>Type</th>
+              <th>Default</th>
+              <th>Description</th>
             </tr>
-        </thead>
-        <tbody>
-            <tr><td><code>query</code></td><td>string</td><td>-</td><td>The search query (required)</td></tr>
-            <tr><td><code>limit</code></td><td>number</td><td>Config default</td><td>Max results to return (capped at <code>max_limit</code>)</td></tr>
-            <tr><td><code>min_score</code></td><td>number</td><td>Config default</td><td>Minimum cosine similarity (0-1). Results below this threshold are filtered out.</td></tr>
-            <tr><td><code>version</code></td><td>string</td><td>-</td><td>Filter results to a specific version tag (matches the <code>version</code> field on sources)</td></tr>
-        </tbody>
-    </table>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>query</code></td>
+              <td>string</td>
+              <td>-</td>
+              <td>The search query (required)</td>
+            </tr>
+            <tr>
+              <td><code>limit</code></td>
+              <td>number</td>
+              <td>Config default</td>
+              <td>Max results to return (capped at <code>max_limit</code>)</td>
+            </tr>
+            <tr>
+              <td><code>min_score</code></td>
+              <td>number</td>
+              <td>Config default</td>
+              <td>
+                Minimum cosine similarity (0-1). Results below this threshold
+                are filtered out.
+              </td>
+            </tr>
+            <tr>
+              <td><code>version</code></td>
+              <td>string</td>
+              <td>-</td>
+              <td>
+                Filter results to a specific version tag (matches the
+                <code>version</code> field on sources)
+              </td>
+            </tr>
+          </tbody>
+        </table>
 
-    <p><strong>Note:</strong> The output format (<code>docs</code>, <code>code</code>, or <code>raw</code>) is configured at the tool level via <code>result_format</code> in your <a href="/config">pathfinder.yaml</a>, not as a per-query parameter.</p>
+        <p>
+          <strong>Note:</strong> The output format (<code>docs</code>,
+          <code>code</code>, or <code>raw</code>) is configured at the tool
+          level via <code>result_format</code> in your
+          <a href="/config">pathfinder.yaml</a>, not as a per-query parameter.
+        </p>
 
-    <h2>Configuring Search</h2>
+        <h2>Configuring Search</h2>
 
-    <p>Search requires three pieces of configuration in your <code>pathfinder.yaml</code>: a source, a search tool, and embedding settings. See the <a href="/config">full config reference</a> for all options.</p>
+        <p>
+          Search requires three pieces of configuration in your
+          <code>pathfinder.yaml</code>: a source, a search tool, and embedding
+          settings. See the <a href="/config">full config reference</a> for all
+          options.
+        </p>
 
-    <div class="code-block"><span class="key">sources:</span>
-  - <span class="key">name:</span> <span class="value">docs</span>
-    <span class="key">type:</span> <span class="value">markdown</span>
-    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
-    <span class="key">path:</span> <span class="value">docs/</span>
-    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>, <span class="value">"**/*.md"</span>]
-    <span class="key">chunk:</span>
-      <span class="key">target_tokens:</span> <span class="value">600</span>
-      <span class="key">overlap_tokens:</span> <span class="value">50</span>
+        <div class="code-block">
+          <span class="key">sources:</span> - <span class="key">name:</span>
+          <span class="value">docs</span> <span class="key">type:</span>
+          <span class="value">markdown</span> <span class="key">repo:</span>
+          <span class="value">https://github.com/org/repo.git</span>
+          <span class="key">path:</span> <span class="value">docs/</span>
+          <span class="key">file_patterns:</span> [<span class="value"
+            >"**/*.mdx"</span
+          >, <span class="value">"**/*.md"</span>]
+          <span class="key">chunk:</span>
+          <span class="key">target_tokens:</span> <span class="value">600</span>
+          <span class="key">overlap_tokens:</span> <span class="value">50</span>
 
-<span class="key">tools:</span>
-  - <span class="key">name:</span> <span class="value">search-docs</span>
-    <span class="key">type:</span> <span class="value">search</span>
-    <span class="key">description:</span> <span class="value">Search the documentation</span>
-    <span class="key">source:</span> <span class="value">docs</span>
-    <span class="key">default_limit:</span> <span class="value">5</span>
-    <span class="key">max_limit:</span> <span class="value">20</span>
-    <span class="key">result_format:</span> <span class="value">docs</span>
-    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Filter out low-quality matches</span>
+          <span class="key">tools:</span>
+          - <span class="key">name:</span>
+          <span class="value">search-docs</span> <span class="key">type:</span>
+          <span class="value">search</span>
+          <span class="key">description:</span>
+          <span class="value">Search the documentation</span>
+          <span class="key">source:</span> <span class="value">docs</span>
+          <span class="key">default_limit:</span> <span class="value">5</span>
+          <span class="key">max_limit:</span> <span class="value">20</span>
+          <span class="key">result_format:</span>
+          <span class="value">docs</span> <span class="key">min_score:</span>
+          <span class="value">0.3</span>
+          <span class="comment"># Filter out low-quality matches</span>
 
-<span class="key">embedding:</span>
-  <span class="key">provider:</span> <span class="value">openai</span>
-  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
-  <span class="key">dimensions:</span> <span class="value">1536</span>
+          <span class="key">embedding:</span>
+          <span class="key">provider:</span> <span class="value">openai</span>
+          <span class="key">model:</span>
+          <span class="value">text-embedding-3-small</span>
+          <span class="key">dimensions:</span> <span class="value">1536</span>
 
-<span class="key">indexing:</span>
-  <span class="key">auto_reindex:</span> <span class="value">true</span>
-  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
-  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
+          <span class="key">indexing:</span>
+          <span class="key">auto_reindex:</span> <span class="value">true</span>
+          <span class="key">reindex_hour_utc:</span>
+          <span class="value">3</span>
+          <span class="key">stale_threshold_hours:</span>
+          <span class="value">24</span>
+        </div>
 
-    <p>The <code>embedding</code> and <code>indexing</code> blocks are required whenever any search tool is configured. The first server boot after adding search triggers an initial indexing pass. Subsequent updates happen on the schedule defined by <code>indexing</code> or when triggered by <a href="/config#webhook">webhooks</a>.</p>
+        <p>
+          The <code>embedding</code> and <code>indexing</code> blocks are
+          required whenever any search tool is configured. The first server boot
+          after adding search triggers an initial indexing pass. Subsequent
+          updates happen on the schedule defined by <code>indexing</code> or
+          when triggered by <a href="/config#webhook">webhooks</a>.
+        </p>
+      </main>
+      <aside class="page-toc" id="page-toc"></aside>
+    </div>
 
-  </main>
-  <aside class="page-toc" id="page-toc"></aside>
-</div>
-
-<footer class="docs-footer">
-  <div class="footer-inner">
-    <div class="footer-left"><span class="prompt">$</span> pathfinder &middot; <a href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Elastic License 2.0</a></div>
-    <ul class="footer-links">
-      <li><a href="https://github.com/CopilotKit/pathfinder" target="_blank">GitHub</a></li>
-      <li><a href="https://www.npmjs.com/package/@copilotkit/pathfinder" target="_blank">npm</a></li>
-    </ul>
-  </div>
-</footer>
-<script src="/sidebar.js"></script>
-</body>
+    <footer class="docs-footer">
+      <div class="footer-inner">
+        <div class="footer-left">
+          <span class="prompt">$</span> pathfinder &middot;
+          <a
+            href="https://github.com/CopilotKit/pathfinder/blob/main/LICENSE"
+            target="_blank"
+            rel="noopener"
+            style="color: inherit; text-decoration: underline"
+            >Elastic License 2.0</a
+          >
+        </div>
+        <ul class="footer-links">
+          <li>
+            <a href="https://github.com/CopilotKit/pathfinder" target="_blank"
+              >GitHub</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.npmjs.com/package/@copilotkit/pathfinder"
+              target="_blank"
+              >npm</a
+            >
+          </li>
+        </ul>
+      </div>
+    </footer>
+    <script src="/sidebar.js"></script>
+  </body>
 </html>

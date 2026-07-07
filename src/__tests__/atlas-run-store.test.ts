@@ -253,6 +253,36 @@ describe("RunStore", () => {
       );
     });
 
+    it("round-trips the run-completion marker (completedAt + upsertedCount)", () => {
+      const completedAt = "2026-06-08T00:00:00.000Z";
+      const written = store.writeManifest(runId, {
+        fragmentCount: 3,
+        ruleSet,
+        completedAt,
+        upsertedCount: 2,
+      });
+      expect(written.completedAt).toBe(completedAt);
+      expect(written.upsertedCount).toBe(2);
+
+      const read = store.readManifest(runId);
+      expect(read!.completedAt).toBe(completedAt);
+      expect(read!.upsertedCount).toBe(2);
+      expect(read).toEqual(written);
+    });
+
+    it("omits the completion marker fields when not provided (incomplete run)", () => {
+      const written = store.writeManifest(runId, {
+        fragmentCount: 1,
+        ruleSet: [],
+      });
+      expect(written.completedAt).toBeUndefined();
+      expect(written.upsertedCount).toBeUndefined();
+
+      const read = store.readManifest(runId);
+      expect(read!.completedAt).toBeUndefined();
+      expect(read!.upsertedCount).toBeUndefined();
+    });
+
     it("returns undefined when no manifest has been written (first run)", () => {
       expect(store.readManifest("first-ever-run")).toBeUndefined();
     });

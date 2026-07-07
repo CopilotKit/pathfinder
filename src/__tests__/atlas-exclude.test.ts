@@ -96,6 +96,15 @@ describe("applyExclusions — flag rules (pure, no LLM)", () => {
         "evaluateEnglishExclusionRule must not be called for flag rules",
       );
     },
+    judgeDistillation: () => {
+      throw new Error("judgeDistillation must not be called by flag rules");
+    },
+    embed: () => {
+      throw new Error("embed must not be called by flag rules");
+    },
+    distillDelta: () => {
+      throw new Error("distillDelta must not be called by flag rules");
+    },
   };
 
   it("drops a candidate whose classification[dimension] === equals", async () => {
@@ -280,6 +289,13 @@ const fixtures: Fixture[] = [
   },
 ];
 
+// The credential english rule as it ships in DEFAULT_EXCLUSION_RULES. Pulled from
+// the default set so the test tracks the real rule text the engine sees.
+const CRED_RULE = DEFAULT_EXCLUSION_RULES.find(
+  (r): r is Extract<ExclusionRule, { kind: "english" }> =>
+    r.kind === "english" && /credential|api key|token|password/i.test(r.text),
+)!;
+
 describe("applyExclusions — english rules (aimock)", () => {
   const mock = new LLMock({ port: 0, logLevel: "silent" });
   let llm: OpenAIDistiller;
@@ -413,5 +429,171 @@ describe("applyExclusions — english rules (aimock)", () => {
     expect(kept).toHaveLength(0);
     expect(excluded).toHaveLength(1);
     expect(excluded[0]!.rule.kind).toBe("flag");
+  });
+});
+
+// ── Deterministic credential pre-filter (D.2, fail-restrictive) ─────────────────
+//
+// The conservative LLM prompt biases the credential english rule toward
+// UNDER-exclusion — a leak risk. The fix has two layers, both exercised here
+// against the REAL engine + a real aimock-backed distiller:
+//
+//   1. A deterministic regex pre-filter drops a candidate whose text carries a
+//      recognizable credential (sk-, ghp_, AKIA, PEM header) BEFORE the LLM is
+//      consulted — so a credential is excluded even if the model under-flags.
+//   2. Fail-CLOSED is preserved: an LLM error on an ambiguous (non-regex)
+//      credential candidate must ABORT, never silently approve.
+//
+// The catch-all KEEP fixture above models the CONSERVATIVE LLM: for any candidate
+// it does not affirmatively recognize, it returns excluded=false. That is exactly
+// the under-flagging the pre-filter must defeat.
+
+describe("applyExclusions — deterministic credential pre-filter (D.2)", () => {
+  const mock = new LLMock({ port: 0, logLevel: "silent" });
+  let llm: OpenAIDistiller;
+
+  beforeAll(async () => {
+    for (const f of fixtures) mock.addFixture(f);
+    await mock.start();
+    llm = new OpenAIDistiller({
+      baseURL: `${mock.url}/v1`,
+      apiKey: "mock",
+      now: () => new Date("2026-06-08T00:00:00.000Z"),
+    });
+  });
+
+  afterAll(async () => {
+    await mock.stop();
+  });
+
+  beforeEach(() => {
+    mock.resetMatchCounts();
+  });
+
+  it("drops a ghp_ token the conservative LLM would keep — NO LLM consulted", async () => {
+    // This candidate carries a GitHub PAT but no ATHENA_SENTINEL, so the LLM
+    // (conservative catch-all) would return excluded=false and LEAK it. The regex
+    // pre-filter must drop it deterministically, without an LLM call.
+    const leak = makeCandidate({
+      title: "How we rotated the CI token",
+      content:
+        "We regenerated the deploy PAT to ghp_ABCDEFghijkl0123456789MNOPqrstuvWX01 and updated CI.",
+      subsystem: "ci",
+      canonical_key: "agent-doc:ci:leak",
+    });
+
+    const { kept, excluded } = await applyExclusions([leak], [CRED_RULE], llm);
+
+    expect(kept).toHaveLength(0);
+    expect(excluded).toHaveLength(1);
+    expect(excluded[0]!.candidate.canonical_key).toBe(leak.canonical_key);
+    expect(excluded[0]!.rule).toEqual(CRED_RULE);
+  });
+
+  it("drops sk-, AKIA, and PEM-header credentials the conservative LLM would keep", async () => {
+    const openaiKey = makeCandidate({
+      title: "Local dev setup",
+      content:
+        "Export OPENAI_API_KEY=sk-ABCDEFGHIJKLMNOPQRSTUVWXabcdefghij0123456789AB before running.",
+      canonical_key: "agent-doc:dev:openai",
+    });
+    const awsKey = makeCandidate({
+      title: "S3 uploader notes",
+      content: "Set AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE in the environment.",
+      canonical_key: "agent-doc:dev:aws",
+    });
+    const pem = makeCandidate({
+      title: "Signing key handoff",
+      content:
+        "The key is:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----",
+      canonical_key: "agent-doc:dev:pem",
+    });
+
+    const { kept, excluded } = await applyExclusions(
+      [openaiKey, awsKey, pem],
+      [CRED_RULE],
+      llm,
+    );
+
+    expect(kept).toHaveLength(0);
+    expect(excluded.map((e) => e.candidate.canonical_key).sort()).toEqual(
+      [openaiKey.canonical_key, awsKey.canonical_key, pem.canonical_key].sort(),
+    );
+    for (const e of excluded) expect(e.rule).toEqual(CRED_RULE);
+  });
+
+  it("does NOT pre-filter a clean candidate — falls through to the LLM (kept)", async () => {
+    // No credential pattern → the pre-filter abstains, the conservative LLM
+    // catch-all returns excluded=false, candidate is kept.
+    const clean = makeCandidate({
+      title: "How the retry backoff works",
+      content: "We use exponential backoff with jitter capped at 30s.",
+      canonical_key: "agent-doc:core:backoff",
+    });
+
+    const { kept, excluded } = await applyExclusions([clean], [CRED_RULE], llm);
+
+    expect(kept.map((c) => c.canonical_key)).toEqual([clean.canonical_key]);
+    expect(excluded).toHaveLength(0);
+  });
+
+  it("does NOT pre-filter a NON-credential english rule (only cred rules pre-filter)", async () => {
+    // A ghp_ token in a candidate must NOT be dropped by the pre-filter when the
+    // active rule is unrelated to credentials (e.g. the Athena GTM rule). The
+    // pre-filter is scoped to credential-oriented rules only.
+    const hasToken = makeCandidate({
+      title: "Unrelated note that happens to mention a token",
+      content:
+        "Old rotated value was ghp_ABCDEFghijkl0123456789MNOPqrstuvWX01.",
+      canonical_key: "agent-doc:core:tokenmention",
+    });
+
+    const rule: ExclusionRule = { kind: "english", text: ATHENA_RULE };
+    const { kept, excluded } = await applyExclusions([hasToken], [rule], llm);
+
+    // Falls through to the conservative LLM (no Athena sentinel) → kept.
+    expect(kept.map((c) => c.canonical_key)).toEqual([hasToken.canonical_key]);
+    expect(excluded).toHaveLength(0);
+  });
+});
+
+// ── Fail-CLOSED preservation (SECURITY) ─────────────────────────────────────────
+//
+// An LLM error on an ambiguous credential candidate (no regex hit) must ABORT the
+// exclusion pass — never silently approve. We point the distiller at a dead
+// endpoint so the real client throws, and assert applyExclusions rejects.
+
+describe("applyExclusions — fail-CLOSED on LLM error (SECURITY)", () => {
+  it("aborts (throws) when the LLM errors on an ambiguous cred candidate", async () => {
+    // A distiller whose LLM call rejects, mirroring a live API/transport error.
+    const failingLlm = {
+      distillEpisodicWindow: () => {
+        throw new Error("must not be called");
+      },
+      evaluateEnglishExclusionRule: async () => {
+        throw new Error("[atlas/llm] simulated LLM transport failure");
+      },
+      judgeDistillation: () => {
+        throw new Error("must not be called");
+      },
+      embed: () => {
+        throw new Error("must not be called");
+      },
+      distillDelta: () => {
+        throw new Error("must not be called");
+      },
+    };
+
+    // Ambiguous: talks about credentials in prose but carries NO regex-detectable
+    // token, so the pre-filter abstains and the LLM path is exercised.
+    const ambiguous = makeCandidate({
+      title: "Where our service credentials live",
+      content: "The credentials are stored in the vault, not in this doc.",
+      canonical_key: "agent-doc:sec:ambiguous",
+    });
+
+    await expect(
+      applyExclusions([ambiguous], [CRED_RULE], failingLlm),
+    ).rejects.toThrow(/simulated LLM transport failure/);
   });
 });

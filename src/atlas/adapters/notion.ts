@@ -27,10 +27,14 @@
 //
 // `provenance.url` is the Notion page URL; cited PR/issue references in the
 // decision body are lifted into `linked_issue` evidence, and the page itself is
-// recorded as `thread` evidence.
+// recorded as `thread` evidence. Concrete repo-relative paths and code symbols
+// a decision cites are lifted into `validationTargets` so the validation gate
+// (S14) can source-verify the claim on origin/main; a decision that cites
+// nothing keeps an empty target list and stays human-gated (prose-aware).
 
 import type { AdapterContext, LeafAdapter } from "./types.js";
 import { scanSensitivity } from "./sensitivity-scan.js";
+import { extractValidationTargets } from "./validation-targets.js";
 import { mostRestrictiveSensitivity } from "../types.js";
 import type {
   CandidateFragment,
@@ -302,13 +306,24 @@ function buildFragment(
     body: `${unit.title} (decision: ${title})`,
   };
 
-  // Notion text is a primary source but NOT source-verified: this adapter
-  // ships NO validationTargets (always [], below), so the validation gate
-  // (S14) has nothing to grep and can never promote a notion fragment — it is
-  // non-approvable-as-behavior BY DESIGN until a human (or a later slot that
-  // emits cited-file targets from page content — a spec follow-up, not
-  // patched here) adds targets. Confidence is high for a ratified decision
-  // page.
+  // Cited symbols/paths → validationTargets, so a decision that names a
+  // concrete code entity gives the validation gate (S14) something to grep on
+  // origin/main → source-verified → promotable. Scanned over the section
+  // heading (which BECOMES the persisted title, and often carries the "in
+  // src/…" citation) plus the body. A decision that cites NOTHING keeps an
+  // empty list: target-less prose stays unverified and falls to the human
+  // review page (the strict + prose-aware policy — correct, not a regression).
+  // Sorted so fragment output is deterministic (mirrors extractCitedReferences).
+  // The shared lift returns first-seen order; notion pins a sorted list.
+  const validationTargets = extractValidationTargets(
+    `${section.heading}\n${section.body}`,
+  ).sort();
+
+  // Notion text is a primary source; `validation_status` stays `unverified`
+  // here regardless of targets — the validation gate (S14), not this adapter,
+  // is what promotes a fragment once its targets source-verify. A target-less
+  // fragment simply has nothing for the gate to grep and remains human-gated.
+  // Confidence is high for a ratified decision page.
   const validation_status: ValidationStatus = "unverified";
   const provenance_class: ProvenanceClass = "primary";
   const confidence: Confidence = "high";
@@ -337,7 +352,7 @@ function buildFragment(
     },
     evidence: [threadEvidence, ...citedEvidence],
     needsReview: false,
-    validationTargets: [],
+    validationTargets,
   };
 }
 

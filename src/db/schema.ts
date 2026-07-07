@@ -173,6 +173,10 @@ CREATE TABLE IF NOT EXISTS atlas_seed_entries (
     rejected_by     TEXT,
     rejected_at     TIMESTAMPTZ,
     rejection_reason TEXT,
+    -- C.1 (S10): derived approvability audit snapshot. Nullable; the ADD COLUMN
+    -- + per-row backfill below carries legacy installs. Audit-only — runtime
+    -- gates re-derive and never read this back.
+    approvable      BOOLEAN,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT atlas_seed_entries_canonical_key_uniq UNIQUE (canonical_key),
@@ -182,6 +186,38 @@ CREATE TABLE IF NOT EXISTS atlas_seed_entries (
 CREATE INDEX IF NOT EXISTS idx_atlas_seed_entries_status ON atlas_seed_entries (status);
 CREATE INDEX IF NOT EXISTS idx_atlas_seed_entries_source_name ON atlas_seed_entries (source_name);
 CREATE INDEX IF NOT EXISTS idx_atlas_seed_entries_repo_ref_subsystem ON atlas_seed_entries (repo_url, ref, subsystem);
+
+-- C.1 approvable audit snapshot (S10). Additive, nullable column recording the
+-- approvability derived by the harvest at upsert time. It is an AUDIT-ONLY
+-- snapshot: the three runtime gate sites (canonicalize, validate, artifact sync)
+-- keep DERIVING approvability from provenance.classification independently and
+-- never read this column back. Nullable so a fresh insert that supplies no value
+-- reads back NULL rather than being silently blessed true.
+--
+-- The backfill computes approvable PER ROW under the SAME §7 gate rule the
+-- runtime sites use — it is deliberately NOT a blanket DEFAULT true, which
+-- would wrongly bless an unverified behavior/architecture row. The §7 rule:
+-- a row is approvable UNLESS its knowledge_type is a gated behavior/architecture
+-- type (every KnowledgeType EXCEPT the exempt process/etiquette set
+-- {process, operational, org-culture}) AND its validation_status is 'unverified'.
+-- The gated set is expressed here as the enum-complement of the exempt set
+-- (mirroring BEHAVIOR_KNOWLEDGE_TYPES in src/atlas/types.ts), so a row whose
+-- type is absent/unknown is treated as gated (the safe, guilty-until-validated
+-- direction). classification lives in provenance->'classification'; a missing
+-- validation_status is NOT 'unverified' by this rule, so such a row backfills to
+-- approvable=true only when its type is exempt or it is not unverified.
+ALTER TABLE atlas_seed_entries ADD COLUMN IF NOT EXISTS approvable BOOLEAN;
+
+-- Per-row backfill for installs whose rows predate the column (approvable IS
+-- NULL). The IS NULL guard keeps the migration idempotent and never overwrites a
+-- value the harvest already persisted.
+UPDATE atlas_seed_entries
+SET approvable = NOT (
+        COALESCE(provenance -> 'classification' ->> 'knowledge_type', '')
+            NOT IN ('process', 'operational', 'org-culture')
+        AND provenance -> 'classification' ->> 'validation_status' = 'unverified'
+    )
+WHERE approvable IS NULL;
 
 -- Atlas derived pages. These rows describe disposable generated pages whose
 -- retrieval projection is stored in chunks.

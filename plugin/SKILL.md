@@ -11,10 +11,12 @@ Pathfinder exposes four tool types via MCP. The exact tool names depend on the s
 Finds content by meaning, not just keywords. Use this when you need to understand a concept, find related documentation, or locate code that implements a particular behavior.
 
 **Parameters:**
+
 - `query` (string, required) — Natural-language search query
 - `limit` (number, optional) — Maximum number of results
 
 **Example queries:**
+
 - "How do I configure authentication?"
 - "Error handling middleware"
 - "Database migration workflow"
@@ -26,18 +28,20 @@ Finds content by meaning, not just keywords. Use this when you need to understan
 A sandboxed bash shell for browsing the indexed filesystem. Files are read-only (except `/workspace/`). Use this for precise lookups, structural exploration, and when you need exact file contents.
 
 **Parameters:**
+
 - `command` (string, required) — Bash command to execute
 
 **Supported commands:**
-| Command | Use for |
-|---------|---------|
-| `find / -name "*.ts"` | Discover files by pattern |
-| `grep -r "pattern" /` | Search file contents for exact matches |
-| `cat /path/to/file` | Read a specific file |
-| `head -n 50 /path/to/file` | Read first N lines |
-| `tail -n 20 /path/to/file` | Read last N lines |
-| `ls /path/` | List directory contents |
-| `cd /path/` | Change working directory (persists across calls) |
+
+| Command                    | Use for                                          |
+| -------------------------- | ------------------------------------------------ |
+| `find / -name "*.ts"`      | Discover files by pattern                        |
+| `grep -r "pattern" /`      | Search file contents for exact matches           |
+| `cat /path/to/file`        | Read a specific file                             |
+| `head -n 50 /path/to/file` | Read first N lines                               |
+| `tail -n 20 /path/to/file` | Read last N lines                                |
+| `ls /path/`                | List directory contents                          |
+| `cd /path/`                | Change working directory (persists across calls) |
 
 **Special commands:**
 
@@ -46,6 +50,7 @@ A sandboxed bash shell for browsing the indexed filesystem. Files are read-only 
 - **`related <path>`** — Given a file path, finds other files with similar content using vector similarity. Useful for discovering related modules, tests, or documentation.
 
 **Virtual files:**
+
 - `INDEX.md` — Full listing of all files in the virtual filesystem
 - `SEARCH_TIPS.md` — Usage hints and available search tools
 
@@ -58,28 +63,30 @@ Submits structured feedback or data back to the server. The exact schema depends
 Browse and search Q&A knowledge extracted from conversational sources (Slack threads, Discord forums, Notion databases with `category: faq`). Use this for questions that are likely answered in community discussions rather than formal documentation.
 
 **Parameters:**
+
 - `query` (string, optional) — Search query. If empty, returns a browsable list of all Q&A pairs.
 - `limit` (number, optional) — Maximum number of results
 - `min_confidence` (number, optional) — Minimum confidence threshold (0-1)
 
 **Example queries:**
+
 - "How do I handle rate limiting?"
 - "What's the recommended way to deploy?"
 - "" (empty = browse all FAQ entries)
 
 ## When to Use Search vs Explore
 
-| Situation | Tool | Why |
-|-----------|------|-----|
-| "How does X work?" | **search** | Conceptual query — semantic search excels |
-| "Find all files importing module Y" | **explore** (`grep`) | Exact pattern match |
-| "What's in the config file?" | **explore** (`cat`) | Need exact file contents |
-| "Find docs about authentication" | **search** | Broad topic discovery |
-| "What files are related to auth.ts?" | **explore** (`related`) | Vector-similarity file discovery |
-| "List all TypeScript files" | **explore** (`find`) | Structural filesystem query |
-| grep returned nothing useful | **explore** (`qmd`) or **search** | Fall back to semantic matching |
-| "What have people asked about X?" | **knowledge** | Q&A from community conversations |
-| Need to save notes for later | **explore** (write to `/workspace/`) | Workspace supports writes |
+| Situation                            | Tool                                 | Why                                       |
+| ------------------------------------ | ------------------------------------ | ----------------------------------------- |
+| "How does X work?"                   | **search**                           | Conceptual query — semantic search excels |
+| "Find all files importing module Y"  | **explore** (`grep`)                 | Exact pattern match                       |
+| "What's in the config file?"         | **explore** (`cat`)                  | Need exact file contents                  |
+| "Find docs about authentication"     | **search**                           | Broad topic discovery                     |
+| "What files are related to auth.ts?" | **explore** (`related`)              | Vector-similarity file discovery          |
+| "List all TypeScript files"          | **explore** (`find`)                 | Structural filesystem query               |
+| grep returned nothing useful         | **explore** (`qmd`) or **search**    | Fall back to semantic matching            |
+| "What have people asked about X?"    | **knowledge**                        | Q&A from community conversations          |
+| Need to save notes for later         | **explore** (write to `/workspace/`) | Workspace supports writes                 |
 
 ## Workspace
 

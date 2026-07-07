@@ -21,6 +21,11 @@ export interface AtlasSeedEntry {
   rejectedBy: string | null;
   rejectedAt: Date | null;
   rejectionReason: string | null;
+  // C.1 (S10): the derived approvability audit snapshot persisted at upsert
+  // time. Nullable — a row written before the column existed (or by a caller
+  // that supplies no value) reads back NULL. Audit-only: the runtime gates
+  // re-derive approvability and never read this back.
+  approvable: boolean | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -48,6 +53,10 @@ export interface UpsertAtlasSeedCandidateInput {
   content: string;
   provenance: Record<string, unknown>;
   evidence: unknown[];
+  // C.1 (S1 type-shape): the derived approvability snapshot. Optional here — the
+  // SQL column + per-row backfill migration and the write into the upsert are
+  // S10; this is the persisted FIELD only.
+  approvable?: boolean;
 }
 
 export interface AtlasCachePage {
@@ -190,6 +199,7 @@ function mapSeedRow(row: Record<string, unknown>): AtlasSeedEntry {
     rejectedBy: (row.rejected_by as string | null) ?? null,
     rejectedAt: toDate(row.rejected_at, `rejected_at of ${ctx}`),
     rejectionReason: (row.rejection_reason as string | null) ?? null,
+    approvable: row.approvable == null ? null : Boolean(row.approvable),
     createdAt: toDate(row.created_at, `created_at of ${ctx}`) ?? new Date(0),
     updatedAt: toDate(row.updated_at, `updated_at of ${ctx}`) ?? new Date(0),
   };
@@ -326,9 +336,10 @@ export async function upsertAtlasSeedCandidate(
         title,
         content,
         provenance,
-        evidence
+        evidence,
+        approvable
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
       ON CONFLICT (canonical_key) DO UPDATE SET
         source_name = CASE
           WHEN atlas_seed_entries.status = 'pending' THEN EXCLUDED.source_name
@@ -362,6 +373,10 @@ export async function upsertAtlasSeedCandidate(
           WHEN atlas_seed_entries.status = 'pending' THEN EXCLUDED.evidence
           ELSE atlas_seed_entries.evidence
         END,
+        approvable = CASE
+          WHEN atlas_seed_entries.status = 'pending' THEN EXCLUDED.approvable
+          ELSE atlas_seed_entries.approvable
+        END,
         updated_at = CASE
           WHEN atlas_seed_entries.status = 'pending' THEN NOW()
           ELSE atlas_seed_entries.updated_at
@@ -378,9 +393,13 @@ export async function upsertAtlasSeedCandidate(
       input.content,
       JSON.stringify(input.provenance),
       JSON.stringify(input.evidence),
+      input.approvable ?? null,
     ],
   );
-  return mapSeedRow(rows[0] as Record<string, unknown>);
+  if (rows[0]) return mapSeedRow(rows[0] as Record<string, unknown>);
+  throw new Error(
+    `Atlas seed upsert for "${input.canonicalKey}" returned no row`,
+  );
 }
 
 export async function approveAtlasSeedEntry(
