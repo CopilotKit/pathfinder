@@ -67,6 +67,12 @@ export const DEFAULT_EXCLUSION_RULES: ExclusionRule[] = [
     kind: "english",
     text: "Exclude go-to-market or sales content that identifies a specific named customer, client, or account (deal details, customer engagements, account-specific commercial terms).",
   },
+  // Internal operational trivia: Railway/CI deploy logs, PR-closeout records,
+  // internal-infra topology — no value to an external CopilotKit builder.
+  {
+    kind: "english",
+    text: "Exclude any candidate that is purely internal operational trivia — Railway/CI deploy logs, PR-closeout records, internal-infra topology — with zero value to an external CopilotKit builder.",
+  },
 ];
 
 // ── Deterministic credential pre-filter (D.2, fail-restrictive) ─────────────────
