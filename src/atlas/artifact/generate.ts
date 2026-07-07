@@ -137,16 +137,26 @@ function resolveSeedRules(
 const NOTION_MAX_BLOCKS_PER_REQUEST = 100;
 const NOTION_MAX_TOTAL_BLOCKS_PER_REQUEST = 800;
 
-// A block-request's total block cost: itself + its nested children. Children
-// are one level deep here (notion-blocks.ts renders callouts/bullets only), so
-// no recursion is needed.
+// A block-request's total block cost: itself PLUS every nested descendant, at
+// any depth. Notion budgets a request by its TOTAL block count across all
+// nesting levels, so the cost must recurse: a candidate to_do now carries a
+// `toggle` whose OWN paragraph children are a second nesting level (to_do →
+// toggle → paragraphs), and counting only the to_do's direct children would
+// undercount the request — letting a batch silently exceed the ~1000-block cap
+// and 400 the whole append.
 function blockCost(block: BlockObjectRequest): number {
   const { type } = block as { type?: string };
   if (!type) return 1;
   const body = (
-    block as unknown as Record<string, { children?: unknown[] } | undefined>
+    block as unknown as Record<
+      string,
+      { children?: BlockObjectRequest[] } | undefined
+    >
   )[type];
-  return 1 + (body?.children?.length ?? 0);
+  const children = body?.children ?? [];
+  let cost = 1;
+  for (const child of children) cost += blockCost(child);
+  return cost;
 }
 
 // Split the ordered block list into request batches obeying both Notion budgets

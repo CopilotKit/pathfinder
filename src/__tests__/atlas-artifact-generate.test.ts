@@ -230,6 +230,20 @@ function childCountOf(block: unknown): number {
   return (b[key]?.children ?? []).length;
 }
 
+// A block's TOTAL block count including ALL descendants at any depth (self + a
+// recursive walk of every `children` array). Candidate to_dos now nest a
+// `toggle` whose own paragraph children are a second level (to_do → toggle →
+// paragraph), so the per-request budget must count them — mirrors generate.ts's
+// recursive `blockCost`.
+function deepBlockCount(block: unknown): number {
+  const b = block as Record<string, { children?: unknown[] }>;
+  const key = (block as { type?: string }).type as string;
+  const children = b[key]?.children ?? [];
+  let count = 1;
+  for (const child of children) count += deepBlockCount(child);
+  return count;
+}
+
 describe("notion-blocks — build side (candidate → blocks)", () => {
   it("renders an APPROVABLE candidate as a to_do checkbox, unchecked by default", () => {
     const c = makeCandidate({ title: "Two-layer shim to the v2 engine" });
@@ -501,7 +515,10 @@ describe("notion-blocks — per-block children cap (Notion ~100-children limit)"
       kind: "fused_from" as const,
       ref: `fragment-ref-${i}`,
     }));
-    const c = makeCandidate({ evidence });
+    // Empty content ⇒ no leading content-toggle child, so this test's indices
+    // address the provenance callout + evidence bullets directly (this case is
+    // about the EVIDENCE cap, not the body toggle).
+    const c = makeCandidate({ evidence, content: "" });
     const block = candidateToDoBlock(c) as {
       to_do: { children?: unknown[] };
     };
@@ -520,6 +537,7 @@ describe("notion-blocks — per-block children cap (Notion ~100-children limit)"
 
   it("leaves a small evidence list uncapped, with no tail bullet", () => {
     const c = makeCandidate({
+      content: "", // no body toggle — this test counts provenance + evidence
       evidence: [
         { kind: "fused_from", ref: "a" },
         { kind: "fused_from", ref: "b" },
@@ -1481,6 +1499,61 @@ describe("generateApprovalArtifact", () => {
     expect(todoTitles).toHaveLength(30);
     for (let i = 0; i < 30; i++) {
       expect(todoTitles[i]).toContain(`heavy candidate ${i}`);
+    }
+  });
+
+  it("budgets by DEEP block count (toggle→paragraph grandchildren counted), keeping each request ≤800 total", async () => {
+    // Each candidate carries a long distilled body, which renders as a `toggle`
+    // whose paragraph children are a SECOND nesting level under the to_do
+    // (to_do → toggle → paragraphs). Plus 90 evidence bullets. A batcher that
+    // counted only the to_do's DIRECT children would miss the toggle's own
+    // grandchildren and could pack a request past Notion's ~1000-block total.
+    // The DEEP per-request count (self + all descendants) must stay ≤800.
+    const evidence: EvidenceItem[] = Array.from({ length: 90 }, (_, i) => ({
+      kind: "fused_from" as const,
+      ref: `ev-${i}`,
+    }));
+    const candidates = Array.from({ length: 40 }, (_, i) =>
+      makeCandidate({
+        subsystem: "cpk-runtime",
+        rankScore: 40 - i,
+        canonical_key: `github-pr:cpk-runtime:deep-${i}`,
+        title: `deep candidate ${i}`,
+        content: `distilled body ${i}: `.padEnd(6000, "x"),
+        evidence,
+      }),
+    );
+    const { client, createCalls, appendCalls } = makeMockNotion();
+    await generateApprovalArtifact({
+      notion: client,
+      parentPageId: "parent",
+      runId: "run-deep",
+      candidates,
+      rules: DEFAULT_EXCLUSION_RULES,
+    });
+
+    const requests: unknown[][] = [
+      (createCalls[0].children ?? []) as unknown[],
+      ...appendCalls.map((call) => (call.children ?? []) as unknown[]),
+    ];
+    for (const batch of requests) {
+      expect(batch.length).toBeLessThanOrEqual(100);
+      const deepTotal = batch.reduce(
+        (sum: number, block) => sum + deepBlockCount(block),
+        0,
+      );
+      expect(deepTotal).toBeLessThanOrEqual(800);
+    }
+
+    // Every candidate still rendered, in rank order (nothing dropped by the
+    // tighter budget).
+    const allChildren = requests.flat() as Array<{ type: string }>;
+    const todoTitles = allChildren
+      .filter((b) => b.type === "to_do")
+      .map((b) => plainTextOf(b));
+    expect(todoTitles).toHaveLength(40);
+    for (let i = 0; i < 40; i++) {
+      expect(todoTitles[i]).toContain(`deep candidate ${i}`);
     }
   });
 
