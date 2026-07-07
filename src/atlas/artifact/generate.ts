@@ -161,15 +161,29 @@ function blockCost(block: BlockObjectRequest): number {
 
 // Split the ordered block list into request batches obeying both Notion budgets
 // (≤100 top-level, ≤800 total incl. nested children). Order-preserving: a batch
-// is flushed exactly when the NEXT block would exceed either budget. Every
-// individual block fits a batch by itself (top-level cost 1, total cost ≤ ~98
-// under notion-blocks.ts's children cap), so no block can be dropped here.
+// is flushed exactly when the NEXT block would exceed either budget. A candidate
+// block now nests a content toggle (whose OWN paragraph children add a second
+// level) alongside its provenance callout + ≤~97 evidence bullets, so a single
+// block's recursive cost is no longer bounded by a small constant: a candidate
+// with a very long body carries many toggle paragraphs. Almost every candidate
+// still fits a batch alone (evidence caps the bullets; typical bodies are one or
+// two paragraphs), but a pathological body whose recursive blockCost alone
+// exceeds the total-block budget could never fit ANY batch — emitting it would
+// build a batch Notion 400s. Fail LOUD on that block instead of deferring the
+// failure to the API.
 function batchBlocks(children: BlockObjectRequest[]): BlockObjectRequest[][] {
   const batches: BlockObjectRequest[][] = [];
   let batch: BlockObjectRequest[] = [];
   let total = 0;
   for (const block of children) {
     const cost = blockCost(block);
+    if (cost > NOTION_MAX_TOTAL_BLOCKS_PER_REQUEST) {
+      throw new Error(
+        `[atlas] a single block's total cost (${cost} blocks incl. nested children) exceeds ` +
+          `the Notion per-request budget (${NOTION_MAX_TOTAL_BLOCKS_PER_REQUEST}); ` +
+          `it cannot fit any batch and would 400 the append`,
+      );
+    }
     if (
       batch.length > 0 &&
       (batch.length + 1 > NOTION_MAX_BLOCKS_PER_REQUEST ||
