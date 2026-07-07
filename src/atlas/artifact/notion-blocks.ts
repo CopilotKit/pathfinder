@@ -76,6 +76,17 @@ type ChildBlockRequest = NonNullable<
   Extract<BlockObjectRequest, { type?: "callout" }>["callout"]["children"]
 >[number];
 
+// Notion permits children ONE level deeper still under a depth-1 block (a
+// candidate's toggle sits at depth 1 as a child of the to_do/note, so ITS OWN
+// children — the content paragraphs — are at depth 2). The SDK types that
+// deepest permitted level as a distinct (non-exported) leaf union; we capture
+// it structurally from the toggle child's own `children` field, exactly as
+// ChildBlockRequest is captured from the callout's. Our grandchildren are only
+// leaf paragraphs, which live within this depth.
+type GrandchildBlockRequest = NonNullable<
+  Extract<ChildBlockRequest, { type?: "toggle" }>["toggle"]["children"]
+>[number];
+
 // ── Markers ───────────────────────────────────────────────────────────────────
 
 // A canonical_key is wrapped `⟦atlas:<key>⟧` at the START of a candidate block's
@@ -250,6 +261,74 @@ function evidenceLine(item: Candidate["evidence"][number]): string {
 // page). 95 + callout + tail = 97 keeps headroom under the cap.
 const MAX_EVIDENCE_BULLETS = 95;
 
+// The distilled why/how prose (`c.content`) rendered as a COLLAPSIBLE toggle
+// child of a candidate's to_do/note, so the reviewer can actually read the text
+// they approve/reject (the checkbox line itself stays terse — marker + title +
+// badge). The toggle's paragraph children carry the content through `richText`,
+// which handles the ≤2000-char run split + 100-run cap + surrogate safety, so a
+// long body spans multiple paragraph children losslessly (each rich_text array
+// is capped, so a body needing >100 runs gets a second paragraph). Returns an
+// empty array (no toggle) when the candidate has no content to show — an empty
+// toggle would be a dead disclosure widget for the reviewer.
+//
+// Placed FIRST among a candidate's children (before the provenance callout +
+// evidence bullets) so the body — the thing being approved — is the first thing
+// the reviewer expands.
+function contentToggleChildren(c: Candidate): ChildBlockRequest[] {
+  if (!c.content?.trim()) return [];
+  // Split the content across as many paragraph children as needed so nothing is
+  // dropped, feeding each chunk to `richText` (which re-splits it into ≤2000-char
+  // runs). The chunking must be BOTH surrogate-safe AND capacity-correct:
+  //
+  //   • Surrogate-safe: a chunk boundary must never fall between the halves of a
+  //     surrogate pair. A lone half would ride into `richText`, whose entry
+  //     `toWellFormedUtf16` sanitizes it to U+FFFD — corrupting an astral char
+  //     (an emoji in thread evidence) into a replacement char across the chunk
+  //     seam. Iterating by CODE POINT (not code unit) makes every boundary land
+  //     between whole characters, so no pair is ever severed (same invariant
+  //     clampTitle guards at the title clamp and richText guards at run edges).
+  //
+  //   • Capacity-correct: `richText` renders at most RICH_TEXT_MAX_RUNS runs, and
+  //     its per-run surrogate backoff can shorten EACH run by one unit (a pair
+  //     straddling a 2000-unit run boundary). A naive chunk of
+  //     RICH_TEXT_RUN_MAX × RICH_TEXT_MAX_RUNS units therefore does NOT fit: the
+  //     accumulated backoff pushes the last run past the char cap and trips
+  //     richText's truncation marker, silently dropping ~RICH_TEXT_RUN_MAX chars
+  //     per chunk for astral-heavy content — the very data this loop exists to
+  //     preserve. Sizing each chunk to the GUARANTEED-lossless floor, (2000−1)
+  //     per run × 100 runs, absorbs a worst-case one-unit backoff on every run,
+  //     so richText renders each chunk without ever truncating.
+  const paragraphs: GrandchildBlockRequest[] = [];
+  const CHUNK_MAX_UNITS = (RICH_TEXT_RUN_MAX - 1) * RICH_TEXT_MAX_RUNS;
+  let chunk = "";
+  const flush = () => {
+    if (chunk === "") return;
+    paragraphs.push({
+      type: "paragraph",
+      paragraph: { rich_text: richText(chunk) },
+    });
+    chunk = "";
+  };
+  // `for…of` on a string iterates by code point, so `cp` is a whole character
+  // (1 or 2 UTF-16 units) — an astral pair is never split at a chunk boundary.
+  // Flush BEFORE appending a code point that would carry the chunk over the safe
+  // capacity (never mid-character), so every chunk stays ≤ CHUNK_MAX_UNITS.
+  for (const cp of c.content) {
+    if (chunk.length + cp.length > CHUNK_MAX_UNITS) flush();
+    chunk += cp;
+  }
+  flush();
+  return [
+    {
+      type: "toggle",
+      toggle: {
+        rich_text: richText("Content (why/how)"),
+        children: paragraphs,
+      },
+    },
+  ];
+}
+
 // Provenance + evidence as child blocks of a candidate's to_do/note. The
 // provenance line (source + url + date) is a callout; each evidence item is a
 // bulleted_list_item. Child blocks keep the checkbox itself terse while still
@@ -340,7 +419,10 @@ export function candidateToDoBlock(c: Candidate): BlockObjectRequest {
     to_do: {
       rich_text: richText(text),
       checked: false,
-      children: provenanceAndEvidenceChildren(c),
+      children: [
+        ...contentToggleChildren(c),
+        ...provenanceAndEvidenceChildren(c),
+      ],
     },
   };
 }
@@ -359,7 +441,10 @@ export function unverifiedNoteBlock(c: Candidate): BlockObjectRequest {
     callout: {
       rich_text: richText(text),
       icon: { type: "emoji", emoji: "⚠️" }, // ⚠️
-      children: provenanceAndEvidenceChildren(c),
+      children: [
+        ...contentToggleChildren(c),
+        ...provenanceAndEvidenceChildren(c),
+      ],
     },
   };
 }

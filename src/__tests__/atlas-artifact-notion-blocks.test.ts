@@ -143,6 +143,27 @@ function childrenOf(block: unknown): unknown[] {
   return b[key]?.children ?? [];
 }
 
+// Concatenate the rendered text of a block and ALL its descendants (any nesting
+// depth) into one string — used to assert the distilled body appears SOMEWHERE
+// beneath a candidate to_do, regardless of how many toggle/paragraph levels it
+// is wrapped in.
+function deepText(block: unknown): string {
+  const self = plainTextOf(block);
+  const kids = childrenOf(block).map(deepText);
+  return [self, ...kids].join("\n");
+}
+
+// The first descendant block (any depth) of `block` whose `type` matches, or
+// undefined. Depth-first, self excluded.
+function findDescendant(block: unknown, type: string): unknown {
+  for (const child of childrenOf(block)) {
+    if ((child as { type?: string }).type === type) return child;
+    const nested = findDescendant(child, type);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
 const LONE_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
@@ -243,10 +264,14 @@ describe("notion-blocks — rich-text run split (exact ≤2000-char boundaries)"
     const c = makeCandidate({
       evidence: [{ kind: "thread", body }],
     });
-    const children = childrenOf(candidateToDoBlock(c));
-    // children[0] is the provenance callout; children[1] is the first evidence
-    // bullet, whose text is `thread: <body>`.
-    return children[1];
+    // The candidate's children are: content toggle (if any) → provenance
+    // callout → evidence bullets. Locate the evidence bullet by its `thread: `
+    // text rather than a fixed index, so the leading content toggle doesn't
+    // shift it out from under these split-boundary assertions.
+    const bullet = childrenOf(candidateToDoBlock(c)).find((ch) =>
+      plainTextOf(ch).startsWith("thread: "),
+    );
+    return bullet;
   }
 
   it("emits a SINGLE run when the content is exactly at the 2000-char cap (no split)", () => {
@@ -301,7 +326,12 @@ describe("notion-blocks — 100-run cap with explicit truncation marker", () => 
     const c = makeCandidate({
       evidence: [{ kind: "thread", body }],
     });
-    return runsOf(childrenOf(candidateToDoBlock(c))[1]);
+    // Locate the evidence bullet by its `thread: ` text (a leading content
+    // toggle child would otherwise shift a fixed index).
+    const bullet = childrenOf(candidateToDoBlock(c)).find((ch) =>
+      plainTextOf(ch).startsWith("thread: "),
+    );
+    return runsOf(bullet);
   }
 
   it("caps a pathological body at 100 runs and marks the truncation", () => {
@@ -413,6 +443,10 @@ describe("notion-blocks — canonical-key marker (delimiter parse contract)", ()
 // ── rule bullet: the `atlas-rule:` delimiter (case / whitespace tolerance) ──────
 
 describe("notion-blocks — rule-bullet delimiter tolerance", () => {
+  // The malformed-JSON case spies on console.warn; restore after each test so
+  // the spy does not leak into later suites (restoreMocks is not globally on).
+  afterEach(() => vi.restoreAllMocks());
+
   const flagRule: ExclusionRule = {
     kind: "flag",
     dimension: "sensitivity",
@@ -535,6 +569,122 @@ describe("notion-blocks — candidate ⇄ block round-trip", () => {
     });
     // The badge (load-bearing security metadata) is still present at the tail.
     expect(rendered).toContain(flagBadge(c));
+  });
+});
+
+// ── candidate body shown as a collapsible toggle (reviewer can read the text) ───
+// The reviewer approves/rejects each candidate; they can only make that call if
+// they can SEE the distilled why/how prose (`c.content`). It is rendered as a
+// collapsible `toggle` child of the item (before the provenance callout +
+// evidence bullets), whose paragraph children carry the content via richText.
+
+describe("notion-blocks — candidate body rendered as a collapsible toggle", () => {
+  const MARKER = "UNIQUE-BODY-MARKER-7f3a";
+  const CONTENT = `${MARKER}: guards POST /admin/:op behind the RBAC check`;
+
+  it("renders the distilled content inside a toggle under an APPROVABLE to_do", () => {
+    const c = makeCandidate({ content: CONTENT });
+    const block = candidateToDoBlock(c);
+    const toggle = findDescendant(block, "toggle");
+    expect(toggle).toBeDefined();
+    // The content marker + concrete token must be reachable within the toggle's
+    // descendant paragraphs (the reviewer can read the body).
+    expect(deepText(toggle)).toContain(MARKER);
+    expect(deepText(toggle)).toContain("POST /admin/:op");
+    // The toggle carries paragraph children (not just a bare label).
+    const para = findDescendant(toggle, "paragraph");
+    expect(para).toBeDefined();
+    expect(plainTextOf(para)).toContain(MARKER);
+  });
+
+  it("renders the distilled content inside a toggle under an UNVERIFIED note", () => {
+    const c = makeCandidate({ approvable: false, content: CONTENT });
+    const block = unverifiedNoteBlock(c);
+    const toggle = findDescendant(block, "toggle");
+    expect(toggle).toBeDefined();
+    expect(deepText(toggle)).toContain(MARKER);
+    expect(deepText(toggle)).toContain("POST /admin/:op");
+  });
+
+  it("does NOT emit a toggle when content is empty/whitespace (guard)", () => {
+    for (const content of ["", "   ", "\n\t "]) {
+      expect(
+        findDescendant(
+          candidateToDoBlock(makeCandidate({ content })),
+          "toggle",
+        ),
+      ).toBeUndefined();
+      expect(
+        findDescendant(
+          unverifiedNoteBlock(makeCandidate({ content })),
+          "toggle",
+        ),
+      ).toBeUndefined();
+    }
+  });
+
+  it("splits a long body across multiple paragraph runs without dropping content", () => {
+    // A body far past a single 2000-char run: the toggle's paragraph(s) must
+    // still reconstruct the full content (marker at the tail proves no drop).
+    const tail = `${MARKER}-END`;
+    const content = `${"b".repeat(RICH_TEXT_RUN_MAX + 500)}${tail}`;
+    const toggle = findDescendant(
+      candidateToDoBlock(makeCandidate({ content })),
+      "toggle",
+    );
+    expect(toggle).toBeDefined();
+    expect(deepText(toggle)).toContain(tail);
+  });
+
+  // Recover the FULL plain-text of a toggle's body: concatenate every paragraph
+  // grandchild's runs in order (the paragraphs partition the body, each carrying
+  // a richText run split). This is the exact lossless round-trip Notion delivers
+  // (fetched plain_text = concatenation of runs), so it must equal the input.
+  function recoveredToggleBody(block: unknown): string {
+    const toggle = findDescendant(block, "toggle") as unknown;
+    const paras = childrenOf(toggle).filter(
+      (ch) => (ch as { type?: string }).type === "paragraph",
+    );
+    return paras.map((p) => plainTextOf(p)).join("");
+  }
+
+  it("preserves an astral char that straddles the chunk boundary (no U+FFFD)", () => {
+    // The chunk splitter partitions c.content into paragraph children. A naive
+    // fixed-code-unit slice can cut an astral char's surrogate PAIR in half at a
+    // chunk boundary; richText then sanitizes each lone half to U+FFFD, so the
+    // recovered body loses the char (two replacement chars in its place). Place
+    // an astral char (𝕏 = U+1D54F, a surrogate pair) EXACTLY at the boundary of
+    // the effective per-paragraph capacity so a fixed-unit slice would sever it.
+    const CAP = RICH_TEXT_MAX_RUNS * RICH_TEXT_RUN_MAX; // naive boundary = 200000
+    const astral = "\u{1D54F}"; // 𝕏 — one code point, two UTF-16 units
+    // High half lands at index CAP-1, low half at index CAP → the naive
+    // slice(0, CAP) keeps a lone HIGH surrogate; slice(CAP) starts on a lone LOW.
+    const content = `${"a".repeat(CAP - 1)}${astral}${"b".repeat(100)}`;
+    const block = candidateToDoBlock(makeCandidate({ content }));
+    const recovered = recoveredToggleBody(block);
+    expect(recovered).toContain(astral); // pair intact — reviewer sees 𝕏
+    expect(recovered).not.toContain("�"); // no corruption
+    expect(recovered).toBe(content); // nothing dropped or mangled
+  });
+
+  it("does not tail-drop an astral-heavy body larger than one chunk", () => {
+    // richText's per-run surrogate backoff means a full 100-run render of an
+    // astral-heavy chunk carries FEWER than 100×2000 code units losslessly:
+    // the accumulated backoff pushes the tail past the char cap and trips the
+    // truncation branch, silently dropping ~2001 chars per chunk. A body of all
+    // astral chars (every pair a candidate backoff point) longer than one chunk
+    // must round-trip with EVERY code point preserved.
+    const astral = "\u{1D54F}"; // 𝕏 — two UTF-16 units each
+    // A single leading ASCII char makes every astral pair straddle an EVEN
+    // index, so each 2000-unit run boundary lands mid-pair and backs off — the
+    // accumulated shortfall is what trips richText's truncation branch. ~1.5
+    // naive chunks worth of astral: 1 + 300000 code units of content.
+    const content = `a${astral.repeat(150000)}`;
+    const block = candidateToDoBlock(makeCandidate({ content }));
+    const recovered = recoveredToggleBody(block);
+    expect(recovered).not.toContain("�"); // no lone-surrogate corruption
+    expect(recovered.length).toBe(content.length); // no silent tail-drop
+    expect(recovered).toBe(content); // exact, in order
   });
 });
 
