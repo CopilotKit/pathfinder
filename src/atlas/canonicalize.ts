@@ -24,12 +24,12 @@
 // exclusion-rule engine (S13) remove rows (§10 bar 1).
 
 import {
+  APPROVABLE_FLOOR_MARKERS,
   BEHAVIOR_KNOWLEDGE_TYPES,
   buildCanonicalKey,
   dateToEpochMs,
-  RAG_NO_DELTA_MARKER,
+  isApprovableFloored,
 } from "./types.js";
-import { hasRestatementMarker } from "./validate.js";
 import type {
   Candidate,
   CandidateFragment,
@@ -188,26 +188,32 @@ function recency(fragment: CandidateFragment, now: number): number {
 // bounded boost (1 + log1p(count)) so a single strong fact is never buried under
 // a weakly-corroborated one purely on evidence count.
 //
-// Rank-neutral §6.2 duplication marks: the rag-dedup gate stamps TWO kinds of
-// `fused_from` evidence on a corpus-overlapping candidate, neither of which is
-// corroboration for the claim — counting either would make a corpus DUPLICATE
-// outrank its un-duplicated twin (inverting §6.2). Filter BOTH out of the depth
-// count; genuine fused_from refs (aggregator provenance — canonical-key-shaped)
-// still count.
+// Rank-neutral §6.2 duplication / floor marks: several upstream gates stamp a
+// `fused_from` evidence item that is NOT corroboration for the claim — counting
+// any of them would make a floored/duplicate candidate outrank its genuine
+// un-floored twin (inverting §6.2). Filter these out of the depth count; genuine
+// fused_from refs (aggregator provenance — canonical-key-shaped) still count.
 //
 //   1. RAG_CORPUS_OVERLAP_REF_PREFIX: an AUDIT annotation about the corpus,
-//      appended on EVERY overlap verdict (delta included).
-//   2. RAG_NO_DELTA_MARKER: the DEDICATED no-delta floor trace, stamped as a
-//      fused_from ref on a pure corpus duplicate (rag-dedup's floorNoDelta). It
-//      is a provenance floor, not evidence — the SAME constant the emitter and
-//      validate reader import, so the exclusion can never drift from the stamp.
+//      appended on EVERY overlap verdict (delta included). A PREFIX, not a whole
+//      marker, so it is matched separately from the floor-marker set.
+//   2. APPROVABLE_FLOOR_MARKERS: the DEDICATED approvable-floor traces
+//      (RESTATEMENT / RAG_NO_DELTA / INTERNAL_OPS), each stamped as a `fused_from`
+//      ref on a floored candidate by its gate. All ride the IDENTICAL fused_from
+//      carrier (types.ts), so ALL must be excluded — not just the no-delta one.
+//      Use the SAME shared set computeRankScore's validation-weight floor reads
+//      (via isApprovableFloored), so the rank filter and the approvable floor
+//      pick up any FUTURE marker automatically and can never drift apart.
+const FLOOR_MARKER_REFS: ReadonlySet<string> = new Set(
+  APPROVABLE_FLOOR_MARKERS,
+);
 function evidenceDepth(fragment: CandidateFragment): number {
   const corroborating = fragment.evidence.filter(
     (e) =>
       !(
         e.kind === "fused_from" &&
         (e.ref.startsWith(RAG_CORPUS_OVERLAP_REF_PREFIX) ||
-          e.ref === RAG_NO_DELTA_MARKER)
+          FLOOR_MARKER_REFS.has(e.ref))
       ),
   );
   return 1 + Math.log1p(corroborating.length);
@@ -222,17 +228,20 @@ export const RAG_CORPUS_OVERLAP_REF_PREFIX = "rag-corpus-overlap:";
 
 function computeRankScore(fragment: CandidateFragment, now: number): number {
   const { validation_status, confidence } = fragment.provenance.classification;
-  // A RESTATEMENT-floored candidate (approvable=false; see validate.ts) carries
-  // no NEW verifiable claim. The validate gate still PROMOTES its
-  // validation_status when its symbols grep-verify (the status is display-truth
-  // — the symbols really do exist), but that promotion must NOT lift the rank:
-  // otherwise the restatement would OUT-RANK a genuine claim purely on the
-  // dominant validation weight, surfacing restatement noise above real why/how
-  // in the ranked artifact (§11.1). Floor the validation weight to `unverified`
-  // for a restatement, consistent with its approvable=false floor — the SAME
-  // predicate the approvability floor uses, so status-display and rank can never
-  // drift apart.
-  const validationWeight = hasRestatementMarker(fragment)
+  // An approvable-FLOORED candidate (approvable=false; see validate.ts) carries
+  // no NEW shippable verifiable claim — whether it is a distillation RESTATEMENT,
+  // a rag-dedup no-delta corpus DUPLICATE, or an INTERNAL_OPS audience-scoped
+  // fact (§6.2). The validate gate still PROMOTES its validation_status when its
+  // symbols grep-verify (the status is display-truth — the symbols really do
+  // exist), but that promotion must NOT lift the rank: otherwise the floored
+  // candidate would OUT-RANK a genuine claim purely on the dominant validation
+  // weight, surfacing floor noise above real why/how in the ranked artifact
+  // (§11.1). Floor the validation weight to `unverified` for ANY approvable-floor
+  // marker, consistent with the approvable=false floor — the SAME S0 shared
+  // predicate the approvability floor uses (isApprovableFloored over the complete
+  // APPROVABLE_FLOOR_MARKERS set), so status-display and rank can never drift
+  // apart and a new floor marker is picked up by both automatically.
+  const validationWeight = isApprovableFloored(fragment)
     ? VALIDATION_WEIGHT.unverified
     : VALIDATION_WEIGHT[validation_status];
   return (

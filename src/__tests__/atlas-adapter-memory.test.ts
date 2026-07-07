@@ -91,9 +91,15 @@ describe("memory leaf adapter", () => {
       // source_name carries the memory filename (the unit identity)
       expect(fragment.source_name).toBe("reference_1password_cli.md");
 
-      // originSessionId → provenance (session is the primary source of the fact)
-      expect(fragment.provenance.source).toContain(
+      // provenance.source is `memory:<basename>` with NO session suffix (spec
+      // §3.1-E2 / §3.3): the authoring session UUID is machine-local glue that
+      // must never enter the external corpus, so it is absent and the source is
+      // the basename form.
+      expect(fragment.provenance.source).not.toContain(
         "e654541f-dcb7-4152-8ee8-f669848555ee",
+      );
+      expect(fragment.provenance.source).toBe(
+        "memory:reference_1password_cli.md",
       );
       // description → summary lives on provenance (validated_against is the
       // single free-text provenance slot for the distilled summary)

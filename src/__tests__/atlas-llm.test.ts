@@ -33,6 +33,8 @@ import { CandidateFragmentSchema } from "../atlas/types.js";
 // gate each fixture to exactly one operation.
 const EPISODIC_SYSTEM_MARKER = "knowledge-distillation engine";
 const EXCLUSION_SYSTEM_MARKER = "exclusion-rule judge";
+const AUDIENCE_SYSTEM_MARKER = "audience-relevance judge";
+const DISTILLATION_SYSTEM_MARKER = "WHY-vs-WHAT judge";
 
 // The distilled-fragment JSON the "model" returns for the episodic call.
 const EPISODIC_MODEL_OUTPUT = {
@@ -93,6 +95,37 @@ const EPISODIC_UNRECOGNIZED_MODEL_OUTPUT = {
   validationTargets: [],
 };
 
+// An UNRECOGNIZED knowledge_type value: not a valid enum member even after
+// trim/lowercase. The distiller must NOT silently coerce it to a
+// CLEAR-RELEVANT knowledge_type (architecture/design-rationale/root-cause/
+// protocol/security) — doing so hands a garbled internal-ops candidate the
+// clear-relevant pre-screen bypass in the audience gate, escaping the
+// fail-restrictive judge and the internal-ops floor. It must WARN (mirroring
+// the sensitivity coercion) and default to a NON-clear-relevant type so
+// unknowns fall through to the judge.
+const UNRECOGNIZED_KNOWLEDGE_TYPE_MARKER = "UNRECOGNIZED-KNOWLEDGE-TYPE-WINDOW";
+const EPISODIC_UNRECOGNIZED_KNOWLEDGE_TYPE_OUTPUT = {
+  title: "Internal deploy-cadence bookkeeping for the harvest cron",
+  content:
+    "The harvest cron's deploy cadence bookkeeping is tracked internally; this is why the on-call rotation owns the redeploy window.",
+  subsystem: "harvest",
+  knowledge_type: "totally-made-up-knowledge-type",
+  validationTargets: [],
+};
+
+// The set of clear-relevant knowledge types (mirrored from audience-gate.ts's
+// CLEAR_RELEVANT_KNOWLEDGE_TYPES, which is module-private). A coerced-default
+// knowledge_type MUST NOT land in this set, or an unrecognized internal-ops
+// candidate takes the clear-relevant bypass and skips the fail-restrictive
+// judge.
+const CLEAR_RELEVANT_KNOWLEDGE_TYPES = new Set([
+  "architecture",
+  "design-rationale",
+  "root-cause",
+  "protocol",
+  "security",
+]);
+
 // A model subsystem containing ':' (a canonical-key structural delimiter) plus
 // padded/blank validationTargets entries. CandidateFragmentSchema rejects ':'
 // in subsystem, so without sanitization the distiller's "always parses against
@@ -143,6 +176,105 @@ const EXCLUSION_EXCLUDE_OUTPUT = {
 const EXCLUSION_KEEP_OUTPUT = {
   excluded: false,
   reason: "Candidate is a generic architecture fact with no customer data.",
+};
+
+// Audience-judge verdicts (§4.4). Each fixture is gated on the audience system
+// prompt plus a distinct user-payload marker so it fires only for its case.
+const AUDIENCE_INTERNAL_OPS_MARKER = "AUDIENCE-INTERNAL-OPS";
+const AUDIENCE_RELEVANT_MARKER = "AUDIENCE-RELEVANT";
+const AUDIENCE_BORDERLINE_MARKER = "AUDIENCE-BORDERLINE";
+const AUDIENCE_INTERNAL_OPS_OUTPUT = {
+  verdict: "internal-ops",
+  reason: "PR-closeout/deploy log with zero external-builder utility.",
+};
+const AUDIENCE_RELEVANT_OUTPUT = {
+  verdict: "relevant",
+  reason: "Explains why timingSafeEqual guards the admin endpoint.",
+};
+const AUDIENCE_BORDERLINE_OUTPUT = {
+  verdict: "borderline",
+  reason: "Internal-leaning but an advanced builder might want it.",
+};
+
+// Audience-judge delimiter VARIANTS of the internal-ops verdict. The canonical
+// verdict is "internal-ops" but a nondeterministic model may emit the same
+// multi-token verdict with a space or underscore ("internal ops" /
+// "internal_ops"). judgeAudience must recognize these as internal-ops, NOT
+// throw and kill the whole harvest run. Each gated on a distinct user marker.
+const AUDIENCE_INTERNAL_OPS_UNDERSCORE_MARKER = "AUDIENCE-IOPS-UNDERSCORE";
+const AUDIENCE_INTERNAL_OPS_SPACE_MARKER = "AUDIENCE-IOPS-SPACE";
+const AUDIENCE_INTERNAL_OPS_CASED_MARKER = "AUDIENCE-IOPS-CASED";
+const AUDIENCE_INTERNAL_OPS_UNDERSCORE_OUTPUT = {
+  verdict: "internal_ops",
+  reason: "Underscore-delimited internal-ops verdict variant.",
+};
+const AUDIENCE_INTERNAL_OPS_SPACE_OUTPUT = {
+  verdict: "internal ops",
+  reason: "Space-delimited internal-ops verdict variant.",
+};
+const AUDIENCE_INTERNAL_OPS_CASED_OUTPUT = {
+  verdict: "  Internal_Ops  ",
+  reason: "Cased/padded internal-ops verdict variant.",
+};
+
+// Audience-judge INTERIOR-RUN delimiter variants of the internal-ops verdict.
+// The round-1 fix only canonicalized SINGLE-delimiter variants (one space, one
+// underscore, one hyphen). A model can just as easily emit a DOUBLE space or a
+// tab between the two tokens ("internal  ops" / "internal\tops"). Those fall
+// through the single-delimiter list to the borderline fallback, silently
+// UN-FLOORING what is clearly an internal-ops verdict (internal-ops floors
+// approvable=false; borderline does not). judgeAudience must collapse ANY run
+// of internal whitespace/underscore/hyphen delimiters and still map to
+// internal-ops. Each gated on a distinct user marker.
+const AUDIENCE_INTERNAL_OPS_DBLSPACE_MARKER = "AUDIENCE-IOPS-DBLSPACE";
+const AUDIENCE_INTERNAL_OPS_TAB_MARKER = "AUDIENCE-IOPS-TAB";
+const AUDIENCE_INTERNAL_OPS_DBLSPACE_OUTPUT = {
+  verdict: "internal  ops",
+  reason: "Double-space-delimited internal-ops verdict variant.",
+};
+const AUDIENCE_INTERNAL_OPS_TAB_OUTPUT = {
+  verdict: "internal\tops",
+  reason: "Tab-delimited internal-ops verdict variant.",
+};
+
+// Audience-judge GARBAGE verdict: an unrecognized value that is neither a known
+// verdict nor an internal-ops delimiter variant. The gate is NEVER-DROP and
+// fail-restrictive: an unrecognized verdict must fall back to "borderline"
+// (keep for human review), NEVER throw and kill the run.
+const AUDIENCE_GARBAGE_MARKER = "AUDIENCE-GARBAGE-VERDICT";
+const AUDIENCE_GARBAGE_OUTPUT = {
+  verdict: "totally-made-up-verdict",
+  reason: "Model emitted a verdict outside the known set.",
+};
+
+// Audience-judge internal-ops verdicts with a TRAILING TOKEN beyond the two
+// canonical tokens: "internal-ops (trivia)" and "internal-ops." The round-3 fix
+// used EXACT-equality after delimiter-collapse, so a verdict with an extra
+// trailing token fell through to the non-flooring borderline fallback — a
+// floor escape. judgeAudience must match internal-ops when the collapsed
+// verdict's LEADING token/prefix is "internal-ops", anchored at the start (so a
+// verdict that merely MENTIONS the phrase mid-sentence does not over-match).
+const AUDIENCE_INTERNAL_OPS_TRAILING_MARKER = "AUDIENCE-IOPS-TRAILING";
+const AUDIENCE_INTERNAL_OPS_TRAILING_DOT_MARKER = "AUDIENCE-IOPS-DOTSUFFIX";
+const AUDIENCE_INTERNAL_OPS_TRAILING_OUTPUT = {
+  verdict: "internal-ops (trivia)",
+  reason: "Internal-ops verdict with a trailing parenthetical token.",
+};
+const AUDIENCE_INTERNAL_OPS_TRAILING_DOT_OUTPUT = {
+  verdict: "internal-ops.",
+  reason: "Internal-ops verdict with a trailing period.",
+};
+
+// A candidate whose ONLY "specific" is a machine-local absolute path (env glue,
+// per §6.1). The patched DISTILLATION_SYSTEM_PROMPT must NOT let the presence of
+// that opaque path make the claim "distilled" — the model rates it a restatement
+// (or a rewrite that drops the env glue). Gated on the distillation system prompt
+// plus this marker in the user payload.
+const MACHINE_PATH_DISTILL_MARKER = "MACHINE-PATH-DISTILL";
+const MACHINE_PATH_DISTILL_OUTPUT = {
+  verdict: "restatement",
+  reason:
+    "The only 'specific' is a machine-local /Users path (env glue), not a product-portable specific, so there is no distilled why/how claim.",
 };
 
 // Markers for windows whose "model" response is VALID JSON but NOT an object —
@@ -212,6 +344,17 @@ const fixtures: Fixture[] = [
     },
     response: { content: JSON.stringify(EPISODIC_UNRECOGNIZED_MODEL_OUTPUT) },
   },
+  // Episodic distillation — UNRECOGNIZED knowledge_type. Listed before the
+  // catch-all episodic fixture so the more specific match wins.
+  {
+    match: {
+      systemMessage: EPISODIC_SYSTEM_MARKER,
+      userMessage: UNRECOGNIZED_KNOWLEDGE_TYPE_MARKER,
+    },
+    response: {
+      content: JSON.stringify(EPISODIC_UNRECOGNIZED_KNOWLEDGE_TYPE_OUTPUT),
+    },
+  },
   // Episodic distillation — ':'-bearing subsystem + padded validationTargets.
   // Listed before the catch-all episodic fixture so the more specific match wins.
   {
@@ -276,6 +419,115 @@ const fixtures: Fixture[] = [
         reason: "  Candidate is a generic fact.  ",
       }),
     },
+  },
+  // Audience judge — INTERNAL-OPS: gate on the audience system prompt AND the
+  // internal-ops marker in the user payload.
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_INTERNAL_OPS_MARKER,
+    },
+    response: { content: JSON.stringify(AUDIENCE_INTERNAL_OPS_OUTPUT) },
+  },
+  // Audience judge — RELEVANT.
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_RELEVANT_MARKER,
+    },
+    response: { content: JSON.stringify(AUDIENCE_RELEVANT_OUTPUT) },
+  },
+  // Audience judge — BORDERLINE.
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_BORDERLINE_MARKER,
+    },
+    response: { content: JSON.stringify(AUDIENCE_BORDERLINE_OUTPUT) },
+  },
+  // Audience judge — internal-ops delimiter VARIANTS: underscore / space / cased.
+  // The model emits the multi-token verdict with a non-canonical delimiter; the
+  // gate must map each to the internal-ops verdict, not throw.
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_INTERNAL_OPS_UNDERSCORE_MARKER,
+    },
+    response: {
+      content: JSON.stringify(AUDIENCE_INTERNAL_OPS_UNDERSCORE_OUTPUT),
+    },
+  },
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_INTERNAL_OPS_SPACE_MARKER,
+    },
+    response: { content: JSON.stringify(AUDIENCE_INTERNAL_OPS_SPACE_OUTPUT) },
+  },
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_INTERNAL_OPS_CASED_MARKER,
+    },
+    response: { content: JSON.stringify(AUDIENCE_INTERNAL_OPS_CASED_OUTPUT) },
+  },
+  // Audience judge — internal-ops INTERIOR-RUN variants: double-space / tab.
+  // A run of >1 whitespace (or mixed) delimiters between the two tokens must
+  // still map to internal-ops, not slip through to the borderline fallback.
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_INTERNAL_OPS_DBLSPACE_MARKER,
+    },
+    response: {
+      content: JSON.stringify(AUDIENCE_INTERNAL_OPS_DBLSPACE_OUTPUT),
+    },
+  },
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_INTERNAL_OPS_TAB_MARKER,
+    },
+    response: { content: JSON.stringify(AUDIENCE_INTERNAL_OPS_TAB_OUTPUT) },
+  },
+  // Audience judge — GARBAGE verdict: unrecognized value falls back to
+  // borderline (never-drop, fail-restrictive), NOT a thrown error.
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_GARBAGE_MARKER,
+    },
+    response: { content: JSON.stringify(AUDIENCE_GARBAGE_OUTPUT) },
+  },
+  // Audience judge — internal-ops with a TRAILING TOKEN: "internal-ops
+  // (trivia)" / "internal-ops." A prefix-anchored match must still floor these;
+  // exact-equality after delimiter-collapse let them escape to borderline.
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_INTERNAL_OPS_TRAILING_MARKER,
+    },
+    response: {
+      content: JSON.stringify(AUDIENCE_INTERNAL_OPS_TRAILING_OUTPUT),
+    },
+  },
+  {
+    match: {
+      systemMessage: AUDIENCE_SYSTEM_MARKER,
+      userMessage: AUDIENCE_INTERNAL_OPS_TRAILING_DOT_MARKER,
+    },
+    response: {
+      content: JSON.stringify(AUDIENCE_INTERNAL_OPS_TRAILING_DOT_OUTPUT),
+    },
+  },
+  // Distillation judge — a candidate whose only "specific" is a machine-local
+  // /Users path: the patched prompt must NOT rate it "distilled" (§6.1).
+  {
+    match: {
+      systemMessage: DISTILLATION_SYSTEM_MARKER,
+      userMessage: MACHINE_PATH_DISTILL_MARKER,
+    },
+    response: { content: JSON.stringify(MACHINE_PATH_DISTILL_OUTPUT) },
   },
   // Embedding — WRONG dimension: the "model" returns a 7-element vector even
   // though embed() requested this.embeddingDimensions (1536). embed() must
@@ -430,6 +682,37 @@ describe("OpenAIDistiller (aimock)", () => {
       }
     });
 
+    it("WARNS and coerces an unrecognized knowledge_type to a NON-clear-relevant default (no clear-relevant bypass escape)", async () => {
+      // Finding 1 (floor escape): an unrecognized model knowledge_type was
+      // silently coerced to "design-rationale" — which is a CLEAR-RELEVANT type.
+      // That hands a garbled internal-ops candidate the clear-relevant pre-screen
+      // bypass in the audience gate, skipping the fail-restrictive judge and the
+      // internal-ops floor. Fail-restrictive: an unrecognized type must WARN
+      // (mirroring coerceEpisodicSensitivity, whose sibling was silent) AND
+      // default to a type that is NOT clear-relevant, so unknowns fall through to
+      // the judge instead of being force-passed.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const fragment = await distiller.distillEpisodicWindow(
+          `Transcript window ${UNRECOGNIZED_KNOWLEDGE_TYPE_MARKER}: deploy cadence.`,
+          { sourceName: "session-unknown-kt", subsystem: "harvest" },
+        );
+
+        expect(() => CandidateFragmentSchema.parse(fragment)).not.toThrow();
+        const kt = fragment.provenance.classification.knowledge_type;
+        // The coerced default must NOT be one of the clear-relevant types, or a
+        // garbled internal-ops candidate escapes the floor via the bypass.
+        expect(CLEAR_RELEVANT_KNOWLEDGE_TYPES.has(kt)).toBe(false);
+        // The warning names the discarded value so the operator can see what the
+        // model actually said (mirrors the sensitivity coercion warn).
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("totally-made-up-knowledge-type"),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it("sanitizes a ':'-bearing model subsystem and trims validationTargets so the fragment stays schema-valid", async () => {
       // ':' is a canonical-key structural delimiter; CandidateFragmentSchema
       // rejects it in subsystem. The distiller promises the returned fragment
@@ -576,6 +859,210 @@ describe("OpenAIDistiller (aimock)", () => {
       );
       expect(verdict.excluded).toBe(false);
       expect(verdict.reason).toBe("Candidate is a generic fact.");
+    });
+  });
+
+  describe("judgeAudience (§4.4)", () => {
+    it("rates a PR-closeout/deploy candidate internal-ops", async () => {
+      const verdict = await distiller.judgeAudience({
+        title: `PR-closeout log ${AUDIENCE_INTERNAL_OPS_MARKER}`,
+        content:
+          "PR #742 shipped the reindex tweak and redeployed the Railway service.",
+        knowledge_type: "operational",
+        subsystem: "pr-closeout",
+      });
+      expect(verdict.kind).toBe("internal-ops");
+      if (verdict.kind === "internal-ops") {
+        expect(verdict.reason).toBe(AUDIENCE_INTERNAL_OPS_OUTPUT.reason);
+      }
+    });
+
+    it("rates a why/how claim about timingSafeEqual relevant", async () => {
+      const verdict = await distiller.judgeAudience({
+        title: `Why timingSafeEqual ${AUDIENCE_RELEVANT_MARKER}`,
+        content:
+          "POST /admin/:op compares the token via timingSafeEqual so a wrong key returns 401 without leaking timing.",
+        knowledge_type: "security",
+        subsystem: "admin-api",
+      });
+      expect(verdict.kind).toBe("relevant");
+    });
+
+    it("rates an internal-leaning-but-maybe-useful claim borderline", async () => {
+      const verdict = await distiller.judgeAudience({
+        title: `Advanced internals ${AUDIENCE_BORDERLINE_MARKER}`,
+        content:
+          "The reindex job batches by subsystem; a sophisticated builder might reuse the batching idea.",
+        knowledge_type: "operational",
+        subsystem: "reindex",
+      });
+      expect(verdict.kind).toBe("borderline");
+      if (verdict.kind === "borderline") {
+        expect(verdict.reason).toBe(AUDIENCE_BORDERLINE_OUTPUT.reason);
+      }
+    });
+
+    it("maps an underscore-delimited 'internal_ops' verdict to internal-ops (no throw)", async () => {
+      const verdict = await distiller.judgeAudience({
+        title: `Deploy log ${AUDIENCE_INTERNAL_OPS_UNDERSCORE_MARKER}`,
+        content: "PR #99 redeployed the Railway service.",
+        knowledge_type: "operational",
+        subsystem: "pr-closeout",
+      });
+      expect(verdict.kind).toBe("internal-ops");
+      if (verdict.kind === "internal-ops") {
+        expect(verdict.reason).toBe(
+          AUDIENCE_INTERNAL_OPS_UNDERSCORE_OUTPUT.reason,
+        );
+      }
+    });
+
+    it("maps a space-delimited 'internal ops' verdict to internal-ops (no throw)", async () => {
+      const verdict = await distiller.judgeAudience({
+        title: `Deploy log ${AUDIENCE_INTERNAL_OPS_SPACE_MARKER}`,
+        content: "PR #100 redeployed the Railway service.",
+        knowledge_type: "operational",
+        subsystem: "pr-closeout",
+      });
+      expect(verdict.kind).toBe("internal-ops");
+      if (verdict.kind === "internal-ops") {
+        expect(verdict.reason).toBe(AUDIENCE_INTERNAL_OPS_SPACE_OUTPUT.reason);
+      }
+    });
+
+    it("maps a cased/padded '  Internal_Ops  ' verdict to internal-ops (no throw)", async () => {
+      const verdict = await distiller.judgeAudience({
+        title: `Deploy log ${AUDIENCE_INTERNAL_OPS_CASED_MARKER}`,
+        content: "PR #101 redeployed the Railway service.",
+        knowledge_type: "operational",
+        subsystem: "pr-closeout",
+      });
+      expect(verdict.kind).toBe("internal-ops");
+      if (verdict.kind === "internal-ops") {
+        expect(verdict.reason).toBe(AUDIENCE_INTERNAL_OPS_CASED_OUTPUT.reason);
+      }
+    });
+
+    it("maps a double-space 'internal  ops' verdict to internal-ops (not borderline)", async () => {
+      // Round-1 canonicalized only single-delimiter variants; an interior run
+      // of >1 space slipped through to the borderline fallback, UN-FLOORING an
+      // internal-ops verdict (borderline does not floor approvable=false).
+      const verdict = await distiller.judgeAudience({
+        title: `Deploy log ${AUDIENCE_INTERNAL_OPS_DBLSPACE_MARKER}`,
+        content: "PR #102 redeployed the Railway service.",
+        knowledge_type: "operational",
+        subsystem: "pr-closeout",
+      });
+      expect(verdict.kind).toBe("internal-ops");
+      if (verdict.kind === "internal-ops") {
+        expect(verdict.reason).toBe(
+          AUDIENCE_INTERNAL_OPS_DBLSPACE_OUTPUT.reason,
+        );
+      }
+    });
+
+    it("maps a tab-delimited 'internal\\tops' verdict to internal-ops (not borderline)", async () => {
+      // A tab between the two tokens is the same interior-run gap as a double
+      // space — it must collapse to the canonical internal-ops verdict.
+      const verdict = await distiller.judgeAudience({
+        title: `Deploy log ${AUDIENCE_INTERNAL_OPS_TAB_MARKER}`,
+        content: "PR #103 redeployed the Railway service.",
+        knowledge_type: "operational",
+        subsystem: "pr-closeout",
+      });
+      expect(verdict.kind).toBe("internal-ops");
+      if (verdict.kind === "internal-ops") {
+        expect(verdict.reason).toBe(AUDIENCE_INTERNAL_OPS_TAB_OUTPUT.reason);
+      }
+    });
+
+    it("falls back to borderline on an unrecognized verdict (never-drop, no throw)", async () => {
+      const verdict = await distiller.judgeAudience({
+        title: `Ambiguous claim ${AUDIENCE_GARBAGE_MARKER}`,
+        content: "Some claim the model classified with a bogus verdict.",
+        knowledge_type: "operational",
+        subsystem: "misc",
+      });
+      expect(verdict.kind).toBe("borderline");
+      if (verdict.kind === "borderline") {
+        expect(verdict.reason).toBe(AUDIENCE_GARBAGE_OUTPUT.reason);
+      }
+    });
+
+    it("WARNS at the seam when it falls back to borderline on an unrecognized verdict (observability, still never-drop)", async () => {
+      // Finding 2: the unrecognized-verdict → borderline fallback logged
+      // NOTHING, unlike every sibling branch (which throws or warns). A drifting
+      // model silently inflates the human-review queue with no operator signal.
+      // The fallback must WARN at the seam (mirroring the sibling warn style)
+      // while KEEPING the never-throw, borderline behavior.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const verdict = await distiller.judgeAudience({
+          title: `Ambiguous claim ${AUDIENCE_GARBAGE_MARKER}`,
+          content: "Some claim the model classified with a bogus verdict.",
+          knowledge_type: "operational",
+          subsystem: "misc",
+        });
+        expect(verdict.kind).toBe("borderline");
+        // The warn names the discarded verdict so a drifting model is visible.
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("totally-made-up-verdict"),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("maps an 'internal-ops (trivia)' verdict (trailing token) to internal-ops, not borderline", async () => {
+      // Finding 3: the floor used EXACT-equality after delimiter-collapse, so a
+      // verdict with an extra trailing token fell through to the non-flooring
+      // borderline fallback — a floor escape. A prefix-anchored match must floor
+      // "internal-ops (trivia)".
+      const verdict = await distiller.judgeAudience({
+        title: `Deploy log ${AUDIENCE_INTERNAL_OPS_TRAILING_MARKER}`,
+        content: "PR #200 redeployed the Railway service.",
+        knowledge_type: "operational",
+        subsystem: "pr-closeout",
+      });
+      expect(verdict.kind).toBe("internal-ops");
+      if (verdict.kind === "internal-ops") {
+        expect(verdict.reason).toBe(
+          AUDIENCE_INTERNAL_OPS_TRAILING_OUTPUT.reason,
+        );
+      }
+    });
+
+    it("maps an 'internal-ops.' verdict (trailing period) to internal-ops, not borderline", async () => {
+      const verdict = await distiller.judgeAudience({
+        title: `Deploy log ${AUDIENCE_INTERNAL_OPS_TRAILING_DOT_MARKER}`,
+        content: "PR #201 redeployed the Railway service.",
+        knowledge_type: "operational",
+        subsystem: "pr-closeout",
+      });
+      expect(verdict.kind).toBe("internal-ops");
+      if (verdict.kind === "internal-ops") {
+        expect(verdict.reason).toBe(
+          AUDIENCE_INTERNAL_OPS_TRAILING_DOT_OUTPUT.reason,
+        );
+      }
+    });
+  });
+
+  describe("judgeDistillation env-glue reconciliation (§6.1)", () => {
+    it("does NOT rate a candidate 'distilled' when its only specific is a machine-local path", async () => {
+      // §6.1: machine-local absolute paths (/Users/…) are env glue, NOT
+      // product-portable specifics. The patched prompt must stop the gate from
+      // rating an env-glue-only candidate "distilled" just because it carries a
+      // long opaque path string. The aimock fixture returns "restatement" for
+      // this input; the assertion is that the verdict is NOT "distilled".
+      const verdict = await distiller.judgeDistillation({
+        title: `Added the atlas gate ${MACHINE_PATH_DISTILL_MARKER}`,
+        content:
+          "Added the audience gate at /Users/dev/proj/cpk/pathfinder/src/atlas/audience-gate.ts.",
+        knowledge_type: "operational",
+      });
+      expect(verdict.kind).not.toBe("distilled");
+      expect(["restatement", "rewritten"]).toContain(verdict.kind);
     });
   });
 });

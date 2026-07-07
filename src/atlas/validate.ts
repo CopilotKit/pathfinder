@@ -35,8 +35,9 @@ import { lookupPill } from "./adapters/showcase.js";
 import type { FeatureRegistry, PillStatus } from "./adapters/showcase.js";
 import {
   BEHAVIOR_KNOWLEDGE_TYPES,
-  RAG_NO_DELTA_MARKER,
   RESTATEMENT_MARKER,
+  hasFloorMarker,
+  isApprovableFloored,
 } from "./types.js";
 import type { Candidate, ValidationStatus } from "./types.js";
 
@@ -367,28 +368,6 @@ export function hasRestatementMarker(
   return hasFloorMarker(c, RESTATEMENT_MARKER);
 }
 
-// Whether the candidate carries a DEDICATED floor marker `marker` on EITHER
-// carrier idiom an upstream gate uses: a whole `"; "`-delimited token in
-// `provenance.validated_against`, or a `fused_from` evidence ref. Whole-token /
-// whole-ref matched (never a substring — one marker could be a prefix of
-// another). Shared by the RESTATEMENT_MARKER reader (above) and the composed
-// approvability floor (below), which check the two dedicated floor markers the
-// upstream gates emit: distillation's RESTATEMENT_MARKER and rag-dedup's
-// RAG_NO_DELTA_MARKER.
-function hasFloorMarker(
-  c: Pick<Candidate, "provenance" | "evidence">,
-  marker: string,
-): boolean {
-  const validatedAgainst = c.provenance.validated_against;
-  if (
-    validatedAgainst &&
-    validatedAgainst.split("; ").some((tok) => tok === marker)
-  ) {
-    return true;
-  }
-  return c.evidence.some((e) => e.kind === "fused_from" && e.ref === marker);
-}
-
 // Promote a candidate through the validation ladder and enforce the binding
 // approvability rule. Returns a NEW Candidate; the input is not mutated.
 export async function promoteValidation(
@@ -433,7 +412,7 @@ export async function promoteValidation(
 
   // COMPOSE upstream FLOORS — the recompute must never RAISE approvability above
   // a value an upstream GATE (not canonicalize's status rule) already floored it
-  // to. Two gates floor approvability for reasons the promoted status alone
+  // to. Several gates floor approvability for reasons the promoted status alone
   // cannot see, and EACH stamps a DEDICATED floor marker so the floor survives
   // this recompute:
   //
@@ -441,23 +420,25 @@ export async function promoteValidation(
   //     already-indexed content carries no NEW verifiable claim.
   //   - RAG_NO_DELTA_MARKER (rag-dedup no-delta gate): a pure corpus DUPLICATE
   //     with nothing net-new to re-seed (applyDistillDelta's no-delta floor).
+  //   - INTERNAL_OPS_MARKER (audience gate): scoped to internal-ops, not
+  //     shippable to the public corpus audience.
   //
-  // The old recompute honored ONLY the restatement marker, so a no-delta
-  // duplicate whose symbols grep-verify was clobbered back to approvable=true —
-  // silently defeating dedup's "duplicates aren't approvable" guarantee. The
-  // structural fix is to compose ALL dedicated floor markers GENERALLY. A
-  // dedicated marker is unambiguous: unlike the generic corpus-overlap
-  // ANNOTATION (stamped for EVERY overlap verdict, delta included, where the
-  // candidate stays approvable), a floor marker is emitted ONLY when the gate
-  // truly floors — so it fires the floor regardless of the incoming flag, and
-  // canonicalize's pure status-rule floor (which stamps NO marker, e.g. an
-  // unverified behavior fact) carries no floor here and is still LIFTED by
-  // `clearsValidationRule` on promotion, preserving the successfully-validated-
-  // behavior path. Any FUTURE gate that floors approvability just adds its
-  // dedicated marker to this set.
-  const upstreamFloored =
-    hasFloorMarker(c, RESTATEMENT_MARKER) ||
-    hasFloorMarker(c, RAG_NO_DELTA_MARKER);
+  // An old recompute honored ONLY the restatement marker, so a floored
+  // duplicate/internal-ops candidate whose symbols grep-verify was clobbered
+  // back to approvable=true — silently defeating the upstream gate's guarantee.
+  // The structural fix composes ALL dedicated floor markers via the S0 shared
+  // `isApprovableFloored` predicate (the ONE source of truth over
+  // APPROVABLE_FLOOR_MARKERS, also read by canonicalize's rank floor — the two
+  // floors can never drift). A dedicated marker is unambiguous: unlike the
+  // generic corpus-overlap ANNOTATION (stamped for EVERY overlap verdict, delta
+  // included, where the candidate stays approvable), a floor marker is emitted
+  // ONLY when the gate truly floors — so it fires the floor regardless of the
+  // incoming flag, and canonicalize's pure status-rule floor (which stamps NO
+  // marker, e.g. an unverified behavior fact) carries no floor here and is still
+  // LIFTED by `clearsValidationRule` on promotion, preserving the successfully-
+  // validated-behavior path. Any FUTURE gate that floors approvability just adds
+  // its dedicated marker to APPROVABLE_FLOOR_MARKERS and both floors pick it up.
+  const upstreamFloored = isApprovableFloored(c);
 
   const approvable = clearsValidationRule && !upstreamFloored;
 

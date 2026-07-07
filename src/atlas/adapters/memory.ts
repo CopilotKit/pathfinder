@@ -25,6 +25,7 @@ import type {
   KnowledgeType,
   Provenance,
 } from "../types.js";
+import { sanitizeEnvRefs } from "./sanitize-env-refs.js";
 import { scanSensitivity } from "./sensitivity-scan.js";
 import { extractValidationTargets } from "./validation-targets.js";
 import type { AdapterContext, LeafAdapter } from "./types.js";
@@ -290,7 +291,6 @@ export const memoryAdapter: LeafAdapter<MemoryFileUnit> = {
 
     const name = asString(frontmatter.name);
     const description = asString(frontmatter.description);
-    const originSessionId = asString(frontmatter.originSessionId);
 
     // KEEP/DROP gate. reference_/project_ always KEEP. feedback_ KEEPs only
     // operational/infra/codebase why-how. Unknown/absent prefix → DROP (the
@@ -335,11 +335,27 @@ export const memoryAdapter: LeafAdapter<MemoryFileUnit> = {
     // is SAFE and stays internal.
     const sensitivity = scanSensitivity(name, description, body);
 
+    // The provenance source is `memory:<basename>` with NO session suffix
+    // (spec §3.1-E2 / §3.3): the authoring session UUID is machine-local glue
+    // that resolves only for internal staff, so it must never enter the
+    // external corpus. `provenance.source` is externally persisted via
+    // toSeedEntryRow (spec §3.1), so it is leak-surface — the basename form
+    // keeps the traceable file identity without the private session id. The
+    // basename is the last path segment (extension retained), so a
+    // directory-qualified filename never leaks its machine-local prefix.
+    const provenanceBasename = unit.filename.split("/").pop() ?? unit.filename;
+
+    // Sanitize the emitted content and provenance.source through the shared
+    // env-reference pass BEFORE returning the fragment (spec §3.3): a
+    // machine-local path or private ref embedded in a memory note's body/source
+    // is rewritten to its repo-relative tail / placeholder here, at
+    // fragment-production time.
+    const { content: sanitizedContent, source: sanitizedSource } =
+      sanitizeEnvRefs(content, `memory:${provenanceBasename}`);
+
     const provenance: Provenance = {
-      // The session that authored the memory note is the primary source.
-      source: originSessionId
-        ? `memory:${unit.filename} (session ${originSessionId})`
-        : `memory:${unit.filename}`,
+      // The memory note is the primary source; identified by its basename.
+      source: sanitizedSource,
       date: isoDate(ctx.now),
       // description is the distilled human-written summary of the fact — the
       // single free-text provenance slot carries it forward for the reviewer.
@@ -363,7 +379,7 @@ export const memoryAdapter: LeafAdapter<MemoryFileUnit> = {
       source_name: unit.filename,
       // name is the already-distilled claim title — NOT the raw filename.
       title: name || slug,
-      content,
+      content: sanitizedContent,
       provenance,
       evidence: [],
       needsReview: false,

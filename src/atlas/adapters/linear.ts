@@ -19,6 +19,7 @@
 // never mutates the input, takes no build-time dependency on the LLM seam.
 
 import type { CandidateFragment } from "../types.js";
+import { sanitizeEnvRefs } from "./sanitize-env-refs.js";
 import { scanSensitivity } from "./sensitivity-scan.js";
 import type { AdapterContext, LeafAdapter } from "./types.js";
 
@@ -180,6 +181,13 @@ export const linearAdapter: LeafAdapter<LinearDocUnit> = {
       });
     }
 
+    // §3.3: sanitize the emitted content (and provenance.source) through the
+    // shared env-reference pass immediately before returning the fragment, so a
+    // machine-local path / session UUID / private ref in the distilled
+    // Problem/Why/Non-Goals prose is rewritten before it enters the pipeline.
+    const { content: sanitizedContent, source: sanitizedSource } =
+      sanitizeEnvRefs(content, "linear-doc");
+
     const fragment: CandidateFragment = {
       sourcetype: "linear-doc",
       subsystem,
@@ -187,9 +195,9 @@ export const linearAdapter: LeafAdapter<LinearDocUnit> = {
       repo_url: undefined,
       ref: undefined,
       title: titleOrFallback(unit.title, `Linear doc ${unit.url}`),
-      content,
+      content: sanitizedContent,
       provenance: {
-        source: "linear-doc",
+        source: sanitizedSource,
         url: unit.url,
         date,
         validated_against: validatedAgainst,

@@ -567,6 +567,158 @@ describe("distillBodyToContent — the NARROW shared helper (B2)", () => {
     expect(out).not.toContain("boilerplate line");
   });
 
+  it("keeps fence parity when a real fence has an INTERNAL blank line and closes, then a boilerplate section follows (P3)", () => {
+    // Over-KEEP bucket (a) / parity-inversion: the outside-section
+    // unterminated-fence recovery fires on a BLANK line inside a LEGITIMATE
+    // fenced block that DOES later close. The recovery flips `inFence` false
+    // mid-fence; the block's REAL closing ``` then re-toggles `inFence` to
+    // true while the parser is actually OUTSIDE any fence — inverting parity
+    // for the rest of the body. With parity inverted and NO trailing blank
+    // line after the closer, a subsequent boilerplate heading (`## Test plan`)
+    // takes the `if (inFence)` branch, so heading parsing is short-circuited
+    // and the whole boilerplate section is silently RETAINED as literal
+    // content; symmetrically, real trailing prose can be swallowed. Fence
+    // parity must be correct regardless of internal blank lines in a real
+    // fenced block.
+    const body =
+      "Real rationale prose.\n" +
+      "```sh\n" + // opens outside any dropped section
+      "echo one\n" +
+      "\n" + // INTERNAL blank line inside the real fence
+      "echo two\n" +
+      "```\n" + // the REAL closer — NO trailing blank line before the heading
+      "## Test plan\n" + // a REAL boilerplate heading that MUST still drop
+      "- [x] ran the suite\n" +
+      "boilerplate detail line\n" +
+      "\n" +
+      "## Rationale\n" +
+      "This trailing prose is REAL why/how content that must survive.";
+    const out = distillBodyToContent(body);
+    // The real prose and the whole fenced block survive.
+    expect(out).toContain("Real rationale prose.");
+    expect(out).toContain("echo one");
+    expect(out).toContain("echo two");
+    // The boilerplate section after the closed fence STILL drops.
+    expect(out).not.toContain("## Test plan");
+    expect(out).not.toContain("ran the suite");
+    expect(out).not.toContain("boilerplate detail line");
+    // Real trailing prose after the boilerplate is retained (not swallowed).
+    expect(out).toContain("## Rationale");
+    expect(out).toContain(
+      "This trailing prose is REAL why/how content that must survive.",
+    );
+  });
+
+  it("keeps fence parity when an UNTERMINATED fence's blank-line recovery is followed by an INDEPENDENT fenced block, then boilerplate (P3-fix-2)", () => {
+    // Over-KEEP bucket (a) / parity-inversion re-introduced by p3-fix-1: the
+    // outside-section blank-line recovery arms the closer-absorb for a fence
+    // that NEVER really closes. A later INDEPENDENT ```code``` block's OPENER
+    // then satisfies the same `absorb && !inFence` condition and gets absorbed
+    // WITHOUT setting `inFence = true`. That block's real CLOSER then toggles
+    // `inFence` to true while the parser is actually OUTSIDE any fence —
+    // inverting parity for the rest of the body, so a subsequent boilerplate
+    // heading (`## Test plan`) takes the `if (inFence)` branch and is silently
+    // RETAINED. The recovery must not let a NEW block's opener be swallowed by
+    // the pending absorb.
+    const body =
+      "Real rationale prose.\n" +
+      "```sh\n" + // opens outside any dropped section, NEVER closed (unterminated)
+      "echo build\n" +
+      "\n" + // paragraph break → recovery boundary for the open fence
+      "Prose between the fences that must survive.\n" +
+      "```js\n" + // OPENER of an INDEPENDENT, well-formed fenced block
+      "const x = 1;\n" +
+      "```\n" + // CLOSER of that independent block
+      "## Test plan\n" + // a REAL boilerplate heading that MUST still drop
+      "- [x] ran the suite\n" +
+      "boilerplate detail line\n" +
+      "\n" +
+      "## Rationale\n" +
+      "This trailing prose is REAL why/how content that must survive.";
+    const out = distillBodyToContent(body);
+    // The real prose survives, and so does the independent block's content.
+    expect(out).toContain("Real rationale prose.");
+    expect(out).toContain("echo build");
+    expect(out).toContain("Prose between the fences that must survive.");
+    expect(out).toContain("const x = 1;");
+    // The boilerplate section after the independent block STILL drops.
+    expect(out).not.toContain("## Test plan");
+    expect(out).not.toContain("ran the suite");
+    expect(out).not.toContain("boilerplate detail line");
+    // Real trailing prose after the boilerplate is retained (not swallowed).
+    expect(out).toContain("## Rationale");
+    expect(out).toContain(
+      "This trailing prose is REAL why/how content that must survive.",
+    );
+  });
+
+  it("keeps stripping to EOF after a truly-unterminated fence with an internal blank line and NO later fence marker (EOF protection)", () => {
+    // EOF-protection invariant: a fence opens outside any dropped section,
+    // contains an internal blank line, and NEVER closes — no later ``` marker
+    // at all. The blank-line recovery must resume heading-parsing so a trailing
+    // boilerplate heading still strips, and parity must NOT latch `inFence`
+    // true to EOF.
+    const body =
+      "Why prose.\n" +
+      "```sh\n" + // unterminated fence, no closer anywhere
+      "echo one\n" +
+      "\n" + // internal blank line → recovery boundary
+      "echo two\n" +
+      "## Test plan\n" + // boilerplate heading AFTER the recovery — must drop
+      "- [x] ran it\n" +
+      "boilerplate tail";
+    const out = distillBodyToContent(body);
+    expect(out).toContain("Why prose.");
+    expect(out).toContain("echo one");
+    expect(out).toContain("echo two");
+    expect(out).not.toContain("## Test plan");
+    expect(out).not.toContain("ran it");
+    expect(out).not.toContain("boilerplate tail");
+  });
+
+  it("keeps fence parity after a DROPPED section's unterminated fence recovers and a later fence marker follows, then boilerplate + real prose (P3-fix-3)", () => {
+    // Over-KEEP + content-LOSS bucket (a) / parity-inversion: symmetric sibling
+    // of P3-fix-2, but the unterminated fence opens INSIDE a dropped boilerplate
+    // section. The dropped-section blank-line recovery (`inDroppedFence` branch,
+    // L310) exits the drop but — before p3-fix-3 — failed to arm the sticky
+    // `recoveredOutsideFence` flag that its OUTSIDE-section sibling (L282) arms.
+    // So a later fence marker toggled `inFence` TRUE while the parser is
+    // actually OUTSIDE any fence, inverting parity for the rest of the body:
+    // a subsequent boilerplate heading (`## Test plan`) took the `if (inFence)`
+    // branch and was silently OVER-KEPT, and — symmetrically, with a second
+    // marker — real trailing why/how prose is swallowed to EOF. The
+    // dropped-section recovery must arm the sticky flag exactly like the
+    // outside-section recovery, so every post-recovery ``` is kept as literal
+    // content and NEVER re-toggles parity.
+    const body =
+      "Why prose.\n" +
+      "## Screenshots\n" + // boilerplate heading → drop starts
+      "```sh\n" + // opens INSIDE the dropped section, unterminated
+      "echo build\n" +
+      "\n" + // paragraph break → dropped-section recovery boundary (L310)
+      "Middle prose keep me.\n" +
+      "```\n" + // a later fence marker — must NOT re-toggle parity post-recovery
+      "## Test plan\n" + // a REAL boilerplate heading that MUST still drop
+      "- [x] ran it\n" +
+      "boilerplate tail\n" +
+      "\n" +
+      "## Rationale\n" +
+      "Closing prose. This trailing why/how content must survive.";
+    const out = distillBodyToContent(body);
+    // Real prose before and between fences survives.
+    expect(out).toContain("Why prose.");
+    expect(out).toContain("Middle prose keep me.");
+    // The boilerplate section after the recovery STILL drops (no over-keep).
+    expect(out).not.toContain("## Test plan");
+    expect(out).not.toContain("ran it");
+    expect(out).not.toContain("boilerplate tail");
+    // Real trailing prose after the boilerplate is retained (not dropped to EOF).
+    expect(out).toContain("## Rationale");
+    expect(out).toContain(
+      "Closing prose. This trailing why/how content must survive.",
+    );
+  });
+
   it("skips the CONTRIBUTING ack drop inside code fences (U2)", () => {
     const body =
       "Prose.\n" + "```\n" + "- [x] I have read the CONTRIBUTING doc\n" + "```";
@@ -894,6 +1046,30 @@ describe("distillBodyToContent title-prefix interplay is unaffected; distillTitl
     // Whitespace-only: distilled AND trimmed raw are both empty → fall back to
     // the `PR #<number>` form (pr.json fixture is #1337).
     expect(await titleFor("   ")).toBe("PR #1337");
+  });
+});
+
+// Env-reference sanitization (spec §3.3): every adapter runs its emitted
+// `content` (and `provenance.source` where set) through `sanitizeEnvRefs`
+// before returning from extract(). A machine-local `/Users/<user>/…` path in
+// the PR body must be rewritten to its repo-relative tail, and a bare session
+// UUID must be stripped, so neither leaks into the external corpus.
+describe("githubAdapter — env-reference sanitization (§3.3)", () => {
+  it("sanitizes a /Users/ path + session UUID out of the emitted content", async () => {
+    const unit = loadFixture("pr.json");
+    (unit as GitHubPullRequestUnit).pullRequest.body =
+      "We patched the bug in " +
+      "/Users/jpr5/proj/cpk/pathfinder/src/atlas/distillation-gate.ts " +
+      "during session e654541f-dcb7-4152-8ee8-f669848555ee — see the fix.";
+    const [fragment] = await githubAdapter.extract(unit, ctx);
+
+    // E1: the machine-local prefix is stripped; the repo-relative tail survives.
+    expect(fragment.content).toContain("src/atlas/distillation-gate.ts");
+    expect(fragment.content).not.toContain("/Users/jpr5");
+    // E2: the bare session UUID is gone.
+    expect(fragment.content).not.toContain(
+      "e654541f-dcb7-4152-8ee8-f669848555ee",
+    );
   });
 });
 

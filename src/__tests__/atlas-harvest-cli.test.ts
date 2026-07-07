@@ -61,6 +61,7 @@ import type {
   CorpusHit,
   ValidationStatus,
 } from "../atlas/types.js";
+import { INTERNAL_OPS_MARKER } from "../atlas/types.js";
 import type { FeatureRegistry } from "../atlas/adapters/showcase.js";
 import type { ValidationContext } from "../atlas/validate.js";
 import type { ExclusionRule } from "../atlas/exclude.js";
@@ -73,14 +74,18 @@ import {
   buildLeafAdapterRegistry,
   runHarvest,
   buildArtifactCandidates,
+  processCandidatePipeline,
   parseMinOverlap,
   resolveBaseUrl,
   resolveToken,
   formatCliError,
   runAtlasHarvestCli,
+  resolveSharedPipelineSeams,
+  __internalsForTest,
   type RunHarvestDeps,
 } from "../atlas/harvest-cli.js";
 import type { DistillationJudge } from "../atlas/distillation-gate.js";
+import type { AudienceJudge } from "../atlas/audience-gate.js";
 
 // The sync MODULE is mocked file-wide: the sync-summary CLI test below asserts
 // only the driver's output plumbing — sync's own enactment semantics live in
@@ -208,6 +213,17 @@ const passThroughJudge: DistillationJudge = {
   judge: async () => ({ kind: "distilled" }),
 };
 
+// A pass-through audience judge: rules every candidate `relevant` (a no-op).
+// Injected alongside `passThroughJudge` into the tests that exercise
+// NON-audience-gate concerns (upsert/manifest/dedup-ordering/parity/re-rank) so
+// `runHarvest`/`buildArtifactCandidates` do not construct a real OpenAIDistiller
+// for the audience-gate default (which would need an API key). The audience
+// gate's OWN wiring is covered by the dedicated describe block at the end of
+// this file, and its transform behavior in atlas-audience-gate.test.ts.
+const passThroughAudienceJudge: AudienceJudge = {
+  judge: async () => ({ kind: "relevant" }),
+};
+
 // No-op semantic-dedup seams (Theme B). Injected alongside `passThroughJudge`
 // into the tests that exercise NON-dedup concerns (upsert/manifest/ordering) so
 // `runHarvest` does not construct a real OpenAIDistiller for the embed/distill
@@ -306,6 +322,7 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       upsert: true,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -350,6 +367,7 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       upsert: true,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -384,6 +402,7 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       runsDir,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -409,6 +428,7 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       dryRun: true,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -431,6 +451,7 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       runsDir,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -469,6 +490,7 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       runsDir,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
       deps,
@@ -501,6 +523,7 @@ describe("atlas-harvest driver — run pipeline (real PGlite)", () => {
       upsert: true,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -579,6 +602,7 @@ describe("atlas-harvest driver — artifact/run pipeline parity (FIX 1)", () => 
       runsDir,
       validationContext: ctx,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ragClient: parityClient,
       ...passThroughSemanticDedup,
     });
@@ -662,6 +686,7 @@ describe("atlas-harvest driver — artifact/run pipeline parity (FIX 1)", () => 
       runsDir,
       validationContext: ctx,
       judge: restatementJudge,
+      audienceJudge: passThroughAudienceJudge,
       ragClient: restatementClient,
       ...passThroughSemanticDedup,
     });
@@ -722,6 +747,7 @@ describe("atlas-harvest driver — artifact/run pipeline parity (FIX 1)", () => 
       runsDir,
       validationContext: ctx,
       judge: rewriteJudge,
+      audienceJudge: passThroughAudienceJudge,
       ragClient: rewriteClient,
       ...passThroughSemanticDedup,
     });
@@ -940,6 +966,7 @@ describe("atlas-harvest driver — artifact/upsert SEMANTIC rag-dedup parity (st
         runsDir,
         validationContext: ctx,
         judge: passThroughJudge,
+        audienceJudge: passThroughAudienceJudge,
         ...seams,
         vectorSearch: vectorSearchAbove(),
       });
@@ -953,6 +980,7 @@ describe("atlas-harvest driver — artifact/upsert SEMANTIC rag-dedup parity (st
         upsert: true,
         validationContext: ctx,
         judge: passThroughJudge,
+        audienceJudge: passThroughAudienceJudge,
         ...seams,
         vectorSearch: vectorSearchAbove(),
       });
@@ -1024,6 +1052,7 @@ describe("atlas-harvest driver — artifact/upsert SEMANTIC rag-dedup parity (st
         runsDir,
         validationContext: ctx,
         judge: passThroughJudge,
+        audienceJudge: passThroughAudienceJudge,
         ...seams,
         vectorSearch: vectorSearchAbove(),
       });
@@ -1036,6 +1065,7 @@ describe("atlas-harvest driver — artifact/upsert SEMANTIC rag-dedup parity (st
         upsert: true,
         validationContext: ctx,
         judge: passThroughJudge,
+        audienceJudge: passThroughAudienceJudge,
         ...seams,
         vectorSearch: vectorSearchAbove(),
       });
@@ -1245,6 +1275,7 @@ describe("atlas-harvest driver — run manifest (V80)", () => {
       runsDir,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -1270,6 +1301,7 @@ describe("atlas-harvest driver — run manifest (V80)", () => {
       runsDir,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -1296,6 +1328,7 @@ describe("atlas-harvest driver — run manifest (V80)", () => {
         runsDir,
         ragClient: client,
         judge: passThroughJudge,
+        audienceJudge: passThroughAudienceJudge,
         ...passThroughSemanticDedup,
         validationContext: emptyValidationContext(checkoutDir),
       });
@@ -1320,6 +1353,7 @@ describe("atlas-harvest driver — run manifest (V80)", () => {
       dryRun: true,
       ragClient: client,
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       ...passThroughSemanticDedup,
       validationContext: emptyValidationContext(checkoutDir),
     });
@@ -1387,6 +1421,7 @@ describe("atlas-harvest driver — post-validate re-rank (V57)", () => {
       // Pass-through distillation judge so this re-rank test does not construct a
       // real OpenAIDistiller (the gate's behavior is covered by the parity tests).
       judge: passThroughJudge,
+      audienceJudge: passThroughAudienceJudge,
       // No-op rag-dedup seams keep this re-rank test isolated to the rank stage.
       ragClient: rerankClient,
       ...passThroughSemanticDedup,
@@ -1628,6 +1663,21 @@ describe("atlas-harvest driver — artifact without --prior-run-id warns (X12)",
       match: { systemMessage: "WHY-vs-WHAT judge" },
       response: { content: JSON.stringify({ verdict: "distilled" }) },
     });
+    // The artifact path now ALSO runs the audience-relevance gate (§4.5), which —
+    // with no judge injection point on the CLI — constructs a real
+    // OpenAIDistiller-backed audience judge. The fragment is a product-portable
+    // why/how claim, so respond with the `relevant` verdict for any user message
+    // under the audience-judge system prompt. Keeps the LLM seam honest (org rule:
+    // aimock, never a vi.fn stub) without a real key.
+    mock.addFixture({
+      match: { systemMessage: "audience-relevance judge" },
+      response: {
+        content: JSON.stringify({
+          verdict: "relevant",
+          reason: "product-portable why/how claim",
+        }),
+      },
+    });
     await mock.start();
     process.env.OPENAI_BASE_URL = `${mock.url}/v1`;
     process.env.OPENAI_API_KEY = "mock";
@@ -1717,5 +1767,204 @@ describe("atlas-harvest driver — artifact without --prior-run-id warns (X12)",
     expect(warn).not.toHaveBeenCalledWith(
       expect.stringContaining("--prior-run-id not provided"),
     );
+  });
+});
+
+// ── S7: audience-relevance gate wiring into the shared pipeline (§4.5) ───────────
+//
+// The gate is wired into processCandidatePipeline AFTER enforceDistillation and
+// BEFORE dedupAgainstRagCorpus. These tests prove the wiring END-TO-END with a
+// FAKE AudienceJudge stub (never a real LLM): a candidate the stub rules
+// `internal-ops` flows through the SHARED pipeline and comes out approvable=false
+// (the gate stamps INTERNAL_OPS_MARKER → validate reads it as an approvability
+// floor). RED before the wiring existed (no audience gate → the candidate stays
+// approvable=true); GREEN after. The second test pins the pipeline ORDER:
+// enforceAudienceRelevance runs BETWEEN the distillation gate and rag-dedup.
+describe("atlas-harvest driver — audience-relevance gate wiring (S7 §4.5)", () => {
+  let runsDir: string;
+  let checkoutDir: string;
+
+  beforeAll(() => {
+    runsDir = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-harvest-aud-"));
+    checkoutDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "atlas-harvest-audco-"),
+    );
+  });
+
+  afterAll(() => {
+    fs.rmSync(runsDir, { recursive: true, force: true });
+    fs.rmSync(checkoutDir, { recursive: true, force: true });
+  });
+
+  // An architecture fact WITH a resolvable validationTarget: without the audience
+  // gate it source-verifies and stays approvable=true; the internal-ops floor is
+  // the ONLY thing that drives it to approvable=false, so it isolates the gate's
+  // wiring. Content/subsystem/knowledge_type are chosen so the gate's
+  // DETERMINISTIC pre-screen does NOT fire (subsystem "runtime" is not an infra
+  // slug; content carries no deploy/PR-closeout vocab; knowledge_type
+  // "architecture" is a clear-relevant type but the content lacks a
+  // product-portable-specific token, so it falls through to the injected judge) —
+  // this way the FAKE judge stub actually decides the verdict.
+  function audienceFragment(): CandidateFragment {
+    const symbolFile = path.join(checkoutDir, "src", "runtime", "stream.ts");
+    fs.mkdirSync(path.dirname(symbolFile), { recursive: true });
+    fs.writeFileSync(symbolFile, "export const drainToolQueue = () => {};\n");
+    return fragment({
+      claimSlugHint: "audience-internal-ops",
+      title: "An operational note with no external-builder value",
+      content:
+        "The team keeps an internal note about coordinating the weekly review " +
+        "cadence across sessions.",
+      provenance: {
+        source: "github-pr",
+        url: "https://github.com/CopilotKit/pathfinder/pull/77",
+        date: "2026-06-01",
+        classification: {
+          sensitivity: "public",
+          knowledge_type: "architecture",
+          audience: "all-staff",
+          validation_status: "unverified",
+          confidence: "high",
+          provenance_class: "primary",
+          freshness: { as_of: "2026-06-01" },
+        },
+      },
+      validationTargets: ["drainToolQueue"],
+    });
+  }
+
+  it("a candidate the audience judge rules internal-ops flows through the pipeline and comes out approvable=false", async () => {
+    const runId = "run-audience-internal-ops";
+    seedRunDir(runsDir, runId, [audienceFragment()]);
+
+    // FAKE audience judge: rules the candidate internal-ops (NOT a real LLM).
+    const internalOpsJudge: AudienceJudge = {
+      judge: async () => ({
+        kind: "internal-ops",
+        reason: "purely internal operational trivia",
+      }),
+    };
+
+    const { client } = makeSearchClient();
+    const store = new RunStore(runsDir);
+    const cands = await processCandidatePipeline({
+      runId,
+      store,
+      validationContext: emptyValidationContext(checkoutDir),
+      judge: passThroughJudge,
+      audienceJudge: internalOpsJudge,
+      ragClient: client,
+      ...passThroughSemanticDedup,
+    });
+
+    expect(cands).toHaveLength(1);
+    const cand = cands[0]!;
+    // The gate stamped the floor marker onto the shared carrier...
+    expect(cand.provenance.validated_against ?? "").toContain(
+      INTERNAL_OPS_MARKER,
+    );
+    // ...and validate READ it as an approvability floor, even though the
+    // candidate source-verifies (the drainToolQueue symbol resolves) — WITHOUT
+    // the audience gate this same candidate comes out approvable=true.
+    expect(cand.approvable).toBe(false);
+  });
+
+  it("runs enforceAudienceRelevance AFTER the distillation gate and BEFORE rag-dedup (pipeline order)", async () => {
+    const runId = "run-audience-order";
+    seedRunDir(runsDir, runId, [audienceFragment()]);
+
+    const order: string[] = [];
+
+    // Order-recording distillation judge (passes through as distilled).
+    const orderingDistillJudge: DistillationJudge = {
+      judge: async () => {
+        order.push("distill");
+        return { kind: "distilled" };
+      },
+    };
+    // Order-recording audience judge (relevant → no floor, keeps the order test
+    // focused purely on WHEN the gate runs).
+    const orderingAudienceJudge: AudienceJudge = {
+      judge: async () => {
+        order.push("audience");
+        return { kind: "relevant" };
+      },
+    };
+    // Order-recording dedup stub (passes candidates through unchanged).
+    const orderingDedup = async (c: Candidate[]): Promise<Candidate[]> => {
+      order.push("dedup");
+      return c;
+    };
+
+    const { client } = makeSearchClient();
+    const store = new RunStore(runsDir);
+    await processCandidatePipeline({
+      runId,
+      store,
+      validationContext: emptyValidationContext(checkoutDir),
+      judge: orderingDistillJudge,
+      audienceJudge: orderingAudienceJudge,
+      ragClient: client,
+      ...passThroughSemanticDedup,
+      dedup: orderingDedup,
+    });
+
+    // distillation gate → audience gate → rag-dedup.
+    expect(order).toEqual(["distill", "audience", "dedup"]);
+    expect(order.indexOf("audience")).toBeGreaterThan(order.indexOf("distill"));
+    expect(order.indexOf("audience")).toBeLessThan(order.indexOf("dedup"));
+  });
+});
+
+// ── Shared-pipeline seam defaults route through the ONE buildLlm() factory ───────
+//
+// resolveSharedPipelineSeams defaults every LLM-backed seam (judge, audienceJudge,
+// embed, distillDelta) to the SAME canonical `buildLlm()` factory. The audience
+// judge MUST NOT construct its own OpenAIDistiller directly — doing so silently
+// bypasses whatever config buildLlm applies (or later gains: apiKey sentinel,
+// model selection, baseURL). This test pins the default audienceJudge to the
+// buildLlm seam by swapping `__internalsForTest.buildLlm` for a spy and asserting
+// the default judge routes through it (never a real LLM — the fake is returned in
+// place of a distiller). RED before the fix: the default audienceJudge built its
+// own `new OpenAIDistiller()`, so the spy is never reached (and, with no
+// OPENAI_API_KEY, the real distiller throws at construction). GREEN after: the
+// default audienceJudge calls buildLlm().judge (the AudienceJudge seam method,
+// which OpenAIDistiller delegates to judgeAudience) like its sibling seams.
+describe("atlas-harvest driver — shared-pipeline seam defaults route through buildLlm", () => {
+  const realBuildLlm = __internalsForTest.buildLlm;
+
+  afterEach(() => {
+    __internalsForTest.buildLlm = realBuildLlm;
+    vi.restoreAllMocks();
+  });
+
+  it("defaults the audienceJudge seam through buildLlm() (not a direct new OpenAIDistiller)", async () => {
+    const judge = vi.fn(async () => ({ kind: "relevant" as const }));
+    // Fake LLM the buildLlm seam returns — exposes just the methods the seam
+    // defaults invoke; if the audienceJudge default bypasses buildLlm, this
+    // judge is never called (the AudienceJudge seam method OpenAIDistiller.judge
+    // delegates to judgeAudience).
+    const fakeLlm = {
+      judge,
+      judgeAudience: vi.fn(),
+      judgeDistillation: vi.fn(),
+      embed: vi.fn(),
+      distillDelta: vi.fn(),
+    };
+    const buildLlmSpy = vi.fn(() => fakeLlm);
+    __internalsForTest.buildLlm = buildLlmSpy as unknown as typeof realBuildLlm;
+
+    const seams = resolveSharedPipelineSeams({});
+    await seams.audienceJudge.judge({
+      title: "t",
+      content: "c",
+      knowledge_type: "architecture",
+      subsystem: "runtime",
+    });
+
+    // The default audienceJudge routed through the buildLlm seam...
+    expect(buildLlmSpy).toHaveBeenCalled();
+    // ...and invoked the judge (AudienceJudge) method on what buildLlm returned.
+    expect(judge).toHaveBeenCalledTimes(1);
   });
 });
