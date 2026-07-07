@@ -143,6 +143,27 @@ function childrenOf(block: unknown): unknown[] {
   return b[key]?.children ?? [];
 }
 
+// Concatenate the rendered text of a block and ALL its descendants (any nesting
+// depth) into one string — used to assert the distilled body appears SOMEWHERE
+// beneath a candidate to_do, regardless of how many toggle/paragraph levels it
+// is wrapped in.
+function deepText(block: unknown): string {
+  const self = plainTextOf(block);
+  const kids = childrenOf(block).map(deepText);
+  return [self, ...kids].join("\n");
+}
+
+// The first descendant block (any depth) of `block` whose `type` matches, or
+// undefined. Depth-first, self excluded.
+function findDescendant(block: unknown, type: string): unknown {
+  for (const child of childrenOf(block)) {
+    if ((child as { type?: string }).type === type) return child;
+    const nested = findDescendant(child, type);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
 const LONE_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
@@ -243,10 +264,14 @@ describe("notion-blocks — rich-text run split (exact ≤2000-char boundaries)"
     const c = makeCandidate({
       evidence: [{ kind: "thread", body }],
     });
-    const children = childrenOf(candidateToDoBlock(c));
-    // children[0] is the provenance callout; children[1] is the first evidence
-    // bullet, whose text is `thread: <body>`.
-    return children[1];
+    // The candidate's children are: content toggle (if any) → provenance
+    // callout → evidence bullets. Locate the evidence bullet by its `thread: `
+    // text rather than a fixed index, so the leading content toggle doesn't
+    // shift it out from under these split-boundary assertions.
+    const bullet = childrenOf(candidateToDoBlock(c)).find((ch) =>
+      plainTextOf(ch).startsWith("thread: "),
+    );
+    return bullet;
   }
 
   it("emits a SINGLE run when the content is exactly at the 2000-char cap (no split)", () => {
@@ -301,7 +326,12 @@ describe("notion-blocks — 100-run cap with explicit truncation marker", () => 
     const c = makeCandidate({
       evidence: [{ kind: "thread", body }],
     });
-    return runsOf(childrenOf(candidateToDoBlock(c))[1]);
+    // Locate the evidence bullet by its `thread: ` text (a leading content
+    // toggle child would otherwise shift a fixed index).
+    const bullet = childrenOf(candidateToDoBlock(c)).find((ch) =>
+      plainTextOf(ch).startsWith("thread: "),
+    );
+    return runsOf(bullet);
   }
 
   it("caps a pathological body at 100 runs and marks the truncation", () => {
@@ -535,6 +565,71 @@ describe("notion-blocks — candidate ⇄ block round-trip", () => {
     });
     // The badge (load-bearing security metadata) is still present at the tail.
     expect(rendered).toContain(flagBadge(c));
+  });
+});
+
+// ── candidate body shown as a collapsible toggle (reviewer can read the text) ───
+// The reviewer approves/rejects each candidate; they can only make that call if
+// they can SEE the distilled why/how prose (`c.content`). It is rendered as a
+// collapsible `toggle` child of the item (before the provenance callout +
+// evidence bullets), whose paragraph children carry the content via richText.
+
+describe("notion-blocks — candidate body rendered as a collapsible toggle", () => {
+  const MARKER = "UNIQUE-BODY-MARKER-7f3a";
+  const CONTENT = `${MARKER}: guards POST /admin/:op behind the RBAC check`;
+
+  it("renders the distilled content inside a toggle under an APPROVABLE to_do", () => {
+    const c = makeCandidate({ content: CONTENT });
+    const block = candidateToDoBlock(c);
+    const toggle = findDescendant(block, "toggle");
+    expect(toggle).toBeDefined();
+    // The content marker + concrete token must be reachable within the toggle's
+    // descendant paragraphs (the reviewer can read the body).
+    expect(deepText(toggle)).toContain(MARKER);
+    expect(deepText(toggle)).toContain("POST /admin/:op");
+    // The toggle carries paragraph children (not just a bare label).
+    const para = findDescendant(toggle, "paragraph");
+    expect(para).toBeDefined();
+    expect(plainTextOf(para)).toContain(MARKER);
+  });
+
+  it("renders the distilled content inside a toggle under an UNVERIFIED note", () => {
+    const c = makeCandidate({ approvable: false, content: CONTENT });
+    const block = unverifiedNoteBlock(c);
+    const toggle = findDescendant(block, "toggle");
+    expect(toggle).toBeDefined();
+    expect(deepText(toggle)).toContain(MARKER);
+    expect(deepText(toggle)).toContain("POST /admin/:op");
+  });
+
+  it("does NOT emit a toggle when content is empty/whitespace (guard)", () => {
+    for (const content of ["", "   ", "\n\t "]) {
+      expect(
+        findDescendant(
+          candidateToDoBlock(makeCandidate({ content })),
+          "toggle",
+        ),
+      ).toBeUndefined();
+      expect(
+        findDescendant(
+          unverifiedNoteBlock(makeCandidate({ content })),
+          "toggle",
+        ),
+      ).toBeUndefined();
+    }
+  });
+
+  it("splits a long body across multiple paragraph runs without dropping content", () => {
+    // A body far past a single 2000-char run: the toggle's paragraph(s) must
+    // still reconstruct the full content (marker at the tail proves no drop).
+    const tail = `${MARKER}-END`;
+    const content = `${"b".repeat(RICH_TEXT_RUN_MAX + 500)}${tail}`;
+    const toggle = findDescendant(
+      candidateToDoBlock(makeCandidate({ content })),
+      "toggle",
+    );
+    expect(toggle).toBeDefined();
+    expect(deepText(toggle)).toContain(tail);
   });
 });
 

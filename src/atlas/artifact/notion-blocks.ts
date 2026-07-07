@@ -76,6 +76,17 @@ type ChildBlockRequest = NonNullable<
   Extract<BlockObjectRequest, { type?: "callout" }>["callout"]["children"]
 >[number];
 
+// Notion permits children ONE level deeper still under a depth-1 block (a
+// candidate's toggle sits at depth 1 as a child of the to_do/note, so ITS OWN
+// children — the content paragraphs — are at depth 2). The SDK types that
+// deepest permitted level as a distinct (non-exported) leaf union; we capture
+// it structurally from the toggle child's own `children` field, exactly as
+// ChildBlockRequest is captured from the callout's. Our grandchildren are only
+// leaf paragraphs, which live within this depth.
+type GrandchildBlockRequest = NonNullable<
+  Extract<ChildBlockRequest, { type?: "toggle" }>["toggle"]["children"]
+>[number];
+
 // ── Markers ───────────────────────────────────────────────────────────────────
 
 // A canonical_key is wrapped `⟦atlas:<key>⟧` at the START of a candidate block's
@@ -250,6 +261,45 @@ function evidenceLine(item: Candidate["evidence"][number]): string {
 // page). 95 + callout + tail = 97 keeps headroom under the cap.
 const MAX_EVIDENCE_BULLETS = 95;
 
+// The distilled why/how prose (`c.content`) rendered as a COLLAPSIBLE toggle
+// child of a candidate's to_do/note, so the reviewer can actually read the text
+// they approve/reject (the checkbox line itself stays terse — marker + title +
+// badge). The toggle's paragraph children carry the content through `richText`,
+// which handles the ≤2000-char run split + 100-run cap + surrogate safety, so a
+// long body spans multiple paragraph children losslessly (each rich_text array
+// is capped, so a body needing >100 runs gets a second paragraph). Returns an
+// empty array (no toggle) when the candidate has no content to show — an empty
+// toggle would be a dead disclosure widget for the reviewer.
+//
+// Placed FIRST among a candidate's children (before the provenance callout +
+// evidence bullets) so the body — the thing being approved — is the first thing
+// the reviewer expands.
+function contentToggleChildren(c: Candidate): ChildBlockRequest[] {
+  if (!c.content?.trim()) return [];
+  // `richText` caps its output at RICH_TEXT_MAX_RUNS runs; a pathological body
+  // longer than that budget would otherwise be truncated at the marker. Split
+  // the content across as many paragraph children as needed so nothing is
+  // dropped: each paragraph takes up to RICH_TEXT_MAX_RUNS × RICH_TEXT_RUN_MAX
+  // characters, and richText re-splits that chunk into ≤2000-char runs.
+  const paragraphs: GrandchildBlockRequest[] = [];
+  const chunkMax = RICH_TEXT_RUN_MAX * RICH_TEXT_MAX_RUNS;
+  for (let i = 0; i < c.content.length; i += chunkMax) {
+    paragraphs.push({
+      type: "paragraph",
+      paragraph: { rich_text: richText(c.content.slice(i, i + chunkMax)) },
+    });
+  }
+  return [
+    {
+      type: "toggle",
+      toggle: {
+        rich_text: richText("Content (why/how)"),
+        children: paragraphs,
+      },
+    },
+  ];
+}
+
 // Provenance + evidence as child blocks of a candidate's to_do/note. The
 // provenance line (source + url + date) is a callout; each evidence item is a
 // bulleted_list_item. Child blocks keep the checkbox itself terse while still
@@ -340,7 +390,10 @@ export function candidateToDoBlock(c: Candidate): BlockObjectRequest {
     to_do: {
       rich_text: richText(text),
       checked: false,
-      children: provenanceAndEvidenceChildren(c),
+      children: [
+        ...contentToggleChildren(c),
+        ...provenanceAndEvidenceChildren(c),
+      ],
     },
   };
 }
@@ -359,7 +412,10 @@ export function unverifiedNoteBlock(c: Candidate): BlockObjectRequest {
     callout: {
       rich_text: richText(text),
       icon: { type: "emoji", emoji: "⚠️" }, // ⚠️
-      children: provenanceAndEvidenceChildren(c),
+      children: [
+        ...contentToggleChildren(c),
+        ...provenanceAndEvidenceChildren(c),
+      ],
     },
   };
 }
