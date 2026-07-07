@@ -1442,12 +1442,15 @@ describe("generateApprovalArtifact", () => {
     }
   });
 
-  it("budgets batches by TOTAL block count (top-level + nested children), order preserved", async () => {
+  it("budgets batches by block count (top-level + DIRECT children), order preserved", async () => {
     // 30 candidates each carrying 150 evidence items. After the per-block cap,
-    // each to_do still carries ~97 nested children, so a batcher that counts
+    // each to_do still carries ~97 direct children, so a batcher that counts
     // only top-level blocks would pack all 30 to_dos (~3000 total blocks) into
     // one request and blow Notion's ~1000-total-blocks-per-request limit. The
-    // batcher must budget by TOTAL block count and flush early.
+    // batcher must budget by block count (self + direct children) and flush
+    // early. (DEEP/grandchild counting — the toggle→paragraph second level — is
+    // asserted by the sibling `budgets by DEEP block count` test below; this one
+    // scopes to the top-level + direct-child arithmetic it actually checks.)
     const evidence: EvidenceItem[] = Array.from({ length: 150 }, (_, i) => ({
       kind: "fused_from" as const,
       ref: `ev-${i}`,
@@ -1482,7 +1485,7 @@ describe("generateApprovalArtifact", () => {
       for (const block of batch) {
         expect(childCountOf(block)).toBeLessThanOrEqual(100);
       }
-      // …and the request's TOTAL block count (top-level + nested) stays under
+      // …and the request's block count (self + DIRECT children) stays under
       // a conservative budget below Notion's ~1000-blocks-per-request cap.
       const total = batch.reduce(
         (sum: number, block) => sum + 1 + childCountOf(block),
