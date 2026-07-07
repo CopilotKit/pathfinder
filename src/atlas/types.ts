@@ -91,6 +91,16 @@ export const RESTATEMENT_MARKER = "distillation:restatement";
 // independently while the integration silently breaks.
 export const RAG_NO_DELTA_MARKER = "rag-dedup:no-delta";
 
+// The audience-scoping INTERNAL-OPS floor marker: the ONE literal the audience
+// gate EMITS on a candidate it scoped to internal-ops (not shippable to the
+// public corpus audience), and validate READS as a hard `approvable=false`
+// floor the recompute cannot lift. Modeled on RESTATEMENT_MARKER /
+// RAG_NO_DELTA_MARKER and carried the SAME way (a validated_against token
+// and/or a `fused_from` evidence ref) so a reader recognizes all three idioms.
+// Exported ONCE here so the emitter (audience gate) and the readers (validate's
+// approvable floor + canonicalize's rank floor) import the SAME string.
+export const INTERNAL_OPS_MARKER = "audience:internal-ops";
+
 // ── RAG-dedup semantic types (Theme B) ────────────────────────────────────────
 
 // A single corpus passage returned by the SEMANTIC (pgvector cosine) retrieval
@@ -251,6 +261,58 @@ export type EvidenceItem = z.infer<typeof EvidenceItemSchema>;
 export type Provenance = z.infer<typeof ProvenanceSchema>;
 export type CandidateFragment = z.infer<typeof CandidateFragmentSchema>;
 export type Candidate = z.infer<typeof CandidateSchema>;
+
+// ── Shared approvable-floor markers (S0 FOUNDATION) ───────────────────────────
+// The COMPLETE set of DEDICATED floor markers an upstream gate stamps to force
+// `approvable=false` on a candidate the recompute cannot lift. Owned HERE (next
+// to the three marker literals) as the ONE source of truth so validate's
+// approvable-floor and canonicalize's rank-floor read the SAME enumeration and
+// can never drift. Any FUTURE gate that floors approvability just adds its
+// dedicated marker to this array — both consumers pick it up automatically.
+//
+//   - RESTATEMENT_MARKER  (distillation gate): a pure restatement of already-
+//     indexed content — no NEW verifiable claim.
+//   - RAG_NO_DELTA_MARKER (rag-dedup no-delta gate): a pure corpus DUPLICATE
+//     with nothing net-new to re-seed.
+//   - INTERNAL_OPS_MARKER (audience gate): scoped to internal-ops, not
+//     shippable to the public corpus audience.
+export const APPROVABLE_FLOOR_MARKERS = [
+  RESTATEMENT_MARKER,
+  RAG_NO_DELTA_MARKER,
+  INTERNAL_OPS_MARKER,
+] as const;
+
+// Whether the candidate carries a SPECIFIC dedicated floor `marker` on EITHER
+// carrier idiom an upstream gate uses: a whole `"; "`-delimited token in
+// `provenance.validated_against`, or a `fused_from` evidence ref. Whole-token /
+// whole-ref matched (never a substring — one marker could be a prefix of
+// another). This is the SHARED implementation of the whole-token match logic
+// (mirrors validate's local `hasFloorMarker` byte-for-byte) so consumers read
+// the floor from ONE place.
+export function hasFloorMarker(
+  c: Pick<Candidate, "provenance" | "evidence">,
+  marker: string,
+): boolean {
+  const validatedAgainst = c.provenance.validated_against;
+  if (
+    validatedAgainst &&
+    validatedAgainst.split("; ").some((tok) => tok === marker)
+  ) {
+    return true;
+  }
+  return c.evidence.some((e) => e.kind === "fused_from" && e.ref === marker);
+}
+
+// Whether the candidate is floored to `approvable=false` by ANY dedicated
+// upstream floor marker in APPROVABLE_FLOOR_MARKERS. The ONE predicate both
+// validate (approvable floor) and canonicalize (rank floor) import so the two
+// floors are computed from the SAME marker set + match semantics and cannot
+// drift. Cycle-free: this module imports nothing from validate/canonicalize.
+export function isApprovableFloored(
+  c: Pick<Candidate, "provenance" | "evidence">,
+): boolean {
+  return APPROVABLE_FLOOR_MARKERS.some((marker) => hasFloorMarker(c, marker));
+}
 
 // ── Canonical-key builder / parser ────────────────────────────────────────────
 
