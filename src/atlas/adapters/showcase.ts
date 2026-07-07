@@ -25,6 +25,7 @@
 
 import type { CandidateFragment } from "../types.js";
 import type { AdapterContext, LeafAdapter } from "./types.js";
+import { sanitizeEnvRefs } from "./sanitize-env-refs.js";
 
 // ── Feature-registry shape (owned here; imported by S14 validate.ts) ───────────
 //
@@ -264,6 +265,16 @@ export const showcaseAdapter: LeafAdapter<ShowcaseUnit> = {
     // feature, so a human sees quarantined/unknown ones.
     const validationTargets = allGreen ? [...features] : [];
 
+    // §3.3: sanitize the emitted content (and provenance.source) through the
+    // shared env-reference pass immediately before returning the fragment. The
+    // feature-support prose is registry-derived and low-risk, but the pass is
+    // applied uniformly across the fleet so no adapter is a leak gap.
+    const { content: sanitizedContent, source: sanitizedSource } =
+      sanitizeEnvRefs(
+        describeFeatureSupport(name, registry, features),
+        "showcase",
+      );
+
     const fragment: CandidateFragment = {
       sourcetype: "derived",
       subsystem: integration,
@@ -278,9 +289,9 @@ export const showcaseAdapter: LeafAdapter<ShowcaseUnit> = {
       // pill may be quarantined/unknown, so "supports N" would overclaim. The
       // count is the UNIQUE declared features.
       title: `${name} declares ${features.length} showcase feature(s)`,
-      content: describeFeatureSupport(name, registry, features),
+      content: sanitizedContent,
       provenance: {
-        source: "showcase",
+        source: sanitizedSource,
         url: manifest.repo_url,
         date: asOf,
         validated_against: "showcase/shared/feature-registry.json",

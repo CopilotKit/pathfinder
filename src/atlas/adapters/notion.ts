@@ -33,6 +33,7 @@
 // nothing keeps an empty target list and stays human-gated (prose-aware).
 
 import type { AdapterContext, LeafAdapter } from "./types.js";
+import { sanitizeEnvRefs } from "./sanitize-env-refs.js";
 import { scanSensitivity } from "./sensitivity-scan.js";
 import { extractValidationTargets } from "./validation-targets.js";
 import { mostRestrictiveSensitivity } from "../types.js";
@@ -328,6 +329,14 @@ function buildFragment(
   const provenance_class: ProvenanceClass = "primary";
   const confidence: Confidence = "high";
 
+  // §3.3: sanitize the emitted content (and provenance.source) through the
+  // shared env-reference pass immediately before returning the fragment. The
+  // E3 Notion arm rewrites any private notion.so page link in the decision body
+  // to `<notion-page-link>` in `content`, while `provenance.url` (the page URL)
+  // is DELIBERATELY retained as harvest attribution (spec §3.1-E3).
+  const { content: sanitizedContent, source: sanitizedSource } =
+    sanitizeEnvRefs(section.body.trim(), SOURCE_NAME);
+
   return {
     sourcetype: "notion-doc",
     subsystem,
@@ -335,9 +344,9 @@ function buildFragment(
     ...(unit.repo_url ? { repo_url: unit.repo_url } : {}),
     ...(unit.ref ? { ref: unit.ref } : {}),
     title,
-    content: section.body.trim(),
+    content: sanitizedContent,
     provenance: {
-      source: SOURCE_NAME,
+      source: sanitizedSource,
       url: unit.url,
       date: asOf,
       classification: {

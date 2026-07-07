@@ -22,6 +22,7 @@
 
 import type { CandidateFragment, EvidenceItem } from "../types.js";
 import type { AdapterContext, LeafAdapter } from "./types.js";
+import { sanitizeEnvRefs } from "./sanitize-env-refs.js";
 import { scanSensitivity } from "./sensitivity-scan.js";
 
 // ── Unit shape ────────────────────────────────────────────────────────────────
@@ -287,6 +288,15 @@ export const sourceCommentAdapter: LeafAdapter<SourceCommentUnit> = {
       { kind: "fused_from", ref: `source-comment:${anchor}` },
     ];
 
+    // §3.3: sanitize the emitted content (and provenance.source) through the
+    // shared env-reference pass immediately before returning the fragment, so a
+    // machine-local path / session UUID / private ref that survived into the
+    // distilled claim is rewritten before it enters the pipeline. (The
+    // file:line anchor on `validated_against` is repo-relative by contract and
+    // is not touched here.)
+    const { content: sanitizedContent, source: sanitizedSource } =
+      sanitizeEnvRefs(content, "source-comment");
+
     const fragment: CandidateFragment = {
       sourcetype: "agent-doc",
       subsystem,
@@ -294,9 +304,9 @@ export const sourceCommentAdapter: LeafAdapter<SourceCommentUnit> = {
       repo_url: unit.repoUrl,
       ref: unit.ref,
       title,
-      content,
+      content: sanitizedContent,
       provenance: {
-        source: "source-comment",
+        source: sanitizedSource,
         url: unit.sourceUrl,
         date: asOf,
         validated_against: anchor,

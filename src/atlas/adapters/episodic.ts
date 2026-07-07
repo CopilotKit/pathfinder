@@ -29,6 +29,7 @@ import {
   mostRestrictiveSensitivity,
   Sensitivity,
 } from "../types.js";
+import { sanitizeEnvRefs } from "./sanitize-env-refs.js";
 import type { AdapterContext, LeafAdapter } from "./types.js";
 
 // ── Input unit ────────────────────────────────────────────────────────────────
@@ -166,6 +167,16 @@ export const episodicAdapter: LeafAdapter<EpisodicWindowUnit> = {
         },
       },
     };
+
+    // §3.3: sanitize the emitted content (and provenance.source) through the
+    // shared env-reference pass immediately before returning the fragment. The
+    // distiller reads raw transcript text — a machine-local path, session UUID,
+    // or private ref can survive into the distilled claim/source, so strip it
+    // here at fragment-production time before the contract parse.
+    const { content: sanitizedContent, source: sanitizedSource } =
+      sanitizeEnvRefs(fragment.content, fragment.provenance.source);
+    fragment.content = sanitizedContent;
+    fragment.provenance.source = sanitizedSource;
 
     // Fail loud if the distillation+stamping did not yield a contract-valid
     // fragment (a bad LLM result in a knowledge-harvest is a defect to surface).

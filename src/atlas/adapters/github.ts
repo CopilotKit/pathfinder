@@ -26,6 +26,7 @@
 // LLM-backed adapter).
 
 import type { AdapterContext, LeafAdapter } from "./types.js";
+import { sanitizeEnvRefs } from "./sanitize-env-refs.js";
 import { scanSensitivity } from "./sensitivity-scan.js";
 import { extractValidationTargets } from "./validation-targets.js";
 import type { CandidateFragment, Provenance, Sensitivity } from "../types.js";
@@ -202,6 +203,35 @@ export function distillBodyToContent(body: string | null | undefined): string {
   // dropped→dropped transition (a boilerplate-named heading inside the
   // section's still-open fence) it must be preserved, for the same reason.
   let inDroppedFence = false;
+  // When the outside-section blank-line recovery below ends an OPEN fence early
+  // (treating it as possibly unterminated), the parser is deliberately forced
+  // back OUTSIDE any fence so heading-parsing — and boilerplate stripping —
+  // resumes. But the line-based scan cannot know whether the fence markers that
+  // FOLLOW the recovery point are (a) that same fence's real trailing closer
+  // (a legitimate block with an internal blank line), or (b) the opener+closer
+  // of a later INDEPENDENT fenced block, or (c) nothing at all (truly
+  // unterminated). A bare ``` is byte-identical in all three, so it is not
+  // disambiguable line-by-line — and an earlier attempt (p3-fix-1) that tried
+  // to absorb only the "next" closer inverted parity in case (b): the new
+  // block's OPENER got absorbed (no `inFence = true`), so the block's real
+  // closer toggled `inFence` true while the parser was outside, and a trailing
+  // `## Test plan` was mis-kept.
+  //
+  // The principled resolution: the RELEVANT downstream consumer of `inFence` is
+  // ONLY the heading short-circuit (fence content is kept as literal prose
+  // whether or not `inFence` is set, because the outside-fence branch keeps
+  // every non-heading line too). Across all three cases the parser ends OUTSIDE
+  // a fence once the trailing markers are consumed, and every boilerplate
+  // heading of interest appears AFTER those markers. So once a recovery fires,
+  // we STAY logically outside for the rest of the body: every subsequent
+  // outside-fence ``` is kept as literal content and NEVER re-toggles parity.
+  // This satisfies all three cases uniformly (heading-parsing/stripping stays
+  // live to EOF, parity never inverts) at the cost of the same documented,
+  // accepted heuristic tradeoff — a `#`-shaped line inside a genuine post-
+  // recovery fenced block may parse as a heading. That over-keep/over-drop is
+  // strictly better than the parity inversion it replaces. The flag is sticky:
+  // it arms on recovery and stays armed to EOF.
+  let recoveredOutsideFence = false;
   for (const line of lines) {
     // Fenced code blocks are literal content: a `# …` line inside a fence is
     // (e.g.) a shell comment, not a markdown heading, and must neither toggle
@@ -215,6 +245,21 @@ export function distillBodyToContent(body: string | null | undefined): string {
         inDroppedFence = !inDroppedFence;
         continue;
       }
+      // After an outside-section blank-line recovery has fired, stay logically
+      // outside a fence for the rest of the body: keep every subsequent
+      // outside-fence ``` as literal content WITHOUT toggling parity, so a
+      // later boilerplate heading is still parsed and stripped and parity can
+      // never invert (see `recoveredOutsideFence`). This uniformly covers a
+      // real block's trailing closer, an independent block's opener+closer, and
+      // a truly unterminated fence. It only applies while genuinely outside a
+      // fence — if a recovery has NOT fired, `recoveredOutsideFence` is false
+      // and the normal toggle below runs.
+      if (recoveredOutsideFence && !inFence) {
+        kept.push(line);
+        continue;
+      }
+      // A genuine fence open/close toggle (no recovery has fired since the last
+      // toggle balanced out).
       inFence = !inFence;
       kept.push(line);
       continue;
@@ -234,7 +279,15 @@ export function distillBodyToContent(body: string | null | undefined): string {
       // the better failure than silently disabling it. This does not touch the
       // dropped-section fence (tracked in `inDroppedFence`) — the s4 case where
       // a fence INSIDE a dropped section drops its content is unaffected.
-      if (line.trim() === "") inFence = false;
+      if (line.trim() === "") {
+        inFence = false;
+        // Arm the sticky recovery: for the rest of the body, every outside-
+        // fence ``` is kept as literal content without re-toggling parity, so
+        // heading-parsing/stripping stays live and parity can never invert —
+        // whether this fence later closes, an independent block follows, or the
+        // fence is truly unterminated. See the flag's declaration.
+        recoveredOutsideFence = true;
+      }
       if (!droppingSection) kept.push(line);
       continue;
     }
@@ -257,6 +310,16 @@ export function distillBodyToContent(body: string | null | undefined): string {
     if (inDroppedFence && line.trim() === "") {
       inDroppedFence = false;
       droppingSection = false;
+      // Arm the sticky recovery, symmetric with the outside-section branch
+      // (L282-290): a fence that OPENED inside this dropped section and is
+      // being treated as unterminated here means the parser is now logically
+      // OUTSIDE any fence. Left un-armed, a later ``` marker toggles `inFence`
+      // true while outside — inverting parity for the rest of the body, which
+      // over-keeps a subsequent boilerplate heading and can silently drop real
+      // trailing why/how prose to EOF. Arming keeps every post-recovery ``` as
+      // literal content without re-toggling parity, so heading-parsing and
+      // stripping stay live to EOF. See the flag's declaration.
+      recoveredOutsideFence = true;
       kept.push(line);
       continue;
     }
@@ -489,6 +552,21 @@ function extractPullRequest(
     bareCredentialMentions: true,
   });
 
+  // §3.3: sanitize the emitted content (and provenance.source) through the
+  // shared env-reference pass immediately before returning the fragment, so a
+  // machine-local path / session UUID / private ref in the distilled PR body
+  // is rewritten to its repo-relative tail / placeholder before it enters the
+  // pipeline.
+  const provenance = firstPassProvenance(
+    pr.htmlUrl,
+    pr.mergeCommitSha ?? null,
+    ctx.now,
+    sensitivity,
+  );
+  const { content: sanitizedContent, source: sanitizedSource } =
+    sanitizeEnvRefs(content, provenance.source);
+  provenance.source = sanitizedSource;
+
   return {
     sourcetype: "github-pr",
     // TRIMMED: the intake guard only trims fullName for its check; the
@@ -506,13 +584,8 @@ function extractPullRequest(
     // checkouts).
     ref: baseBranch ?? unit.repo.defaultBranch,
     title: titleOrFallback(pr.title, `PR #${pr.number}`),
-    content,
-    provenance: firstPassProvenance(
-      pr.htmlUrl,
-      pr.mergeCommitSha ?? null,
-      ctx.now,
-      sensitivity,
-    ),
+    content: sanitizedContent,
+    provenance,
     // A.3: the WHAT-metadata header lifted off `content` is RETAINED here as a
     // provenance evidence entry — the facts (Repository/branch/commit/author/
     // URL) are relocated, not dropped. Prepended so it reads as the fragment's
@@ -575,6 +648,18 @@ function extractIssue(
     [issue.title, content, ...(unit.reviewThreads ?? [])].join("\n"),
   );
 
+  // §3.3: sanitize the emitted content (and provenance.source) before return —
+  // same rationale as the PR path above.
+  const provenance = firstPassProvenance(
+    issue.htmlUrl,
+    null,
+    ctx.now,
+    sensitivity,
+  );
+  const { content: sanitizedContent, source: sanitizedSource } =
+    sanitizeEnvRefs(content, provenance.source);
+  provenance.source = sanitizedSource;
+
   return {
     sourcetype: "github-issue",
     // TRIMMED for the same canonical-key reason as the PR path; the shared
@@ -584,8 +669,8 @@ function extractIssue(
     repo_url: unit.repo.cloneUrl,
     ref: unit.repo.defaultBranch,
     title: titleOrFallback(issue.title, `Issue #${issue.number}`),
-    content,
-    provenance: firstPassProvenance(issue.htmlUrl, null, ctx.now, sensitivity),
+    content: sanitizedContent,
+    provenance,
     // A.3: WHAT-metadata header retained as a provenance evidence entry (see
     // extractPullRequest).
     evidence: [
