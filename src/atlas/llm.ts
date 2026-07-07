@@ -228,8 +228,8 @@ const DISTILLATION_SYSTEM_PROMPT = `You are a WHY-vs-WHAT judge for an engineeri
 You are given ONE candidate knowledge entry (title + content + knowledge_type). Institutional-memory knowledge must explain the WHY / HOW behind a decision, root cause, architecture choice, or operational reality — NOT merely RESTATE the WHAT that is already obvious from metadata (which PR merged, what a file is named, that a component was added).
 
 Classify the candidate into EXACTLY ONE verdict:
-- "distilled": already a why/how CLAIM (explains reasoning, tradeoffs, mechanism, or consequence). Keep as-is.
-- "rewritten": the SUBSTANCE is salvageable but the current title/content just restates WHAT happened; a why/how claim can be extracted. Provide the rewrite.
+- "distilled": already a why/how CLAIM (explains reasoning, tradeoffs, mechanism, or consequence). Keep as-is. A claim that already states a CONCRETE MECHANISM — specific endpoints/routes, HTTP status codes, error codes, named functions/methods/symbols, file paths, config keys, or specific numbers — is "distilled": keep it as-is; do NOT rewrite a concrete-mechanism claim up into higher-level rationale.
+- "rewritten": the SUBSTANCE is salvageable but the current title/content just restates WHAT happened; a why/how claim can be extracted. Provide the rewrite. The rewrite MUST RETAIN every concrete verifiable detail present in the source — API endpoints/routes, HTTP status codes, error codes, function/method/symbol names, file paths, config keys, and specific numbers. Sharpen the claim by adding the WHY/HOW AROUND those specifics; NEVER drop, generalize, or paraphrase them away. (Concretely: rewriting "POST /admin/:op returns 401 via timingSafeEqual" into "authentication enhances security" is WRONG — the endpoint, the code, and the symbol were all dropped.)
 - "restatement": a PURE WHAT restatement (e.g. "adds X/Y/Z components", "PR #N merged", a stack/component inventory) that carries NO new reasoning or verifiable engineering claim. Cannot be salvaged into a why/how claim from the given text.
 
 Return JSON with EXACTLY this structure:
@@ -243,6 +243,7 @@ Return JSON with EXACTLY this structure:
 Rules:
 - Be conservative about "distilled": if the content only names WHAT (files, components, PRs) with no reasoning, it is NOT distilled.
 - Only choose "rewritten" when the given text ACTUALLY contains extractable why/how substance — do NOT invent reasoning that is not present. If nothing is salvageable, choose "restatement".
+- PRESERVE-SPECIFICS is mandatory on "rewritten": if you cannot produce a rewrite that keeps EVERY identifier/endpoint/status-code/error-code/symbol/path/config-key/number from the source, return "distilled" instead (pass the original through unchanged). Losing a verifiable specific is worse than leaving the prose slightly WHAT-flavored.
 - title/content are REQUIRED for "rewritten" and ignored for the other verdicts.`;
 
 const DISTILL_DELTA_SYSTEM_PROMPT = `You are a knowledge-DELTA distiller for an engineering knowledge corpus.
