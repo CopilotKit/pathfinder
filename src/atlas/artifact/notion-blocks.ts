@@ -276,19 +276,48 @@ const MAX_EVIDENCE_BULLETS = 95;
 // the reviewer expands.
 function contentToggleChildren(c: Candidate): ChildBlockRequest[] {
   if (!c.content?.trim()) return [];
-  // `richText` caps its output at RICH_TEXT_MAX_RUNS runs; a pathological body
-  // longer than that budget would otherwise be truncated at the marker. Split
-  // the content across as many paragraph children as needed so nothing is
-  // dropped: each paragraph takes up to RICH_TEXT_MAX_RUNS × RICH_TEXT_RUN_MAX
-  // characters, and richText re-splits that chunk into ≤2000-char runs.
+  // Split the content across as many paragraph children as needed so nothing is
+  // dropped, feeding each chunk to `richText` (which re-splits it into ≤2000-char
+  // runs). The chunking must be BOTH surrogate-safe AND capacity-correct:
+  //
+  //   • Surrogate-safe: a chunk boundary must never fall between the halves of a
+  //     surrogate pair. A lone half would ride into `richText`, whose entry
+  //     `toWellFormedUtf16` sanitizes it to U+FFFD — corrupting an astral char
+  //     (an emoji in thread evidence) into a replacement char across the chunk
+  //     seam. Iterating by CODE POINT (not code unit) makes every boundary land
+  //     between whole characters, so no pair is ever severed (same invariant
+  //     clampTitle guards at the title clamp and richText guards at run edges).
+  //
+  //   • Capacity-correct: `richText` renders at most RICH_TEXT_MAX_RUNS runs, and
+  //     its per-run surrogate backoff can shorten EACH run by one unit (a pair
+  //     straddling a 2000-unit run boundary). A naive chunk of
+  //     RICH_TEXT_RUN_MAX × RICH_TEXT_MAX_RUNS units therefore does NOT fit: the
+  //     accumulated backoff pushes the last run past the char cap and trips
+  //     richText's truncation marker, silently dropping ~RICH_TEXT_RUN_MAX chars
+  //     per chunk for astral-heavy content — the very data this loop exists to
+  //     preserve. Sizing each chunk to the GUARANTEED-lossless floor, (2000−1)
+  //     per run × 100 runs, absorbs a worst-case one-unit backoff on every run,
+  //     so richText renders each chunk without ever truncating.
   const paragraphs: GrandchildBlockRequest[] = [];
-  const chunkMax = RICH_TEXT_RUN_MAX * RICH_TEXT_MAX_RUNS;
-  for (let i = 0; i < c.content.length; i += chunkMax) {
+  const CHUNK_MAX_UNITS = (RICH_TEXT_RUN_MAX - 1) * RICH_TEXT_MAX_RUNS;
+  let chunk = "";
+  const flush = () => {
+    if (chunk === "") return;
     paragraphs.push({
       type: "paragraph",
-      paragraph: { rich_text: richText(c.content.slice(i, i + chunkMax)) },
+      paragraph: { rich_text: richText(chunk) },
     });
+    chunk = "";
+  };
+  // `for…of` on a string iterates by code point, so `cp` is a whole character
+  // (1 or 2 UTF-16 units) — an astral pair is never split at a chunk boundary.
+  // Flush BEFORE appending a code point that would carry the chunk over the safe
+  // capacity (never mid-character), so every chunk stays ≤ CHUNK_MAX_UNITS.
+  for (const cp of c.content) {
+    if (chunk.length + cp.length > CHUNK_MAX_UNITS) flush();
+    chunk += cp;
   }
+  flush();
   return [
     {
       type: "toggle",

@@ -443,6 +443,10 @@ describe("notion-blocks — canonical-key marker (delimiter parse contract)", ()
 // ── rule bullet: the `atlas-rule:` delimiter (case / whitespace tolerance) ──────
 
 describe("notion-blocks — rule-bullet delimiter tolerance", () => {
+  // The malformed-JSON case spies on console.warn; restore after each test so
+  // the spy does not leak into later suites (restoreMocks is not globally on).
+  afterEach(() => vi.restoreAllMocks());
+
   const flagRule: ExclusionRule = {
     kind: "flag",
     dimension: "sensitivity",
@@ -630,6 +634,57 @@ describe("notion-blocks — candidate body rendered as a collapsible toggle", ()
     );
     expect(toggle).toBeDefined();
     expect(deepText(toggle)).toContain(tail);
+  });
+
+  // Recover the FULL plain-text of a toggle's body: concatenate every paragraph
+  // grandchild's runs in order (the paragraphs partition the body, each carrying
+  // a richText run split). This is the exact lossless round-trip Notion delivers
+  // (fetched plain_text = concatenation of runs), so it must equal the input.
+  function recoveredToggleBody(block: unknown): string {
+    const toggle = findDescendant(block, "toggle") as unknown;
+    const paras = childrenOf(toggle).filter(
+      (ch) => (ch as { type?: string }).type === "paragraph",
+    );
+    return paras.map((p) => plainTextOf(p)).join("");
+  }
+
+  it("preserves an astral char that straddles the chunk boundary (no U+FFFD)", () => {
+    // The chunk splitter partitions c.content into paragraph children. A naive
+    // fixed-code-unit slice can cut an astral char's surrogate PAIR in half at a
+    // chunk boundary; richText then sanitizes each lone half to U+FFFD, so the
+    // recovered body loses the char (two replacement chars in its place). Place
+    // an astral char (𝕏 = U+1D54F, a surrogate pair) EXACTLY at the boundary of
+    // the effective per-paragraph capacity so a fixed-unit slice would sever it.
+    const CAP = RICH_TEXT_MAX_RUNS * RICH_TEXT_RUN_MAX; // naive boundary = 200000
+    const astral = "\u{1D54F}"; // 𝕏 — one code point, two UTF-16 units
+    // High half lands at index CAP-1, low half at index CAP → the naive
+    // slice(0, CAP) keeps a lone HIGH surrogate; slice(CAP) starts on a lone LOW.
+    const content = `${"a".repeat(CAP - 1)}${astral}${"b".repeat(100)}`;
+    const block = candidateToDoBlock(makeCandidate({ content }));
+    const recovered = recoveredToggleBody(block);
+    expect(recovered).toContain(astral); // pair intact — reviewer sees 𝕏
+    expect(recovered).not.toContain("�"); // no corruption
+    expect(recovered).toBe(content); // nothing dropped or mangled
+  });
+
+  it("does not tail-drop an astral-heavy body larger than one chunk", () => {
+    // richText's per-run surrogate backoff means a full 100-run render of an
+    // astral-heavy chunk carries FEWER than 100×2000 code units losslessly:
+    // the accumulated backoff pushes the tail past the char cap and trips the
+    // truncation branch, silently dropping ~2001 chars per chunk. A body of all
+    // astral chars (every pair a candidate backoff point) longer than one chunk
+    // must round-trip with EVERY code point preserved.
+    const astral = "\u{1D54F}"; // 𝕏 — two UTF-16 units each
+    // A single leading ASCII char makes every astral pair straddle an EVEN
+    // index, so each 2000-unit run boundary lands mid-pair and backs off — the
+    // accumulated shortfall is what trips richText's truncation branch. ~1.5
+    // naive chunks worth of astral: 1 + 300000 code units of content.
+    const content = `a${astral.repeat(150000)}`;
+    const block = candidateToDoBlock(makeCandidate({ content }));
+    const recovered = recoveredToggleBody(block);
+    expect(recovered).not.toContain("�"); // no lone-surrogate corruption
+    expect(recovered.length).toBe(content.length); // no silent tail-drop
+    expect(recovered).toBe(content); // exact, in order
   });
 });
 
