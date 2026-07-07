@@ -58,6 +58,10 @@ import {
   enforceDistillation,
   type DistillationJudge,
 } from "./distillation-gate.js";
+import {
+  enforceAudienceRelevance,
+  type AudienceJudge,
+} from "./audience-gate.js";
 import { promoteValidation, type ValidationContext } from "./validate.js";
 import { loadValidationContext } from "./validate-checkout.js";
 import {
@@ -154,6 +158,13 @@ export interface RunHarvestOptions {
   // backed judge (honors OPENAI_BASE_URL so tests can redirect to aimock);
   // tests inject a fixture judge here.
   judge?: DistillationJudge;
+  // The audience-relevance gate judge (external-builder-vs-internal-ops). NET-NEW
+  // top-level field, wired the SAME way as `judge`: an LLM seam, not a
+  // deterministic transform, so it lives here and not in `deps`. When omitted,
+  // `runHarvest` defaults to a real OpenAIDistiller-backed judge (honors
+  // OPENAI_BASE_URL so tests can redirect to aimock); tests inject a fixture
+  // judge here.
+  audienceJudge?: AudienceJudge;
   // Testing seam (see RunHarvestDeps).
   deps?: RunHarvestDeps;
 }
@@ -203,6 +214,9 @@ export interface ProcessCandidatePipelineOptions {
   store: RunStore;
   // The A.1 distillation-gate judge (why-vs-what).
   judge: DistillationJudge;
+  // The audience-relevance gate judge (external-builder-vs-internal-ops). Runs
+  // AFTER the distillation gate, BEFORE rag-dedup (§4.5).
+  audienceJudge: AudienceJudge;
   // The live RAG-corpus lexical probe (rag-dedup pre-filter).
   ragClient: Pick<AtlasHttpClient, "search">;
   // Lexical verbatim-overlap threshold for the rag-dedup pre-filter.
@@ -245,6 +259,19 @@ export async function processCandidatePipeline(
     judge: opts.judge,
   });
 
+  // 4c. Audience-relevance gate (§4.5) — AFTER the distillation gate, BEFORE
+  //     rag-dedup. Judges each candidate's external-builder fit: an internal-ops
+  //     verdict stamps INTERNAL_OPS_MARKER (which validate reads as an
+  //     approvable=false floor and canonicalize reads as a rank-weight floor), a
+  //     borderline verdict sets needsReview=true, a relevant verdict passes
+  //     untouched. NEVER drops; same-length output; input never mutated. Runs
+  //     here (post-distillation) because distillation may rewrite a candidate
+  //     into clearly-relevant why/how first, and there is no point RAG-probing a
+  //     candidate we are about to mark internal-ops.
+  const audienced = await enforceAudienceRelevance(distilled, {
+    judge: opts.audienceJudge,
+  });
+
   // 5. RAG-dedup gate — BEFORE validate (spec §4). Detects corpus overlap
   //    (lexical verbatim pre-filter + semantic pgvector retrieval) and RESOLVES
   //    it via distill-to-delta. It is NO LONGER mark-only: on a SEMANTIC overlap
@@ -258,9 +285,9 @@ export async function processCandidatePipeline(
   //    candidate that survives the lexical pre-filter — one embedding call
   //    apiece. Emit the estimated upper bound now that candidateCount is known,
   //    so a large run's embedding spend is visible before it is incurred.
-  if (distilled.length > 0) {
+  if (audienced.length > 0) {
     console.warn(
-      `[rag-dedup] semantic dedup will embed up to ${distilled.length} candidate(s) ` +
+      `[rag-dedup] semantic dedup will embed up to ${audienced.length} candidate(s) ` +
         `(one /v1/embeddings call each for candidates surviving the lexical pre-filter)`,
     );
   }
@@ -271,7 +298,7 @@ export async function processCandidatePipeline(
     vectorSearch: opts.vectorSearch,
     distillDelta: opts.distillDelta,
   };
-  const deduped = await dedup(distilled, ragCtx);
+  const deduped = await dedup(audienced, ragCtx);
 
   // 6. Validation gate — promote validation_status + enforce approvability.
   //    validate can PROMOTE validation_status — the DOMINANT rank weight — so
@@ -307,6 +334,7 @@ export async function processCandidatePipeline(
 // passed through unchanged.
 interface SharedPipelineSeamOverrides {
   judge?: DistillationJudge;
+  audienceJudge?: AudienceJudge;
   embed?: (text: string) => Promise<number[]>;
   vectorSearch?: (vector: number[], k: number) => Promise<CorpusHit[]>;
   distillDelta?: (
@@ -317,8 +345,11 @@ interface SharedPipelineSeamOverrides {
   validate?: (cand: Candidate, ctx: ValidationContext) => Promise<Candidate>;
 }
 
-function resolveSharedPipelineSeams(overrides: SharedPipelineSeamOverrides): {
+export function resolveSharedPipelineSeams(
+  overrides: SharedPipelineSeamOverrides,
+): {
   judge: DistillationJudge;
+  audienceJudge: AudienceJudge;
   embed: (text: string) => Promise<number[]>;
   vectorSearch: (vector: number[], k: number) => Promise<CorpusHit[]>;
   distillDelta: (
@@ -330,14 +361,19 @@ function resolveSharedPipelineSeams(overrides: SharedPipelineSeamOverrides): {
 } {
   return {
     judge: overrides.judge ?? {
-      judge: (c) => buildLlm().judgeDistillation(c),
+      judge: (c) => __internalsForTest.buildLlm().judgeDistillation(c),
     },
-    embed: overrides.embed ?? ((text: string) => buildLlm().embed(text)),
+    audienceJudge: overrides.audienceJudge ?? {
+      judge: (c) => __internalsForTest.buildLlm().judge(c),
+    },
+    embed:
+      overrides.embed ??
+      ((text: string) => __internalsForTest.buildLlm().embed(text)),
     vectorSearch: overrides.vectorSearch ?? defaultVectorSearch,
     distillDelta:
       overrides.distillDelta ??
       ((cand: Candidate, overlaps: CorpusHit[]) =>
-        buildLlm().distillDelta({
+        __internalsForTest.buildLlm().distillDelta({
           title: cand.title,
           content: cand.content,
           overlaps: overlaps.map((h) => ({ content: h.content })),
@@ -402,6 +438,7 @@ export async function runHarvest(
     validationContext: opts.validationContext,
     ...resolveSharedPipelineSeams({
       ...(opts.judge ? { judge: opts.judge } : {}),
+      ...(opts.audienceJudge ? { audienceJudge: opts.audienceJudge } : {}),
       ...(opts.embed ? { embed: opts.embed } : {}),
       ...(opts.vectorSearch ? { vectorSearch: opts.vectorSearch } : {}),
       ...(opts.distillDelta ? { distillDelta: opts.distillDelta } : {}),
@@ -486,6 +523,12 @@ export interface BuildArtifactCandidatesOptions {
   // distillation gate `run --upsert` runs, or a restatement/rewritten candidate
   // diverges from the rows the approval page promises to match.
   judge?: DistillationJudge;
+  // The audience-relevance gate judge. Wired exactly like `judge`: injected by
+  // tests, else a real OpenAIDistiller-backed judge (honors OPENAI_BASE_URL).
+  // The artifact MUST run the SAME audience gate `run --upsert` runs, or an
+  // internal-ops candidate renders approvable=true on the page while the upsert
+  // writes approvable=false.
+  audienceJudge?: AudienceJudge;
 }
 
 // Build the ranked candidate set the approval artifact renders. It runs the
@@ -530,6 +573,7 @@ export async function buildArtifactCandidates(
     validationContext: opts.validationContext,
     ...resolveSharedPipelineSeams({
       ...(opts.judge ? { judge: opts.judge } : {}),
+      ...(opts.audienceJudge ? { audienceJudge: opts.audienceJudge } : {}),
       ...(opts.embed ? { embed: opts.embed } : {}),
       ...(opts.vectorSearch ? { vectorSearch: opts.vectorSearch } : {}),
       ...(opts.distillDelta ? { distillDelta: opts.distillDelta } : {}),
@@ -632,10 +676,22 @@ function buildHttpClient(flags: {
   });
 }
 
-function buildLlm(): LlmDistiller {
+// The canonical LLM constructor for the shared pipeline seams. OpenAIDistiller
+// implements BOTH LlmDistiller (judge/embed/distillDelta) and AudienceJudge, so
+// the return type advertises both: the audienceJudge seam builds its judge via
+// this SAME factory as every other seam, rather than constructing its own
+// distiller and silently bypassing any config buildLlm applies (or later gains).
+function buildLlm(): LlmDistiller & AudienceJudge {
   // Reuses the openai dep; honors OPENAI_BASE_URL so it can be redirected.
   return new OpenAIDistiller();
 }
+
+// Indirection seam so tests can swap the LLM factory the shared-pipeline defaults
+// resolve to WITHOUT constructing a real OpenAIDistiller (which needs a key). The
+// defaults in resolveSharedPipelineSeams call `__internalsForTest.buildLlm()`
+// (not the bare local `buildLlm`) so all four buildLlm-backed seams route through
+// this ONE spyable slot. Production leaves it untouched → the real buildLlm.
+export const __internalsForTest = { buildLlm };
 
 // Default vectorSearch seam: cosine top-k retrieval over the SAME chunks corpus
 // the indexer writes (db/queries.ts:searchChunks), mapped to the CorpusHit shape
