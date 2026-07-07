@@ -30,6 +30,7 @@ import type {
   KnowledgeType,
 } from "./types.js";
 import { mostRestrictiveSensitivity } from "./types.js";
+import type { AudienceJudge, AudienceVerdict } from "./audience-gate.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -79,6 +80,17 @@ export interface DistillationJudgeInput {
   title: string;
   content: string;
   knowledge_type: KnowledgeType;
+}
+
+// What the audience judge sees for one candidate (corpus-scoping spec §4.4).
+// Kept structural — the SAME narrow shape `AudienceJudge.judge` consumes in
+// audience-gate.ts — so the gate can hand a Candidate straight through after its
+// deterministic pre-screen declines to classify it. Mirrors DistillationJudgeInput.
+export interface AudienceJudgeInput {
+  title: string;
+  content: string;
+  knowledge_type: KnowledgeType;
+  subsystem: string;
 }
 
 // What the distill-to-delta rewrite (Theme B fix (c)) sees for one candidate: its
@@ -228,8 +240,8 @@ const DISTILLATION_SYSTEM_PROMPT = `You are a WHY-vs-WHAT judge for an engineeri
 You are given ONE candidate knowledge entry (title + content + knowledge_type). Institutional-memory knowledge must explain the WHY / HOW behind a decision, root cause, architecture choice, or operational reality — NOT merely RESTATE the WHAT that is already obvious from metadata (which PR merged, what a file is named, that a component was added).
 
 Classify the candidate into EXACTLY ONE verdict:
-- "distilled": already a why/how CLAIM (explains reasoning, tradeoffs, mechanism, or consequence). Keep as-is. A claim that already states a CONCRETE MECHANISM — specific endpoints/routes, HTTP status codes, error codes, named functions/methods/symbols, file paths, config keys, or specific numbers — is "distilled": keep it as-is; do NOT rewrite a concrete-mechanism claim up into higher-level rationale.
-- "rewritten": the SUBSTANCE is salvageable but the current title/content just restates WHAT happened; a why/how claim can be extracted. Provide the rewrite. The rewrite MUST RETAIN every concrete verifiable detail present in the source — API endpoints/routes, HTTP status codes, error codes, function/method/symbol names, file paths, config keys, and specific numbers. Sharpen the claim by adding the WHY/HOW AROUND those specifics; NEVER drop, generalize, or paraphrase them away. (Concretely: rewriting "POST /admin/:op returns 401 via timingSafeEqual" into "authentication enhances security" is WRONG — the endpoint, the code, and the symbol were all dropped.)
+- "distilled": already a why/how CLAIM (explains reasoning, tradeoffs, mechanism, or consequence). Keep as-is. A claim that already states a CONCRETE MECHANISM — specific endpoints/routes, HTTP status codes, error codes, named functions/methods/symbols, repo-relative file paths, config keys, or specific numbers — is "distilled": keep it as-is; do NOT rewrite a concrete-mechanism claim up into higher-level rationale.
+- "rewritten": the SUBSTANCE is salvageable but the current title/content just restates WHAT happened; a why/how claim can be extracted. Provide the rewrite. The rewrite MUST RETAIN every concrete verifiable detail present in the source — API endpoints/routes, HTTP status codes, error codes, function/method/symbol names, repo-relative file paths, config keys, and specific numbers. Sharpen the claim by adding the WHY/HOW AROUND those specifics; NEVER drop, generalize, or paraphrase them away. (Concretely: rewriting "POST /admin/:op returns 401 via timingSafeEqual" into "authentication enhances security" is WRONG — the endpoint, the code, and the symbol were all dropped.)
 - "restatement": a PURE WHAT restatement (e.g. "adds X/Y/Z components", "PR #N merged", a stack/component inventory) that carries NO new reasoning or verifiable engineering claim. Cannot be salvaged into a why/how claim from the given text.
 
 Return JSON with EXACTLY this structure:
@@ -241,10 +253,26 @@ Return JSON with EXACTLY this structure:
 }
 
 Rules:
+- Machine-local absolute paths (e.g. /Users/…, /home/…, /proj/…), session UUIDs, private Notion page IDs, and internal Slack channel names are NOT product-portable specifics — do NOT treat their presence as making a claim 'distilled'.
 - Be conservative about "distilled": if the content only names WHAT (files, components, PRs) with no reasoning, it is NOT distilled.
 - Only choose "rewritten" when the given text ACTUALLY contains extractable why/how substance — do NOT invent reasoning that is not present. If nothing is salvageable, choose "restatement".
 - PRESERVE-SPECIFICS is mandatory on "rewritten": if you cannot produce a rewrite that keeps EVERY identifier/endpoint/status-code/error-code/symbol/path/config-key/number from the source, return "distilled" instead (pass the original through unchanged). Losing a verifiable specific is worse than leaving the prose slightly WHAT-flavored.
 - title/content are REQUIRED for "rewritten" and ignored for the other verdicts.`;
+
+const AUDIENCE_SYSTEM_PROMPT = `You are an audience-relevance judge for an external-builder knowledge corpus. The audience is developers building products with CopilotKit / Pathfinder — they are NOT CopilotKit employees and do NOT have access to internal infra, private Slack, internal Notion pages, or our Railway/CI setup.
+
+Classify into EXACTLY ONE verdict:
+- "relevant": answers a WHY/HOW/WHAT an external CopilotKit builder would genuinely need — architecture decisions, API/protocol/SDK behavior, configuration choices, root causes of observable behaviors.
+- "borderline": primarily internal operational but contains some info an advanced external builder might want; send to human review.
+- "internal-ops": purely internal operational trivia — deploy logs, PR-closeout records, CI/infra topology, internal Slack guidance, internal approval workflows.
+
+FAIL-RESTRICTIVE: when uncertain between "relevant" and "internal-ops", prefer "borderline". Only use "internal-ops" when the content has zero external-builder utility.
+
+Return JSON with EXACTLY this structure:
+{
+  "verdict": "<relevant | borderline | internal-ops>",
+  "reason": "<one sentence>"
+}`;
 
 const DISTILL_DELTA_SYSTEM_PROMPT = `You are a knowledge-DELTA distiller for an engineering knowledge corpus.
 
@@ -350,8 +378,35 @@ function coerceKnowledgeType(v: unknown): Classification["knowledge_type"] {
   ) {
     return normalized as Classification["knowledge_type"];
   }
-  // Episodic distillations are explanatory by nature; default to design-rationale.
-  return "design-rationale";
+  // Fail-restrictive default (finding 1 — floor escape). The prior default,
+  // "design-rationale", is a CLEAR-RELEVANT knowledge_type (audience-gate.ts's
+  // CLEAR_RELEVANT_KNOWLEDGE_TYPES). Coercing an UNRECOGNIZED/garbled model type
+  // to it silently granted a garbled — possibly internal-ops — candidate the
+  // clear-relevant pre-screen BYPASS, skipping the fail-restrictive judge and
+  // the internal-ops floor. The default must therefore be a type that is NOT
+  // clear-relevant, so an unrecognized candidate FALLS THROUGH to the judge
+  // (and can still be floored) instead of being force-passed.
+  //
+  // "ownership" is chosen deliberately over the schema-wide catch-all
+  // "operational" (classify.ts DEFAULT_KNOWLEDGE_TYPE): both are outside the
+  // clear-relevant set, but "operational" is ALSO in EXEMPT_KNOWLEDGE_TYPES, so
+  // it is APPROVABLE even while unverified — the wrong direction for a garbled,
+  // unclassifiable candidate. "ownership" is in BEHAVIOR_KNOWLEDGE_TYPES, so an
+  // unverified fragment (episodic fragments are always unverified) stays
+  // NON-approvable — the most restrictive direction on both axes (no bypass, no
+  // approvability). And we WARN, naming the discarded value, mirroring
+  // coerceEpisodicSensitivity — the sibling coercion that (unlike this one
+  // previously) already surfaced an unrecognized value instead of swallowing it.
+  const attempted =
+    v == null || (typeof v === "string" && v.trim() === "")
+      ? undefined
+      : JSON.stringify(v);
+  if (attempted !== undefined) {
+    console.warn(
+      `[atlas/llm] unrecognized model knowledge_type ${attempted} — defaulting to "ownership" (a NON-clear-relevant, non-approvable-when-unverified type so an unclassifiable candidate reaches the audience judge rather than taking the clear-relevant bypass)`,
+    );
+  }
+  return "ownership";
 }
 
 // The sensitivity enum values, mirrored from S0's Sensitivity. Used to validate
@@ -399,7 +454,7 @@ function coerceEpisodicSensitivity(v: unknown): Classification["sensitivity"] {
   return "secret";
 }
 
-export class OpenAIDistiller implements LlmDistiller {
+export class OpenAIDistiller implements LlmDistiller, AudienceJudge {
   private readonly client: OpenAI;
   private readonly model: string;
   private readonly embeddingModel: string;
@@ -659,6 +714,100 @@ export class OpenAIDistiller implements LlmDistiller {
         parsed.verdict,
       )} (expected distilled | rewritten | restatement)`,
     );
+  }
+
+  async judgeAudience(candidate: AudienceJudgeInput): Promise<AudienceVerdict> {
+    const userPayload = JSON.stringify({
+      title: candidate.title,
+      content: candidate.content,
+      knowledge_type: candidate.knowledge_type,
+      subsystem: candidate.subsystem,
+    });
+
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      messages: [
+        { role: "system", content: AUDIENCE_SYSTEM_PROMPT },
+        { role: "user", content: userPayload },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0,
+    });
+
+    const parsed = parseJsonContent(
+      response.choices[0]?.message?.content,
+      "judgeAudience",
+    );
+
+    const verdict = asString(parsed.verdict)?.toLowerCase();
+    const reason = asString(parsed.reason) ?? "";
+
+    if (verdict === "relevant") {
+      return { kind: "relevant" };
+    }
+    if (verdict === "borderline") {
+      return { kind: "borderline", reason };
+    }
+    // internal-ops is the only MULTI-TOKEN verdict, so a nondeterministic model
+    // routinely emits it with a non-canonical delimiter between the two tokens
+    // — a space, underscore, or hyphen, and just as easily a RUN of them (a
+    // double space, a tab, "internal - ops"). asString has already
+    // lowercased/trimmed via `verdict`; collapse ANY run of internal
+    // whitespace/underscore/hyphen delimiters to a single hyphen so every
+    // delimiter-run variant maps to the canonical internal-ops rather than
+    // slipping through to the borderline fallback below (which does NOT floor
+    // approvable=false) — a double-spaced internal-ops verdict must not escape
+    // the floor.
+    //
+    // Finding 3 (floor escape): match on the LEADING token/prefix, not
+    // exact-equality. A model routinely appends a trailing token to the two
+    // canonical ones — "internal-ops (trivia)", "internal-ops." — and exact
+    // equality let those fall through to the non-flooring borderline fallback.
+    // The collapse turns interior whitespace/underscore/hyphen runs into single
+    // hyphens; we then check the verdict STARTS WITH "internal-ops" at a token
+    // boundary (end-of-string, or a non-[a-z0-9] separator such as a space,
+    // "(", or "."). Anchoring at the start (rather than a bare `.includes`)
+    // avoids over-matching a genuinely DIFFERENT verdict that merely mentions
+    // the phrase mid-sentence ("relevant, not internal-ops").
+    const collapsed = verdict?.replace(/[\s_-]+/g, "-");
+    if (collapsed && /^internal-ops(?![a-z0-9])/.test(collapsed)) {
+      return { kind: "internal-ops", reason };
+    }
+
+    // NEVER-DROP, fail-restrictive: any OTHER unrecognized verdict falls back to
+    // borderline (keep for human review) rather than throwing. Mirrors how
+    // judgeDistillation salvages an ambiguous verdict to the conservative
+    // never-drop direction instead of failing the run loud. The model's reason
+    // (if any) carries through so a reviewer sees why it was ambiguous.
+    //
+    // Finding 2 (observability): WARN at the seam. Every SIBLING branch above
+    // either returns a recognized verdict or (previously) silently borderlined;
+    // a drifting model that keeps emitting unrecognized verdicts silently
+    // inflates the human-review queue with no operator signal. Warn (naming the
+    // discarded verdict, mirroring the coerce* warns) while KEEPING the
+    // never-throw behavior — the warn is diagnostic only, it does not change the
+    // returned verdict.
+    console.warn(
+      `[atlas/llm] judgeAudience: unrecognized audience verdict ${JSON.stringify(
+        parsed.verdict,
+      )} (expected relevant | borderline | internal-ops) — falling back to borderline (kept for human review)`,
+    );
+    return {
+      kind: "borderline",
+      reason:
+        reason ||
+        `model returned an unrecognized audience verdict ${JSON.stringify(
+          parsed.verdict,
+        )} (expected relevant | borderline | internal-ops); kept for human review`,
+    };
+  }
+
+  // AudienceJudge seam method (audience-gate.ts): the gate injects an
+  // OpenAIDistiller as its `AudienceJudge` and calls `.judge(...)`. Delegates to
+  // judgeAudience so the interface's method name and the seam's own method are
+  // one implementation — no drift between the two entry points.
+  judge(candidate: AudienceJudgeInput): Promise<AudienceVerdict> {
+    return this.judgeAudience(candidate);
   }
 
   async embed(text: string): Promise<number[]> {
