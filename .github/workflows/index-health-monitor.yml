@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Restore state from cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/health-monitor-state.json
           key: index-health-state-
@@ -565,7 +565,7 @@ jobs:
           done < "$NOTIFY_FILE"
 
       - name: Save state to cache
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always() && inputs.dry_run != 'true'
         with:
           path: /tmp/health-monitor-state.json
