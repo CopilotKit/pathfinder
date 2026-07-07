@@ -10,6 +10,8 @@ import {
   CandidateSchema,
   parseCanonicalKey,
   RAG_NO_DELTA_MARKER,
+  RESTATEMENT_MARKER,
+  INTERNAL_OPS_MARKER,
 } from "../atlas/types.js";
 import type {
   CandidateFragment,
@@ -469,14 +471,23 @@ describe("canonicalize — rank ordering", () => {
     // duplicate's rankScore so it OUT-RANKS its un-duplicated twin (the §6.2 rank
     // inversion). It must be excluded from the evidence-depth count exactly like
     // the rag-corpus-overlap: prefix already is.
+    //
+    // This test isolates the evidence-DEPTH exclusion, so both fragments are
+    // `unverified` — validation weight 1 for both, whether or not the shared
+    // rank floor fires — leaving evidence depth as the ONLY variable. (The
+    // RAG_NO_DELTA_MARKER now ALSO floors the validation weight via the shared
+    // isApprovableFloored predicate; that floor is covered by the dedicated
+    // RESTATEMENT/INTERNAL_OPS floor tests above.)
     const floored = makeFragment({
       subsystem: "s",
       claimSlugHint: "floored",
+      validation_status: "unverified",
       evidence: [{ kind: "fused_from", ref: RAG_NO_DELTA_MARKER }],
     });
     const bare = makeFragment({
       subsystem: "s",
       claimSlugHint: "bare-nd",
+      validation_status: "unverified",
       evidence: [],
     });
     const out = canonicalize([floored, bare]);
@@ -484,6 +495,149 @@ describe("canonicalize — rank ordering", () => {
       out.find((c) => c.canonical_key.endsWith(`:${slug}`))!;
     // The floor marker must NOT count: the floored duplicate ties its bare twin.
     expect(row("floored").rankScore).toBe(row("bare-nd").rankScore);
+  });
+
+  it("an INTERNAL_OPS floor marker is rank-NEUTRAL for evidence depth (does not out-rank a genuine twin)", () => {
+    // §6.2: an INTERNAL_OPS_MARKER floor is carried on the SAME `fused_from` ref
+    // idiom as RESTATEMENT/RAG_NO_DELTA. It is a provenance floor trace, NOT
+    // corroboration for the claim — counting it toward evidence depth would
+    // inflate the floored candidate's rankScore so it OUT-RANKS a genuine twin
+    // with no extra corroboration (inverting §6.2). This isolates the
+    // evidence-DEPTH exclusion: both fragments are `unverified` (validation
+    // weight 1 for both, so the validation-weight floor is not the variable),
+    // leaving the floor `fused_from` ref as the ONLY difference. The genuine
+    // twin has NO evidence, so if the floor ref counted, the floored candidate
+    // would win.
+    const floored = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "io-depth-floored",
+      validation_status: "unverified",
+      evidence: [{ kind: "fused_from", ref: INTERNAL_OPS_MARKER }],
+    });
+    const genuineTwin = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "io-depth-twin",
+      validation_status: "unverified",
+      evidence: [],
+    });
+    const out = canonicalize([floored, genuineTwin]);
+    const row = (slug: string) =>
+      out.find((c) => c.canonical_key.endsWith(`:${slug}`))!;
+    // The floor marker must NOT count as evidence: the floored candidate must
+    // NOT out-rank its genuine twin — they tie.
+    expect(row("io-depth-floored").rankScore).toBe(
+      row("io-depth-twin").rankScore,
+    );
+    expect(row("io-depth-floored").rankScore).not.toBeGreaterThan(
+      row("io-depth-twin").rankScore,
+    );
+  });
+
+  it("a RESTATEMENT floor marker is rank-NEUTRAL for evidence depth (does not out-rank a genuine twin)", () => {
+    // Same evidence-depth exclusion for the RESTATEMENT_MARKER floor: it rides
+    // the identical `fused_from` ref carrier, so it must ALSO be excluded from
+    // the corroboration count. Both twins `unverified` to isolate depth.
+    const floored = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "rs-depth-floored",
+      validation_status: "unverified",
+      evidence: [{ kind: "fused_from", ref: RESTATEMENT_MARKER }],
+    });
+    const genuineTwin = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "rs-depth-twin",
+      validation_status: "unverified",
+      evidence: [],
+    });
+    const out = canonicalize([floored, genuineTwin]);
+    const row = (slug: string) =>
+      out.find((c) => c.canonical_key.endsWith(`:${slug}`))!;
+    expect(row("rs-depth-floored").rankScore).toBe(
+      row("rs-depth-twin").rankScore,
+    );
+    expect(row("rs-depth-floored").rankScore).not.toBeGreaterThan(
+      row("rs-depth-twin").rankScore,
+    );
+  });
+
+  it("floors the rank validation-weight for an INTERNAL_OPS-marked candidate (§6.2 shared floor predicate)", () => {
+    // §6.2 rank-score decision: internal-ops MUST also floor rank, via the S0
+    // shared `isApprovableFloored` predicate — not just RESTATEMENT. An
+    // internal-ops candidate is approvable=false (audience floor), and its rank
+    // must not be lifted above a genuine claim by the dominant validation weight.
+    // The floor is carried on either idiom; use the fused_from ref here.
+    //
+    // A `showcase-verified` internal-ops candidate carries the DOMINANT
+    // validation weight (3). Its twin is IDENTICAL — same INTERNAL_OPS_MARKER
+    // (so evidence-depth matches) — but already `unverified` (weight 1), so the
+    // comparison isolates the validation-weight floor. Before the generalization,
+    // computeRankScore reads hasRestatementMarker — which ignores INTERNAL_OPS —
+    // so the showcase-verified row keeps its full weight and strictly OUT-RANKS
+    // the unverified twin (RED). After: floored to `unverified`, they tie (GREEN).
+    const internalOps = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "internal-ops",
+      validation_status: "showcase-verified",
+      evidence: [{ kind: "fused_from", ref: INTERNAL_OPS_MARKER }],
+    });
+    const twin = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "bare-io",
+      validation_status: "unverified",
+      evidence: [{ kind: "fused_from", ref: INTERNAL_OPS_MARKER }],
+    });
+    const out = canonicalize([internalOps, twin]);
+    const row = (slug: string) =>
+      out.find((c) => c.canonical_key.endsWith(`:${slug}`))!;
+    expect(row("internal-ops").rankScore).toBe(row("bare-io").rankScore);
+  });
+
+  it("still floors the rank validation-weight for a RESTATEMENT-marked candidate (no regression)", () => {
+    // The two pre-existing floor markers must keep flooring rank exactly as
+    // before the generalization. A `showcase-verified` restatement (weight 3)
+    // ties its `unverified` twin (weight 1) once floored — the twin carries the
+    // SAME RESTATEMENT_MARKER so evidence-depth matches and only validation
+    // weight differs.
+    const restatement = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "restatement",
+      validation_status: "showcase-verified",
+      evidence: [{ kind: "fused_from", ref: RESTATEMENT_MARKER }],
+    });
+    const twin = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "bare-rs",
+      validation_status: "unverified",
+      evidence: [{ kind: "fused_from", ref: RESTATEMENT_MARKER }],
+    });
+    const out = canonicalize([restatement, twin]);
+    const row = (slug: string) =>
+      out.find((c) => c.canonical_key.endsWith(`:${slug}`))!;
+    expect(row("restatement").rankScore).toBe(row("bare-rs").rankScore);
+  });
+
+  it("does NOT floor the rank validation-weight for a clean (unmarked) candidate", () => {
+    // No floor marker → the full promoted validation weight applies. A clean
+    // `showcase-verified` candidate (weight 3) strictly OUT-RANKS a bare
+    // `unverified` twin (weight 1). This guards against the floor over-firing.
+    const clean = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "clean-sv",
+      validation_status: "showcase-verified",
+      evidence: [],
+    });
+    const bare = makeFragment({
+      subsystem: "s",
+      claimSlugHint: "bare-clean",
+      validation_status: "unverified",
+      evidence: [],
+    });
+    const out = canonicalize([clean, bare]);
+    const row = (slug: string) =>
+      out.find((c) => c.canonical_key.endsWith(`:${slug}`))!;
+    expect(row("clean-sv").rankScore).toBeGreaterThan(
+      row("bare-clean").rankScore,
+    );
   });
 
   it("ranks a more recent fact higher, all else equal", () => {

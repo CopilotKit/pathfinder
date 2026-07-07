@@ -32,6 +32,7 @@ import type { ValidationContext } from "../atlas/validate.js";
 import { recomputeRankScore } from "../atlas/canonicalize.js";
 import {
   CandidateSchema,
+  INTERNAL_OPS_MARKER,
   RAG_NO_DELTA_MARKER,
   RESTATEMENT_MARKER,
 } from "../atlas/types.js";
@@ -1194,6 +1195,111 @@ describe("promoteValidation — composes the rag-dedup no-delta floor (dedicated
     expect(out.provenance.classification.validation_status).toBe(
       "source-verified",
     );
+    expect(out.approvable).toBe(true);
+  });
+});
+
+describe("promoteValidation — composes the audience-gate internal-ops floor (dedicated marker)", () => {
+  // The audience gate stamps INTERNAL_OPS_MARKER on a candidate it scoped to
+  // internal-ops (not shippable to the public corpus audience) and floors it to
+  // `approvable=false`. It follows the SAME dual carrier idiom the other floor
+  // markers use — provenance.validated_against and/or a `fused_from` evidence
+  // ref. validate must READ this marker via the S0 shared floor predicate so an
+  // internal-ops candidate whose symbols grep-verify stays approvable=false —
+  // the marker is a floor the source-verify recompute cannot lift.
+
+  function withValidatedAgainst(c: Candidate, marker: string): Candidate {
+    return {
+      ...c,
+      provenance: { ...c.provenance, validated_against: marker },
+    };
+  }
+
+  it("an internal-ops candidate (validated_against marker) with grep-verifiable symbols is approvable=false", async () => {
+    // `TwoLayerShim` IS declared in the fixture checkout → source-verifies → an
+    // architecture fact would normally recompute to approvable=true. The
+    // internal-ops floor marker must survive the recompute.
+    const base = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const candidate = withValidatedAgainst(base, INTERNAL_OPS_MARKER);
+    const out = await promoteValidation(candidate, ctx);
+    // Status still promotes (display truth — the symbol really exists).
+    expect(out.provenance.classification.validation_status).toBe(
+      "source-verified",
+    );
+    // The upstream floor survives — NOT clobbered back to true.
+    expect(out.approvable).toBe(false);
+  });
+
+  it("the internal-ops floor is recognized via the fused_from evidence ref alone", async () => {
+    const base = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const candidate: Candidate = {
+      ...base,
+      evidence: [{ kind: "fused_from", ref: INTERNAL_OPS_MARKER }],
+    };
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.approvable).toBe(false);
+  });
+
+  it("the internal-ops marker is recognized among other '; '-joined validated_against tokens", async () => {
+    const base = makeCandidate({
+      knowledge_type: "product",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const candidate = withValidatedAgainst(
+      base,
+      `rag-corpus-overlap:some-ref; ${INTERNAL_OPS_MARKER}`,
+    );
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.approvable).toBe(false);
+  });
+
+  it("an internal-ops candidate mapping to a GREEN pill (showcase-verifies) still stays approvable=false", async () => {
+    const base = makeCandidate({
+      knowledge_type: "product",
+      title: "agentic-chat",
+      validationTargets: ["agentic-chat"],
+    });
+    const candidate = withValidatedAgainst(base, INTERNAL_OPS_MARKER);
+    const out = await promoteValidation(candidate, ctx);
+    expect(out.provenance.classification.validation_status).toBe(
+      "showcase-verified",
+    );
+    expect(out.approvable).toBe(false);
+  });
+
+  it("REGRESSION: the existing RESTATEMENT / RAG_NO_DELTA floors are unchanged", async () => {
+    // The shared predicate ORs all three markers; the two pre-existing floors
+    // must still fire exactly as before.
+    const restatement = withValidatedAgainst(
+      makeCandidate({
+        knowledge_type: "architecture",
+        validationTargets: ["TwoLayerShim"],
+      }),
+      RESTATEMENT_MARKER,
+    );
+    const noDelta = withValidatedAgainst(
+      makeCandidate({
+        knowledge_type: "architecture",
+        validationTargets: ["TwoLayerShim"],
+      }),
+      RAG_NO_DELTA_MARKER,
+    );
+    expect((await promoteValidation(restatement, ctx)).approvable).toBe(false);
+    expect((await promoteValidation(noDelta, ctx)).approvable).toBe(false);
+  });
+
+  it("CONTROL: a candidate with NO floor marker whose symbols grep-verify stays approvable=true", async () => {
+    const candidate = makeCandidate({
+      knowledge_type: "architecture",
+      validationTargets: ["TwoLayerShim"],
+    });
+    const out = await promoteValidation(candidate, ctx);
     expect(out.approvable).toBe(true);
   });
 });

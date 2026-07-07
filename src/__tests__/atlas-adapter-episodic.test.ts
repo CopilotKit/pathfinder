@@ -170,10 +170,16 @@ describe("episodic leaf adapter (aimock)", () => {
     expect(fragment.provenance.classification.freshness.as_of).toBe(
       "2026-06-07",
     );
-    // The conv path is the provenance url + source label so the fragment is
-    // traceable to its transcript.
+    // The conv path is the provenance url so the fragment stays traceable to
+    // its transcript — `provenance.url` is a bounded attribution slot retained
+    // as harvest attribution (spec §3.1-E3 rationale).
     expect(fragment.provenance.url).toBe(CONV_PATH);
-    expect(fragment.provenance.source).toBe(CONV_PATH);
+    // `provenance.source`, by contrast, is externally persisted via
+    // toSeedEntryRow (spec §3.1) and so is run through the env-reference
+    // sanitizer (§3.3): the machine-local `~/.claude/…` conv path has no
+    // recognized repo top-level segment, so E1 rewrites it to `<local-path>` —
+    // the private home-dir path never enters the external corpus.
+    expect(fragment.provenance.source).toBe("<local-path>");
     // The top-level provenance.date carries the SAME window date as
     // freshness.as_of — canonicalize.ts reads provenance.date (not
     // freshness.as_of) for recency() and supersedes(), so a fragment without

@@ -236,10 +236,14 @@ describe("applyExclusions — flag rules (pure, no LLM)", () => {
       (r): r is Extract<ExclusionRule, { kind: "english" }> =>
         r.kind === "english",
     );
-    expect(englishRules.length).toBeGreaterThanOrEqual(2);
+    expect(englishRules.length).toBeGreaterThanOrEqual(3);
     const joined = englishRules.map((r) => r.text.toLowerCase()).join(" | ");
     expect(joined).toMatch(/credential|secret|api key|token|password/);
     expect(joined).toMatch(/customer|client|account/);
+    // Internal-ops trivia: Railway/CI deploy logs, PR-closeout records,
+    // internal-infra topology with zero external-builder value.
+    expect(joined).toMatch(/internal operational trivia/);
+    expect(joined).toMatch(/pr-closeout/);
   });
 });
 

@@ -790,6 +790,11 @@ describe("atlas harvest E2E — full pipeline against the live /api/search route
       // path, not the why-vs-what gate (covered in atlas-distillation-gate.test.ts),
       // so avoid constructing a real OpenAIDistiller (which needs an API key).
       judge: { judge: async () => ({ kind: "distilled" as const }) },
+      // Pass-through audience judge (same rationale as `judge` above): this E2E
+      // asserts the rag-dedup/upsert path, not the audience gate, so avoid a real
+      // OpenAIDistiller and make no LLM call — always "relevant" so the gate is a
+      // no-op and existing expectations are unchanged.
+      audienceJudge: { judge: async () => ({ kind: "relevant" as const }) },
       validationContext,
     }).finally(() => {
       // Capture-then-restore even if the run throws — mockRestore CLEARS

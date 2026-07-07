@@ -7,6 +7,10 @@ import {
   KnowledgeType,
   BEHAVIOR_KNOWLEDGE_TYPES,
   RESTATEMENT_MARKER,
+  RAG_NO_DELTA_MARKER,
+  INTERNAL_OPS_MARKER,
+  APPROVABLE_FLOOR_MARKERS,
+  isApprovableFloored,
   buildCanonicalKey,
   parseCanonicalKey,
   mostRestrictiveSensitivity,
@@ -811,6 +815,126 @@ describe("DistillationVerdict (A.1 judge output union)", () => {
 describe("RESTATEMENT_MARKER (O2 shared literal)", () => {
   it("exports the exact restatement marker literal", () => {
     expect(RESTATEMENT_MARKER).toBe("distillation:restatement");
+  });
+});
+
+// ── S0 (FOUNDATION): shared approvable-floor marker set + predicate ────────────
+// The audience gate's new INTERNAL_OPS_MARKER and the two existing floor markers
+// (RESTATEMENT_MARKER, RAG_NO_DELTA_MARKER) must be read from ONE place so
+// validate's approvable-floor and canonicalize's rank-floor cannot drift. This
+// slot owns the shared set + predicate both consumers will import.
+describe("isApprovableFloored / APPROVABLE_FLOOR_MARKERS (S0 shared floor primitive)", () => {
+  // Build a minimal floor-marker carrier: a candidate whose validated_against
+  // carries `marker` as a whole "; "-delimited token (the idiom the upstream
+  // gates use), everything else clean.
+  function candidateWithMarker(
+    marker: string,
+  ): Pick<Candidate, "provenance" | "evidence"> {
+    return {
+      provenance: {
+        source: "x",
+        validated_against: `some prior context; ${marker}; and more`,
+        classification: {
+          sensitivity: "internal",
+          knowledge_type: "architecture",
+          audience: "all-staff",
+          validation_status: "source-verified",
+          confidence: "high",
+          provenance_class: "derived",
+          freshness: { as_of: "2026-06-08", re_verify_by: "2026-09-08" },
+        },
+      } as Candidate["provenance"],
+      evidence: [],
+    };
+  }
+
+  it("exports the audience internal-ops marker literal", () => {
+    expect(INTERNAL_OPS_MARKER).toBe("audience:internal-ops");
+  });
+
+  it("enumerates exactly the three approvable-floor markers", () => {
+    expect([...APPROVABLE_FLOOR_MARKERS].sort()).toEqual(
+      [RESTATEMENT_MARKER, RAG_NO_DELTA_MARKER, INTERNAL_OPS_MARKER].sort(),
+    );
+  });
+
+  // RED anchor: the NEW audience marker must floor.
+  it("floors a candidate carrying INTERNAL_OPS_MARKER in validated_against", () => {
+    expect(isApprovableFloored(candidateWithMarker(INTERNAL_OPS_MARKER))).toBe(
+      true,
+    );
+  });
+
+  // No regression on the two pre-existing markers.
+  it("still floors on RESTATEMENT_MARKER and RAG_NO_DELTA_MARKER", () => {
+    expect(isApprovableFloored(candidateWithMarker(RESTATEMENT_MARKER))).toBe(
+      true,
+    );
+    expect(isApprovableFloored(candidateWithMarker(RAG_NO_DELTA_MARKER))).toBe(
+      true,
+    );
+  });
+
+  // Also reads the fused_from evidence-ref carrier idiom.
+  it("floors on a fused_from evidence ref equal to a floor marker", () => {
+    const c: Pick<Candidate, "provenance" | "evidence"> = {
+      provenance: {
+        source: "x",
+        classification: {
+          sensitivity: "internal",
+          knowledge_type: "architecture",
+          audience: "all-staff",
+          validation_status: "source-verified",
+          confidence: "high",
+          provenance_class: "derived",
+          freshness: { as_of: "2026-06-08", re_verify_by: "2026-09-08" },
+        },
+      } as Candidate["provenance"],
+      evidence: [{ kind: "fused_from", ref: INTERNAL_OPS_MARKER }],
+    };
+    expect(isApprovableFloored(c)).toBe(true);
+  });
+
+  it("does NOT floor a clean candidate (no marker on either carrier)", () => {
+    const clean: Pick<Candidate, "provenance" | "evidence"> = {
+      provenance: {
+        source: "x",
+        validated_against: "some grep target; another ref",
+        classification: {
+          sensitivity: "internal",
+          knowledge_type: "architecture",
+          audience: "all-staff",
+          validation_status: "source-verified",
+          confidence: "high",
+          provenance_class: "derived",
+          freshness: { as_of: "2026-06-08", re_verify_by: "2026-09-08" },
+        },
+      } as Candidate["provenance"],
+      evidence: [{ kind: "fused_from", ref: "github-issue:agui-adk:1732" }],
+    };
+    expect(isApprovableFloored(clean)).toBe(false);
+  });
+
+  // Whole-token match, never substring: a marker that is a PREFIX of a longer
+  // token must NOT floor (mirrors the upstream hasFloorMarker semantics).
+  it("does NOT floor on a substring/prefix-only match (whole-token only)", () => {
+    const c: Pick<Candidate, "provenance" | "evidence"> = {
+      provenance: {
+        source: "x",
+        validated_against: `${INTERNAL_OPS_MARKER}-but-longer`,
+        classification: {
+          sensitivity: "internal",
+          knowledge_type: "architecture",
+          audience: "all-staff",
+          validation_status: "source-verified",
+          confidence: "high",
+          provenance_class: "derived",
+          freshness: { as_of: "2026-06-08", re_verify_by: "2026-09-08" },
+        },
+      } as Candidate["provenance"],
+      evidence: [],
+    };
+    expect(isApprovableFloored(c)).toBe(false);
   });
 });
 
