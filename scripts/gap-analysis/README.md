@@ -1,12 +1,12 @@
-# Monthly Gap Analysis
+# Gap Analysis
 
 A scheduled pipeline that surfaces the documentation/knowledge gaps in
 Pathfinder's indexed corpus by analyzing what users actually search for — and
 what comes back empty — over a rolling 30-day window.
 
 It runs from the [`monthly-gap-analysis.yml`](../../.github/workflows/monthly-gap-analysis.yml)
-GitHub Action on the 1st of each month (04:00 UTC, after the nightly reindex)
-and can be triggered manually via `workflow_dispatch`.
+GitHub Action on the 1st and 15th of each month (04:00 UTC, after the nightly
+reindex) and can be triggered manually via `workflow_dispatch`.
 
 ## What it does
 

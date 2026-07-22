@@ -3,7 +3,7 @@
 /**
  * monthly-gap-analysis.ts
  *
- * Monthly (30-day lookback) Pathfinder gap-analysis pipeline. Designed to run
+ * Bi-weekly (30-day lookback) Pathfinder gap-analysis pipeline. Designed to run
  * from a scheduled GitHub Action WITHOUT polluting production analytics:
  *
  *   - It READS the analytics JSON API (GET /api/analytics/{summary,queries,
@@ -845,7 +845,7 @@ export async function persistAndMaybeAlert(opts: {
  * title. The LLM rephrases gap titles run-to-run; keying on the normalized form
  * means a TRIVIALLY reworded title for the same underlying gap (casing,
  * punctuation, stop words, word order) is NOT reported as new — which would
- * otherwise produce a monthly false-positive Slack storm. The collapse is only
+ * otherwise produce a recurring false-positive Slack storm. The collapse is only
  * as strong as the normalization: a SUBSTANTIAL semantic rephrasing (different
  * significant tokens) reduces to a different key and may still be reported as
  * new. A null prior (first run, or missing/corrupt state) reports every high
@@ -1268,7 +1268,7 @@ async function postSlack(text: string): Promise<void> {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  console.log("=== Pathfinder Monthly Gap Analysis ===");
+  console.log("=== Pathfinder Gap Analysis ===");
 
   if (!ANALYTICS_TOKEN) {
     // Dry/no-secrets mode: this is the expected state in CI lint before the
