@@ -935,7 +935,7 @@ export interface RunDeps {
 }
 
 const DEFAULT_BASE_URL = "https://mcp.copilotkit.ai";
-const DEFAULT_PARENT_PAGE_ID = "3373aa38-1852-8152-a10b-e4aa1b8a667e";
+const DEFAULT_PARENT_PAGE_ID = "3793aa38-1852-80a5-89d3-c3d37147aa22";
 
 /**
  * Build the real (network-backed) fetchJson bound to a base URL + token, modeled
