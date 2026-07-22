@@ -1,4 +1,4 @@
-name: Monthly Gap Analysis
+name: Gap Analysis
 # Runs the Pathfinder gap-analysis pipeline on a 30-day lookback and publishes a
 # ranked gap report to Notion, alerting Slack only when NEW high-severity gaps
 # appear vs the prior run.
@@ -27,14 +27,14 @@ name: Monthly Gap Analysis
 #
 # Prior-run state (for new-gap diffing) is carried across runs as the
 # `gap-analysis-state` artifact rather than the Actions cache: caches are
-# evicted after 7 days of no access, but this job runs only every ~30 days, so
+# evicted after 7 days of no access, but this job runs only every ~2 weeks, so
 # the cache was always gone and EVERY high-severity gap re-alerted as "new".
 # Artifacts persist 90 days regardless of access, comfortably past the cadence.
 on:
   schedule:
-    # Monthly, 1st of the month at 04:00 UTC — after the nightly reindex so the
-    # 30-day window reflects a freshly indexed corpus.
-    - cron: "0 4 1 * *"
+    # Bi-weekly, on the 1st and 15th of the month at 04:00 UTC — after the
+    # nightly reindex so the 30-day window reflects a freshly indexed corpus.
+    - cron: "0 4 1,15 * *"
   workflow_dispatch:
 
 permissions: {}
@@ -124,10 +124,10 @@ jobs:
           path: /tmp/gap-report.md
           if-no-files-found: ignore
 
-      # Persist updated state as a durable artifact so the next run (≈30 days
+      # Persist updated state as a durable artifact so the next run (≈2 weeks
       # later) can diff new high-severity gaps. Artifacts live 90 days
       # regardless of access — unlike the Actions cache, which evicts after 7
-      # days idle and so was always gone by the next monthly run. Upload only
+      # days idle and so was always gone by the next run. Upload only
       # when the script actually wrote the state file.
       - name: Upload gap-analysis state
         if: always()
