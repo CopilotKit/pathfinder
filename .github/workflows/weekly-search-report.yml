@@ -76,8 +76,8 @@ jobs:
           # SLACK_ENGR_WEBHOOK; the org-level secret is SLACK_WEBHOOK_ENGR.
           # Unset → the success ping is simply skipped.
           SLACK_ENGR_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_ENGR }}
-          # Pathfinder project page where weekly reports land.
-          NOTION_PARENT_PAGE_ID: "3373aa38-1852-8152-a10b-e4aa1b8a667e"
+          # Gap Reports page where weekly reports land.
+          NOTION_PARENT_PAGE_ID: "3793aa38-1852-80a5-89d3-c3d37147aa22"
           # Production analytics API base.
           ANALYTICS_BASE_URL: "https://mcp.copilotkit.ai"
           # 7-day lookback window.
