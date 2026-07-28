@@ -214,10 +214,33 @@ export interface AnalyticsSummary {
   low_confidence_count_window: number;
   /**
    * low_confidence_count_window / total_queries_window (0 when the window is
-   * empty). Surfaced alongside empty_result_rate_window so the dashboard can
-   * show "looks like a hit but isn't relevant" as its own signal.
+   * empty). Rendered by the dashboard's "Low Confidence" stat card, next to
+   * "Empty Result Rate", as the "looks like a hit but isn't relevant" signal.
+   *
+   * NOTE the denominator is total_queries_window — ALL windowed queries, not
+   * just the scored ones — so it is directly comparable to
+   * empty_result_rate_window. Read it with {@link scored_query_count_window};
+   * a 0 rate over a 0 scored population means "nothing measured", not
+   * "nothing low confidence".
    */
   low_confidence_rate_window: number;
+  /**
+   * Count of queries in the window that could be classified at all: rows that
+   * returned results AND declared the cosine scale (`score_kind = 'cosine'`)
+   * — the same FILTER {@link low_confidence_count_window} uses, minus the
+   * threshold comparison. It is the low-confidence metric's MEASURED
+   * population.
+   *
+   * Exists to separate the two readings that both leave low_confidence at 0:
+   * "every scored query cleared the threshold" (good) and "no query has been
+   * scored yet" (nothing to say). Those are not distinguishable from the
+   * count alone, and the second is the state EVERY install lands in the
+   * moment `score_kind` ships — the column starts NULL on all history and
+   * only fills as new traffic is logged. The dashboard keys its empty state
+   * off this field so a fresh deployment reads "—" instead of a falsely
+   * reassuring "0.0%".
+   */
+  scored_query_count_window: number;
   avg_latency_ms_window: number;
   /**
    * Distinct non-NULL `client_ip` values in the window. Computed inside the
@@ -838,6 +861,11 @@ export async function getAnalyticsSummary(
   // it. It excludes legacy rows written before score_kind existed, whose
   // top_score may hold an RRF rank score (ceiling ~0.033) that would compare
   // below ANY cosine threshold and flag 100% of scored queries.
+  //
+  // `scored` is that same FILTER WITHOUT the threshold comparison: the rows
+  // low_confidence was actually able to classify. Carried so a reader can tell
+  // "0 low-confidence out of 400 scored" (a clean window) from "0 out of 0
+  // scored" (nothing measured yet) — see scored_query_count_window's JSDoc.
   const summaryRes = await pool.query(
     `SELECT
         count(*)::int AS total,
@@ -848,6 +876,11 @@ export async function getAnalyticsSummary(
             AND score_kind = $${scoreKindIdx2}
             AND top_score < $${lowConfIdx2}
         )::int AS low_confidence,
+        count(*) FILTER (
+          WHERE result_count > 0
+            AND top_score IS NOT NULL
+            AND score_kind = $${scoreKindIdx2}
+        )::int AS scored,
         COALESCE(avg(latency_ms)::int, 0) AS avg_latency,
         COUNT(DISTINCT client_ip) FILTER (WHERE client_ip IS NOT NULL)::int AS unique_ip_count_window,
         COUNT(DISTINCT session_id) FILTER (WHERE session_id IS NOT NULL)::int AS unique_session_count_window
@@ -1016,6 +1049,10 @@ export async function getAnalyticsSummary(
   const totalWindow = toFiniteNumber(s.total);
   const emptyWindow = toFiniteNumber(s.empty);
   const lowConfidenceWindow = toFiniteNumber(s.low_confidence);
+  // Measured population behind lowConfidenceWindow. Defaults to 0 (not NaN,
+  // not undefined) when the column is missing so the UI's `> 0` empty-state
+  // check reads a missing denominator as "nothing scored" — the safe side.
+  const scoredWindow = toFiniteNumber(s.scored);
   const avgLatencyWindow = toFiniteNumber(s.avg_latency);
   // Unique IP / session counts over the SAME windowed population as
   // total_queries_window (they're columns on the windowed summary subquery).
@@ -1050,6 +1087,7 @@ export async function getAnalyticsSummary(
     low_confidence_count_window: lowConfidenceWindow,
     low_confidence_rate_window:
       totalWindow > 0 ? lowConfidenceWindow / totalWindow : 0,
+    scored_query_count_window: scoredWindow,
     avg_latency_ms_window: avgLatencyWindow,
     unique_ip_count_window: uniqueIpCountWindow,
     unique_session_count_window: uniqueSessionCountWindow,
