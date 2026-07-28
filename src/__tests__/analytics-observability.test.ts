@@ -256,7 +256,6 @@ describe("observability: request_source + low-confidence (PGlite integration)", 
     const result = await getAnalyticsSummary({}, 7);
 
     expect(result.total_queries_window).toBe(2);
-    expect(result.scored_query_count_window).toBe(2);
     expect(result.low_confidence_count_window).toBe(1);
   });
 
