@@ -107,11 +107,13 @@ export const INTERNAL_OPS_MARKER = "audience:internal-ops";
 // the rag-dedup gate runs against the already-indexed corpus. Shared here (not in
 // rag-dedup.ts) so the vectorSearch seam (harvest-cli wiring, db/queries), the
 // distill-to-delta LLM seam (llm.ts), and the gate itself narrow on the SAME
-// shape. `similarity` is cosine similarity in [0,1] (1 - cosine distance);
+// shape. `similarity` is cosine similarity in [-1,1] (1 - cosine distance);
 // `content` is the passage prose the delta rewrite subtracts from the candidate.
 export interface CorpusHit {
-  // Cosine similarity in [0,1] (1 = identical direction). The gate's overlap
-  // oracle: a hit at/above the semantic threshold counts as corpus overlap.
+  // Cosine similarity in [-1,1] (1 = identical direction, 0 = orthogonal,
+  // negative = pointed away — pgvector's `<=>` is a DISTANCE in [0,2]). The
+  // gate's overlap oracle: a hit at/above the semantic threshold counts as
+  // corpus overlap, so only the positive end of the range ever qualifies.
   similarity: number;
   // The already-indexed passage prose. The distill-to-delta seam rewrites the
   // candidate's content down to only the part this (and its sibling hits) do

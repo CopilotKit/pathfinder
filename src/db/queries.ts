@@ -26,6 +26,30 @@ function toFiniteNumber(v: unknown): number {
 }
 
 /**
+ * Coerce a DB-returned value to a cosine RELEVANCE score, or to null when it is
+ * not one. Deliberately NOT {@link toFiniteNumber}: the cosine scale is
+ * [-1, 1] (see COSINE_SCORE_MIN/MAX in src/relevance.ts), so 0 is a LEGITIMATE
+ * reading — two orthogonal embeddings — and defaulting a corrupt value to 0
+ * makes it indistinguishable from a real one. That is not hypothetical:
+ * pgvector's `<=>` returns NaN for a zero-norm embedding, so a single
+ * degenerate indexed row used to surface as `cosine_similarity: 0`, get
+ * persisted to `query_log.top_score` as a real score, and be counted as a
+ * FALSE low-confidence hit (0 < 0.5) — manufacturing exactly the content-gap
+ * signal the metric exists to detect. Mapping to null instead routes it
+ * through the "no score" path, which analytics never reads as a low score.
+ *
+ * null/undefined/"" map to null too, rather than riding `Number()`'s coercion
+ * of all three to 0 — an absent column is an absent score, not an orthogonal
+ * match. (`toFiniteNumber` keeps the 0 default for `similarity`, which is a
+ * ranking-only number and must stay a `number`.)
+ */
+function toCosineScoreOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Strip NUL bytes (U+0000) from a string. Postgres `text` columns and the
  * string members of `jsonb` documents both reject `0x00` with
  * `invalid byte sequence for encoding "UTF8": 0x00`, so any indexed-content
@@ -343,8 +367,10 @@ export async function searchChunks(
     // Vector rows carry a real cosine similarity, so ranking score and
     // relevance score coincide here. Recorded separately anyway: rrfMerge
     // overwrites `similarity` with the fused rank score, and this is the copy
-    // analytics reads (see ChunkResult.cosine_similarity).
-    cosine_similarity: toFiniteNumber(r.similarity),
+    // analytics reads (see ChunkResult.cosine_similarity). Coerced through
+    // toCosineScoreOrNull, NOT toFiniteNumber: a corrupt value must read as
+    // "no score", because 0 is a real point on the [-1, 1] cosine scale.
+    cosine_similarity: toCosineScoreOrNull(r.similarity),
   }));
 }
 
@@ -512,7 +538,7 @@ export async function hybridSearchChunks(
  * `similarity` is a RANK score bounded by 2/(RRF_K+1) ≈ 0.033 — not a cosine
  * similarity. `cosine_similarity` is carried through untouched from the
  * canonical (vector-preferred) result, so callers that need a relevance score
- * on the 0-1 cosine scale read THAT field. Persisting `similarity` as a
+ * on the [-1, 1] cosine scale read THAT field. Persisting `similarity` as a
  * relevance metric is a scale error; see src/mcp/tools/search.ts.
  *
  * Exported for direct unit testing of the merge logic.
@@ -1169,6 +1195,11 @@ export async function getFaqChunks(
     // Coerce to a finite number: a non-numeric similarity string would Number()
     // to NaN and corrupt sort order / top_score. Same guard as confidence below.
     similarity: toFiniteNumber(r.similarity),
+    // Browse selects a constant `0.0 AS similarity` — no embedding is compared
+    // at all — so there is no relevance score on the cosine scale to report.
+    // The knowledge tool's SEARCH path overwrites this with the cosine of the
+    // vector hit it merged the row against.
+    cosine_similarity: null,
     metadata: (r.metadata as Record<string, unknown>) ?? {},
     // Coerce to a finite number for the same reason as similarity above:
     // toFiniteNumber maps a non-numeric confidence string (Number(...)=NaN) back
@@ -1242,6 +1273,10 @@ export async function getFaqChunksByIds(
     // Coerce to a finite number: a non-numeric similarity would Number() to NaN
     // and corrupt sort order / top_score. Same guard as confidence below.
     similarity: toFiniteNumber(r.similarity),
+    // As in getFaqChunks: `0.0 AS similarity` is a placeholder, not a cosine.
+    // The caller (knowledge.ts) re-associates these rows with the vector hits
+    // it ranked and copies the real cosine across.
+    cosine_similarity: null,
     metadata: (r.metadata as Record<string, unknown>) ?? {},
     // Coerce to a finite number for the same reason as similarity above: a
     // null/non-numeric confidence would otherwise yield NaN and corrupt

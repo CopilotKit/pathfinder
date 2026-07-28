@@ -15,6 +15,10 @@ function makeResult(id: number, similarity: number = 0.5): ChunkResult {
     end_line: null,
     language: null,
     similarity,
+    // These tests exercise the fusion arithmetic only; the relevance score is
+    // covered in relevance-score-scale.test.ts. Null is the honest default —
+    // the merge must carry whatever the producer set, not synthesize one.
+    cosine_similarity: null,
   };
 }
 

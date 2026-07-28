@@ -568,7 +568,7 @@ export interface ChunkResult {
   language: string | null;
   /**
    * RANKING score. Its scale depends on which retriever produced the row:
-   * cosine similarity (0-1) from `searchChunks`, ts_rank from
+   * cosine similarity ([-1, 1]) from `searchChunks`, ts_rank from
    * `textSearchChunks`, and a fused Reciprocal Rank Fusion score
    * (max 2/(RRF_K+1) ≈ 0.033) from `rrfMerge`. It orders results and nothing
    * more — it is NOT comparable across modes and must NEVER be persisted as a
@@ -576,9 +576,14 @@ export interface ChunkResult {
    */
   similarity: number;
   /**
-   * RELEVANCE score: the true cosine similarity (0-1) of this chunk against
-   * the query embedding, or null when the row has no comparable semantic score
-   * (a keyword-only hit — ts_rank is not on the cosine scale).
+   * RELEVANCE score: the true cosine similarity of this chunk against the
+   * query embedding, on the [-1, 1] scale pgvector produces (see
+   * COSINE_SCORE_MIN/COSINE_SCORE_MAX in src/relevance.ts — `<=>` is cosine
+   * DISTANCE in [0, 2], so `1 - distance` reaches -1). Null when the row has
+   * no comparable semantic score: a keyword-only hit (ts_rank is not on the
+   * cosine scale), a browse row (no embedding compared at all), or a corrupt
+   * one (a non-finite distance, which pgvector returns for a zero-norm
+   * embedding).
    *
    * Kept separate from {@link similarity} because `rrfMerge` OVERWRITES
    * `similarity` with the fused rank score, destroying the cosine value. This
@@ -586,10 +591,14 @@ export interface ChunkResult {
    * dashboard's Avg Cosine column, the low-confidence flag) reads one metric
    * on one scale regardless of `search_mode`.
    *
-   * Optional so non-retrieval producers of ChunkResult-shaped rows (Atlas
-   * dedup, bash related-files) compile unchanged; absent reads as "no cosine".
+   * REQUIRED, not optional. Nullable is the escape hatch for a producer with
+   * no cosine to report; optional would have made the scale invariant opt-in,
+   * so a new retriever that simply forgot the field would log 100% NULL
+   * top_scores — silently blanking every score-based analytic — with no type
+   * error to catch it. Writing `cosine_similarity: null` is a one-line, and
+   * deliberate, opt-out.
    */
-  cosine_similarity?: number | null;
+  cosine_similarity: number | null;
 }
 
 export interface FaqChunkResult extends ChunkResult {
