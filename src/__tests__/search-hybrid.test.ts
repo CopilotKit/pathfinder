@@ -50,6 +50,11 @@ function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
     end_line: null,
     language: null,
     similarity: 0.9,
+    // Mirror what searchChunks actually returns: a vector hit's ranking score
+    // and its cosine similarity are the same number. Hybrid cases override
+    // `cosine_similarity` explicitly to model an RRF-ranked row, where
+    // `similarity` is a fusion score and the cosine is the real relevance.
+    cosine_similarity: overrides.similarity ?? 0.9,
     ...overrides,
   };
 }
