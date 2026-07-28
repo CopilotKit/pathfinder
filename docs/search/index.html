@@ -593,7 +593,8 @@
             <strong>Retrieval</strong> — When an agent searches, the query is
             embedded using the same model, then compared against stored vectors
             using cosine similarity. The most similar chunks are returned,
-            ranked by score (0-1).
+            ranked by score (-1 to 1, where 1 is a perfect match and 0 is
+            unrelated).
           </li>
         </ol>
 

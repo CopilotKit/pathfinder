@@ -1,5 +1,10 @@
 import { getPool } from "./client.js";
-import { COSINE_SCORE_KIND, COSINE_SCORE_MAX } from "../relevance.js";
+import {
+  COSINE_SCORE_KIND,
+  COSINE_SCORE_MAX,
+  COSINE_SCORE_MIN,
+  COSINE_SCORE_ORTHOGONAL,
+} from "../relevance.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -60,24 +65,41 @@ export const P95_LATENCY_ROW_CAP = 100000;
  * that look like hits but aren't actually relevant. Exported so tool handlers,
  * readers, and tests share a single source of truth.
  *
- * DERIVED from {@link COSINE_SCORE_MAX} (the midpoint of the scale) rather than
- * hard-coded, so it cannot drift onto a different scale than the metric it is
- * compared against. That drift is exactly what broke this metric before: the
- * threshold sat at 0.5 while hybrid mode persisted an RRF rank score whose
- * ceiling is ~0.033, so every scored hybrid query was flagged low-confidence.
+ * DERIVED from the cosine scale rather than hard-coded, so it cannot drift
+ * onto a different scale than the metric it is compared against. That drift is
+ * exactly what broke this metric before: the threshold sat at 0.5 while hybrid
+ * mode persisted an RRF rank score whose ceiling is ~0.033, so every scored
+ * hybrid query was flagged low-confidence.
+ *
+ * The derivation is the midpoint between {@link COSINE_SCORE_ORTHOGONAL} (0 —
+ * the query and the chunk share no direction at all) and
+ * {@link COSINE_SCORE_MAX} (1 — a perfect match). It is deliberately NOT the
+ * midpoint of the FULL [{@link COSINE_SCORE_MIN}, {@link COSINE_SCORE_MAX}]
+ * range, which is orthogonality itself: everything at or below 0 is already
+ * definitionally irrelevant, so a threshold there would flag essentially
+ * nothing and the "low confidence" card would go permanently dark. Half of the
+ * usable half is the cut, and it is the same 0.5 this metric has always used —
+ * only the arithmetic behind it is now true of the real scale.
  *
  * Predicate: `result_count > 0 AND score_kind = 'cosine' AND top_score <
  * threshold`. `top_score IS NULL` (browse/keyword rows that never compute a
- * cosine) is intentionally NOT low-confidence — absence of a score is not a
- * low score — and neither is a row whose scale is unknown (score_kind NULL).
+ * cosine, and rows whose only cosine was corrupt) is intentionally NOT
+ * low-confidence — absence of a score is not a low score — and neither is a
+ * row whose scale is unknown (score_kind NULL).
  */
-export const LOW_CONFIDENCE_SCORE_THRESHOLD = COSINE_SCORE_MAX * 0.5;
+export const LOW_CONFIDENCE_SCORE_THRESHOLD =
+  (COSINE_SCORE_ORTHOGONAL + COSINE_SCORE_MAX) / 2;
 
 // Re-exported so the scale contract reads as one surface: every consumer of
-// the low-confidence threshold also needs the kind tag and the scale bound,
+// the low-confidence threshold also needs the kind tag and the scale bounds,
 // and they are defined in src/relevance.ts (which owns the retrieval-side
 // reducer) to keep this module free of a dependency on ChunkResult.
-export { COSINE_SCORE_KIND, COSINE_SCORE_MAX };
+export {
+  COSINE_SCORE_KIND,
+  COSINE_SCORE_MAX,
+  COSINE_SCORE_MIN,
+  COSINE_SCORE_ORTHOGONAL,
+};
 
 /**
  * Canonical request-origin tags persisted on `query_log.request_source`.
@@ -271,7 +293,7 @@ export interface TopQuery {
   count: number;
   avg_result_count: number | null;
   /**
-   * Mean best-match COSINE similarity (0-1) across this query's events —
+   * Mean best-match COSINE similarity (-1 to 1) across this query's events —
    * the dashboard's "Avg Cosine" column. Averaged only over rows whose
    * `score_kind` declares the cosine scale, so a legacy row holding an RRF
    * rank score can never drag the average onto a different scale. Null when

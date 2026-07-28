@@ -696,7 +696,8 @@ export const __internalsForTest = { buildLlm };
 // Default vectorSearch seam: cosine top-k retrieval over the SAME chunks corpus
 // the indexer writes (db/queries.ts:searchChunks), mapped to the CorpusHit shape
 // the rag-dedup gate + distill-to-delta consume. `similarity` is 1 - cosine
-// distance in [0,1] (searchChunks already coerces it to a finite number).
+// distance, so it spans [-1,1] (searchChunks coerces it to a finite number);
+// the gate's positive minSemanticOverlap floor discards the negative half.
 async function defaultVectorSearch(
   vector: number[],
   k: number,
