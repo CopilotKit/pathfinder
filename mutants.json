@@ -1,0 +1,132 @@
+{
+  "$comment": [
+    "Mutation manifest for the relevance/analytics score-scale contract: for each",
+    "production line, a mutation that SHOULD break the suite, and the verdict that",
+    "was actually observed by applying it and running `npm run build && npm test`.",
+    "",
+    "Why this file exists: 'the tests pass' says nothing about whether the tests",
+    "would NOTICE the production line being reverted. A `caught` entry is a test",
+    "suite property that has been demonstrated, not assumed. A `survived` entry is",
+    "a known coverage hole, recorded so it is not rediscovered from scratch in the",
+    "next review round.",
+    "",
+    "This is the INPUT for a mutation runner, not the runner. Verdicts here were",
+    "produced by hand: apply `mutation` at `file`, run the full suite plus",
+    "`npx tsc --noEmit`, record whether anything failed, revert. `line` is the",
+    "line at the time of `verified.commit` and is a hint for locating the anchor,",
+    "not an address to patch blindly — match on the code, not the number.",
+    "",
+    "Adding an entry: run the mutation before you write the verdict down. An",
+    "unverified entry is worse than no entry, because it looks like evidence."
+  ],
+  "verified": {
+    "commit": "c5055de",
+    "branch": "fix/146-core",
+    "command": "npm run build && npm test && npx tsc --noEmit",
+    "baseline": "3604 passed | 1 skipped (3605)",
+    "date": "2026-07-28"
+  },
+  "summary": { "total": 7, "caught": 6, "survived": 1 },
+  "mutants": [
+    {
+      "id": "topCosineScore-max-to-min",
+      "file": "src/relevance.ts",
+      "line": 77,
+      "anchor": "if (best === null || cosine > best) best = cosine;",
+      "mutation": "Flip `>` to `<` so topCosineScore reduces to the WORST cosine in the result set instead of the best.",
+      "verdict": "caught",
+      "failing_tests": 4,
+      "caught_by": [
+        "src/__tests__/relevance-score-scale.test.ts",
+        "src/__tests__/knowledge-analytics.test.ts",
+        "src/__tests__/search-analytics.test.ts"
+      ]
+    },
+    {
+      "id": "topCosineScore-drop-finite-guard",
+      "file": "src/relevance.ts",
+      "line": 76,
+      "anchor": "if (typeof cosine !== \"number\" || !Number.isFinite(cosine)) continue;",
+      "mutation": "Drop the `!Number.isFinite(cosine)` half of the guard, letting a NaN or Infinity cosine reach query_log.top_score.",
+      "verdict": "caught",
+      "failing_tests": 1,
+      "caught_by": ["src/__tests__/relevance-score-scale.test.ts"]
+    },
+    {
+      "id": "cosine-score-min-negone-to-zero",
+      "file": "src/relevance.ts",
+      "line": 40,
+      "anchor": "export const COSINE_SCORE_MIN = -1;",
+      "mutation": "Restore the pre-fix claim that the cosine scale starts at 0 rather than -1.",
+      "verdict": "caught",
+      "failing_tests": 3,
+      "caught_by": ["src/__tests__/cosine-scale-range.test.ts"]
+    },
+    {
+      "id": "cosine-score-orthogonal-zero-to-min",
+      "file": "src/relevance.ts",
+      "line": 50,
+      "anchor": "export const COSINE_SCORE_ORTHOGONAL = 0;",
+      "mutation": "Anchor orthogonality at the scale MINIMUM (-1), which drags the derived LOW_CONFIDENCE_SCORE_THRESHOLD from 0.5 to 0 and makes the low-confidence metric flag essentially nothing.",
+      "verdict": "caught",
+      "failing_tests": 8,
+      "caught_by": [
+        "src/__tests__/cosine-scale-range.test.ts",
+        "src/__tests__/relevance-score-scale.test.ts",
+        "src/__tests__/analytics.test.ts"
+      ]
+    },
+    {
+      "id": "low-confidence-threshold-hardcoded",
+      "file": "src/db/analytics.ts",
+      "line": 101,
+      "anchor": "export const LOW_CONFIDENCE_SCORE_THRESHOLD =\n  (COSINE_SCORE_ORTHOGONAL + COSINE_SCORE_MAX) / 2;",
+      "mutation": "Replace the derivation from the cosine-scale constants with the literal 0.5.",
+      "verdict": "survived",
+      "failing_tests": 0,
+      "caught_by": [],
+      "note": [
+        "Expected, and worth keeping as a recorded hole rather than 'fixing' by",
+        "deleting the mutant. The derivation and the literal are numerically",
+        "identical TODAY, so no behavioural test can separate them. What the",
+        "derivation buys is that the threshold cannot silently drift onto a",
+        "different scale than the metric it is compared against — which is the",
+        "exact bug it was written to prevent, and which only shows up if the scale",
+        "constants change.",
+        "",
+        "Closing it needs a test that asserts the RELATIONSHIP, not the value: that",
+        "LOW_CONFIDENCE_SCORE_THRESHOLD sits strictly between COSINE_SCORE_ORTHOGONAL",
+        "and COSINE_SCORE_MAX and moves when those move. Note the sibling mutant",
+        "cosine-score-orthogonal-zero-to-min IS caught, so the derivation is",
+        "partially pinned from the other direction: the constants it reads are",
+        "load-bearing even though the arithmetic itself is not."
+      ]
+    },
+    {
+      "id": "score-kind-always-cosine",
+      "file": "src/db/analytics.ts",
+      "line": 439,
+      "anchor": "const scoreKind =\n    entry.top_score == null ? null : (entry.score_kind ?? COSINE_SCORE_KIND);",
+      "mutation": "Tag score_kind='cosine' unconditionally, so a row with a NULL top_score still declares the cosine scale.",
+      "verdict": "caught",
+      "failing_tests": 2,
+      "caught_by": [
+        "src/__tests__/analytics.test.ts",
+        "src/__tests__/relevance-score-scale.test.ts"
+      ]
+    },
+    {
+      "id": "cosine-corrupt-to-zero",
+      "file": "src/db/queries.ts",
+      "line": 373,
+      "anchor": "cosine_similarity: toCosineScoreOrNull(r.similarity),",
+      "mutation": "Coerce a corrupt similarity to 0 via toFiniteNumber instead of to null. On a [-1, 1] scale, 0 is a REAL orthogonal reading, so a corrupt row becomes indistinguishable from a genuine one — and gets logged as low-confidence.",
+      "verdict": "caught",
+      "failing_tests": 6,
+      "caught_by": [
+        "src/__tests__/cosine-scale-range.test.ts",
+        "src/__tests__/min-score-gate.test.ts"
+      ]
+    }
+  ]
+}

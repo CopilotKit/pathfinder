@@ -22,7 +22,29 @@ jobs:
       # Cover the gap-analysis script too: it ships from scripts/ and was
       # previously neither format-checked nor type-checked in CI (the other
       # scripts/ files predate this gate and are out of scope here).
-      - run: npx prettier --check "src/**/*.ts" "scripts/gap-analysis/**/*.ts" "scripts/weekly-search-report/**/*.ts"
+      - run: npx prettier --check "src/**/*.ts" "scripts/gap-analysis/**/*.ts" "scripts/weekly-search-report/**/*.ts" "scripts/*.mjs"
+
+  test-shapes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 24 }
+      - run: npm ci
+      # Self-test FIRST, and as its own step so a failure is unambiguous. The
+      # checker's rules run off shared AST helpers, and a bug in one of those
+      # silently disables rules while the check still reports success — that
+      # happened twice while writing it. This step proves each rule still fires
+      # on its known-bad fixture and still tolerates the near-miss beside it, so
+      # the ✓ from the next step means something.
+      - run: node scripts/check-test-shapes.mjs --self-test
+      # Ratchet over src/__tests__: a per-file violation count may fall, never
+      # rise. Pre-existing violations are recorded in
+      # scripts/check-test-shapes.baseline.json.
+      - run: node scripts/check-test-shapes.mjs
 
   typecheck-scripts:
     runs-on: ubuntu-latest
