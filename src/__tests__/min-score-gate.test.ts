@@ -2,8 +2,9 @@
 //
 // The floor is documented as "minimum cosine similarity", but retrieval
 // carries TWO numbers per row on two scales: `similarity` (a per-retriever
-// RANKING score) and `cosine_similarity` (the 0-1 RELEVANCE score). Only the
-// latter may be compared against a threshold (see src/relevance.ts).
+// RANKING score) and `cosine_similarity` (the RELEVANCE score, on the [-1, 1]
+// cosine scale or null). Only the latter may be compared against a threshold
+// (see src/relevance.ts).
 //
 // The defect these tests pin is not the field the old gate read — on a freshly
 // fetched vector row both fields hold the same cosine, so the arithmetic was
@@ -319,6 +320,41 @@ describe("vector search min_score gate (real tool, PGlite + pgvector)", () => {
   it("returns everything when no floor is supplied", async () => {
     const text = await callVectorSearch({ query: "anything" });
     expect(text).toContain("weak.md");
+  });
+
+  it("returns a row whose cosine could not be measured, instead of reading it as 0", async () => {
+    // Where this floor and the [-1, 1] scale contract meet, and a deliberate
+    // behaviour CHANGE rather than an obviously desirable one — pinned so it
+    // cannot drift back silently either way.
+    //
+    // pgvector's `<=>` returns NaN for a zero-norm embedding, so searchChunks
+    // maps the row's cosine to null (toCosineScoreOrNull), meaning UNKNOWN
+    // relevance — and this predicate never excludes what it failed to measure.
+    // The old gate read `similarity`, where the same NaN coerces to 0 and any
+    // positive floor dropped the row; that only looked correct because
+    // "corrupt" and "orthogonal" are the same number in that field. So a row
+    // of unknown relevance now surfaces where it used to be filtered. It still
+    // cannot pollute a score-based analytic: a null cosine never reaches
+    // `query_log.top_score` (see topCosineScore).
+    await db.query(
+      `INSERT INTO chunks
+           (source_name, source_url, title, content, embedding, repo_url,
+            file_path, chunk_index, tsv)
+       VALUES ('docs', NULL, $1, $2, $3, NULL, $1, 0,
+               to_tsvector('english', $2))`,
+      ["degenerate.md", "delta subject matter", pgvector.toSql([0, 0, 0])],
+    );
+
+    const corrupt = (await searchChunks(QUERY_EMBEDDING, 10, "docs")).find(
+      (r) => r.file_path === "degenerate.md",
+    )!;
+    expect(corrupt.cosine_similarity).toBeNull();
+    expect(isBelowCosineFloor(corrupt, 0.5)).toBe(false);
+
+    const text = await callVectorSearch({ query: "anything", min_score: 0.5 });
+    expect(text).toContain("degenerate.md");
+    // The floor still does its job on rows it DID measure.
+    expect(text).not.toContain("weak.md");
   });
 
   it("orders rows by descending cosine, which is why filtering after the DB LIMIT loses nothing", async () => {
