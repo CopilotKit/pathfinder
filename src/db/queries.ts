@@ -1,5 +1,6 @@
 import pgvector from "pgvector";
 import { getPool } from "./client.js";
+import { topCosineScore } from "../relevance.js";
 import type {
   Chunk,
   ChunkResult,
@@ -552,6 +553,16 @@ export function isBelowCosineFloor(
  * "excludes every result we can prove is below the floor", not "everything
  * returned is above the floor" — the latter would require embedding-distance
  * lookups for the keyword half that hybrid search deliberately avoids paying.
+ *
+ * `onCosineMeasured` reports the best cosine this call MEASURED, before the
+ * floor removes anything, so the caller can log a relevance reading that its own
+ * delivery contract has not censored. Without it the floor is invisible from
+ * outside: the caller only ever sees survivors, so a query whose every candidate
+ * measured below the floor is indistinguishable from one that matched nothing
+ * (see maxCosineScore in src/relevance.ts). It is an observer, not an output —
+ * always invoked exactly once when the retrieval completes, including when there
+ * is no floor and when nothing was measured (null) — so it cannot change what
+ * this function returns.
  */
 export async function hybridSearchChunks(
   embedding: number[],
@@ -560,6 +571,7 @@ export async function hybridSearchChunks(
   sourceName?: string,
   version?: string,
   minScore?: number,
+  onCosineMeasured?: (topCosine: number | null) => void,
 ): Promise<ChunkResult[]> {
   // Fetch 2x candidates from each retriever to ensure good RRF coverage
   const candidateLimit = limit * 2;
@@ -569,6 +581,11 @@ export async function hybridSearchChunks(
     searchChunks(embedding, candidateLimit, sourceName, version),
     textSearchChunks(queryText, candidateLimit, sourceName, version),
   ]);
+
+  // Report the measurement BEFORE the floor is applied. The vector half is the
+  // only place a cosine exists, and this is the last point at which the
+  // sub-floor readings are still in hand.
+  onCosineMeasured?.(topCosineScore(vectorResults));
 
   if (minScore == null) return rrfMerge(vectorResults, keywordResults, limit);
 

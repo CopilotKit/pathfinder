@@ -161,12 +161,24 @@ export interface QueryLogEntry {
   query_text: string;
   result_count: number;
   /**
-   * Best RELEVANCE score across the returned results, as a cosine similarity
-   * in [0, 1], or null when no returned result carried one (an empty result
-   * set, a browse call, or a keyword-only match). Never a ranking score: a
-   * ts_rank or an RRF fusion score belongs to a different scale and must be
-   * logged as null, not squeezed into this column. See
-   * {@link COSINE_SCORE_KIND}.
+   * Best RELEVANCE score this request MEASURED, as a cosine similarity in
+   * [{@link COSINE_SCORE_MIN}, {@link COSINE_SCORE_MAX}] — that is [-1, 1], not
+   * [0, 1] as this field claimed before the bound was measured against real
+   * pgvector (see the scale contract in src/relevance.ts). Null means no cosine
+   * was computed anywhere in the request: an empty index-side candidate set, a
+   * browse call, or a keyword-only match.
+   *
+   * MEASURED, not "returned": a `min_score` floor is a delivery contract on the
+   * results, not a filter on the metric, so a query whose every candidate
+   * measured below the floor records the sub-floor reading rather than NULL.
+   * Conflating the two floored `avg_top_score` at `min_score` and made a
+   * near-miss indistinguishable from a no-match. See maxCosineScore in
+   * src/relevance.ts.
+   *
+   * Never a ranking score: a ts_rank or an RRF fusion score belongs to a
+   * different scale and must be logged as null, not squeezed into this column.
+   * See {@link COSINE_SCORE_KIND}. A non-finite value is coerced to null at the
+   * write boundary (see {@link logQuery}).
    */
   top_score: number | null;
   /**
@@ -428,15 +440,33 @@ export async function logQuery(
   const blocked = entry.blocked ?? false;
   const blockReason = entry.block_reason ?? null;
   const clientIp = entry.client_ip ?? null;
+  // Coerce a non-finite score to NULL at the write boundary. Every producer
+  // already refuses to emit one (topCosineScore / maxCosineScore in
+  // src/relevance.ts and toCosineScoreOrNull in src/db/queries.ts all guard with
+  // Number.isFinite), but `top_score` is a plain `number | null` on a writer any
+  // tool can call, and Postgres accepts NaN in a float column — so nothing else
+  // stands between a caller mistake and a permanently poisoned row. All three
+  // score readers treat NaN as a real reading and then misbehave: it satisfies
+  // `top_score IS NOT NULL`, so it inflates the scored population; it can never
+  // satisfy `top_score < threshold`, because Postgres orders NaN above every
+  // finite float, so it never classifies as low-confidence; and `avg(top_score)`
+  // over any group containing it yields NaN, which the reader maps to null —
+  // nulling out that whole group's Avg Cosine. Routing it to NULL up front gives
+  // it the one honest reading available: no score.
+  const topScore =
+    typeof entry.top_score === "number" && Number.isFinite(entry.top_score)
+      ? entry.top_score
+      : null;
   // Derive score_kind from top_score at the write boundary rather than trusting
   // the caller, so the column and the value it describes can never disagree: a
   // present score is always tagged 'cosine' (tools only ever log a cosine — see
   // topCosineScore in src/relevance.ts), and an absent score is always
-  // untagged. A caller-supplied kind is honored only when a score is present,
-  // which leaves room for a future second scale without letting a NULL score
-  // carry a kind.
+  // untagged. Derived from the COERCED score above, so a rejected non-finite
+  // value cannot leave a kind tag behind on a NULL. A caller-supplied kind is
+  // honored only when a score is present, which leaves room for a future second
+  // scale without letting a NULL score carry a kind.
   const scoreKind =
-    entry.top_score == null ? null : (entry.score_kind ?? COSINE_SCORE_KIND);
+    topScore == null ? null : (entry.score_kind ?? COSINE_SCORE_KIND);
   try {
     await pool.query(
       `INSERT INTO query_log (tool_name, query_text, result_count, top_score, score_kind, latency_ms, source_name, session_id, request_source, client_ip, user_agent, blocked, block_reason)
@@ -445,7 +475,7 @@ export async function logQuery(
         entry.tool_name,
         text,
         entry.result_count,
-        entry.top_score,
+        topScore,
         scoreKind,
         entry.latency_ms,
         entry.source_name,

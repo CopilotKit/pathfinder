@@ -29,13 +29,25 @@ export const COSINE_SCORE_KIND = "cosine";
  * as this contract claimed until the bound was actually measured. Anything
  * pointed away from the query is negative; 0 means orthogonal.
  *
- * A deployment MAY make negatives unreachable by setting a positive
- * `min_score` (deploy/copilotkit-docs.yaml uses 0.3 on its four search tools),
- * but that floor is per-tool, optional, request-overridable, and skipped
- * entirely by the keyword and knowledge paths — so it is a property of one
- * config, not of the metric. These constants encode the scale pgvector
- * actually produces; a threshold that wants a tighter floor derives it (see
- * LOW_CONFIDENCE_SCORE_THRESHOLD) instead of assuming the config.
+ * A deployment MAY set a positive `min_score` (deploy/copilotkit-docs.yaml uses
+ * 0.3 on its four search tools), but that floor is per-tool, optional,
+ * request-overridable, and skipped entirely by the keyword and knowledge paths —
+ * so it is a property of one config, not of the metric. These constants encode
+ * the scale pgvector actually produces; a threshold that wants a tighter floor
+ * derives it (see LOW_CONFIDENCE_SCORE_THRESHOLD) instead of assuming the
+ * config.
+ *
+ * The interaction between that floor and this scale is worth stating outright,
+ * because getting it wrong is what made the whole metric a lie once already. A
+ * `min_score` gates DELIVERY, not measurement: `top_score` records the best
+ * cosine the request measured, so the full [-1, 1] range stays reachable in
+ * `query_log` no matter how high the floor is set, and the low-confidence
+ * classifier can fire across its entire band [-1, 0.5). Reduce the score over
+ * the post-floor results instead and the metric collapses onto the config: with
+ * a 0.3 floor, `avg_top_score` cannot report below 0.3, and low-confidence can
+ * only fire in [0.3, 0.5) because everything worse logs NULL and reads as "no
+ * score". That is the censored version this contract exists to prevent — see
+ * maxCosineScore and src/mcp/tools/search.ts.
  */
 export const COSINE_SCORE_MIN = -1;
 export const COSINE_SCORE_MAX = 1;
@@ -76,6 +88,39 @@ export function topCosineScore(results: ChunkResult[]): number | null {
     const cosine = r.cosine_similarity;
     if (typeof cosine !== "number" || !Number.isFinite(cosine)) continue;
     if (best === null || cosine > best) best = cosine;
+  }
+  return best;
+}
+
+/**
+ * Best of several independent cosine measurements, or null when none of them is
+ * one. The combiner for the case where a request measures relevance in more than
+ * one place — which is what `min_score` creates.
+ *
+ * A retrieval mode with a floor MEASURES a cosine for every vector candidate and
+ * then DELIVERS only the ones above the floor. Those are different concerns and
+ * `query_log.top_score` belongs to the first: it is the reading this request
+ * took of the index, not a summary of what survived the caller's delivery
+ * contract. Reducing only over the returned rows made the metric report the
+ * floor back at itself — `avg_top_score` could not go below `min_score` by
+ * construction, and a query whose best chunk measured 0.29 under a 0.3 floor
+ * logged NULL, which analytics reads as "no score at all" and is therefore
+ * indistinguishable from a query that matched nothing. See
+ * src/mcp/tools/search.ts, where the pre-floor measurement is captured and
+ * combined here with whatever cosine still rides on the returned rows.
+ *
+ * Taking the MAX (rather than preferring the pre-floor reading outright) is
+ * deliberate defence in depth: in production the delivered rows are a subset of
+ * the measured ones, so the max IS the pre-floor reading; but a retriever that
+ * never reports a pre-floor measurement — a future mode, or a test double
+ * standing in for one — still contributes the cosine visible on its own output
+ * instead of silently degrading `top_score` to NULL.
+ */
+export function maxCosineScore(...scores: Array<number | null>): number | null {
+  let best: number | null = null;
+  for (const score of scores) {
+    if (typeof score !== "number" || !Number.isFinite(score)) continue;
+    if (best === null || score > best) best = score;
   }
   return best;
 }

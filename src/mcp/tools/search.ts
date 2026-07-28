@@ -8,7 +8,7 @@ import {
   hybridSearchChunks,
   isBelowCosineFloor,
 } from "../../db/queries.js";
-import { topCosineScore } from "../../relevance.js";
+import { maxCosineScore, topCosineScore } from "../../relevance.js";
 import { logQuery } from "../../db/analytics.js";
 import { getAnalyticsConfig } from "../../config.js";
 import { checkBlocklist } from "../abuse-blocklist.js";
@@ -193,6 +193,18 @@ export function registerSearchTool(
       try {
         let results: ChunkResult[];
         const minScore = min_score ?? toolConfig.min_score;
+        // Best cosine this request MEASURED, captured before `minScore` removes
+        // anything. `min_score` is a DELIVERY contract (do not hand the caller a
+        // chunk we proved is below the floor); `query_log.top_score` is a
+        // MEASUREMENT (how well did the index answer this query). Reducing the
+        // score over the post-floor set conflated the two and censored the
+        // metric — see maxCosineScore in src/relevance.ts for what that cost.
+        //
+        // A mutable holder rather than a bare `let`: the hybrid retriever writes
+        // it from inside an observer callback, and TypeScript's control-flow
+        // narrowing deliberately ignores assignments made in nested functions,
+        // so a `let` would still read as `null` at the log site below.
+        const measured: { topCosine: number | null } = { topCosine: null };
 
         switch (searchMode) {
           case "keyword": {
@@ -202,8 +214,10 @@ export function registerSearchTool(
               toolConfig.source,
               version,
             );
-            // ts_rank scores are not on the cosine similarity scale,
-            // so min_score filtering is not applied in keyword mode.
+            // ts_rank scores are not on the cosine similarity scale, so
+            // min_score filtering is not applied in keyword mode — and no
+            // cosine is measured anywhere in this request, which is why
+            // `measured.topCosine` stays null and the logged score is NULL.
             break;
           }
           case "hybrid": {
@@ -211,6 +225,9 @@ export function registerSearchTool(
             // hybridSearchChunks evaluates the cosine floor on the vector
             // candidates and applies the verdict to BOTH lists before the RRF
             // merge, so a condemned chunk cannot re-enter on its keyword rank.
+            // The floor is applied in there, so the pre-floor reading has to
+            // come back out through the observer — by the time the fused rows
+            // arrive here the sub-floor cosines are gone.
             results = await hybridSearchChunks(
               embedding,
               query,
@@ -218,6 +235,9 @@ export function registerSearchTool(
               toolConfig.source,
               version,
               minScore,
+              (topCosine) => {
+                measured.topCosine = topCosine;
+              },
             );
             break;
           }
@@ -230,11 +250,34 @@ export function registerSearchTool(
               toolConfig.source,
               version,
             );
-            // Filtering AFTER the DB LIMIT costs nothing here: searchChunks
-            // orders by embedding distance, so its rows already arrive in
-            // non-increasing cosine order and the floor is a suffix cut. Any
-            // row an over-fetch would surface ranks below one already rejected,
-            // so it could never clear the floor either.
+            // Measure BEFORE the floor, for the same reason hybrid mode reports
+            // its pre-floor reading: this is the last point at which a sub-floor
+            // cosine is still in hand.
+            measured.topCosine = topCosineScore(results);
+            // Filtering AFTER the DB LIMIT loses no qualifying row, so this mode
+            // does not over-fetch the way hybrid and knowledge do (2x
+            // candidates). It is NOT the "suffix cut" it used to be described
+            // as, though — that stopped being true when a corrupt distance began
+            // reading as a NULL cosine instead of 0:
+            //
+            //   * searchChunks orders by `embedding <=> $1` ASCENDING, and
+            //     Postgres sorts a NaN float8 above every finite one, so a
+            //     zero-norm indexed row (whose distance is NaN) lands strictly
+            //     LAST in the window;
+            //   * isBelowCosineFloor never excludes a NULL cosine — unknown
+            //     relevance is not bad relevance — so that trailing row SURVIVES
+            //     while lower-cosine finite rows ahead of it are cut. The
+            //     deletion is therefore mid-array, and the response can come
+            //     back shorter than `limit`.
+            //
+            // What still holds is the part that matters: a NULL-cosine row can
+            // only enter the window after every finite row has, so if one is
+            // present the whole matching population is already in hand and there
+            // is nothing past the LIMIT to over-fetch. And when the window stops
+            // short of the NULL-cosine rows it IS a pure descending-cosine
+            // prefix, so the next row out ranks below one already rejected and
+            // could not clear the floor either. Pinned in
+            // src/__tests__/min-score-logging.test.ts against real pgvector.
             if (minScore != null) {
               results = results.filter((r) => !isBelowCosineFloor(r, minScore));
             }
@@ -252,7 +295,19 @@ export function registerSearchTool(
         // the dashboard's Avg Cosine column are defined on. Keyword mode
         // therefore logs NULL here, which analytics reads as "no score", not
         // "a low score". See topCosineScore.
-        const topScore = topCosineScore(results);
+        //
+        // The pre-floor measurement is combined with the cosine still on the
+        // returned rows rather than replacing it: the two agree in production
+        // (survivors are a subset of what was measured), and the returned-row
+        // term keeps a retriever that reports no measurement from degrading the
+        // score to NULL. NULL is thereby reserved for its one honest meaning —
+        // no cosine was computed anywhere in this request — instead of also
+        // covering "every candidate we measured fell below the caller's floor".
+        // See maxCosineScore.
+        const topScore = maxCosineScore(
+          measured.topCosine,
+          topCosineScore(results),
+        );
         logQuery(
           {
             tool_name: toolConfig.name,

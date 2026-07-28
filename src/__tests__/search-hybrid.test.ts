@@ -128,6 +128,11 @@ describe("search tool hybrid mode", () => {
       "docs", // source
       undefined, // version
       undefined, // minScore (no config or request min_score)
+      // onCosineMeasured: the observer through which the retriever reports the
+      // best cosine it measured BEFORE the floor was applied, so query_log's
+      // top_score records a measurement rather than a summary of the survivors.
+      // See maxCosineScore in src/relevance.ts.
+      expect.any(Function),
     );
     expect(result.isError).toBeFalsy();
     const text = (result.content as Array<{ type: string; text: string }>)[0]
@@ -151,6 +156,7 @@ describe("search tool hybrid mode", () => {
       "docs",
       undefined,
       0.5,
+      expect.any(Function), // onCosineMeasured — see the test above
     );
   });
 
