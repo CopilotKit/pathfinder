@@ -11,6 +11,7 @@ import {
   getFaqChunksByIds,
   searchChunks,
 } from "../../db/queries.js";
+import { topCosineScore } from "../../relevance.js";
 import { logQuery } from "../../db/analytics.js";
 import { getAnalyticsConfig } from "../../config.js";
 import { checkBlocklist } from "../abuse-blocklist.js";
@@ -255,6 +256,11 @@ export function registerKnowledgeTool(
               qualifying.push({
                 ...faqChunk,
                 similarity: result.similarity,
+                // Carry the cosine through with the ranking score. getFaqChunks*
+                // select no similarity column of their own, so without this the
+                // merged row would look score-less and drop out of the
+                // low-confidence / Avg Cosine analytics.
+                cosine_similarity: result.cosine_similarity,
               });
             }
           }
@@ -262,10 +268,12 @@ export function registerKnowledgeTool(
 
           // Fire-and-forget analytics logging
           const analyticsConfig = getAnalyticsConfig();
-          const topScore =
-            mergedResults.length > 0
-              ? Math.max(...mergedResults.map((r) => r.similarity))
-              : null;
+          // Same contract as the search tool: log the best COSINE similarity,
+          // so query_log.top_score is one metric on one scale across every
+          // tool. This path is vector-only, so the cosine and the ranking
+          // score coincide — reducing over cosine_similarity keeps it that way
+          // if a future change fuses in another retriever. See topCosineScore.
+          const topScore = topCosineScore(mergedResults);
           logQuery(
             {
               tool_name: toolConfig.name,

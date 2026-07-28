@@ -7,6 +7,7 @@ import {
   textSearchChunks,
   hybridSearchChunks,
 } from "../../db/queries.js";
+import { topCosineScore } from "../../relevance.js";
 import { logQuery } from "../../db/analytics.js";
 import { getAnalyticsConfig } from "../../config.js";
 import { checkBlocklist } from "../abuse-blocklist.js";
@@ -105,7 +106,12 @@ export function registerSearchTool(
       .max(1)
       .optional()
       .describe(
-        "Minimum similarity score (0-1). Results below this threshold are filtered out.",
+        "Minimum cosine similarity (0-1) for semantically matched results. " +
+          "In vector mode it filters the returned results. In hybrid mode it " +
+          "raises the semantic floor of the vector half BEFORE the results are " +
+          "fused with keyword matches, so a keyword-only match can still be " +
+          "returned below this score. Ignored in keyword mode, which has no " +
+          "comparable score.",
       ),
     version: z
       .string()
@@ -230,10 +236,14 @@ export function registerSearchTool(
         // Fire-and-forget analytics logging (always captures, regardless of analytics.enabled)
         const logQueries = getAnalyticsConfig()?.log_queries ?? true;
         const latencyMs = Date.now() - startMs;
-        const topScore =
-          results.length > 0
-            ? Math.max(...results.map((r) => r.similarity))
-            : null;
+        // Persist the best COSINE similarity, never `similarity`. In hybrid
+        // mode `similarity` has been overwritten with the RRF fusion score
+        // (ceiling ≈ 0.033) and in keyword mode it is a ts_rank — neither is
+        // comparable to the 0-1 cosine scale the low-confidence threshold and
+        // the dashboard's Avg Cosine column are defined on. Keyword mode
+        // therefore logs NULL here, which analytics reads as "no score", not
+        // "a low score". See topCosineScore.
+        const topScore = topCosineScore(results);
         logQuery(
           {
             tool_name: toolConfig.name,

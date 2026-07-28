@@ -9,6 +9,7 @@ import {
   ALL_TIME_DAYS,
   ROLLING_WINDOW_CAP_DAYS,
   BROWSE_QUERY_TEXT,
+  COSINE_SCORE_KIND,
 } from "../db/analytics.js";
 import { generatePostSchemaMigration } from "../db/schema.js";
 
@@ -72,14 +73,21 @@ async function seed(db: PGlite, count: number, opts: SeedOpts = {}) {
   for (let i = 0; i < count; i++) {
     await db.query(
       `INSERT INTO query_log
-        (tool_name, query_text, result_count, top_score, latency_ms,
+        (tool_name, query_text, result_count, top_score, score_kind, latency_ms,
          source_name, session_id, request_source, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         "search-docs",
         opts.query_text ?? "q",
         opts.result_count ?? 5,
         opts.top_score === undefined ? 0.9 : opts.top_score,
+        // Mirror logQuery's write-boundary rule: a present score declares its
+        // scale, an absent one declares nothing. Score-based readers require
+        // the tag, so seeding without it would silently test the "unknown
+        // scale, excluded" path instead of the intended one.
+        (opts.top_score === undefined ? 0.9 : opts.top_score) == null
+          ? null
+          : COSINE_SCORE_KIND,
         42,
         "docs",
         "sess-1",
@@ -298,14 +306,17 @@ async function seedAt(
 ): Promise<void> {
   await db.query(
     `INSERT INTO query_log
-        (tool_name, query_text, result_count, top_score, latency_ms,
+        (tool_name, query_text, result_count, top_score, score_kind, latency_ms,
          source_name, session_id, request_source, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       "search-docs",
       opts.query_text ?? "q",
       opts.result_count ?? 5,
       opts.top_score === undefined ? 0.9 : opts.top_score,
+      (opts.top_score === undefined ? 0.9 : opts.top_score) == null
+        ? null
+        : COSINE_SCORE_KIND,
       42,
       "docs",
       "sess-1",

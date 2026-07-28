@@ -477,7 +477,15 @@
           <th>Tool</th>
           <th>Count</th>
           <th>Avg Results</th>
-          <th>Avg Score</th>
+          <!-- "Avg Cosine", not "Avg Score": the column shows the mean
+               best-match cosine similarity (0-1). It deliberately reads "—"
+               for keyword-only traffic and for rows logged before the scale
+               was recorded, rather than mixing a rank score into the mean. -->
+          <th
+            title="Mean best-match cosine similarity (0-1) over this query's events. Blank when no event recorded a cosine score (keyword-only matches, browse calls, or rows logged before the score scale was tracked)."
+          >
+            Avg Cosine
+          </th>
         </tr>
       </thead>
       <tbody></tbody>
