@@ -239,7 +239,6 @@ describe("min_score gates delivery without censoring the measurement", () => {
     // score" rather than as the content gap this actually is.
     expect(row.top_score).not.toBeNull();
     expect(row.top_score!).toBeCloseTo(0.25, 4);
-    console.log("CAPTURE hybrid near-miss:", JSON.stringify(row));
     expect(row.score_kind).toBe("cosine");
   });
 
@@ -247,7 +246,6 @@ describe("min_score gates delivery without censoring the measurement", () => {
     const { snippetText, row } = await runSearch(toolConfig("nearmiss", "vector"));
     expect(snippetText).toBe("No results found.");
     expect(row.result_count).toBe(0);
-    console.log("CAPTURE vector near-miss:", JSON.stringify(row));
     expect(row.top_score!).toBeCloseTo(0.25, 4);
   });
 
@@ -258,7 +256,6 @@ describe("min_score gates delivery without censoring the measurement", () => {
     const { row } = await runSearch(toolConfig("empty", "hybrid"));
     expect(row.result_count).toBe(0);
     expect(row.top_score).toBeNull();
-    console.log("CAPTURE no-match:", JSON.stringify(row));
     expect(row.score_kind).toBeNull();
   });
 
@@ -278,7 +275,6 @@ describe("min_score gates delivery without censoring the measurement", () => {
     expect(entry).toBeDefined();
     expect(entry!.avg_top_score).not.toBeNull();
     expect(entry!.avg_top_score!).toBeLessThan(PRODUCTION_MIN_SCORE);
-    console.log("CAPTURE avg cosine:", JSON.stringify(entry));
     expect(entry!.avg_top_score!).toBeCloseTo(0.25, 4);
   });
 });
