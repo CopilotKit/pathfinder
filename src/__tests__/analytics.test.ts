@@ -2146,7 +2146,14 @@ describe("getToolBreakdown", () => {
     expect(sql).toContain("latency_ms >= 0");
     // No blocked clause, no redacted exclusion (matches getToolCounts).
     expect(sql).not.toContain("blocked");
-    expect(sql).not.toContain("REDACTED");
+    // The redacted exclusion is emitted as a predicate ON query_text (bound as
+    // `query_text != $N`, or inlined), so query_text is the only thing that can
+    // actually witness its absence. Asserting the SQL lacks the string
+    // "REDACTED" proved nothing: REDACTED_QUERY_TEXT is a bound parameter, so
+    // that identifier can never appear in the query text under any
+    // implementation — the assertion held even with a real exclusion added.
+    expect(sql).not.toContain("query_text");
+    expect(params).not.toContain(REDACTED_QUERY_TEXT);
     // Default request-source filter binds "user" (real-users-by-default).
     expect(params).toEqual([7, "user"]);
   });
