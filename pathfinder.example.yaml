@@ -22,7 +22,10 @@ server:
   #   - "160.79.106.35"               # Example: Anthropic Assistant crawler
   #   - "10.0.0.0/8"                  # Example: internal health-probe CIDR
   # NOTE: behind a reverse proxy (Railway, Fly, etc.), allowlist entries only match
-  # when trust_proxy: true. Otherwise the server sees the proxy IP for every request.
+  # when trust_proxy is set. Otherwise the server sees the proxy IP for every
+  # request. Prefer a hop count (e.g. 1) over `true` — with `true`, a client can
+  # forge X-Forwarded-For and be attributed to an allowlisted IP. See the
+  # SECURITY WARNING below.
   #
   # ⚠️  SECURITY WARNING — trust_proxy ⚠️
   # When true, the server honors X-Forwarded-For and populates req.ip from
