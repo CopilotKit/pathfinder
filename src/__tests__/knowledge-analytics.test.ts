@@ -186,7 +186,7 @@ describe("knowledge tool analytics instrumentation", () => {
   // embedding). The merge in src/mcp/tools/knowledge.ts copies the candidate's
   // cosine onto the FAQ row, and topCosineScore reduces over that field. Drop
   // either half and every knowledge query silently logs top_score = NULL,
-  // blanking the low-confidence card and the Avg Cosine column for this tool
+  // blanking the low-confidence metric and the Avg Cosine column for this tool
   // while the tool's own output looks perfectly correct. Nothing else in the
   // suite reads top_score on this path, so these tests are the only thing
   // standing between that regression and production.
