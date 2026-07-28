@@ -230,7 +230,17 @@ export function registerKnowledgeTool(
             allResults.push(...results);
           }
 
-          // Sort the full candidate pool by similarity descending.
+          // Sort the full candidate pool by the RANKING score descending.
+          // `similarity` is the sort key rather than `cosine_similarity` because
+          // it is the only one of the two that is a number on every row: a
+          // corrupt (non-finite) distance leaves `cosine_similarity` null, and
+          // null has no place in a numeric comparator. The cost is that
+          // toFiniteNumber floors such a row's `similarity` at 0, so a corrupt
+          // row sorts ABOVE a row with a legitimately negative cosine. That is
+          // accepted, not overlooked: both are below orthogonal and neither is a
+          // useful answer, so the mis-ordering can only ever reshuffle the tail.
+          // Note it does NOT contradict the cosine-carry below — the sort key and
+          // the recorded relevance score are deliberately different fields.
           allResults.sort((a, b) => b.similarity - a.similarity);
 
           // Fetch FAQ metadata (with confidence) for EXACTLY the candidate ids.
@@ -257,9 +267,13 @@ export function registerKnowledgeTool(
                 ...faqChunk,
                 similarity: result.similarity,
                 // Carry the cosine through with the ranking score. getFaqChunks*
-                // select no similarity column of their own, so without this the
-                // merged row would look score-less and drop out of the
-                // low-confidence / Avg Cosine analytics.
+                // select a constant `0.0 AS similarity` — a placeholder, not a
+                // measurement, since neither reader compares an embedding — and
+                // no cosine column at all, so without this the merged row would
+                // carry a fabricated 0 ranking score and a NULL relevance score,
+                // and drop out of the low-confidence / Avg Cosine analytics
+                // entirely. Both fields therefore come from the vector `result`,
+                // never from `faqChunk`.
                 cosine_similarity: result.cosine_similarity,
               });
             }
@@ -270,9 +284,18 @@ export function registerKnowledgeTool(
           const analyticsConfig = getAnalyticsConfig();
           // Same contract as the search tool: log the best COSINE similarity,
           // so query_log.top_score is one metric on one scale across every
-          // tool. This path is vector-only, so the cosine and the ranking
-          // score coincide — reducing over cosine_similarity keeps it that way
-          // if a future change fuses in another retriever. See topCosineScore.
+          // tool. On this vector-only path the two fields hold the same number
+          // for a HEALTHY row — but not for every row: a corrupt (non-finite)
+          // distance yields `similarity: 0` and `cosine_similarity: null`, and
+          // only the latter is honest about it (0 is a real, orthogonal cosine).
+          // So reducing over `cosine_similarity` is not merely future-proofing
+          // against a second retriever being fused in; it is already the
+          // difference between recording "no reading" and recording a
+          // fabricated orthogonal one. See topCosineScore.
+          //
+          // Unlike the search tool this path has no `min_score` to reconcile —
+          // the knowledge floor is FAQ `confidence`, which gates delivery on
+          // curation quality rather than on measured relevance.
           const topScore = topCosineScore(mergedResults);
           logQuery(
             {
