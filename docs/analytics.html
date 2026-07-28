@@ -484,7 +484,7 @@
                logged before the scale was recorded, rather than mixing a rank
                score into the mean. -->
           <th
-            title="Mean best-match cosine similarity (-1 to 1; 1 is a perfect match, 0 is unrelated, negative means pointed away) over this query's events. Blank when no event recorded a cosine score (keyword-only matches, browse calls, or rows logged before the score scale was tracked)."
+            title="Mean best-match cosine similarity (-1 to 1; 1 is a perfect match, 0 is unrelated, negative means pointed away) over this query's events. Shows — when no event recorded a cosine score (keyword-only matches, browse calls, or rows logged before the score scale was tracked)."
           >
             Avg Cosine
           </th>
@@ -640,6 +640,12 @@
             total_queries_window: 1284,
             empty_result_rate_window: 0.074,
             empty_result_count_window: 95,
+            // scored_query_count_window > 0 puts the Low Confidence card in
+            // its POPULATED state for the mockup. Drop it to 0 to preview the
+            // "nothing scored yet" em-dash a freshly-migrated install shows.
+            low_confidence_count_window: 41,
+            low_confidence_rate_window: 0.0319,
+            scored_query_count_window: 1043,
             avg_latency_ms_window: 142,
             p95_latency_ms_window: 318,
             queries_per_day_window: [
@@ -1958,10 +1964,55 @@
             typeof rate === "number" && Number.isFinite(rate)
               ? (rate * 100).toFixed(1) + "%"
               : "-";
+          // Low-confidence rate: queries that returned rows whose best match
+          // still scored below the server's low-confidence threshold — "looks
+          // like a hit but isn't relevant". Sits next to the empty-result rate
+          // because the two are the pair of retrieval-quality signals.
+          //
+          // The counter only classifies rows that DECLARE the cosine scale
+          // (score_kind='cosine'), so on any install that just gained the
+          // column NOTHING is classifiable until fresh traffic is logged, and
+          // both the count and the rate sit at 0 for want of measurement. A
+          // literal "0.0%" would read as "nothing looks irrelevant" — the
+          // opposite of the truth. Gate on the scored population and fall
+          // back to the same em-dash the Avg Cosine column uses for "no
+          // cosine recorded". Deliberately no threshold value in the copy:
+          // the threshold lives on the server (LOW_CONFIDENCE_SCORE_THRESHOLD,
+          // derived from the cosine scale) and restating a number here is
+          // exactly the drift that broke this metric before.
+          var lowConfRate = summary.low_confidence_rate_window;
+          var scoredWindow = summary.scored_query_count_window;
+          var lowConfMeasured =
+            typeof scoredWindow === "number" &&
+            Number.isFinite(scoredWindow) &&
+            scoredWindow > 0 &&
+            typeof lowConfRate === "number" &&
+            Number.isFinite(lowConfRate);
           statCards.push(
             {
               label: "Empty Result Rate (" + winLabel + ")",
               value: rateLabel,
+            },
+            {
+              label: "Low Confidence (" + winLabel + ")",
+              value: lowConfMeasured
+                ? (lowConfRate * 100).toFixed(1) + "%"
+                : "—",
+              title: lowConfMeasured
+                ? safeNumber(
+                    summary.low_confidence_count_window,
+                  ).toLocaleString() +
+                  " of " +
+                  safeNumber(summary.total_queries_window).toLocaleString() +
+                  " queries in this window returned results whose best match " +
+                  "scored below the low-confidence threshold (" +
+                  safeNumber(scoredWindow).toLocaleString() +
+                  " queries carried a cosine score)."
+                : "No query in this window recorded a cosine similarity, so " +
+                  "there is nothing to classify yet. Keyword-only and browse " +
+                  "traffic never carries one, and rows logged before the " +
+                  "score scale was tracked don't either — newly logged " +
+                  "searches will populate this card.",
             },
             {
               label: "Avg Latency (" + winLabel + ")",
@@ -1991,8 +2042,14 @@
           );
           document.getElementById("stats").innerHTML = statCards
             .map(function (s) {
+              // `title` is optional — only cards whose value needs explaining
+              // (currently Low Confidence, whose em-dash state is otherwise
+              // unreadable) carry one. Same hover-tooltip affordance the Avg
+              // Cosine column header uses.
               return (
-                '<div class="stat-card"><div class="label">' +
+                '<div class="stat-card"' +
+                (s.title ? ' title="' + esc(s.title) + '"' : "") +
+                '><div class="label">' +
                 esc(s.label) +
                 '</div><div class="value">' +
                 s.value +

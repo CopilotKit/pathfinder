@@ -1869,6 +1869,45 @@ describe("getAnalyticsSummary low-confidence metric", () => {
   it("threshold constant is 0.5 (matches the brief)", () => {
     expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(0.5);
   });
+
+  it("surfaces scored_query_count_window as the low-confidence denominator", async () => {
+    // Without a scored population, a consumer cannot tell "no query in this
+    // window was low confidence" (good) from "no query in this window was
+    // SCORED at all" (nothing measured) — both leave low_confidence at 0.
+    // The dashboard card keys its empty state off this field.
+    mockSummaryQueries({
+      total: 100,
+      empty: 5,
+      low_confidence: 12,
+      scored: 80,
+      avg_latency: 50,
+    });
+    const result = await getAnalyticsSummary({});
+
+    expect(result.scored_query_count_window).toBe(80);
+  });
+
+  it("scored_query_count_window shares the low-confidence FILTER minus the threshold", async () => {
+    // Same population the low-confidence counter draws from — result-bearing
+    // rows that DECLARE the cosine scale — so the two are directly comparable
+    // and the card's "nothing scored yet" state is exact rather than inferred.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    const [sql] = mockQuery.mock.calls[1];
+    expect(sql).toMatch(
+      /count\(\*\) FILTER \(\s*WHERE result_count > 0\s+AND top_score IS NOT NULL\s+AND score_kind = \$\d+\s*\)::int AS scored/,
+    );
+  });
+
+  it("scored_query_count_window defaults to 0 when the column is absent", async () => {
+    // A missing column must read as "nothing scored", never NaN — the card
+    // renders its em-dash empty state off `> 0`.
+    mockSummaryQueries({ total: 100, empty: 5, low_confidence: 0 });
+    const result = await getAnalyticsSummary({});
+
+    expect(result.scored_query_count_window).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
