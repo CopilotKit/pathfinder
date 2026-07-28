@@ -79,3 +79,36 @@ export function topCosineScore(results: ChunkResult[]): number | null {
   }
   return best;
 }
+
+/**
+ * Best of several independent cosine measurements, or null when none of them is
+ * one. The combiner for the case where a request measures relevance in more than
+ * one place — which is what `min_score` creates.
+ *
+ * A retrieval mode with a floor MEASURES a cosine for every vector candidate and
+ * then DELIVERS only the ones above the floor. Those are different concerns and
+ * `query_log.top_score` belongs to the first: it is the reading this request
+ * took of the index, not a summary of what survived the caller's delivery
+ * contract. Reducing only over the returned rows made the metric report the
+ * floor back at itself — `avg_top_score` could not go below `min_score` by
+ * construction, and a query whose best chunk measured 0.29 under a 0.3 floor
+ * logged NULL, which analytics reads as "no score at all" and is therefore
+ * indistinguishable from a query that matched nothing. See
+ * src/mcp/tools/search.ts, where the pre-floor measurement is captured and
+ * combined here with whatever cosine still rides on the returned rows.
+ *
+ * Taking the MAX (rather than preferring the pre-floor reading outright) is
+ * deliberate defence in depth: in production the delivered rows are a subset of
+ * the measured ones, so the max IS the pre-floor reading; but a retriever that
+ * never reports a pre-floor measurement — a future mode, or a test double
+ * standing in for one — still contributes the cosine visible on its own output
+ * instead of silently degrading `top_score` to NULL.
+ */
+export function maxCosineScore(...scores: Array<number | null>): number | null {
+  let best: number | null = null;
+  for (const score of scores) {
+    if (typeof score !== "number" || !Number.isFinite(score)) continue;
+    if (best === null || score > best) best = score;
+  }
+  return best;
+}
