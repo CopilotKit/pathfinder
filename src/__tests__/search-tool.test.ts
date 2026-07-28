@@ -12,9 +12,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { SearchToolConfig, ChunkResult } from "../types.js";
 
-vi.mock("../db/queries.js", () => ({
-  searchChunks: vi.fn(),
-}));
+// Only the DB-touching entry point is stubbed. `isBelowCosineFloor` — the
+// min_score predicate the tool applies to whatever searchChunks returns — is
+// pure, and stubbing it would leave these min_score tests asserting against a
+// double instead of the gate that actually ships.
+vi.mock("../db/queries.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../db/queries.js")>();
+  return { ...actual, searchChunks: vi.fn() };
+});
 vi.mock("../db/analytics.js", () => ({
   logQuery: vi.fn().mockResolvedValue(undefined),
 }));
@@ -30,6 +35,7 @@ const mockSearchChunks = vi.mocked(searchChunks);
 const mockEmbed = vi.fn();
 
 function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
+  const similarity = overrides.similarity ?? 0.95;
   return {
     id: 1,
     source_name: "docs",
@@ -41,7 +47,13 @@ function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
     start_line: null,
     end_line: null,
     language: null,
-    similarity: 0.95,
+    similarity,
+    // These rows stand in for searchChunks output, which writes the SAME
+    // cosine to both fields. Defaulting the relevance score from the ranking
+    // score keeps the fixture a row the vector retriever could actually
+    // return; a fixture carrying only `similarity` models one it cannot, and
+    // min_score is evaluated on the relevance score.
+    cosine_similarity: similarity,
     ...overrides,
   };
 }

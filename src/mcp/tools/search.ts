@@ -6,6 +6,7 @@ import {
   searchChunks,
   textSearchChunks,
   hybridSearchChunks,
+  isBelowCosineFloor,
 } from "../../db/queries.js";
 import { topCosineScore } from "../../relevance.js";
 import { logQuery } from "../../db/analytics.js";
@@ -106,12 +107,11 @@ export function registerSearchTool(
       .max(1)
       .optional()
       .describe(
-        "Minimum cosine similarity (0-1) for semantically matched results. " +
-          "In vector mode it filters the returned results. In hybrid mode it " +
-          "raises the semantic floor of the vector half BEFORE the results are " +
-          "fused with keyword matches, so a keyword-only match can still be " +
-          "returned below this score. Ignored in keyword mode, which has no " +
-          "comparable score.",
+        "Minimum cosine similarity (0-1). Excludes every result whose measured " +
+          "semantic relevance falls below this floor. In hybrid mode a keyword " +
+          "match that never appeared among the vector candidates has no measured " +
+          "cosine, so it has nothing to compare against and is returned ungated. " +
+          "Ignored in keyword mode, which produces no comparable score.",
       ),
     version: z
       .string()
@@ -205,8 +205,9 @@ export function registerSearchTool(
           }
           case "hybrid": {
             const embedding = await embeddingClient.embed(query);
-            // hybridSearchChunks applies min_score to vector candidates
-            // before RRF merge, preserving semantic quality floor.
+            // hybridSearchChunks evaluates the cosine floor on the vector
+            // candidates and applies the verdict to BOTH lists before the RRF
+            // merge, so a condemned chunk cannot re-enter on its keyword rank.
             results = await hybridSearchChunks(
               embedding,
               query,
@@ -226,8 +227,13 @@ export function registerSearchTool(
               toolConfig.source,
               version,
             );
+            // Filtering AFTER the DB LIMIT costs nothing here: searchChunks
+            // orders by embedding distance, so its rows already arrive in
+            // non-increasing cosine order and the floor is a suffix cut. Any
+            // row an over-fetch would surface ranks below one already rejected,
+            // so it could never clear the floor either.
             if (minScore != null) {
-              results = results.filter((r) => r.similarity >= minScore);
+              results = results.filter((r) => !isBelowCosineFloor(r, minScore));
             }
             break;
           }
