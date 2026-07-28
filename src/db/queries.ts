@@ -340,6 +340,11 @@ export async function searchChunks(
     // Coerce to a finite number: a non-numeric similarity would Number() to
     // NaN and corrupt the similarity sort order / top_score downstream.
     similarity: toFiniteNumber(r.similarity),
+    // Vector rows carry a real cosine similarity, so ranking score and
+    // relevance score coincide here. Recorded separately anyway: rrfMerge
+    // overwrites `similarity` with the fused rank score, and this is the copy
+    // analytics reads (see ChunkResult.cosine_similarity).
+    cosine_similarity: toFiniteNumber(r.similarity),
   }));
 }
 
@@ -445,6 +450,9 @@ export async function textSearchChunks(
     // Coerce to a finite number: a non-numeric similarity would Number() to
     // NaN and corrupt the similarity sort order / top_score downstream.
     similarity: toFiniteNumber(r.similarity),
+    // ts_rank is not on the cosine scale and there is no embedding distance
+    // for a keyword-only hit, so this row contributes no relevance score.
+    cosine_similarity: null,
   }));
 }
 
@@ -500,6 +508,13 @@ export async function hybridSearchChunks(
  * where k = 60 (standard constant from the original RRF paper).
  * Documents appearing in only one list get a single-term score.
  *
+ * The fused score is written to `similarity`, so on the returned rows
+ * `similarity` is a RANK score bounded by 2/(RRF_K+1) ≈ 0.033 — not a cosine
+ * similarity. `cosine_similarity` is carried through untouched from the
+ * canonical (vector-preferred) result, so callers that need a relevance score
+ * on the 0-1 cosine scale read THAT field. Persisting `similarity` as a
+ * relevance metric is a scale error; see src/mcp/tools/search.ts.
+ *
  * Exported for direct unit testing of the merge logic.
  */
 export const RRF_K = 60;
@@ -544,7 +559,9 @@ export function rrfMerge(
     .sort((a, b) => b.rrfScore - a.rrfScore)
     .slice(0, limit);
 
-  // Return ChunkResult[] with similarity set to the RRF score
+  // Return ChunkResult[] with similarity set to the RRF score. The spread
+  // preserves `cosine_similarity` from the canonical result — that is the only
+  // relevance signal that survives the fusion, so do not drop or overwrite it.
   return sorted.map(({ rrfScore, result }) => ({
     ...result,
     similarity: rrfScore,
