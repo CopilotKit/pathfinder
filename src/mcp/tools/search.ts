@@ -106,7 +106,9 @@ export function registerSearchTool(
       .max(1)
       .optional()
       .describe(
-        "Minimum cosine similarity (0-1) for semantically matched results. " +
+        "Minimum cosine similarity for semantically matched results, 0-1. " +
+          "(The cosine scale itself runs -1 to 1; this floor is capped at 0 " +
+          "because anything at or below 0 is already unrelated.) " +
           "In vector mode it filters the returned results. In hybrid mode it " +
           "raises the semantic floor of the vector half BEFORE the results are " +
           "fused with keyword matches, so a keyword-only match can still be " +
@@ -239,7 +241,7 @@ export function registerSearchTool(
         // Persist the best COSINE similarity, never `similarity`. In hybrid
         // mode `similarity` has been overwritten with the RRF fusion score
         // (ceiling ≈ 0.033) and in keyword mode it is a ts_rank — neither is
-        // comparable to the 0-1 cosine scale the low-confidence threshold and
+        // comparable to the cosine scale the low-confidence threshold and
         // the dashboard's Avg Cosine column are defined on. Keyword mode
         // therefore logs NULL here, which analytics reads as "no score", not
         // "a low score". See topCosineScore.

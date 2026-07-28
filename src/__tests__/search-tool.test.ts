@@ -42,6 +42,9 @@ function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
     end_line: null,
     language: null,
     similarity: 0.95,
+    // Stands in for searchChunks output, where the ranking score IS the
+    // cosine — keep the fake on the same contract as the real producer.
+    cosine_similarity: 0.95,
     ...overrides,
   };
 }

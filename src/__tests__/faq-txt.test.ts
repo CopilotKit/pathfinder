@@ -19,6 +19,7 @@ function makeFaqChunk(
     end_line: null,
     language: null,
     similarity: 0,
+    cosine_similarity: null,
     metadata: {},
     ...overrides,
   };

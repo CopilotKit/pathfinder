@@ -17,8 +17,9 @@ import type { SearchToolConfig, ChunkResult } from "../types.js";
 // Scale integrity of query_log.top_score.
 //
 // Retrieval produces two numbers per result on two different scales:
-// `similarity` (a per-retriever RANKING score) and `cosine_similarity` (a 0-1
-// RELEVANCE score). Persisting the former broke every score-based analytic:
+// `similarity` (a per-retriever RANKING score) and `cosine_similarity` (a
+// [-1, 1] RELEVANCE score — see cosine-scale-range.test.ts for where that
+// bound comes from). Persisting the former broke every score-based analytic:
 // in hybrid mode `similarity` is a Reciprocal Rank Fusion score whose ceiling
 // is 2/(RRF_K+1) ≈ 0.0328, so a perfect match logged ~0.016 against a 0.5
 // low-confidence threshold and EVERY scored query was flagged.
@@ -45,6 +46,7 @@ import {
   topCosineScore,
   COSINE_SCORE_KIND,
   COSINE_SCORE_MAX,
+  COSINE_SCORE_ORTHOGONAL,
 } from "../relevance.js";
 import {
   LOW_CONFIDENCE_SCORE_THRESHOLD,
@@ -88,8 +90,16 @@ function makeChunk(
 
 describe("low-confidence threshold and the metric it is compared against", () => {
   it("is derived from the cosine scale, not hard-coded onto it", () => {
-    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(COSINE_SCORE_MAX * 0.5);
-    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBeGreaterThan(0);
+    // The midpoint of [orthogonal, perfect]. NOT `COSINE_SCORE_MAX * 0.5`:
+    // that arrives at the same 0.5 by accident, and the justification it used
+    // to carry ("the midpoint of the scale") was false — COSINE_SCORE_MAX is
+    // the maximum, and the scale's real midpoint is orthogonality.
+    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(
+      (COSINE_SCORE_ORTHOGONAL + COSINE_SCORE_MAX) / 2,
+    );
+    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBeGreaterThan(
+      COSINE_SCORE_ORTHOGONAL,
+    );
     expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBeLessThanOrEqual(
       COSINE_SCORE_MAX,
     );
