@@ -79,8 +79,13 @@ export function stripNulBytes(s: string): string {
  * Postgres text and rejects `0x00` the same way the `content`/`title` text
  * columns do, AND it rejects `0x00` in keys identically — a NUL anywhere
  * inside metadata (key or value, at any depth) fails the whole INSERT. A
- * NUL-bearing key would otherwise survive `JSON.stringify` as the 6-char
- * escape ` ` and still error the jsonb cast at the wire.
+ * NUL-bearing key would otherwise survive `JSON.stringify` as the 6-character
+ * escape sequence backslash-u-0-0-0-0 and still error the jsonb cast at the
+ * wire. (Spelled out rather than written literally: the raw form is a NUL byte
+ * away from being the very thing this function removes, and an editor or a
+ * copy-paste that "helpfully" resolves the escape silently empties the example —
+ * which is exactly how this sentence previously came to name a 6-char escape and
+ * then show nothing at all.)
  *
  * Safe under cyclic inputs and arbitrary nesting depth — does not recurse on
  * the JS call stack. Implemented as a two-pass iterative walk over an
@@ -90,14 +95,17 @@ export function stripNulBytes(s: string): string {
  * therefore feed cyclic OR arbitrarily-deep payloads without risking a
  * `RangeError: Maximum call stack size exceeded` mid-INSERT.
  *
- * Identity preservation: returns the input unchanged (referentially `===`)
- * when no string anywhere in the tree carried a NUL — the detect pass
- * short-circuits and skips the transform allocation entirely. This is the
- * common case for indexed content. NOTE: under the iterative scheme the
- * identity guarantee is now whole-tree — if ANY descendant required cleaning,
- * EVERY container on the path from root to that descendant is freshly
- * allocated (the prior recursive impl had the same property in practice,
- * since a dirty descendant forced cloning at every wrapping container).
+ * Identity preservation is ALL OR NOTHING, and only the "nothing" half is a
+ * guarantee: when no string anywhere in the tree carried a NUL, the detect pass
+ * short-circuits and the input is returned referentially `===`, having allocated
+ * nothing. That is the common case for indexed content. But as soon as ONE
+ * string anywhere in the tree needs cleaning, pass 2 allocates a fresh mirror
+ * for EVERY reachable plain container in the tree — not merely the ones on the
+ * path to the dirty string — because the pre-allocation sweep walks the whole
+ * structure so that a back-edge always has a clone to point at. No sub-object
+ * of the output is reference-identical to its input counterpart (non-plain
+ * leaves excepted; those are wired through unchanged by design). Callers must
+ * not treat `output.foo === input.foo` as a signal that `foo` was clean.
  *
  * Object containers are allocated via `Object.create(null)` so that bracket
  * assignment of a sanitized key like `"__proto__"` (from input
