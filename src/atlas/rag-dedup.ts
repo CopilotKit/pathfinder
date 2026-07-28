@@ -111,7 +111,7 @@ export interface RagDedupContext {
     cand: Candidate,
     overlaps: CorpusHit[],
   ) => Promise<DistillDeltaResult>;
-  // Cosine similarity in [-1,1] at/above which a SEMANTIC (vector) corpus hit
+  // Cosine similarity in [0,1] at/above which a SEMANTIC (vector) corpus hit
   // counts as overlap worth resolving via distill-to-delta. Defaults to
   // DEFAULT_MIN_SEMANTIC_OVERLAP. Distinct from `minOverlap` (the lexical
   // verbatim threshold) — semantic near-duplicates need not be byte-identical.
@@ -199,7 +199,7 @@ const MIN_CANDIDATE_TOKENS = 5;
 // provider a body the provider itself would truncate (or reject).
 const MAX_EMBED_TEXT_CHARS = 30_000;
 
-// Cosine similarity in [-1,1] at/above which a SEMANTIC (vector) corpus hit
+// Cosine similarity in [0,1] at/above which a SEMANTIC (vector) corpus hit
 // counts as overlap. Lower than the lexical verbatim threshold because a
 // paraphrase — the exact case semantic retrieval exists to catch — is a real
 // duplicate at a cosine well below byte-identity. Tuned so a genuine paraphrase
