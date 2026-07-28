@@ -483,6 +483,51 @@ export async function textSearchChunks(
 }
 
 /**
+ * The min_score floor predicate, shared by every retrieval mode that has one.
+ *
+ * The floor is defined on `cosine_similarity` — the RELEVANCE score, on the
+ * [-1, 1] cosine scale (see COSINE_SCORE_MIN/MAX in src/relevance.ts) — and
+ * NOT on `similarity`, which is a per-retriever RANKING score: a cosine on a
+ * freshly fetched vector row, a ts_rank on a keyword row, and an RRF fusion
+ * score bounded by 2/(RRF_K+1) ≈ 0.033 once rrfMerge has run. On a healthy
+ * vector row the two fields hold the same number, so reading the ranking score
+ * produced correct answers; it is still the wrong field to compare a threshold
+ * against (see the contract in src/relevance.ts: only `cosine_similarity` may
+ * be persisted, aggregated, or compared against a threshold) and it silently
+ * stops being correct the moment a gate moves to the other side of the fusion.
+ *
+ * "Provably below" is deliberate. A row carrying no cosine at all has UNKNOWN
+ * relevance, not zero relevance, and this predicate never excludes it. The
+ * floor removes what we measured and found wanting, never what we failed to
+ * measure. Two rows reach it that way:
+ *
+ *   - a keyword hit that never appeared among the vector candidates, so no
+ *     cosine was ever computed for it;
+ *   - a vector row whose distance came back non-finite — pgvector's `<=>`
+ *     returns NaN for a zero-norm embedding — which searchChunks maps to null
+ *     via toCosineScoreOrNull rather than to 0.
+ *
+ * The second case is where this predicate and the [-1, 1] scale contract meet,
+ * and it is a deliberate behaviour CHANGE. The old gate read `similarity`,
+ * where the same corrupt row coerces to 0 and any positive floor dropped it —
+ * but only by accident, because 0 is a real cosine (orthogonal) and "corrupt"
+ * and "orthogonal" were indistinguishable in that field. A corrupt row is now
+ * returned rather than silently filtered. That is the honest reading: we do not
+ * know its relevance, and the alternative is to keep pretending a broken
+ * measurement is a bad one. It stays out of every score-based analytic either
+ * way, because a null cosine never reaches `query_log.top_score`.
+ */
+export function isBelowCosineFloor(
+  result: ChunkResult,
+  minScore: number,
+): boolean {
+  const cosine = result.cosine_similarity;
+  return (
+    typeof cosine === "number" && Number.isFinite(cosine) && cosine < minScore
+  );
+}
+
+/**
  * Hybrid search combining vector similarity and full-text keyword search
  * using Reciprocal Rank Fusion (RRF) to merge ranked lists.
  *
@@ -491,12 +536,22 @@ export async function textSearchChunks(
  * This is faster than a single SQL query because each query uses its
  * respective index (HNSW for vector, GIN for tsvector).
  *
- * min_score gates ONLY the vector candidates, and does so BEFORE the RRF
- * merge. It is a cosine-similarity floor, so it is meaningful only for the
- * vector list; the keyword list has no comparable score. A hit that surfaces
- * via keyword search but is NOT in the surviving vector set therefore enters
- * the fused output UNGATED by min_score — min_score raises the semantic floor
- * of the vector contribution, it does not filter keyword-only matches.
+ * min_score is a cosine floor applied BEFORE the merge, and it removes a chunk
+ * from BOTH candidate lists — not just the vector one. Gating only the vector
+ * list left the knob close to inert in hybrid mode, which is the mode every
+ * deployed tool runs in: a semantically weak chunk that also satisfied the
+ * tsquery was dropped from the vector list and then walked straight back in
+ * through the keyword list. Worse, the keyword row carries
+ * `cosine_similarity: null`, so the sub-floor cosine we had just measured was
+ * erased on the way out and the row was reported as having no relevance score
+ * rather than a bad one.
+ *
+ * What the floor still cannot gate: a keyword hit outside the vector candidate
+ * window has no measured cosine anywhere in this request, so there is nothing
+ * to compare and it enters the fusion ungated. The contract is therefore
+ * "excludes every result we can prove is below the floor", not "everything
+ * returned is above the floor" — the latter would require embedding-distance
+ * lookups for the keyword half that hybrid search deliberately avoids paying.
  */
 export async function hybridSearchChunks(
   embedding: number[],
@@ -515,15 +570,22 @@ export async function hybridSearchChunks(
     textSearchChunks(queryText, candidateLimit, sourceName, version),
   ]);
 
-  // Apply min_score to the VECTOR candidates only, before merging. Keyword-only
-  // hits (present in keywordResults but not in the surviving vector set) are not
-  // score-gated here — they still enter the RRF merge below.
-  const filteredVectorResults =
-    minScore != null
-      ? vectorResults.filter((r) => r.similarity >= minScore)
-      : vectorResults;
+  if (minScore == null) return rrfMerge(vectorResults, keywordResults, limit);
 
-  return rrfMerge(filteredVectorResults, keywordResults, limit);
+  // The vector half is the only place a cosine is measured, so it is also the
+  // only place the floor can be evaluated. Collect the ids it condemns, then
+  // apply that verdict to BOTH lists so a condemned chunk cannot re-enter via
+  // its keyword rank.
+  const belowFloor = new Set<number>();
+  for (const r of vectorResults) {
+    if (isBelowCosineFloor(r, minScore)) belowFloor.add(r.id);
+  }
+
+  return rrfMerge(
+    vectorResults.filter((r) => !belowFloor.has(r.id)),
+    keywordResults.filter((r) => !belowFloor.has(r.id)),
+    limit,
+  );
 }
 
 /**
