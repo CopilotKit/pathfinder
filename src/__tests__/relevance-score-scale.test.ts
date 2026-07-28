@@ -90,6 +90,15 @@ function makeChunk(
 
 describe("low-confidence threshold and the metric it is compared against", () => {
   it("is derived from the cosine scale, not hard-coded onto it", () => {
+    // Anchor the scale and the threshold as LITERALS first. Every assertion
+    // below restates an expression over the same constants it is checking, so on
+    // its own the block holds for ANY constant values: swap COSINE_SCORE_MAX to
+    // 2 and the threshold slides to 1.0 with nothing here noticing. The rest of
+    // this file then compares fixture scores against the threshold, so a silent
+    // slide would take its classifications with it.
+    expect(COSINE_SCORE_ORTHOGONAL).toBe(0);
+    expect(COSINE_SCORE_MAX).toBe(1);
+    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(0.5);
     // The midpoint of [orthogonal, perfect]. NOT `COSINE_SCORE_MAX * 0.5`:
     // that arrives at the same 0.5 by accident, and the justification it used
     // to carry ("the midpoint of the scale") was false — COSINE_SCORE_MAX is
@@ -97,12 +106,13 @@ describe("low-confidence threshold and the metric it is compared against", () =>
     expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(
       (COSINE_SCORE_ORTHOGONAL + COSINE_SCORE_MAX) / 2,
     );
+    // Strictly inside the usable half, at both ends: a threshold sitting AT
+    // orthogonality flags nothing, and one sitting at the maximum flags
+    // everything, so neither bound may be reachable.
     expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBeGreaterThan(
       COSINE_SCORE_ORTHOGONAL,
     );
-    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBeLessThanOrEqual(
-      COSINE_SCORE_MAX,
-    );
+    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBeLessThan(COSINE_SCORE_MAX);
   });
 
   it("sits far above the RRF ranking ceiling, so an RRF score can never be a valid input", () => {

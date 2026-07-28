@@ -55,9 +55,6 @@
       "src/__tests__/atlas-harvest-cli.test.ts": 1,
       "src/__tests__/bash-related.test.ts": 1,
       "src/__tests__/discord-provider.test.ts": 1
-    },
-    "nan-comparator-in-assertion": {
-      "src/__tests__/min-score-gate.test.ts": 1
     }
   }
 }

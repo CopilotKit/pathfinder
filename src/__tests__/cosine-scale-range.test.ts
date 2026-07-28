@@ -73,10 +73,20 @@ describe("the cosine scale constants describe the range pgvector produces", () =
   });
 
   it("puts the low-confidence threshold in the usable half, not at the midpoint", () => {
-    // Derived as the midpoint of [orthogonal, perfect]. The midpoint of the
+    // The VALUE, as a literal. Restating `analytics.ts`'s own expression is not
+    // enough on its own: it holds for any constants at all, so raising
+    // COSINE_SCORE_MAX to 2 would slide the threshold to 1.0 — flagging almost
+    // every query as low-confidence — with this test still green. An anchor is
+    // needed somewhere, and here is where the scale itself is anchored (the
+    // -1 / 1 bounds above are pinned as literals for the same reason).
+    expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(0.5);
+    // The DERIVATION: the midpoint of [orthogonal, perfect]. The midpoint of the
     // FULL range is orthogonality itself — a threshold there would flag
     // essentially nothing, because a hit below 0 barely occurs and everything
-    // at or under 0 is already definitionally irrelevant.
+    // at or under 0 is already definitionally irrelevant. Behaviourally the
+    // derivation and the literal 0.5 are indistinguishable today (recorded as
+    // the one surviving mutant in mutants.json); what these two assertions
+    // together forbid is the pair drifting apart onto different scales.
     expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(
       (COSINE_SCORE_ORTHOGONAL + COSINE_SCORE_MAX) / 2,
     );
@@ -119,13 +129,17 @@ describe("searchChunks against a real pgvector index (PGlite)", () => {
       ids.set(file, rows[0].id);
     }
     // One row carrying FAQ confidence metadata, so the browse reader
-    // (getFaqChunks) has something to return alongside the by-id reader.
-    await db.query(
+    // (getFaqChunks) has something to return. `RETURNING id` is load-bearing:
+    // without it this row's id never entered `ids`, so the by-id reader
+    // (getFaqChunksByIds) was handed only the four non-FAQ rows and the test
+    // below asserted the FAQ contract on a set that contained no FAQ row.
+    const { rows: faqRows } = await db.query<{ id: number }>(
       `INSERT INTO chunks (source_name, content, embedding, file_path, chunk_index, metadata)
        VALUES ('docs', 'a frequently asked question', $1, 'faq.md', 0,
-               '{"confidence": 0.9}'::jsonb)`,
+               '{"confidence": 0.9}'::jsonb) RETURNING id`,
       [pgvector.toSql([1, 0, 0])],
     );
+    ids.set("faq.md", faqRows[0].id);
   });
 
   afterAll(async () => {
@@ -220,11 +234,18 @@ describe("searchChunks against a real pgvector index (PGlite)", () => {
   it("gives FAQ rows an explicit null cosine — they compare no embedding at all", async () => {
     // BOTH FAQ readers: getFaqChunksByIds (the knowledge tool's search path)
     // and getFaqChunks (its browse path). Neither selects a real similarity.
-    const faq = [
-      ...(await getFaqChunksByIds([...ids.values()])),
-      ...(await getFaqChunks(["docs"], 0.5)),
-    ];
-    expect(faq.length).toBeGreaterThan(ids.size);
+    const byIds = await getFaqChunksByIds([...ids.values()]);
+    const browsed = await getFaqChunks(["docs"], 0.5);
+
+    // Each reader has to have actually SEEN the FAQ row. Asserting only on the
+    // combined list let the by-id half return four non-FAQ rows and still look
+    // like it had exercised the FAQ contract.
+    expect(byIds.map((r) => r.file_path)).toContain("faq.md");
+    expect(browsed.map((r) => r.file_path)).toContain("faq.md");
+
+    const faq = [...byIds, ...browsed];
+    // Every seeded row by id, plus the one confident FAQ row from browse.
+    expect(faq).toHaveLength(ids.size + 1);
     for (const row of faq) {
       // Present-and-null, not absent: `0.0 AS similarity` is a placeholder, so
       // an absent key would let these rows silently inherit "unknown" instead

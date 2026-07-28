@@ -102,6 +102,26 @@ async function seed(fixtures: Fixture[]): Promise<void> {
 
 const names = (rows: ChunkResult[]): string[] => rows.map((r) => r.file_path);
 
+/**
+ * Add a row whose embedding has zero norm. pgvector's `<=>` returns NaN for it,
+ * so searchChunks maps its cosine to null (toCosineScoreOrNull) — the only shape
+ * in which a vector row carries UNKNOWN rather than bad relevance.
+ *
+ * Shared by the two tests that need it. It used to be inlined in one of them,
+ * which is how the ordering test below came to assert an invariant that only
+ * held because the `beforeEach` re-seed kept this row out of its fixture.
+ */
+async function insertDegenerateRow(): Promise<void> {
+  await db.query(
+    `INSERT INTO chunks
+         (source_name, source_url, title, content, embedding, repo_url,
+          file_path, chunk_index, tsv)
+     VALUES ('docs', NULL, $1, $2, $3, NULL, $1, 0,
+             to_tsvector('english', $2))`,
+    ["degenerate.md", "delta subject matter", pgvector.toSql([0, 0, 0])],
+  );
+}
+
 beforeAll(async () => {
   db = new PGlite({ extensions: { vector } });
   await db.waitReady;
@@ -238,9 +258,18 @@ describe("hybrid search min_score gate (PGlite + pgvector)", () => {
     // Insertion order scrambled so the candidate window is decided by cosine
     // rank and not by id: seeded best-first, `far.md` would fall outside the
     // window either way and the test would not notice.
+    //
+    // The fixture is also built so the fused ranking is STRICT. With `kumquat`
+    // in `far.md` alone, `far.md` and `v1.md` were both rank 1 in their
+    // respective lists and scored an identical 1/(RRF_K+1) — an exact tie at the
+    // top of a 5-row set truncated to 2, whose resolution is V8 sort stability
+    // rather than anything this test means to assert. Mentioning `kumquat` twice
+    // in `far.md` and once in `v1.md` makes `v1.md` a member of BOTH lists, so
+    // it scores 1/61 + 1/62 and outranks `far.md`'s 1/61 outright, which in turn
+    // outranks `v2.md`'s 1/62. The result order below is then exact.
     await seed([
-      { name: "far.md", cosine: 0.1, content: "kumquat" },
-      { name: "v1.md", cosine: 1.0, content: "alpha prose" },
+      { name: "far.md", cosine: 0.1, content: "kumquat kumquat" },
+      { name: "v1.md", cosine: 1.0, content: "alpha prose kumquat" },
       { name: "v6.md", cosine: 0.05, content: "echo prose" },
       { name: "v2.md", cosine: 0.9, content: "bravo prose" },
       { name: "v3.md", cosine: 0.8, content: "charlie prose" },
@@ -256,9 +285,13 @@ describe("hybrid search min_score gate (PGlite + pgvector)", () => {
       0.5,
     );
 
-    expect(names(results)).toContain("far.md");
+    // Exact and ordered: `far.md` is included on its own merits, not because a
+    // tie happened to break its way.
+    expect(names(results)).toEqual(["v1.md", "far.md"]);
     const far = results.find((r) => r.file_path === "far.md")!;
     expect(far.cosine_similarity).toBeNull();
+    const v1 = results.find((r) => r.file_path === "v1.md")!;
+    expect(v1.similarity).toBeGreaterThan(far.similarity);
   });
 });
 
@@ -336,14 +369,7 @@ describe("vector search min_score gate (real tool, PGlite + pgvector)", () => {
     // of unknown relevance now surfaces where it used to be filtered. It still
     // cannot pollute a score-based analytic: a null cosine never reaches
     // `query_log.top_score` (see topCosineScore).
-    await db.query(
-      `INSERT INTO chunks
-           (source_name, source_url, title, content, embedding, repo_url,
-            file_path, chunk_index, tsv)
-       VALUES ('docs', NULL, $1, $2, $3, NULL, $1, 0,
-               to_tsvector('english', $2))`,
-      ["degenerate.md", "delta subject matter", pgvector.toSql([0, 0, 0])],
-    );
+    await insertDegenerateRow();
 
     const corrupt = (await searchChunks(QUERY_EMBEDDING, 10, "docs")).find(
       (r) => r.file_path === "degenerate.md",
@@ -357,23 +383,67 @@ describe("vector search min_score gate (real tool, PGlite + pgvector)", () => {
     expect(text).not.toContain("weak.md");
   });
 
-  it("orders rows by descending cosine, which is why filtering after the DB LIMIT loses nothing", async () => {
-    // The gate runs in JS after `LIMIT`, with no over-fetch. That is only
-    // sound because searchChunks orders by embedding distance: the floor is a
-    // suffix cut, so a row an over-fetch would surface ranks below one already
-    // rejected and could never clear the floor either. Assert the ordering
-    // invariant that argument rests on, then the equivalence it implies.
-    const cosines = (await searchChunks(QUERY_EMBEDDING, 3, "docs")).map(
-      (r) => r.cosine_similarity,
-    );
-    expect(cosines).toEqual([...cosines].sort((a, b) => b! - a!));
+  it("orders measured rows by descending cosine and unmeasured ones strictly last, which is why the post-LIMIT cut loses nothing", async () => {
+    // The gate runs in JS after `LIMIT`, with no over-fetch. That is only sound
+    // because searchChunks orders by embedding distance. Two things were wrong
+    // with the way this test used to establish it.
+    //
+    // First, the fixture. It ran against the three finite-cosine rows the
+    // `beforeEach` seeds, and the row that refutes the naive form of the claim —
+    // the zero-norm one the PRECEDING test inserts — was wiped by that re-seed
+    // before this test could ever see it. So the invariant was pinned on the one
+    // fixture where it holds unconditionally.
+    //
+    // Second, the assertion: `cosines.sort((a, b) => b! - a!)` over
+    // `(number | null)[]`. That neither throws nor yields NaN — `null` coerces
+    // to 0, so the comparator silently ranks an UNMEASURED row as exactly
+    // orthogonal, which is the precise conflation this change exists to remove.
+    // The assertion then "passes" by agreeing with the bug. (The
+    // `nan-comparator-in-assertion` rule in scripts/check-test-shapes.mjs flags
+    // the same shape for its sibling failure: an `undefined` element DOES make
+    // the comparator NaN, `Array#sort` treats NaN as "equal", and the array
+    // comes back untouched — true no matter what the retriever did.)
+    //
+    // So: seed the counterexample, and assert the two claims separately.
+    await insertDegenerateRow();
 
-    const atLimit = (await searchChunks(QUERY_EMBEDDING, 2, "docs")).filter(
-      (r) => !isBelowCosineFloor(r, 0.7),
+    const rows = await searchChunks(QUERY_EMBEDDING, 4, "docs");
+    const measured = rows.filter((r) => r.cosine_similarity !== null);
+    const unmeasured = rows.filter((r) => r.cosine_similarity === null);
+
+    // Pinned by name, so neither group is empty and neither claim below is
+    // vacuous.
+    expect(names(measured)).toEqual(["strong.md", "middling.md", "weak.md"]);
+    expect(names(unmeasured)).toEqual(["degenerate.md"]);
+    // 1. every unmeasured row trails every measured one.
+    expect(names(rows)).toEqual([...names(measured), ...names(unmeasured)]);
+    // 2. the measured prefix is STRICTLY descending. No comparator, so nothing
+    //    to coerce, and a tie fails instead of passing.
+    for (let i = 1; i < measured.length; i++) {
+      expect(measured[i].cosine_similarity!).toBeLessThan(
+        measured[i - 1].cosine_similarity!,
+      );
+    }
+
+    // What that buys the handler: nothing an over-fetch would add could have
+    // cleared the floor.
+    const atLimit = await searchChunks(QUERY_EMBEDDING, 2, "docs");
+    const overFetched = await searchChunks(QUERY_EMBEDDING, 4, "docs");
+    expect(names(overFetched).slice(0, atLimit.length)).toEqual(names(atLimit));
+
+    const beyondLimit = overFetched.slice(atLimit.length);
+    expect(names(beyondLimit)).toEqual(["weak.md", "degenerate.md"]);
+    // Every MEASURED row past the LIMIT is below the floor, so over-fetching
+    // would surface nothing the filter would have kept. `degenerate.md` is not
+    // below the floor — unknown relevance is not bad relevance — which is
+    // exactly why the cut is not the pure "suffix" it was once described as; the
+    // hole it leaves is mid-array. See min-score-logging.test.ts.
+    const measuredBeyondLimit = beyondLimit.filter(
+      (r) => r.cosine_similarity !== null,
     );
-    const overFetched = (await searchChunks(QUERY_EMBEDDING, 4, "docs"))
-      .filter((r) => !isBelowCosineFloor(r, 0.7))
-      .slice(0, 2);
-    expect(names(atLimit)).toEqual(names(overFetched));
+    expect(names(measuredBeyondLimit)).toEqual(["weak.md"]);
+    for (const r of measuredBeyondLimit) {
+      expect(isBelowCosineFloor(r, 0.7)).toBe(true);
+    }
   });
 });

@@ -496,7 +496,13 @@ describe("all-time window + dashboard consistency (PGlite integration)", () => {
 
   it("summary numeric rates are finite numbers (driver-typing coercion)", async () => {
     await seedAt(db, utcNoonOfOffset(0), { result_count: 0 });
-    await seedAt(db, utcNoonOfOffset(0), { top_score: 0.3, result_count: 4 });
+    // Stated relative to the exported threshold, like every other scored fixture
+    // in this file — a bare literal here would be the one place the scale could
+    // move out from under a row without the suite noticing.
+    await seedAt(db, utcNoonOfOffset(0), {
+      top_score: SCORE_BELOW_THRESHOLD,
+      result_count: 4,
+    });
 
     const result = await getAnalyticsSummary({}, 7);
 
