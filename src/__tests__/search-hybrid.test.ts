@@ -59,6 +59,18 @@ function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
   };
 }
 
+/**
+ * A KEYWORD hit as `textSearchChunks` actually returns it: `similarity` holds a
+ * ts_rank, and `cosine_similarity` is ALWAYS null because no embedding was
+ * compared (see src/db/queries.ts). Modelling a keyword row with a non-null
+ * cosine — which makeChunkResult does by default — encodes a state the
+ * production query cannot produce, and lets the NULL half of the contract go
+ * untested on the one path that always exercises it.
+ */
+function makeKeywordResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
+  return makeChunkResult({ ...overrides, cosine_similarity: null });
+}
+
 // ── Hybrid mode tests ─────────────────────────────────────────────────────
 
 describe("search tool hybrid mode", () => {
@@ -227,7 +239,7 @@ describe("search tool keyword mode", () => {
 
   it("calls textSearchChunks without embedding", async () => {
     mockTextSearchChunks.mockResolvedValueOnce([
-      makeChunkResult({ title: "Keyword Result" }),
+      makeKeywordResult({ title: "Keyword Result" }),
     ]);
 
     const result = await client.callTool({
@@ -250,7 +262,7 @@ describe("search tool keyword mode", () => {
 
   it("does not apply min_score filtering", async () => {
     mockTextSearchChunks.mockResolvedValueOnce([
-      makeChunkResult({ similarity: 0.01, title: "Low Rank" }),
+      makeKeywordResult({ similarity: 0.01, title: "Low Rank" }),
     ]);
 
     const result = await client.callTool({
@@ -265,7 +277,7 @@ describe("search tool keyword mode", () => {
 
   it("keyword mode succeeds even when embedding client would throw", async () => {
     mockTextSearchChunks.mockResolvedValueOnce([
-      makeChunkResult({ title: "Found it" }),
+      makeKeywordResult({ title: "Found it" }),
     ]);
 
     const result = await client.callTool({

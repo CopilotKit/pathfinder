@@ -10,6 +10,8 @@ import {
   ROLLING_WINDOW_CAP_DAYS,
   BROWSE_QUERY_TEXT,
   COSINE_SCORE_KIND,
+  COSINE_SCORE_MAX,
+  LOW_CONFIDENCE_SCORE_THRESHOLD,
 } from "../db/analytics.js";
 import { generatePostSchemaMigration } from "../db/schema.js";
 
@@ -60,6 +62,41 @@ function nowNoonUtc(): Date {
   const day = new Date().toISOString().slice(0, 10);
   return new Date(`${day}T12:00:00.000Z`);
 }
+
+// ---------------------------------------------------------------------------
+// Low-confidence fixture scores, stated RELATIVE to the exported threshold.
+//
+// LOW_CONFIDENCE_SCORE_THRESHOLD is DERIVED from the cosine scale constants
+// (see src/db/analytics.ts) precisely so its value cannot drift from the scale
+// it is compared on. Restating that value as a bare literal here would put the
+// coupling straight back: the scale could move and this file would either keep
+// asserting against the old cut or start failing for a reason that has nothing
+// to do with the SQL it is meant to exercise.
+//
+// The `_JUST_BELOW` value is deliberately adjacent to the threshold, not
+// comfortably under it. That is what makes these tests pin the boundary the
+// SQL actually applies to the exported constant rather than merely to "some
+// number in the neighbourhood": a bound threshold that drifts from the
+// constant by as little as THRESHOLD_EPSILON reclassifies this row. A bare
+// 0.3 tolerates a drift of 40%.
+// ---------------------------------------------------------------------------
+
+/**
+ * One step below the threshold. 2**-12 is a dyadic rational, so it survives
+ * the float4 round-trip of `query_log.top_score` (declared REAL — a float8
+ * epsilon such as Number.EPSILON would round straight back up to the
+ * threshold and land the row ON the exclusive boundary instead of under it).
+ */
+const THRESHOLD_EPSILON = 2 ** -12;
+
+/** Low confidence: strictly below the cut. */
+const SCORE_BELOW_THRESHOLD =
+  LOW_CONFIDENCE_SCORE_THRESHOLD - THRESHOLD_EPSILON;
+/** NOT low confidence: the predicate is `<`, so the cut itself is excluded. */
+const SCORE_AT_THRESHOLD = LOW_CONFIDENCE_SCORE_THRESHOLD;
+/** NOT low confidence: comfortably into the confident half of the scale. */
+const SCORE_ABOVE_THRESHOLD =
+  (LOW_CONFIDENCE_SCORE_THRESHOLD + COSINE_SCORE_MAX) / 2;
 
 interface SeedOpts {
   request_source?: string | null;
@@ -184,34 +221,53 @@ describe("observability: request_source + low-confidence (PGlite integration)", 
   });
 
   // ---------------------------------------------------------------------------
-  // low-confidence: result_count > 0 AND top_score < 0.5 (NULL excluded)
+  // low-confidence: result_count > 0 AND top_score < LOW_CONFIDENCE_SCORE_THRESHOLD
+  // (NULL excluded). Every score below is derived from the exported constant —
+  // see the SCORE_* fixtures above for why no literal appears here.
   // ---------------------------------------------------------------------------
 
-  it("counts low-confidence rows (result_count>0 AND top_score<0.5), excludes NULL-score and empty", async () => {
-    // 5 strong hits (0.9), 3 low-confidence (0.3), 2 empty (0 results, null
-    // score), 1 borderline (exactly 0.5 — NOT low because predicate is < 0.5).
-    await seed(db, 5, { top_score: 0.9, result_count: 5 });
-    await seed(db, 3, { top_score: 0.3, result_count: 4 });
+  it("counts low-confidence rows (result_count>0 AND top_score below the threshold), excludes NULL-score and empty", async () => {
+    // 5 strong hits, 3 low-confidence, 2 empty (0 results, null score),
+    // 1 borderline sitting exactly ON the threshold — NOT low, the predicate
+    // is strictly `<`.
+    await seed(db, 5, { top_score: SCORE_ABOVE_THRESHOLD, result_count: 5 });
+    await seed(db, 3, { top_score: SCORE_BELOW_THRESHOLD, result_count: 4 });
     await seed(db, 2, { top_score: null, result_count: 0 });
-    await seed(db, 1, { top_score: 0.5, result_count: 4 });
+    await seed(db, 1, { top_score: SCORE_AT_THRESHOLD, result_count: 4 });
 
     const result = await getAnalyticsSummary({}, 7);
 
-    // Only the 3 rows scoring 0.3 are low-confidence.
+    // Only the 3 sub-threshold rows are low-confidence.
     expect(result.low_confidence_count_window).toBe(3);
     // 11 rows total in the window, 3 low-confidence.
     expect(result.total_queries_window).toBe(11);
     expect(result.low_confidence_rate_window).toBeCloseTo(3 / 11);
   });
 
+  it("applies the cut at exactly LOW_CONFIDENCE_SCORE_THRESHOLD, not near it", async () => {
+    // The two rows straddle the boundary by a single float4 step, so this
+    // fails if the threshold the SQL binds drifts from the exported constant
+    // in EITHER direction — including a stale value inlined into the query
+    // that happens to still look plausible. A comfortably-under fixture (the
+    // old bare 0.3) would tolerate a drift of tens of percent unnoticed.
+    await seed(db, 1, { top_score: SCORE_BELOW_THRESHOLD, result_count: 4 });
+    await seed(db, 1, { top_score: SCORE_AT_THRESHOLD, result_count: 4 });
+
+    const result = await getAnalyticsSummary({}, 7);
+
+    expect(result.total_queries_window).toBe(2);
+    expect(result.scored_query_count_window).toBe(2);
+    expect(result.low_confidence_count_window).toBe(1);
+  });
+
   it("low-confidence respects the request-source default (synthetic low-conf excluded)", async () => {
     await seed(db, 2, {
-      top_score: 0.3,
+      top_score: SCORE_BELOW_THRESHOLD,
       result_count: 4,
       request_source: "user",
     });
     await seed(db, 5, {
-      top_score: 0.3,
+      top_score: SCORE_BELOW_THRESHOLD,
       result_count: 4,
       request_source: "synthetic",
     });
