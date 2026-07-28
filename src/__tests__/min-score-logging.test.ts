@@ -35,7 +35,7 @@ vi.mock("../config.js", () => ({
 }));
 
 import { searchChunks, isBelowCosineFloor } from "../db/queries.js";
-import { getTopQueries } from "../db/analytics.js";
+import { getTopQueries, logQuery } from "../db/analytics.js";
 import {
   generateSchema,
   generatePostSchemaMigration,
@@ -276,6 +276,55 @@ describe("min_score gates delivery without censoring the measurement", () => {
     expect(entry!.avg_top_score).not.toBeNull();
     expect(entry!.avg_top_score!).toBeLessThan(PRODUCTION_MIN_SCORE);
     expect(entry!.avg_top_score!).toBeCloseTo(0.25, 4);
+  });
+
+  it("refuses a non-finite top_score at the write boundary", async () => {
+    // No producer emits one today, but `top_score` is a plain `number | null` on
+    // a writer any tool can call, and Postgres accepts NaN in a float column.
+    // A persisted NaN is worse than a missing score: it satisfies
+    // `top_score IS NOT NULL`, so it inflates the scored population, and it can
+    // never satisfy `top_score < threshold`, so it never classifies.
+    await logQuery({
+      tool_name: "search-docs",
+      query_text: "corrupt reading",
+      result_count: 3,
+      top_score: Number.NaN,
+      latency_ms: 10,
+      source_name: "docs",
+      session_id: null,
+    });
+    const { rows } = await db.query<{
+      top_score: number | null;
+      score_kind: string | null;
+    }>("SELECT top_score, score_kind FROM query_log");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].top_score).toBeNull();
+    // And the kind must go with it — a NULL score carrying a scale tag would
+    // read as "a cosine we have" to every score-based reader.
+    expect(rows[0].score_kind).toBeNull();
+  });
+
+  it("keeps one corrupt row from nulling a whole group's Avg Cosine", async () => {
+    // The consequence at the dashboard. `avg(top_score)` over a group containing
+    // NaN is NaN, which the reader maps to null — so a single poisoned row used
+    // to erase the Avg Cosine of every event sharing its query text.
+    for (const score of [0.62, Number.NaN, 0.58]) {
+      await logQuery({
+        tool_name: "search-docs",
+        query_text: "shared query",
+        result_count: 3,
+        top_score: score,
+        latency_ms: 10,
+        source_name: "docs",
+        session_id: null,
+      });
+    }
+    const entry = (await getTopQueries(7, 10)).find(
+      (q) => q.query_text === "shared query",
+    );
+    expect(entry!.count).toBe(3);
+    expect(entry!.avg_top_score).not.toBeNull();
+    expect(entry!.avg_top_score!).toBeCloseTo(0.6, 4);
   });
 });
 

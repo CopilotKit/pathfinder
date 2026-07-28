@@ -29,13 +29,25 @@ export const COSINE_SCORE_KIND = "cosine";
  * as this contract claimed until the bound was actually measured. Anything
  * pointed away from the query is negative; 0 means orthogonal.
  *
- * A deployment MAY make negatives unreachable by setting a positive
- * `min_score` (deploy/copilotkit-docs.yaml uses 0.3 on its four search tools),
- * but that floor is per-tool, optional, request-overridable, and skipped
- * entirely by the keyword and knowledge paths — so it is a property of one
- * config, not of the metric. These constants encode the scale pgvector
- * actually produces; a threshold that wants a tighter floor derives it (see
- * LOW_CONFIDENCE_SCORE_THRESHOLD) instead of assuming the config.
+ * A deployment MAY set a positive `min_score` (deploy/copilotkit-docs.yaml uses
+ * 0.3 on its four search tools), but that floor is per-tool, optional,
+ * request-overridable, and skipped entirely by the keyword and knowledge paths —
+ * so it is a property of one config, not of the metric. These constants encode
+ * the scale pgvector actually produces; a threshold that wants a tighter floor
+ * derives it (see LOW_CONFIDENCE_SCORE_THRESHOLD) instead of assuming the
+ * config.
+ *
+ * The interaction between that floor and this scale is worth stating outright,
+ * because getting it wrong is what made the whole metric a lie once already. A
+ * `min_score` gates DELIVERY, not measurement: `top_score` records the best
+ * cosine the request measured, so the full [-1, 1] range stays reachable in
+ * `query_log` no matter how high the floor is set, and the low-confidence
+ * classifier can fire across its entire band [-1, 0.5). Reduce the score over
+ * the post-floor results instead and the metric collapses onto the config: with
+ * a 0.3 floor, `avg_top_score` cannot report below 0.3, and low-confidence can
+ * only fire in [0.3, 0.5) because everything worse logs NULL and reads as "no
+ * score". That is the censored version this contract exists to prevent — see
+ * maxCosineScore and src/mcp/tools/search.ts.
  */
 export const COSINE_SCORE_MIN = -1;
 export const COSINE_SCORE_MAX = 1;
