@@ -1,4 +1,4 @@
-# pathfinder [![npm version](https://img.shields.io/npm/v/@copilotkit/pathfinder)](https://www.npmjs.com/package/@copilotkit/pathfinder)
+# pathfinder [![npm version](https://img.shields.io/npm/v/@copilotkit/pathfinder)](https://www.npmjs.com/package/@copilotkit/pathfinder) [![MCP status](https://mcpvitals.com/badge/78061f72f4.svg)](https://mcpvitals.com/status/78061f72f4)
 
 The knowledge server for AI agents — index your docs, code, Notion pages, Slack threads, and Discord forums into searchable, agent-accessible knowledge via MCP. One config file, one command, works with any AI coding agent.
 
