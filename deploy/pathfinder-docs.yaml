@@ -4,11 +4,23 @@ server:
   max_sessions: 1000
   session_ttl_minutes: 30
   session_unused_ttl_minutes: 15
-  # Anthropic crawler — bypasses per-IP session limit (requires trust_proxy: true to match the forwarded IP)
+  # Anthropic crawler — bypasses per-IP session limit (requires trust_proxy to be
+  # set so the allowlist matches the forwarded client IP, not the proxy's)
   allowlist: ["160.79.106.35"]
-  # Safe to enable: Railway's edge discards any client-supplied X-Forwarded-For
-  # and sets its own trusted value, so the leftmost XFF entry is the real peer.
-  trust_proxy: true
+  # Numeric hop count, NOT `true`. Exactly one proxy sits in front of this
+  # container: Railway's edge terminates TLS and forwards to the Node process
+  # (no CDN, no in-container reverse proxy). `trust proxy: 1` therefore tells
+  # Express to trust that single hop and resolve req.ip to the address the
+  # edge itself appended.
+  #
+  # `true` would be a vulnerability here: it trusts EVERY hop and resolves
+  # req.ip to the LEFTMOST X-Forwarded-For entry, which is client-supplied.
+  # Any caller could send `X-Forwarded-For: 160.79.106.35` and be attributed
+  # to the allowlisted crawler above — bypassing the per-IP session limit and
+  # poisoning query_log IP attribution. With a hop count, a forged prefix is
+  # ignored because the edge appends the real peer to the right of it.
+  # See src/ip-util.ts for the full rationale.
+  trust_proxy: 1
 
 sources:
   - name: pathfinder-docs
