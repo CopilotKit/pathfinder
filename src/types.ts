@@ -566,7 +566,30 @@ export interface ChunkResult {
   start_line: number | null;
   end_line: number | null;
   language: string | null;
+  /**
+   * RANKING score. Its scale depends on which retriever produced the row:
+   * cosine similarity (0-1) from `searchChunks`, ts_rank from
+   * `textSearchChunks`, and a fused Reciprocal Rank Fusion score
+   * (max 2/(RRF_K+1) ≈ 0.033) from `rrfMerge`. It orders results and nothing
+   * more — it is NOT comparable across modes and must NEVER be persisted as a
+   * relevance metric. Use {@link cosine_similarity} for that.
+   */
   similarity: number;
+  /**
+   * RELEVANCE score: the true cosine similarity (0-1) of this chunk against
+   * the query embedding, or null when the row has no comparable semantic score
+   * (a keyword-only hit — ts_rank is not on the cosine scale).
+   *
+   * Kept separate from {@link similarity} because `rrfMerge` OVERWRITES
+   * `similarity` with the fused rank score, destroying the cosine value. This
+   * field survives the merge, so analytics (`query_log.top_score`, the
+   * dashboard's Avg Cosine column, the low-confidence flag) reads one metric
+   * on one scale regardless of `search_mode`.
+   *
+   * Optional so non-retrieval producers of ChunkResult-shaped rows (Atlas
+   * dedup, bash related-files) compile unchanged; absent reads as "no cosine".
+   */
+  cosine_similarity?: number | null;
 }
 
 export interface FaqChunkResult extends ChunkResult {

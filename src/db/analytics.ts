@@ -1,4 +1,5 @@
 import { getPool } from "./client.js";
+import { COSINE_SCORE_KIND, COSINE_SCORE_MAX } from "../relevance.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -59,12 +60,24 @@ export const P95_LATENCY_ROW_CAP = 100000;
  * that look like hits but aren't actually relevant. Exported so tool handlers,
  * readers, and tests share a single source of truth.
  *
- * Predicate (matches the brief): `result_count > 0 AND top_score < 0.5`.
- * `top_score IS NULL` (e.g. browse/keyword rows that never compute a cosine
- * score) is intentionally NOT low-confidence — absence of a score is not a
- * low score.
+ * DERIVED from {@link COSINE_SCORE_MAX} (the midpoint of the scale) rather than
+ * hard-coded, so it cannot drift onto a different scale than the metric it is
+ * compared against. That drift is exactly what broke this metric before: the
+ * threshold sat at 0.5 while hybrid mode persisted an RRF rank score whose
+ * ceiling is ~0.033, so every scored hybrid query was flagged low-confidence.
+ *
+ * Predicate: `result_count > 0 AND score_kind = 'cosine' AND top_score <
+ * threshold`. `top_score IS NULL` (browse/keyword rows that never compute a
+ * cosine) is intentionally NOT low-confidence — absence of a score is not a
+ * low score — and neither is a row whose scale is unknown (score_kind NULL).
  */
-export const LOW_CONFIDENCE_SCORE_THRESHOLD = 0.5;
+export const LOW_CONFIDENCE_SCORE_THRESHOLD = COSINE_SCORE_MAX * 0.5;
+
+// Re-exported so the scale contract reads as one surface: every consumer of
+// the low-confidence threshold also needs the kind tag and the scale bound,
+// and they are defined in src/relevance.ts (which owns the retrieval-side
+// reducer) to keep this module free of a dependency on ChunkResult.
+export { COSINE_SCORE_KIND, COSINE_SCORE_MAX };
 
 /**
  * Canonical request-origin tags persisted on `query_log.request_source`.
@@ -125,7 +138,22 @@ export interface QueryLogEntry {
   tool_name: string;
   query_text: string;
   result_count: number;
+  /**
+   * Best RELEVANCE score across the returned results, as a cosine similarity
+   * in [0, 1], or null when no returned result carried one (an empty result
+   * set, a browse call, or a keyword-only match). Never a ranking score: a
+   * ts_rank or an RRF fusion score belongs to a different scale and must be
+   * logged as null, not squeezed into this column. See
+   * {@link COSINE_SCORE_KIND}.
+   */
   top_score: number | null;
+  /**
+   * Scale declaration for {@link top_score} — {@link COSINE_SCORE_KIND} when a
+   * score is present, null when it is not. Optional on the entry so existing
+   * call sites compile; the writer derives it from `top_score` so the two can
+   * never disagree.
+   */
+  score_kind?: string | null;
   latency_ms: number;
   source_name: string | null;
   session_id: string | null;
@@ -242,6 +270,14 @@ export interface TopQuery {
   tool_name: string;
   count: number;
   avg_result_count: number | null;
+  /**
+   * Mean best-match COSINE similarity (0-1) across this query's events —
+   * the dashboard's "Avg Cosine" column. Averaged only over rows whose
+   * `score_kind` declares the cosine scale, so a legacy row holding an RRF
+   * rank score can never drag the average onto a different scale. Null when
+   * no event in the window carried a cosine (keyword-only or browse traffic,
+   * or history predating `score_kind`).
+   */
   avg_top_score: number | null;
 }
 
@@ -366,15 +402,25 @@ export async function logQuery(
   const blocked = entry.blocked ?? false;
   const blockReason = entry.block_reason ?? null;
   const clientIp = entry.client_ip ?? null;
+  // Derive score_kind from top_score at the write boundary rather than trusting
+  // the caller, so the column and the value it describes can never disagree: a
+  // present score is always tagged 'cosine' (tools only ever log a cosine — see
+  // topCosineScore in src/relevance.ts), and an absent score is always
+  // untagged. A caller-supplied kind is honored only when a score is present,
+  // which leaves room for a future second scale without letting a NULL score
+  // carry a kind.
+  const scoreKind =
+    entry.top_score == null ? null : (entry.score_kind ?? COSINE_SCORE_KIND);
   try {
     await pool.query(
-      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, request_source, client_ip, user_agent, blocked, block_reason)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, score_kind, latency_ms, source_name, session_id, request_source, client_ip, user_agent, blocked, block_reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
         entry.tool_name,
         text,
         entry.result_count,
         entry.top_score,
+        scoreKind,
         entry.latency_ms,
         entry.source_name,
         entry.session_id,
@@ -772,6 +818,7 @@ export async function getAnalyticsSummary(
   const rs2 = buildRequestSourceClause(filter, dw2.nextIdx);
   const redactedIdx2 = rs2.nextIdx;
   const lowConfIdx2 = redactedIdx2 + 1;
+  const scoreKindIdx2 = lowConfIdx2 + 1;
   const summaryBase = [
     ...dw2.clauses,
     ...rs2.clauses,
@@ -785,6 +832,12 @@ export async function getAnalyticsSummary(
   // threshold is bound, not inlined, so LOW_CONFIDENCE_SCORE_THRESHOLD stays
   // the single source of truth. `top_score IS NOT NULL` is part of the FILTER
   // so NULL-score rows (browse/keyword) never count as low confidence.
+  //
+  // `score_kind = 'cosine'` is the SCALE GUARD: the threshold lives on the
+  // cosine scale, so only rows that declare that scale may be compared against
+  // it. It excludes legacy rows written before score_kind existed, whose
+  // top_score may hold an RRF rank score (ceiling ~0.033) that would compare
+  // below ANY cosine threshold and flag 100% of scored queries.
   const summaryRes = await pool.query(
     `SELECT
         count(*)::int AS total,
@@ -792,6 +845,7 @@ export async function getAnalyticsSummary(
         count(*) FILTER (
           WHERE result_count > 0
             AND top_score IS NOT NULL
+            AND score_kind = $${scoreKindIdx2}
             AND top_score < $${lowConfIdx2}
         )::int AS low_confidence,
         COALESCE(avg(latency_ms)::int, 0) AS avg_latency,
@@ -805,6 +859,7 @@ export async function getAnalyticsSummary(
       ...rs2.params,
       REDACTED_QUERY_TEXT,
       LOW_CONFIDENCE_SCORE_THRESHOLD,
+      COSINE_SCORE_KIND,
     ],
   );
 
@@ -1054,14 +1109,24 @@ export async function getTopQueries(
         tool_name,
         count(*)::int AS count,
         avg(result_count) FILTER (WHERE result_count >= 0)::real AS avg_result_count,
-        avg(top_score) FILTER (WHERE top_score IS NOT NULL)::real AS avg_top_score
+        avg(top_score) FILTER (
+          WHERE top_score IS NOT NULL
+            AND score_kind = $${redactedIdx + 1}
+        )::real AS avg_top_score
     FROM query_log
     ${where}
     GROUP BY query_text, tool_name
     HAVING bool_or(result_count > 0)
     ORDER BY count DESC
-    LIMIT $${redactedIdx + 1}`,
-    [...fp, ...dw.params, ...rs.params, REDACTED_QUERY_TEXT, limit],
+    LIMIT $${redactedIdx + 2}`,
+    [
+      ...fp,
+      ...dw.params,
+      ...rs.params,
+      REDACTED_QUERY_TEXT,
+      COSINE_SCORE_KIND,
+      limit,
+    ],
   );
 
   return rows.map((r: Record<string, unknown>) => {
