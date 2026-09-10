@@ -14,15 +14,34 @@ sources:
   - name: docs
     type: markdown
     repo: https://github.com/CopilotKit/CopilotKit.git
-    path: showcase/shell-docs/src/content/docs/
+    # Walk from src/content/ rather than src/content/docs/ so the API
+    # reference tree is reachable. It is a SIBLING of the prose docs —
+    # src/content/reference/, rendered by src/app/reference/[...slug] —
+    # so a walk rooted at src/content/docs/ can never see it, which is why
+    # only the one stray reference page committed under the prose tree
+    # (docs/reference/v2/hooks/useCapabilities.mdx) was ever indexed.
+    path: showcase/shell-docs/src/content/
     base_url: https://docs.copilotkit.ai/
     url_derivation:
-      strip_prefix: "showcase/shell-docs/src/content/docs/"
+      # First match wins, so the longer docs/ prefix must precede the
+      # shorter content/ one. Prose pages live at the site root
+      # (docs/quickstart.mdx -> /quickstart); reference pages keep their
+      # directory (reference/hooks/useAgent.mdx -> /reference/hooks/useAgent,
+      # which the [...slug] route serves as the v2 root SDK).
+      strip_prefix:
+        - "showcase/shell-docs/src/content/docs/"
+        - "showcase/shell-docs/src/content/"
       strip_suffix: ".mdx"
       strip_route_groups: true
       strip_index: true
+    # Repo-root-relative, and now load-bearing: the wider walk root also
+    # exposes snippets/ (MDX partials), ag-ui/ (owned by the ag-ui-docs
+    # source) and framework-overviews/, none of which are standalone pages.
+    # These patterns are also what scopes the incremental webhook path,
+    # which filters changed files by pattern alone with no walk-root check.
     file_patterns:
-      - "**/*.mdx"
+      - "showcase/shell-docs/src/content/docs/**/*.mdx"
+      - "showcase/shell-docs/src/content/reference/**/*.mdx"
     chunk:
       target_tokens: 600
       overlap_tokens: 50
