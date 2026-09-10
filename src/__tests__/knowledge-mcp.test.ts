@@ -57,6 +57,9 @@ function makeFaqResult(
     end_line: null,
     language: null,
     similarity: 0.0,
+    // getFaqChunksByIds selects a constant 0.0 similarity and no cosine — the
+    // knowledge tool copies the vector hit's cosine in when it merges.
+    cosine_similarity: null,
     metadata: { channel: "C123", confidence: 0.85 },
     confidence: 0.85,
     ...overrides,
@@ -76,6 +79,9 @@ function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
     end_line: null,
     language: null,
     similarity: 0.92,
+    // Stands in for searchChunks output, where the ranking score IS the
+    // cosine — keep the fake on the same contract as the real producer.
+    cosine_similarity: 0.92,
     ...overrides,
   };
 }

@@ -10,11 +10,18 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { SearchToolConfig, ChunkResult } from "../types.js";
+import type { SearchToolConfig } from "../types.js";
+import { chunkResultFactory } from "./helpers/chunkFixtures.js";
+import { mockQueriesModule } from "./helpers/queriesMock.js";
 
-vi.mock("../db/queries.js", () => ({
-  searchChunks: vi.fn(),
-}));
+// Only the DB-touching entry point is stubbed. `isBelowCosineFloor` — the
+// min_score predicate the tool applies to whatever searchChunks returns — is
+// pure, and stubbing it would leave these min_score tests asserting against a
+// double instead of the gate that actually ships. See ./helpers/queriesMock.ts
+// for why the completeness of the double is a compile-time property.
+vi.mock("../db/queries.js", async (importOriginal) =>
+  mockQueriesModule(importOriginal, { searchChunks: vi.fn() }),
+);
 vi.mock("../db/analytics.js", () => ({
   logQuery: vi.fn().mockResolvedValue(undefined),
 }));
@@ -29,22 +36,19 @@ import { searchChunks } from "../db/queries.js";
 const mockSearchChunks = vi.mocked(searchChunks);
 const mockEmbed = vi.fn();
 
-function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
-  return {
-    id: 1,
-    source_name: "docs",
-    source_url: "https://docs.example.com/getting-started",
-    title: "Getting Started",
-    content: "This is the getting started guide.",
-    repo_url: "https://github.com/org/repo",
-    file_path: "docs/getting-started.md",
-    start_line: null,
-    end_line: null,
-    language: null,
-    similarity: 0.95,
-    ...overrides,
-  };
-}
+// Shared factory, with this suite's own titles/paths/repo. The cosine is
+// derived from `similarity` in one place (see ./helpers/chunkFixtures.ts):
+// these rows stand in for searchChunks output, where the ranking score IS the
+// cosine, and min_score is evaluated on the relevance score — so a fixture
+// carrying only `similarity` models a row the retriever cannot return.
+const makeChunkResult = chunkResultFactory({
+  source_url: "https://docs.example.com/getting-started",
+  title: "Getting Started",
+  content: "This is the getting started guide.",
+  repo_url: "https://github.com/org/repo",
+  file_path: "docs/getting-started.md",
+  similarity: 0.95,
+});
 
 const baseToolConfig: SearchToolConfig = {
   name: "search-docs",

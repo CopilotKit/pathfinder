@@ -1,5 +1,6 @@
 import pgvector from "pgvector";
 import { getPool } from "./client.js";
+import { topCosineScore } from "../relevance.js";
 import type {
   Chunk,
   ChunkResult,
@@ -23,6 +24,30 @@ import type {
 function toFiniteNumber(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Coerce a DB-returned value to a cosine RELEVANCE score, or to null when it is
+ * not one. Deliberately NOT {@link toFiniteNumber}: the cosine scale is
+ * [-1, 1] (see COSINE_SCORE_MIN/MAX in src/relevance.ts), so 0 is a LEGITIMATE
+ * reading — two orthogonal embeddings — and defaulting a corrupt value to 0
+ * makes it indistinguishable from a real one. That is not hypothetical:
+ * pgvector's `<=>` returns NaN for a zero-norm embedding, so a single
+ * degenerate indexed row used to surface as `cosine_similarity: 0`, get
+ * persisted to `query_log.top_score` as a real score, and be counted as a
+ * FALSE low-confidence hit (0 < 0.5) — manufacturing exactly the content-gap
+ * signal the metric exists to detect. Mapping to null instead routes it
+ * through the "no score" path, which analytics never reads as a low score.
+ *
+ * null/undefined/"" map to null too, rather than riding `Number()`'s coercion
+ * of all three to 0 — an absent column is an absent score, not an orthogonal
+ * match. (`toFiniteNumber` keeps the 0 default for `similarity`, which is a
+ * ranking-only number and must stay a `number`.)
+ */
+function toCosineScoreOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -54,8 +79,13 @@ export function stripNulBytes(s: string): string {
  * Postgres text and rejects `0x00` the same way the `content`/`title` text
  * columns do, AND it rejects `0x00` in keys identically — a NUL anywhere
  * inside metadata (key or value, at any depth) fails the whole INSERT. A
- * NUL-bearing key would otherwise survive `JSON.stringify` as the 6-char
- * escape ` ` and still error the jsonb cast at the wire.
+ * NUL-bearing key would otherwise survive `JSON.stringify` as the 6-character
+ * escape sequence backslash-u-0-0-0-0 and still error the jsonb cast at the
+ * wire. (Spelled out rather than written literally: the raw form is a NUL byte
+ * away from being the very thing this function removes, and an editor or a
+ * copy-paste that "helpfully" resolves the escape silently empties the example —
+ * which is exactly how this sentence previously came to name a 6-char escape and
+ * then show nothing at all.)
  *
  * Safe under cyclic inputs and arbitrary nesting depth — does not recurse on
  * the JS call stack. Implemented as a two-pass iterative walk over an
@@ -65,14 +95,17 @@ export function stripNulBytes(s: string): string {
  * therefore feed cyclic OR arbitrarily-deep payloads without risking a
  * `RangeError: Maximum call stack size exceeded` mid-INSERT.
  *
- * Identity preservation: returns the input unchanged (referentially `===`)
- * when no string anywhere in the tree carried a NUL — the detect pass
- * short-circuits and skips the transform allocation entirely. This is the
- * common case for indexed content. NOTE: under the iterative scheme the
- * identity guarantee is now whole-tree — if ANY descendant required cleaning,
- * EVERY container on the path from root to that descendant is freshly
- * allocated (the prior recursive impl had the same property in practice,
- * since a dirty descendant forced cloning at every wrapping container).
+ * Identity preservation is ALL OR NOTHING, and only the "nothing" half is a
+ * guarantee: when no string anywhere in the tree carried a NUL, the detect pass
+ * short-circuits and the input is returned referentially `===`, having allocated
+ * nothing. That is the common case for indexed content. But as soon as ONE
+ * string anywhere in the tree needs cleaning, pass 2 allocates a fresh mirror
+ * for EVERY reachable plain container in the tree — not merely the ones on the
+ * path to the dirty string — because the pre-allocation sweep walks the whole
+ * structure so that a back-edge always has a clone to point at. No sub-object
+ * of the output is reference-identical to its input counterpart (non-plain
+ * leaves excepted; those are wired through unchanged by design). Callers must
+ * not treat `output.foo === input.foo` as a signal that `foo` was clean.
  *
  * Object containers are allocated via `Object.create(null)` so that bracket
  * assignment of a sanitized key like `"__proto__"` (from input
@@ -340,6 +373,13 @@ export async function searchChunks(
     // Coerce to a finite number: a non-numeric similarity would Number() to
     // NaN and corrupt the similarity sort order / top_score downstream.
     similarity: toFiniteNumber(r.similarity),
+    // Vector rows carry a real cosine similarity, so ranking score and
+    // relevance score coincide here. Recorded separately anyway: rrfMerge
+    // overwrites `similarity` with the fused rank score, and this is the copy
+    // analytics reads (see ChunkResult.cosine_similarity). Coerced through
+    // toCosineScoreOrNull, NOT toFiniteNumber: a corrupt value must read as
+    // "no score", because 0 is a real point on the [-1, 1] cosine scale.
+    cosine_similarity: toCosineScoreOrNull(r.similarity),
   }));
 }
 
@@ -445,7 +485,55 @@ export async function textSearchChunks(
     // Coerce to a finite number: a non-numeric similarity would Number() to
     // NaN and corrupt the similarity sort order / top_score downstream.
     similarity: toFiniteNumber(r.similarity),
+    // ts_rank is not on the cosine scale and there is no embedding distance
+    // for a keyword-only hit, so this row contributes no relevance score.
+    cosine_similarity: null,
   }));
+}
+
+/**
+ * The min_score floor predicate, shared by every retrieval mode that has one.
+ *
+ * The floor is defined on `cosine_similarity` — the RELEVANCE score, on the
+ * [-1, 1] cosine scale (see COSINE_SCORE_MIN/MAX in src/relevance.ts) — and
+ * NOT on `similarity`, which is a per-retriever RANKING score: a cosine on a
+ * freshly fetched vector row, a ts_rank on a keyword row, and an RRF fusion
+ * score bounded by 2/(RRF_K+1) ≈ 0.033 once rrfMerge has run. On a healthy
+ * vector row the two fields hold the same number, so reading the ranking score
+ * produced correct answers; it is still the wrong field to compare a threshold
+ * against (see the contract in src/relevance.ts: only `cosine_similarity` may
+ * be persisted, aggregated, or compared against a threshold) and it silently
+ * stops being correct the moment a gate moves to the other side of the fusion.
+ *
+ * "Provably below" is deliberate. A row carrying no cosine at all has UNKNOWN
+ * relevance, not zero relevance, and this predicate never excludes it. The
+ * floor removes what we measured and found wanting, never what we failed to
+ * measure. Two rows reach it that way:
+ *
+ *   - a keyword hit that never appeared among the vector candidates, so no
+ *     cosine was ever computed for it;
+ *   - a vector row whose distance came back non-finite — pgvector's `<=>`
+ *     returns NaN for a zero-norm embedding — which searchChunks maps to null
+ *     via toCosineScoreOrNull rather than to 0.
+ *
+ * The second case is where this predicate and the [-1, 1] scale contract meet,
+ * and it is a deliberate behaviour CHANGE. The old gate read `similarity`,
+ * where the same corrupt row coerces to 0 and any positive floor dropped it —
+ * but only by accident, because 0 is a real cosine (orthogonal) and "corrupt"
+ * and "orthogonal" were indistinguishable in that field. A corrupt row is now
+ * returned rather than silently filtered. That is the honest reading: we do not
+ * know its relevance, and the alternative is to keep pretending a broken
+ * measurement is a bad one. It stays out of every score-based analytic either
+ * way, because a null cosine never reaches `query_log.top_score`.
+ */
+export function isBelowCosineFloor(
+  result: ChunkResult,
+  minScore: number,
+): boolean {
+  const cosine = result.cosine_similarity;
+  return (
+    typeof cosine === "number" && Number.isFinite(cosine) && cosine < minScore
+  );
 }
 
 /**
@@ -457,12 +545,32 @@ export async function textSearchChunks(
  * This is faster than a single SQL query because each query uses its
  * respective index (HNSW for vector, GIN for tsvector).
  *
- * min_score gates ONLY the vector candidates, and does so BEFORE the RRF
- * merge. It is a cosine-similarity floor, so it is meaningful only for the
- * vector list; the keyword list has no comparable score. A hit that surfaces
- * via keyword search but is NOT in the surviving vector set therefore enters
- * the fused output UNGATED by min_score — min_score raises the semantic floor
- * of the vector contribution, it does not filter keyword-only matches.
+ * min_score is a cosine floor applied BEFORE the merge, and it removes a chunk
+ * from BOTH candidate lists — not just the vector one. Gating only the vector
+ * list left the knob close to inert in hybrid mode, which is the mode every
+ * deployed tool runs in: a semantically weak chunk that also satisfied the
+ * tsquery was dropped from the vector list and then walked straight back in
+ * through the keyword list. Worse, the keyword row carries
+ * `cosine_similarity: null`, so the sub-floor cosine we had just measured was
+ * erased on the way out and the row was reported as having no relevance score
+ * rather than a bad one.
+ *
+ * What the floor still cannot gate: a keyword hit outside the vector candidate
+ * window has no measured cosine anywhere in this request, so there is nothing
+ * to compare and it enters the fusion ungated. The contract is therefore
+ * "excludes every result we can prove is below the floor", not "everything
+ * returned is above the floor" — the latter would require embedding-distance
+ * lookups for the keyword half that hybrid search deliberately avoids paying.
+ *
+ * `onCosineMeasured` reports the best cosine this call MEASURED, before the
+ * floor removes anything, so the caller can log a relevance reading that its own
+ * delivery contract has not censored. Without it the floor is invisible from
+ * outside: the caller only ever sees survivors, so a query whose every candidate
+ * measured below the floor is indistinguishable from one that matched nothing
+ * (see maxCosineScore in src/relevance.ts). It is an observer, not an output —
+ * always invoked exactly once when the retrieval completes, including when there
+ * is no floor and when nothing was measured (null) — so it cannot change what
+ * this function returns.
  */
 export async function hybridSearchChunks(
   embedding: number[],
@@ -471,6 +579,7 @@ export async function hybridSearchChunks(
   sourceName?: string,
   version?: string,
   minScore?: number,
+  onCosineMeasured?: (topCosine: number | null) => void,
 ): Promise<ChunkResult[]> {
   // Fetch 2x candidates from each retriever to ensure good RRF coverage
   const candidateLimit = limit * 2;
@@ -481,15 +590,27 @@ export async function hybridSearchChunks(
     textSearchChunks(queryText, candidateLimit, sourceName, version),
   ]);
 
-  // Apply min_score to the VECTOR candidates only, before merging. Keyword-only
-  // hits (present in keywordResults but not in the surviving vector set) are not
-  // score-gated here — they still enter the RRF merge below.
-  const filteredVectorResults =
-    minScore != null
-      ? vectorResults.filter((r) => r.similarity >= minScore)
-      : vectorResults;
+  // Report the measurement BEFORE the floor is applied. The vector half is the
+  // only place a cosine exists, and this is the last point at which the
+  // sub-floor readings are still in hand.
+  onCosineMeasured?.(topCosineScore(vectorResults));
 
-  return rrfMerge(filteredVectorResults, keywordResults, limit);
+  if (minScore == null) return rrfMerge(vectorResults, keywordResults, limit);
+
+  // The vector half is the only place a cosine is measured, so it is also the
+  // only place the floor can be evaluated. Collect the ids it condemns, then
+  // apply that verdict to BOTH lists so a condemned chunk cannot re-enter via
+  // its keyword rank.
+  const belowFloor = new Set<number>();
+  for (const r of vectorResults) {
+    if (isBelowCosineFloor(r, minScore)) belowFloor.add(r.id);
+  }
+
+  return rrfMerge(
+    vectorResults.filter((r) => !belowFloor.has(r.id)),
+    keywordResults.filter((r) => !belowFloor.has(r.id)),
+    limit,
+  );
 }
 
 /**
@@ -499,6 +620,13 @@ export async function hybridSearchChunks(
  *
  * where k = 60 (standard constant from the original RRF paper).
  * Documents appearing in only one list get a single-term score.
+ *
+ * The fused score is written to `similarity`, so on the returned rows
+ * `similarity` is a RANK score bounded by 2/(RRF_K+1) ≈ 0.033 — not a cosine
+ * similarity. `cosine_similarity` is carried through untouched from the
+ * canonical (vector-preferred) result, so callers that need a relevance score
+ * on the [-1, 1] cosine scale read THAT field. Persisting `similarity` as a
+ * relevance metric is a scale error; see src/mcp/tools/search.ts.
  *
  * Exported for direct unit testing of the merge logic.
  */
@@ -544,7 +672,9 @@ export function rrfMerge(
     .sort((a, b) => b.rrfScore - a.rrfScore)
     .slice(0, limit);
 
-  // Return ChunkResult[] with similarity set to the RRF score
+  // Return ChunkResult[] with similarity set to the RRF score. The spread
+  // preserves `cosine_similarity` from the canonical result — that is the only
+  // relevance signal that survives the fusion, so do not drop or overwrite it.
   return sorted.map(({ rrfScore, result }) => ({
     ...result,
     similarity: rrfScore,
@@ -1152,6 +1282,11 @@ export async function getFaqChunks(
     // Coerce to a finite number: a non-numeric similarity string would Number()
     // to NaN and corrupt sort order / top_score. Same guard as confidence below.
     similarity: toFiniteNumber(r.similarity),
+    // Browse selects a constant `0.0 AS similarity` — no embedding is compared
+    // at all — so there is no relevance score on the cosine scale to report.
+    // The knowledge tool's SEARCH path overwrites this with the cosine of the
+    // vector hit it merged the row against.
+    cosine_similarity: null,
     metadata: (r.metadata as Record<string, unknown>) ?? {},
     // Coerce to a finite number for the same reason as similarity above:
     // toFiniteNumber maps a non-numeric confidence string (Number(...)=NaN) back
@@ -1225,6 +1360,10 @@ export async function getFaqChunksByIds(
     // Coerce to a finite number: a non-numeric similarity would Number() to NaN
     // and corrupt sort order / top_score. Same guard as confidence below.
     similarity: toFiniteNumber(r.similarity),
+    // As in getFaqChunks: `0.0 AS similarity` is a placeholder, not a cosine.
+    // The caller (knowledge.ts) re-associates these rows with the vector hits
+    // it ranked and copies the real cosine across.
+    cosine_similarity: null,
     metadata: (r.metadata as Record<string, unknown>) ?? {},
     // Coerce to a finite number for the same reason as similarity above: a
     // null/non-numeric confidence would otherwise yield NaN and corrupt

@@ -477,7 +477,17 @@
           <th>Tool</th>
           <th>Count</th>
           <th>Avg Results</th>
-          <th>Avg Score</th>
+          <!-- "Avg Cosine", not "Avg Score": the column shows the mean
+               best-match cosine similarity (-1 to 1 — pgvector's `<=>` is a
+               distance in [0, 2], so `1 - distance` can go negative). It
+               deliberately reads "—" for keyword-only traffic and for rows
+               logged before the scale was recorded, rather than mixing a rank
+               score into the mean. -->
+          <th
+            title="Mean best-match cosine similarity (-1 to 1; 1 is a perfect match, 0 is unrelated, negative means pointed away) over this query's events. Shows — when no event recorded a cosine score (keyword-only matches, browse calls, or rows logged before the score scale was tracked)."
+          >
+            Avg Cosine
+          </th>
         </tr>
       </thead>
       <tbody></tbody>

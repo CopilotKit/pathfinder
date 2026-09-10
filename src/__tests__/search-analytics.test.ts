@@ -10,14 +10,21 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { SearchToolConfig, ChunkResult } from "../types.js";
+import type { SearchToolConfig } from "../types.js";
+import { chunkResultFactory } from "./helpers/chunkFixtures.js";
+import { mockQueriesModule } from "./helpers/queriesMock.js";
 
-// Mock dependencies
-vi.mock("../db/queries.js", () => ({
-  searchChunks: vi.fn(),
-  textSearchChunks: vi.fn(),
-  hybridSearchChunks: vi.fn(),
-}));
+// Mock dependencies. The retrievers are stubbed; everything else in
+// ../db/queries.js stays real, so an export the tool handler needs (such as
+// `isBelowCosineFloor`) cannot go missing from the double. See
+// ./helpers/queriesMock.ts.
+vi.mock("../db/queries.js", async (importOriginal) =>
+  mockQueriesModule(importOriginal, {
+    searchChunks: vi.fn(),
+    textSearchChunks: vi.fn(),
+    hybridSearchChunks: vi.fn(),
+  }),
+);
 vi.mock("../db/analytics.js", () => ({
   logQuery: vi.fn(),
 }));
@@ -36,22 +43,15 @@ const mockLogQuery = vi.mocked(logQuery);
 const mockGetAnalyticsConfig = vi.mocked(getAnalyticsConfig);
 const mockEmbed = vi.fn();
 
-function makeChunkResult(overrides: Partial<ChunkResult> = {}): ChunkResult {
-  return {
-    id: 1,
-    source_name: "docs",
-    source_url: null,
-    title: "Title",
-    content: "Content",
-    repo_url: null,
-    file_path: "f.md",
-    start_line: null,
-    end_line: null,
-    language: null,
-    similarity: 0.9,
-    ...overrides,
-  };
-}
+// Shared factory, with this suite's own titles/paths. The cosine is derived
+// from `similarity` in one place (see ./helpers/chunkFixtures.ts) so a fixture
+// here cannot drift into a row searchChunks could not return.
+const makeChunkResult = chunkResultFactory({
+  source_url: null,
+  title: "Title",
+  content: "Content",
+  file_path: "f.md",
+});
 
 const toolConfig: SearchToolConfig = {
   name: "search-docs",

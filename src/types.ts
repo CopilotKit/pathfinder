@@ -25,14 +25,19 @@ import ipaddr from "ipaddr.js";
  *   - a negative or non-numeric CIDR suffix
  *   - an empty CIDR suffix (e.g. "10.0.0.0/")
  *   - a prefix length outside the per-family valid range (IPv4 0-32,
- *     IPv6 0-128). Out-of-range prefixes still get rejected downstream by
- *     ipaddr.js, but catching them at the schema boundary yields a cleaner,
- *     family-aware error message for operators reading config-validation
- *     output.
+ *     IPv6 0-128).
  *
- * Two separate regexes are used so that e.g. "10.0.0.0/33" fails with a clear
- * "not a valid CIDR" message rather than being diffused through ipaddr.js. An
- * entry matching neither regex is rejected up front.
+ * Two separate regexes are used so the prefix-range bound is enforced PER
+ * FAMILY: a single combined alphabet would have to accept /0-128 for both, so
+ * "10.0.0.0/33" would slip past the pre-check and reach ipaddr.js. The value of
+ * the split is that rejection, not the wording of the error — BOTH issue sites
+ * below emit the same generic "Must be a valid IPv4/IPv6 address or CIDR range"
+ * string, so an operator reading config-validation output cannot tell a
+ * regex-stage rejection from an ipaddr.js one, nor which family bound was
+ * violated. (Out-of-range prefixes are also rejected downstream by ipaddr.js;
+ * catching them here means the allowlist cannot be bypassed if ipaddr.js
+ * tolerance ever drifts, which is the point.) An entry matching neither regex is
+ * rejected up front.
  */
 // IPv4 / IPv4-CIDR: decimal octet characters and optional /0–/32.
 const ALLOWLIST_IPV4_REGEX = /^[0-9.]+(\/([0-9]|[1-2][0-9]|3[0-2]))?$/;
@@ -571,7 +576,39 @@ export interface ChunkResult {
   start_line: number | null;
   end_line: number | null;
   language: string | null;
+  /**
+   * RANKING score. Its scale depends on which retriever produced the row:
+   * cosine similarity ([-1, 1]) from `searchChunks`, ts_rank from
+   * `textSearchChunks`, and a fused Reciprocal Rank Fusion score
+   * (max 2/(RRF_K+1) ≈ 0.033) from `rrfMerge`. It orders results and nothing
+   * more — it is NOT comparable across modes and must NEVER be persisted as a
+   * relevance metric. Use {@link cosine_similarity} for that.
+   */
   similarity: number;
+  /**
+   * RELEVANCE score: the true cosine similarity of this chunk against the
+   * query embedding, on the [-1, 1] scale pgvector produces (see
+   * COSINE_SCORE_MIN/COSINE_SCORE_MAX in src/relevance.ts — `<=>` is cosine
+   * DISTANCE in [0, 2], so `1 - distance` reaches -1). Null when the row has
+   * no comparable semantic score: a keyword-only hit (ts_rank is not on the
+   * cosine scale), a browse row (no embedding compared at all), or a corrupt
+   * one (a non-finite distance, which pgvector returns for a zero-norm
+   * embedding).
+   *
+   * Kept separate from {@link similarity} because `rrfMerge` OVERWRITES
+   * `similarity` with the fused rank score, destroying the cosine value. This
+   * field survives the merge, so analytics (`query_log.top_score`, the
+   * dashboard's Avg Cosine column, the low-confidence flag) reads one metric
+   * on one scale regardless of `search_mode`.
+   *
+   * REQUIRED, not optional. Nullable is the escape hatch for a producer with
+   * no cosine to report; optional would have made the scale invariant opt-in,
+   * so a new retriever that simply forgot the field would log 100% NULL
+   * top_scores — silently blanking every score-based analytic — with no type
+   * error to catch it. Writing `cosine_similarity: null` is a one-line, and
+   * deliberate, opt-out.
+   */
+  cosine_similarity: number | null;
 }
 
 export interface FaqChunkResult extends ChunkResult {

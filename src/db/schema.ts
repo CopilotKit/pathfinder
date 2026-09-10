@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS query_log (
     query_text      TEXT NOT NULL,
     result_count    INTEGER NOT NULL,
     top_score       REAL,
+    score_kind      TEXT,
     latency_ms      INTEGER NOT NULL,
     source_name     TEXT,
     session_id      TEXT,
@@ -139,6 +140,22 @@ ALTER TABLE query_log ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT 
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS block_reason TEXT;
 CREATE INDEX IF NOT EXISTS idx_query_log_blocked ON query_log (blocked);
 CREATE INDEX IF NOT EXISTS idx_query_log_client_ip ON query_log (client_ip);
+
+-- score_kind declares the SCALE of top_score. Added after query_log shipped, so
+-- ADD COLUMN IF NOT EXISTS keeps the migration idempotent; the CREATE TABLE
+-- above carries it for fresh installs.
+--
+-- There is deliberately NO BACKFILL. Historical rows were written under the old
+-- mode-dependent semantics: vector mode logged a cosine, keyword mode logged a
+-- ts_rank, and hybrid mode logged a Reciprocal Rank Fusion score capped at
+-- ~0.033. Those scales are not recoverable per-row after the fact (an RRF 0.016
+-- carries no derivable cosine), and guessing from the value would silently
+-- reinterpret history. Leaving score_kind NULL marks such a row "unknown
+-- scale"; every score-based reader (the low-confidence FILTER in
+-- getAnalyticsSummary and avg_top_score in getTopQueries) now requires
+-- score_kind = 'cosine', so legacy rows are EXCLUDED rather than misread. The
+-- score-based cards therefore start empty and refill as new traffic lands.
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS score_kind TEXT;
 
 -- Webhook delivery tracking
 CREATE TABLE IF NOT EXISTS webhook_deliveries (

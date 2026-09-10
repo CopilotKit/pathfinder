@@ -17,6 +17,7 @@ function makeFaqResult(overrides: Partial<FaqChunkResult>): FaqChunkResult {
     end_line: null,
     language: null,
     similarity: 0.92,
+    cosine_similarity: 0.92,
     metadata: { channel: "C123", confidence: 0.85 },
     confidence: 0.85,
     ...overrides,

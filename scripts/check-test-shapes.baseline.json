@@ -1,0 +1,62 @@
+{
+  "$comment": "Pre-existing violations of scripts/check-test-shapes.mjs, as a per-file count RATCHET: a count may fall, never rise. Do not add entries by hand — fix the tests, then rerun with --update-baseline. A file absent here must have zero violations.",
+  "rules": {
+    "as-never-in-test": {
+      "src/__tests__/activity-refresh-ordering.test.ts": 1,
+      "src/__tests__/analytics-auth-length-check.test.ts": 1,
+      "src/__tests__/analytics-endpoints.test.ts": 37,
+      "src/__tests__/empty-result-scope-hint.test.ts": 12,
+      "src/__tests__/health-endpoint.test.ts": 1,
+      "src/__tests__/knowledge-analytics.test.ts": 2,
+      "src/__tests__/knowledge-mcp.test.ts": 6,
+      "src/__tests__/knowledge-tool.test.ts": 2,
+      "src/__tests__/knowledge.test.ts": 4,
+      "src/__tests__/oauth-consent-handler.test.ts": 34,
+      "src/__tests__/oauth-handlers.test.ts": 130,
+      "src/__tests__/oauth-trusted-client-ip.test.ts": 1,
+      "src/__tests__/search-analytics.test.ts": 4,
+      "src/__tests__/search-hybrid.test.ts": 6,
+      "src/__tests__/search-tool.test.ts": 8,
+      "src/__tests__/session-hardening-coverage.test.ts": 19,
+      "src/__tests__/session-init-rollback-reason.test.ts": 4,
+      "src/__tests__/sse-messages-ip-log.test.ts": 1
+    },
+    "clear-all-mocks-with-once": {
+      "src/__tests__/analytics-server.test.ts": 1,
+      "src/__tests__/bash-telemetry.test.ts": 1,
+      "src/__tests__/collect-mcp.test.ts": 1,
+      "src/__tests__/discord-api.test.ts": 1,
+      "src/__tests__/discord-provider.test.ts": 1,
+      "src/__tests__/discord-webhook.test.ts": 1,
+      "src/__tests__/distiller.test.ts": 1,
+      "src/__tests__/embeddings.test.ts": 1,
+      "src/__tests__/empty-result-scope-hint.test.ts": 1,
+      "src/__tests__/github-webhook.test.ts": 1,
+      "src/__tests__/knowledge-analytics.test.ts": 1,
+      "src/__tests__/knowledge-mcp.test.ts": 3,
+      "src/__tests__/knowledge.test.ts": 2,
+      "src/__tests__/local-embeddings.test.ts": 1,
+      "src/__tests__/notion-api.test.ts": 1,
+      "src/__tests__/notion-provider.test.ts": 1,
+      "src/__tests__/orchestrator-source-reindex.test.ts": 1,
+      "src/__tests__/search-analytics.test.ts": 2,
+      "src/__tests__/search-hybrid.test.ts": 3,
+      "src/__tests__/search-tool.test.ts": 4,
+      "src/__tests__/slack-api.test.ts": 1,
+      "src/__tests__/slack-provider.test.ts": 1,
+      "src/__tests__/slack-webhook.test.ts": 1,
+      "src/__tests__/text-search-tsvector.test.ts": 1
+    },
+    "bare-conditional-expect": {
+      "src/__tests__/analytics-ui.test.ts": 4,
+      "src/__tests__/markdown-chunker.test.ts": 3
+    },
+    "tautological-not-tocontain": {
+      "src/__tests__/atlas-adapter-memory.test.ts": 1,
+      "src/__tests__/atlas-cli.test.ts": 1,
+      "src/__tests__/atlas-harvest-cli.test.ts": 1,
+      "src/__tests__/bash-related.test.ts": 1,
+      "src/__tests__/discord-provider.test.ts": 1
+    }
+  }
+}

@@ -18,6 +18,7 @@ import {
   REDACTED_QUERY_TEXT,
   P95_LATENCY_ROW_CAP,
   LOW_CONFIDENCE_SCORE_THRESHOLD,
+  COSINE_SCORE_KIND,
   normalizeRequestSource,
   DEFAULT_REQUEST_SOURCE,
   REQUEST_SOURCE_VALUES,
@@ -63,6 +64,9 @@ describe("logQuery", () => {
       "how to install",
       5,
       0.92,
+      // score_kind: derived from top_score at the write boundary, so a present
+      // score is always tagged with the scale it lives on.
+      COSINE_SCORE_KIND,
       42,
       "docs",
       "sess-123",
@@ -93,6 +97,7 @@ describe("logQuery", () => {
       REDACTED_QUERY_TEXT,
       baseEntry.result_count,
       baseEntry.top_score,
+      COSINE_SCORE_KIND,
       baseEntry.latency_ms,
       baseEntry.source_name,
       baseEntry.session_id,
@@ -119,8 +124,11 @@ describe("logQuery", () => {
 
     const [, params] = mockQuery.mock.calls[0];
     expect(params[3]).toBeNull(); // top_score
-    expect(params[5]).toBeNull(); // source_name
-    expect(params[6]).toBeNull(); // session_id
+    // A NULL top_score must carry a NULL score_kind — an untagged absence, not
+    // a score on an unnamed scale.
+    expect(params[4]).toBeNull(); // score_kind
+    expect(params[6]).toBeNull(); // source_name
+    expect(params[7]).toBeNull(); // session_id
   });
 
   it("persists the session_id passed on the entry (no longer hardcoded null)", async () => {
@@ -131,7 +139,7 @@ describe("logQuery", () => {
     await logQuery({ ...baseEntry, session_id: "live-session-42" });
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[6]).toBe("live-session-42");
+    expect(params[7]).toBe("live-session-42");
   });
 
   it("coerces an unknown request_source to the default ('user')", async () => {
@@ -141,7 +149,7 @@ describe("logQuery", () => {
     await logQuery({ ...baseEntry, request_source: "bogus-origin" });
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[7]).toBe("user");
+    expect(params[8]).toBe("user");
   });
 
   it("coerces an absent request_source to the default ('user')", async () => {
@@ -151,7 +159,7 @@ describe("logQuery", () => {
     await logQuery(noSource);
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[7]).toBe("user");
+    expect(params[8]).toBe("user");
   });
 
   it("persists a synthetic request_source verbatim", async () => {
@@ -159,12 +167,12 @@ describe("logQuery", () => {
     await logQuery({ ...baseEntry, request_source: "synthetic" });
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[7]).toBe("synthetic");
+    expect(params[8]).toBe("synthetic");
   });
 
   // v1.15.2 attribution columns: client_ip, user_agent, blocked, block_reason.
-  // Positional indices on params are 8, 9, 10, 11 respectively (after the
-  // existing 8 fields tool_name..request_source).
+  // Positional indices on params are 9, 10, 11, 12 respectively (after the
+  // nine fields tool_name..request_source, which now include score_kind).
 
   it("persists client_ip and user_agent verbatim when provided", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
@@ -175,8 +183,8 @@ describe("logQuery", () => {
     });
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[8]).toBe("203.0.113.10");
-    expect(params[9]).toBe("Claude-User/1.0");
+    expect(params[9]).toBe("203.0.113.10");
+    expect(params[10]).toBe("Claude-User/1.0");
   });
 
   it("truncates a pathological user_agent to USER_AGENT_MAX_LEN chars", async () => {
@@ -188,7 +196,7 @@ describe("logQuery", () => {
     await logQuery({ ...baseEntry, user_agent: huge });
 
     const [, params] = mockQuery.mock.calls[0];
-    expect((params[9] as string).length).toBe(256);
+    expect((params[10] as string).length).toBe(256);
   });
 
   it("persists blocked=true with a block_reason", async () => {
@@ -200,8 +208,8 @@ describe("logQuery", () => {
     });
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[10]).toBe(true);
-    expect(params[11]).toBe("pattern:movie-box-office");
+    expect(params[11]).toBe(true);
+    expect(params[12]).toBe("pattern:movie-box-office");
   });
 
   it("defaults blocked to false and block_reason to null when absent", async () => {
@@ -211,8 +219,8 @@ describe("logQuery", () => {
     await logQuery(baseEntry);
 
     const [, params] = mockQuery.mock.calls[0];
-    expect(params[10]).toBe(false);
-    expect(params[11]).toBeNull();
+    expect(params[11]).toBe(false);
+    expect(params[12]).toBeNull();
   });
 });
 
@@ -1833,6 +1841,31 @@ describe("getAnalyticsSummary low-confidence metric", () => {
     expect(params).toContain(LOW_CONFIDENCE_SCORE_THRESHOLD);
   });
 
+  it("gates the low-confidence FILTER on score_kind so a foreign scale can't be compared", async () => {
+    // The threshold lives on the cosine scale, so only rows that DECLARE that
+    // scale may be compared against it. Without this guard, legacy rows whose
+    // top_score holds an RRF rank score (ceiling ~0.033) compare below any
+    // cosine threshold and flag 100% of scored traffic — the bug this replaces.
+    mockSummaryQueries();
+    await getAnalyticsSummary({});
+
+    const [sql, params] = mockQuery.mock.calls[1];
+    expect(sql).toMatch(/score_kind = \$\d+/);
+    expect(params).toContain(COSINE_SCORE_KIND);
+  });
+
+  it("averages top_score only over cosine-scaled rows in getTopQueries", async () => {
+    // Same scale guard on the dashboard's Avg Cosine column: a legacy RRF row
+    // must not be folded into a mean presented as a cosine similarity.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getTopQueries(7, 50);
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/avg\(top_score\) FILTER/);
+    expect(sql).toMatch(/score_kind = \$\d+/);
+    expect(params).toContain(COSINE_SCORE_KIND);
+  });
+
   it("threshold constant is 0.5 (matches the brief)", () => {
     expect(LOW_CONFIDENCE_SCORE_THRESHOLD).toBe(0.5);
   });
@@ -2074,7 +2107,14 @@ describe("getToolBreakdown", () => {
     expect(sql).toContain("latency_ms >= 0");
     // No blocked clause, no redacted exclusion (matches getToolCounts).
     expect(sql).not.toContain("blocked");
-    expect(sql).not.toContain("REDACTED");
+    // The redacted exclusion is emitted as a predicate ON query_text (bound as
+    // `query_text != $N`, or inlined), so query_text is the only thing that can
+    // actually witness its absence. Asserting the SQL lacks the string
+    // "REDACTED" proved nothing: REDACTED_QUERY_TEXT is a bound parameter, so
+    // that identifier can never appear in the query text under any
+    // implementation — the assertion held even with a real exclusion added.
+    expect(sql).not.toContain("query_text");
+    expect(params).not.toContain(REDACTED_QUERY_TEXT);
     // Default request-source filter binds "user" (real-users-by-default).
     expect(params).toEqual([7, "user"]);
   });

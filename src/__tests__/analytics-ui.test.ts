@@ -3317,3 +3317,49 @@ describe("analytics dashboard UI — data availability label", () => {
     expect(label!.textContent!.trim()).toBe("showing 1 day of data");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Avg Cosine column: tooltip must describe what the renderer actually emits
+// ---------------------------------------------------------------------------
+
+describe("analytics dashboard UI — Avg Cosine empty-cell contract", () => {
+  it("the Avg Cosine tooltip names the em-dash the renderer emits, not 'Blank'", async () => {
+    // The renderer falls back to "—" for a missing cosine. A tooltip
+    // promising a BLANK cell describes a different UI than the one shipped,
+    // and an operator who sees "—" has no way to know it means "no score
+    // recorded" rather than "score unavailable / errored".
+    const { dom } = await loadDashboard({
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 100).summary,
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [
+        {
+          query_text: "keyword only",
+          tool_name: "search-docs",
+          count: 3,
+          avg_result_count: 2,
+          avg_top_score: null,
+        },
+      ],
+      "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
+    });
+
+    const th = Array.from(
+      dom.window.document.querySelectorAll<HTMLElement>(
+        "#topQueriesTable thead th",
+      ),
+    ).find((el) => el.textContent!.trim() === "Avg Cosine");
+    expect(th).toBeDefined();
+    const tip = th!.getAttribute("title") ?? "";
+
+    // The glyph the renderer actually produces for a score-less row.
+    const cells = Array.from(
+      dom.window.document.querySelectorAll("#topQueriesTable tbody tr td"),
+    );
+    expect(cells[cells.length - 1]!.textContent).toBe("—");
+
+    expect(tip).toContain("—");
+    expect(tip).not.toMatch(/\bblank\b/i);
+  });
+});
