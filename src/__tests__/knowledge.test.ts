@@ -203,7 +203,11 @@ describe("knowledge tool search mode — FAQ metadata fetched by result id", () 
 
     const text = (result.content as Array<{ type: string; text: string }>)[0]
       .text;
-    expect(text).toBe("No FAQ results found.");
+    expect(JSON.parse(text)).toMatchObject({
+      results: [],
+      reason: "no_results",
+      domain: "slack-support, discord-faq",
+    });
   });
 
   it("does not call getFaqChunksByIds when there are zero vector hits", async () => {
@@ -217,7 +221,11 @@ describe("knowledge tool search mode — FAQ metadata fetched by result id", () 
 
     const text = (result.content as Array<{ type: string; text: string }>)[0]
       .text;
-    expect(text).toBe("No FAQ results found.");
+    expect(JSON.parse(text)).toMatchObject({
+      results: [],
+      reason: "no_results",
+      domain: "slack-support, discord-faq",
+    });
     // No ids to look up — skip the round-trip entirely.
     expect(mockGetFaqChunksByIds).not.toHaveBeenCalled();
   });

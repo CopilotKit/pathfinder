@@ -71,6 +71,98 @@ describe("checkBlocklist — positive matches", () => {
       reason: "pattern:sports-event-contracts",
       query: "sport event contract market",
     },
+    // --- Awards-show family (2026 scraping wave) -------------------------
+    {
+      name: "awards-show (emmy + nominations)",
+      reason: "pattern:awards-show",
+      query: "Emmy Awards Beef Season 2 nominations 78th",
+    },
+    {
+      name: "awards-show (emmy + outstanding category)",
+      reason: "pattern:awards-show",
+      query: "Emmy 2026 Outstanding Lead Actor Limited Series nominees",
+    },
+    {
+      name: "awards-show (emmy + bare 'awards')",
+      reason: "pattern:awards-show",
+      query: "Emmy Awards bracket win probability 2 3 awards",
+    },
+    {
+      name: "awards-show (grammy + record of the year / winners)",
+      reason: "pattern:awards-show",
+      query: "GRAMMY Record of the Year historical winners base rates",
+    },
+    {
+      name: "awards-show (oscar + nominations)",
+      reason: "pattern:awards-show",
+      query: "Dune Messiah Oscar nominations 2027",
+    },
+    {
+      name: "awards-show (academy awards + best actress)",
+      reason: "pattern:awards-show",
+      query: "Julianne Moore 2027 Academy Awards Best Actress",
+    },
+    {
+      name: "awards-show-year (emmy + year, no category word)",
+      reason: "pattern:awards-show-year",
+      query: "Betty Gilpin Widow's Bay Emmy 2026",
+    },
+    {
+      name: "awards-show-year (grammy + year)",
+      reason: "pattern:awards-show-year",
+      query: "Olivia Dean Art of Loving GRAMMY 2027",
+    },
+    // --- Elections / prediction-market family (2026 scraping wave) -------
+    {
+      name: "election-politics (congressional + district)",
+      reason: "pattern:election-politics",
+      query: "Michigan congressional districts 2026 midterm elections",
+    },
+    {
+      name: "election-politics (house seats + midterm + forecast)",
+      reason: "pattern:election-politics",
+      query: "California House seats 2026 midterm election forecast",
+    },
+    {
+      name: "election-politics (congressional district + midterm)",
+      reason: "pattern:election-politics",
+      query: "Iowa 1st congressional district 2026 midterm",
+    },
+    {
+      name: "election-politics (senate + turnout)",
+      reason: "pattern:election-politics",
+      query: "Ohio Senate election 2026 turnout",
+    },
+    {
+      name: "election-politics (presidential + candidates/polls)",
+      reason: "pattern:election-politics",
+      query: "Brazil 2026 presidential election candidates polls",
+    },
+    {
+      name: "election-politics (governor + election)",
+      reason: "pattern:election-politics",
+      query: "Alaska governor 2026 election",
+    },
+    {
+      name: "election-politics-year (redistricting + year)",
+      reason: "pattern:election-politics-year",
+      query: "Missouri congressional redistricting 2026",
+    },
+    {
+      name: "election-politics-year (senate + year, no contest word)",
+      reason: "pattern:election-politics-year",
+      query: "Dan Sullivan Alaska Senate 2026",
+    },
+    {
+      name: "election-polling (bare 'election' + polling)",
+      reason: "pattern:election-polling",
+      query: "Swedish election 2026 Centre Party polling",
+    },
+    {
+      name: "election-polling (bare 'election' + polls)",
+      reason: "pattern:election-polling",
+      query: "Swedish Liberals Liberalerna 2026 election polls threshold",
+    },
   ];
 
   for (const { name, reason, query } of positives) {
@@ -122,6 +214,33 @@ describe("checkBlocklist — legitimate queries do not match", () => {
     "configure copilot runtime with anthropic",
     "MCP server health endpoint",
     "How to debug a langgraph agent",
+    // Near-misses for the awards-show family. The topic term must co-occur
+    // with an awards-context term (or, for the unambiguous show names, a
+    // year); a bare "award"/"season"/"series" in a product context, or a
+    // person named Oscar, must stay out.
+    "award badge component in the docs sidebar",
+    "series and season fields in the demo catalog config",
+    "Oscar asked in Discord whether the 2026 roadmap includes Angular support",
+    "beef up the error handling in the runtime adapter",
+    "state of the art embedding models for retrieval",
+    // Near-misses for the elections family. Every hazard word here is a real
+    // CopilotKit/AG-UI term: "poll"/"polling" (transport), "race" (race
+    // condition), "state" (React state), "primary" (CSS color), "candidate"
+    // (index keys), "seats" (billing), "district"/"governor"/"forecast"
+    // (product nouns), "polly" (AWS Polly TTS). None may match on its own.
+    "Raft leader election polling interval for agent runner replicas",
+    "how do I poll the runtime endpoint until the run finishes",
+    "long-polling transport fallback for MCP sessions",
+    "AWS Polly text-to-speech integration with CopilotKit",
+    "polly",
+    "race condition connect while run finishes isRunning implementation",
+    "how to manage React state in a CopilotKit component",
+    "CSS variables --copilot-kit-primary-color CopilotKit theme customization Vue v2",
+    "forecast chart component for the dashboard demo",
+    "candidate keys for the vector index lookup",
+    "cpufreq governor settings for the CI runner",
+    "how many seats does the Intelligence Cloud free plan include per developer",
+    "district heating dashboard demo with a map component",
   ];
 
   for (const query of negatives) {

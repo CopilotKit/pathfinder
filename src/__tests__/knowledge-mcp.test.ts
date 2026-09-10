@@ -175,7 +175,11 @@ describe("knowledge tool browse mode (no query)", () => {
     expect(result.isError).toBeFalsy();
     const text = (result.content as Array<{ type: string; text: string }>)[0]
       .text;
-    expect(text).toBe("No FAQ results found.");
+    expect(JSON.parse(text)).toMatchObject({
+      results: [],
+      reason: "no_results",
+      domain: "slack-support, discord-faq",
+    });
     expect(mockGetFaqChunks).toHaveBeenCalled();
     expect(mockEmbed).not.toHaveBeenCalled();
   });
@@ -341,7 +345,11 @@ describe("knowledge tool search mode (with query)", () => {
 
     const text = (result.content as Array<{ type: string; text: string }>)[0]
       .text;
-    expect(text).toBe("No FAQ results found.");
+    expect(JSON.parse(text)).toMatchObject({
+      results: [],
+      reason: "no_results",
+      domain: "slack-support, discord-faq",
+    });
   });
 
   it("sorts merged results by similarity descending", async () => {
@@ -418,7 +426,11 @@ describe("knowledge tool search mode (with query)", () => {
     const text = (result.content as Array<{ type: string; text: string }>)[0]
       .text;
     // 0.85 < 0.9, should be filtered out
-    expect(text).toBe("No FAQ results found.");
+    expect(JSON.parse(text)).toMatchObject({
+      results: [],
+      reason: "no_results",
+      domain: "slack-support, discord-faq",
+    });
   });
 });
 
