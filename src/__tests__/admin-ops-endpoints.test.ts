@@ -391,6 +391,12 @@ describe("admin ops control surface", () => {
         last_indexed: "2026-01-01T00:00:00.000Z",
         commit: "abcdef12",
         error: null,
+        // The row carries no config fingerprint (written before the column
+        // existed), so the next run cannot be proven current and will take a
+        // full walk. Surfacing the pending decision is the point: a reindex
+        // that would write zero rows is now visible BEFORE it runs.
+        next_acquire: "full",
+        next_acquire_reason: "no-stored-config-fingerprint",
       },
     ]);
   });
