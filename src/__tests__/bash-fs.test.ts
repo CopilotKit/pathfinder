@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { buildBashFilesMap } from "../mcp/tools/bash-fs.js";
 import type { SourceConfig } from "../types.js";
 
@@ -98,6 +101,80 @@ describe("buildBashFilesMap", () => {
     ];
     const map = await buildBashFilesMap(sources);
     expect(Object.keys(map)).toHaveLength(0);
+  });
+
+  describe("git sources match file_patterns against repo-root-relative paths", () => {
+    // The indexer (FileDataProvider / walkSourceFiles) relativises against
+    // the REPO ROOT, so anchored patterns in a config are written that way.
+    // bash-fs must agree, or explore-* silently serves a different (here:
+    // empty) file set than search-* indexes.
+    let cloneDir: string;
+
+    beforeEach(() => {
+      cloneDir = fs.mkdtempSync(path.join(os.tmpdir(), "bash-fs-repo-"));
+      const deep = path.join(
+        cloneDir,
+        "myrepo",
+        "content",
+        "reference",
+        "hooks",
+      );
+      fs.mkdirSync(deep, { recursive: true });
+      fs.writeFileSync(path.join(deep, "useAgent.mdx"), "# useAgent\n");
+      fs.writeFileSync(
+        path.join(cloneDir, "myrepo", "content", "top.mdx"),
+        "# top\n",
+      );
+    });
+
+    afterEach(() => {
+      fs.rmSync(cloneDir, { recursive: true, force: true });
+    });
+
+    function source(filePatterns: string[]): SourceConfig[] {
+      return [
+        {
+          name: "docs",
+          type: "markdown",
+          repo: "https://github.com/example/myrepo.git",
+          path: "content/",
+          file_patterns: filePatterns,
+          chunk: { target_tokens: 600, overlap_tokens: 50 },
+        },
+      ];
+    }
+
+    it("includes files matched by a repo-root-anchored pattern", async () => {
+      const map = await buildBashFilesMap(
+        source(["content/reference/**/*.mdx"]),
+        {
+          cloneDir,
+        },
+      );
+      // Virtual paths stay relative to the source path, even though the
+      // pattern that selected them is repo-root-relative.
+      expect(Object.keys(map).sort()).toEqual([
+        "/reference/hooks/useAgent.mdx",
+      ]);
+    });
+
+    it("excludes files outside a repo-root-anchored pattern", async () => {
+      const map = await buildBashFilesMap(
+        source(["content/reference/**/*.mdx"]),
+        {
+          cloneDir,
+        },
+      );
+      expect(Object.keys(map)).not.toContain("/top.mdx");
+    });
+
+    it("still honours a catch-all pattern (pre-existing configs)", async () => {
+      const map = await buildBashFilesMap(source(["**/*.mdx"]), { cloneDir });
+      expect(Object.keys(map).sort()).toEqual([
+        "/reference/hooks/useAgent.mdx",
+        "/top.mdx",
+      ]);
+    });
   });
 
   describe("missing-path warnings", () => {

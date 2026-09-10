@@ -75,7 +75,12 @@ const AllowlistEntrySchema = z.string().superRefine((val, ctx) => {
 // ── Source configuration schemas ──────────────────────────────────────────────
 
 export const UrlDerivationConfigSchema = z.object({
-  strip_prefix: z.string().optional(),
+  // A single prefix, or an ordered list of candidates of which the FIRST
+  // one that matches the file path is stripped. A list is what lets one
+  // source span sibling content trees that sit at different URL depths —
+  // e.g. CopilotKit's prose docs live at the site root while its API
+  // reference keeps its directory in the URL.
+  strip_prefix: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
   strip_suffix: z.string().optional(),
   strip_route_groups: z.boolean().optional(),
   strip_index: z.boolean().optional(),
