@@ -24,13 +24,19 @@ function makeFaqResult(overrides: Partial<FaqChunkResult>): FaqChunkResult {
 }
 
 describe("formatFaqResults", () => {
-  it('returns "No FAQ results found." for empty array', () => {
-    expect(formatFaqResults([])).toBe("No FAQ results found.");
+  it("returns the scope-hint payload for an empty array", () => {
+    const payload = JSON.parse(formatFaqResults([], ["slack-support"]));
+    expect(payload).toEqual({
+      results: [],
+      reason: "no_results",
+      domain: "slack-support",
+      hint: expect.stringContaining("slack-support"),
+    });
   });
 
   it("formats a single result with QUESTION/ANSWER/SOURCE/CONFIDENCE", () => {
     const results = [makeFaqResult({})];
-    const output = formatFaqResults(results);
+    const output = formatFaqResults(results, ["slack-support"]);
     expect(output).toContain("Q&A 1");
     expect(output).toContain("QUESTION: How to configure headers?");
     expect(output).toContain(
@@ -45,7 +51,7 @@ describe("formatFaqResults", () => {
       makeFaqResult({ id: 1, title: "Q1", confidence: 0.9 }),
       makeFaqResult({ id: 2, title: "Q2", confidence: 0.8 }),
     ];
-    const output = formatFaqResults(results);
+    const output = formatFaqResults(results, ["slack-support"]);
     expect(output).toContain("Q&A 1");
     expect(output).toContain("Q&A 2");
   });
@@ -54,13 +60,13 @@ describe("formatFaqResults", () => {
     const results = [
       makeFaqResult({ source_url: null, file_path: "C123:456:0" }),
     ];
-    const output = formatFaqResults(results);
+    const output = formatFaqResults(results, ["slack-support"]);
     expect(output).toContain("SOURCE: C123:456:0");
   });
 
   it("uses (untitled) when title is null", () => {
     const results = [makeFaqResult({ title: null })];
-    const output = formatFaqResults(results);
+    const output = formatFaqResults(results, ["slack-support"]);
     expect(output).toContain("QUESTION: (untitled)");
   });
 
@@ -70,7 +76,7 @@ describe("formatFaqResults", () => {
         content: "Q: What is X?\n\nA: X is a thing that does Y and Z.",
       }),
     ];
-    const output = formatFaqResults(results);
+    const output = formatFaqResults(results, ["slack-support"]);
     expect(output).toContain("ANSWER: X is a thing that does Y and Z.");
   });
 
@@ -80,7 +86,7 @@ describe("formatFaqResults", () => {
         content: "Just some plain text answer.",
       }),
     ];
-    const output = formatFaqResults(results);
+    const output = formatFaqResults(results, ["slack-support"]);
     expect(output).toContain("ANSWER: Just some plain text answer.");
   });
 });

@@ -14,13 +14,22 @@ import {
 import { logQuery } from "../../db/analytics.js";
 import { getAnalyticsConfig } from "../../config.js";
 import { checkBlocklist } from "../abuse-blocklist.js";
+import { formatEmptyResult } from "../empty-result.js";
 import { oauthLog } from "../../oauth/observability.js";
 
 /**
  * Format FAQ results in the standard QUESTION/ANSWER/SOURCE/CONFIDENCE format.
+ *
+ * `sources` is the tool's configured source list, used ONLY to build the
+ * empty-result scope hint (see src/mcp/empty-result.ts). It applies to both
+ * browse mode (nothing above the confidence floor) and search mode (no
+ * qualifying hit) — an empty answer is equally uninformative either way.
  */
-export function formatFaqResults(results: FaqChunkResult[]): string {
-  if (results.length === 0) return "No FAQ results found.";
+export function formatFaqResults(
+  results: FaqChunkResult[],
+  sources: string[],
+): string {
+  if (results.length === 0) return formatEmptyResult(sources);
 
   return results
     .map((r, i) =>
@@ -201,7 +210,10 @@ export function registerKnowledgeTool(
 
           return {
             content: [
-              { type: "text" as const, text: formatFaqResults(chunks) },
+              {
+                type: "text" as const,
+                text: formatFaqResults(chunks, toolConfig.sources),
+              },
             ],
           };
         } else {
@@ -290,7 +302,10 @@ export function registerKnowledgeTool(
 
           return {
             content: [
-              { type: "text" as const, text: formatFaqResults(mergedResults) },
+              {
+                type: "text" as const,
+                text: formatFaqResults(mergedResults, toolConfig.sources),
+              },
             ],
           };
         }
