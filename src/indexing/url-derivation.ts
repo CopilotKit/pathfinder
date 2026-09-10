@@ -15,8 +15,18 @@ export function deriveUrl(
   const d = sourceConfig.url_derivation;
   let slug = filePath;
 
-  if (d.strip_prefix && slug.startsWith(d.strip_prefix)) {
-    slug = slug.slice(d.strip_prefix.length);
+  if (d.strip_prefix) {
+    // Ordered candidates: the first prefix that matches wins, so a more
+    // specific prefix must be listed before a shorter one that also
+    // matches. A plain string behaves exactly as a one-element list.
+    const prefixes =
+      typeof d.strip_prefix === "string" ? [d.strip_prefix] : d.strip_prefix;
+    for (const prefix of prefixes) {
+      if (slug.startsWith(prefix)) {
+        slug = slug.slice(prefix.length);
+        break;
+      }
+    }
   }
   if (d.strip_suffix) {
     const re = new RegExp(escapeRegex(d.strip_suffix) + "$");

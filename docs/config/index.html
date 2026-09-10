@@ -792,7 +792,16 @@
                 <strong>strip_prefix</strong> — Remove this prefix from the file
                 path before generating the URL. For example,
                 <code>"docs/"</code> turns <code>docs/guide/auth.mdx</code> into
-                <code>guide/auth.mdx</code>.
+                <code>guide/auth.mdx</code>. It also accepts a list of candidate
+                prefixes, of which the first one that matches the path is
+                stripped — useful when one source spans sibling content trees
+                that sit at different URL depths. Order matters: list a longer
+                prefix before any shorter prefix that would also match it. For
+                example <code>["content/docs/", "content/"]</code> turns
+                <code>content/docs/guide.mdx</code> into
+                <code>guide.mdx</code> while turning
+                <code>content/reference/useAgent.mdx</code> into
+                <code>reference/useAgent.mdx</code>.
               </li>
               <li>
                 <strong>strip_suffix</strong> — Remove the file extension. For

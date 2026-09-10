@@ -56,15 +56,24 @@ export async function buildBashFilesMap(
   for (const source of sources) {
     if (!isFileSourceConfig(source)) continue; // Slack sources don't have filesystem paths
     let rootDir: string;
+    // `file_patterns` are matched against the path the indexer would see:
+    // repo-root-relative for a git source, rootDir-relative for a local one
+    // (see FileDataProvider and walkSourceFiles, which both relativise
+    // against the repo root). Matching against rootDir here instead would
+    // silently disagree with the index whenever `source.path` is a subtree
+    // and the patterns are anchored rather than catch-all.
+    let matchRoot: string;
     if (source.repo && options?.cloneDir) {
       // Git-based source: the orchestrator clones into cloneDir/<repoName>/
       const repoName = source.repo
         .replace(/\.git$/, "")
         .split("/")
         .pop()!;
-      rootDir = path.join(options.cloneDir, repoName, source.path);
+      matchRoot = path.join(options.cloneDir, repoName);
+      rootDir = path.join(matchRoot, source.path);
     } else {
       rootDir = path.resolve(source.path);
+      matchRoot = rootDir;
     }
     if (!fs.existsSync(rootDir)) {
       // Sources with a `repo` configured are populated asynchronously by the
@@ -90,7 +99,7 @@ export async function buildBashFilesMap(
 
     for (const absPath of allFiles) {
       const relPath = path.relative(rootDir, absPath);
-      if (!matchesPatterns(relPath, source)) continue;
+      if (!matchesPatterns(path.relative(matchRoot, absPath), source)) continue;
 
       let content: string;
       try {

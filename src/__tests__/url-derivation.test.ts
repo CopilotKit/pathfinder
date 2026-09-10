@@ -92,6 +92,58 @@ describe("deriveUrl", () => {
     );
   });
 
+  // ── strip_prefix as an ordered candidate list ───────────────────────────
+
+  it("strips the first matching prefix from a candidate list", () => {
+    const config = makeConfig("https://example.com/", {
+      strip_prefix: ["content/docs/", "content/"],
+    });
+    expect(deriveUrl("content/docs/guide/intro.md", config)).toBe(
+      "https://example.com/guide/intro.md",
+    );
+  });
+
+  it("falls through to a later candidate when the first does not match", () => {
+    const config = makeConfig("https://example.com/", {
+      strip_prefix: ["content/docs/", "content/"],
+    });
+    expect(deriveUrl("content/reference/hooks/useAgent.md", config)).toBe(
+      "https://example.com/reference/hooks/useAgent.md",
+    );
+  });
+
+  it("stops at the first match rather than stripping every candidate", () => {
+    // "content/" also prefixes "content/docs/...". Without an early exit the
+    // second candidate would strip again and mangle the slug.
+    const config = makeConfig("https://example.com/", {
+      strip_prefix: ["content/", "docs/"],
+    });
+    expect(deriveUrl("content/docs/guide.md", config)).toBe(
+      "https://example.com/docs/guide.md",
+    );
+  });
+
+  it("leaves the path unchanged when no candidate matches", () => {
+    const config = makeConfig("https://example.com/", {
+      strip_prefix: ["src/", "lib/"],
+    });
+    expect(deriveUrl("docs/guide/intro.md", config)).toBe(
+      "https://example.com/docs/guide/intro.md",
+    );
+  });
+
+  it("treats a one-element list exactly like the plain string form", () => {
+    const asList = makeConfig("https://example.com/", {
+      strip_prefix: ["docs/"],
+    });
+    const asString = makeConfig("https://example.com/", {
+      strip_prefix: "docs/",
+    });
+    expect(deriveUrl("docs/guide/intro.md", asList)).toBe(
+      deriveUrl("docs/guide/intro.md", asString),
+    );
+  });
+
   // ── strip_suffix ────────────────────────────────────────────────────────
 
   it("strips a matching suffix", () => {
