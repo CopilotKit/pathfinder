@@ -72,6 +72,11 @@ DROP TABLE IF EXISTS code_chunks CASCADE;
  * Returns ONLY core DDL that works on both PostgreSQL and PGlite:
  * - tsvector support for hybrid search (v1.8.0): the `tsv` column, a one-time
  *   populate of existing rows, and the GIN index.
+ * - The idempotent `index_state.config_fingerprint` ADD COLUMN. It sits
+ *   BEFORE the query_log section on purpose: several PGlite tests slice this
+ *   DDL from the query_log marker to the end of the string and apply only
+ *   that tail, so index_state DDL placed after the marker would run against a
+ *   database that has no index_state table.
  * - The analytics `query_log` table (+ its indexes and the idempotent
  *   `request_source` ADD COLUMN for back-compat).
  * - The `webhook_deliveries` table (+ its indexes).
@@ -93,6 +98,18 @@ UPDATE chunks SET tsv = to_tsvector('english', content) WHERE tsv IS NULL;
 
 -- GIN index for fast full-text search
 CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
+
+-- index_state.config_fingerprint (v1.16.1). A stable hash of the fields of a
+-- source's config that decide WHAT gets walked and how paths/URLs map. The
+-- orchestrator previously chose incremental-vs-full acquisition on the commit
+-- sha alone, so a config-only scope change (widening file_patterns, moving
+-- path, changing url_derivation) diffed HEAD against itself and indexed
+-- nothing while reporting success. Additive and nullable, so installs whose
+-- index_state predates the column read back NULL; the orchestrator treats
+-- NULL as "unknown" and takes ONE full walk per source, which persists the
+-- fingerprint — a one-time cost, not a per-boot one. The CREATE TABLE above
+-- carries the column for fresh installs.
+ALTER TABLE index_state ADD COLUMN IF NOT EXISTS config_fingerprint TEXT;
 
 -- Analytics: query_log table for tracking tool usage
 --
@@ -157,18 +174,6 @@ CREATE INDEX IF NOT EXISTS idx_query_log_client_ip ON query_log (client_ip);
 -- score_kind = 'cosine', so legacy rows are EXCLUDED rather than misread. The
 -- score-based cards therefore start empty and refill as new traffic lands.
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS score_kind TEXT;
-
--- index_state.config_fingerprint (v1.16.1). A stable hash of the fields of a
--- source's config that decide WHAT gets walked and how paths/URLs map. The
--- orchestrator previously chose incremental-vs-full acquisition on the commit
--- sha alone, so a config-only scope change (widening file_patterns, moving
--- path, changing url_derivation) diffed HEAD against itself and indexed
--- nothing while reporting success. Additive and nullable, so installs whose
--- index_state predates the column read back NULL; the orchestrator treats
--- NULL as "unknown" and takes ONE full walk per source, which persists the
--- fingerprint — a one-time cost, not a per-boot one. The CREATE TABLE above
--- carries the column for fresh installs.
-ALTER TABLE index_state ADD COLUMN IF NOT EXISTS config_fingerprint TEXT;
 
 -- Webhook delivery tracking
 CREATE TABLE IF NOT EXISTS webhook_deliveries (

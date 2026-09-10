@@ -186,6 +186,16 @@ describe("generatePostSchemaMigration", () => {
     );
   });
 
+  it("places index_state DDL BEFORE the query_log marker", () => {
+    // Several PGlite tests apply only the tail of this migration, sliced from
+    // the query_log marker. index_state DDL after that marker would run
+    // against a database with no index_state table and abort the whole slice.
+    const sql = generatePostSchemaMigration();
+    expect(sql.indexOf("ALTER TABLE index_state")).toBeLessThan(
+      sql.indexOf("-- Analytics: query_log table for tracking tool usage"),
+    );
+  });
+
   it("creates query_log table", () => {
     const sql = generatePostSchemaMigration();
     expect(sql).toContain("CREATE TABLE IF NOT EXISTS query_log");

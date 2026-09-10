@@ -83,9 +83,7 @@ function fingerprintPayload(config: SourceConfig): Record<string, unknown> {
       return {
         type: config.type,
         guild_id: config.guild_id,
-        channels: [...config.channels]
-          .map((c) => `${c.id}:${c.type}`)
-          .sort(),
+        channels: [...config.channels].map((c) => `${c.id}:${c.type}`).sort(),
         min_thread_replies: config.min_thread_replies,
         confidence_threshold: config.confidence_threshold,
       };
