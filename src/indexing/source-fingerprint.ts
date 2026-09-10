@@ -116,18 +116,34 @@ function fingerprintPayload(config: SourceConfig): Record<string, unknown> {
 }
 
 /**
+ * Deterministic JSON: object keys sorted at EVERY depth, arrays left in order.
+ *
+ * Not `JSON.stringify(value, sortedKeys)` — passing a key array as the
+ * replacer filters keys at every level against that ONE list, which silently
+ * drops nested objects' contents (url_derivation would serialize as `{}`,
+ * making a strip_prefix change invisible to the fingerprint).
+ */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
  * Stable hex fingerprint of a source's effective crawl configuration.
  *
  * Stable across process restarts and across cosmetic reordering of set-valued
  * fields; changes whenever a covered field changes.
  */
 export function computeSourceConfigFingerprint(config: SourceConfig): string {
-  const payload = fingerprintPayload(config);
-  // Sort keys so the serialization does not depend on object literal order.
-  const canonical = JSON.stringify(
-    payload,
-    Object.keys(payload).sort(),
-  );
+  const canonical = canonicalJson(fingerprintPayload(config));
   return createHash("sha256")
     .update(`v${FINGERPRINT_VERSION}:${canonical}`)
     .digest("hex")
