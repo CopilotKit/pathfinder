@@ -44,6 +44,67 @@ const PATTERNS: { name: string; regex: RegExp }[] = [
     name: "sports-event-contracts",
     regex: /\bsports?\s*event\s*contracts?\b/i,
   },
+
+  // -------------------------------------------------------------------------
+  // Awards-show scraping (Sept 2026 wave). The bot rotates show titles and
+  // nominee names constantly ("Widow's Bay", "Beef", "The Pitt", ...), so
+  // per-title regexes are a treadmill. Instead: require a SHOW NAME to
+  // co-occur with an AWARDS-CONTEXT term. Both patterns use `(?=...)`
+  // lookaheads over `[\s\S]*` so the two halves match in either order and
+  // across newlines (indexed GitHub/Discord bodies are multi-line).
+  // -------------------------------------------------------------------------
+  {
+    name: "awards-show",
+    regex:
+      /^(?=[\s\S]*\b(?:emmys?|grammys?|oscars?|academy\s+awards?|golden\s+globes?|tony\s+awards?|baftas?)\b)(?=[\s\S]*\b(?:awards?|nominations?|nominees?|nominated|winners?|wins|red\s+carpet|outstanding|best\s+(?:actor|actress|picture|director|album|song|new\s+artist|international\s+feature|(?:limited\s+)?series)|album\s+of\s+(?:the\s+)?year|record\s+of\s+the\s+year|song\s+of\s+the\s+year|ceremony|shortlists?|frontrunners?|contenders?|snubs?|lead\s+act(?:or|ress)|supporting\s+act(?:or|ress)|guest\s+act(?:or|ress)|limited\s+series|variety\s+series)\b)/i,
+  },
+  // Same show names paired with a bare 4-digit year ("Betty Gilpin Widow's
+  // Bay Emmy 2026"), which carries no category word. `oscars?` is
+  // deliberately EXCLUDED here: "Oscar" is a common given name, and
+  // "Oscar ... 2026" in a Discord/GitHub body is a plausible legitimate
+  // query. Oscar-flavoured abuse still gets caught by `awards-show` above,
+  // which requires a real awards-context term.
+  {
+    name: "awards-show-year",
+    regex:
+      /^(?=[\s\S]*\b(?:emmys?|grammys?|academy\s+awards?|golden\s+globes?|tony\s+awards?|baftas?)\b)(?=[\s\S]*\b20\d\d\b)/i,
+  },
+
+  // -------------------------------------------------------------------------
+  // US/international election + prediction-market scraping (Sept 2026 wave).
+  // Same co-occurrence shape. The hazard list here is long because almost
+  // every electoral word has a legitimate software meaning: "poll"/"polling"
+  // (transport), "race" (race condition), "state" (React state), "primary"
+  // (CSS color), "candidate" (index keys), "seat" (billing), "district",
+  // "forecast", "turnout". NONE of them is blocked on its own — each only
+  // counts as CONTEXT, and a match additionally requires a POLITICAL-DOMAIN
+  // term that has no software meaning (presidential, congressional, senate,
+  // midterm, redistricting, ...).
+  // -------------------------------------------------------------------------
+  {
+    name: "election-politics",
+    regex:
+      /^(?=[\s\S]*\b(?:presidential|gubernatorial|governor|senate|senatorial|congressional|parliamentary|midterms?|redistricting|electorate|electoral\s+college|caucus|house\s+(?:seats?|districts?))\b)(?=[\s\S]*\b(?:elections?|primar(?:y|ies)|ballots?|turnout|votes?|voting|voters?|candidates?|polls?|polling|nominations?|incumbents?|seats?|districts?|races?|forecasts?|constituency)\b)/i,
+  },
+  // Political-domain term + a bare year ("Dan Sullivan Alaska Senate 2026",
+  // "Missouri congressional redistricting 2026") — the bot's terse shape,
+  // which carries no contest word at all.
+  {
+    name: "election-politics-year",
+    regex:
+      /^(?=[\s\S]*\b(?:presidential|gubernatorial|governor|senate|senatorial|congressional|parliamentary|midterms?|redistricting|electorate|electoral\s+college|caucus|house\s+(?:seats?|districts?))\b)(?=[\s\S]*\b20\d\d\b)/i,
+  },
+  // The bot also asks about national elections with no office word at all
+  // ("Swedish election 2026 Centre Party polling"). Bare "election" + a
+  // ballot-box term is the only signal left, so this pattern carves out the
+  // one real software collision: Raft/consensus LEADER election, which
+  // legitimately co-occurs with "polling". The negative lookbehind keeps
+  // "Raft leader election polling interval" out of the blocklist.
+  {
+    name: "election-polling",
+    regex:
+      /^(?=[\s\S]*\b(?<!\bleader\s)elections?\b)(?=[\s\S]*\b(?:polls?|polling|turnout|ballots?|voters?|electorate|constituency|caucus)\b)/i,
+  },
 ];
 
 /**
