@@ -51,6 +51,21 @@ import {
 } from "../db/schema.js";
 import { __setPoolForTesting, __resetPoolForTesting } from "../db/client.js";
 import { registerSearchTool } from "../mcp/tools/search.js";
+import { NO_RESULTS_REASON } from "../mcp/empty-result.js";
+
+/**
+ * An empty result is no longer the bare string "No results found." — it
+ * carries the scope-hint payload (src/mcp/empty-result.ts). "Nothing reached
+ * the caller" is therefore asserted on the payload, not on prose.
+ */
+function expectNothingDelivered(snippetText: string): void {
+  const payload = JSON.parse(snippetText) as {
+    results: unknown[];
+    reason: string;
+  };
+  expect(payload.results).toEqual([]);
+  expect(payload.reason).toBe(NO_RESULTS_REASON);
+}
 
 /** Three dims is enough to place a seed at any chosen cosine from [1, 0, 0]. */
 const DIMS = 3;
@@ -242,7 +257,7 @@ describe("min_score gates delivery without censoring the measurement", () => {
 
     // Delivery still honours the caller's floor — nothing measured below it
     // reaches the caller, including via its keyword rank.
-    expect(snippetText).toBe("No results found.");
+    expectNothingDelivered(snippetText);
     expect(row.result_count).toBe(0);
     // ...and the measurement survives. NULL here would be a lie: it is what a
     // query that matched NOTHING logs, and the analytics layer reads it as "no
@@ -256,7 +271,7 @@ describe("min_score gates delivery without censoring the measurement", () => {
     const { snippetText, row } = await runSearch(
       toolConfig("nearmiss", "vector"),
     );
-    expect(snippetText).toBe("No results found.");
+    expectNothingDelivered(snippetText);
     expect(row.result_count).toBe(0);
     expect(row.top_score!).toBeCloseTo(0.25, 4);
   });

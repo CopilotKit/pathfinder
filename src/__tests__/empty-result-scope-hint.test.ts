@@ -14,7 +14,12 @@ import type {
 // nor a real user who hit a genuine documentation gap. Every empty response
 // must now carry the same `domain` + `hint` payload shape the abuse
 // blocklist already returns on its blocked path.
-vi.mock("../db/queries.js", () => ({
+// The retrievers are doubled; `isBelowCosineFloor` is NOT. It is a pure
+// predicate over a ChunkResult (no database), and the search tool calls it to
+// apply `min_score`. Stubbing it would make the min_score case below assert
+// against a fake floor instead of the real one.
+vi.mock("../db/queries.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../db/queries.js")>()),
   searchChunks: vi.fn(),
   textSearchChunks: vi.fn(),
   hybridSearchChunks: vi.fn(),
@@ -253,6 +258,7 @@ describe("search tool: empty results carry a scope hint", () => {
       end_line: null,
       language: null,
       similarity: 0.05,
+      cosine_similarity: 0.05,
     };
     mockSearchChunks.mockResolvedValueOnce([lowScoreHit]);
 
@@ -279,6 +285,7 @@ describe("search tool: empty results carry a scope hint", () => {
         end_line: null,
         language: null,
         similarity: 0.9,
+        cosine_similarity: 0.9,
       },
     ]);
 
@@ -344,6 +351,7 @@ describe("knowledge tool: empty results carry a scope hint", () => {
           end_line: null,
           language: null,
           similarity: 0.9,
+          cosine_similarity: 0.9,
         },
       ])
       .mockResolvedValueOnce([]);
