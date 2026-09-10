@@ -153,7 +153,7 @@ describe("search tool via MCP protocol (docs format)", () => {
     expect(mockSearchChunks).toHaveBeenCalledWith([0.1], 5, "docs", "v2.0");
   });
 
-  it('returns "No results found." when no results match', async () => {
+  it("returns the scope-hint payload when no results match", async () => {
     mockEmbed.mockResolvedValueOnce([0.1]);
     mockSearchChunks.mockResolvedValueOnce([]);
 
@@ -165,7 +165,11 @@ describe("search tool via MCP protocol (docs format)", () => {
     expect(result.isError).toBeFalsy();
     const text = (result.content as Array<{ type: string; text: string }>)[0]
       .text;
-    expect(text).toBe("No results found.");
+    expect(JSON.parse(text)).toMatchObject({
+      results: [],
+      reason: "no_results",
+      domain: "docs",
+    });
   });
 
   it("filters results by min_score when provided", async () => {

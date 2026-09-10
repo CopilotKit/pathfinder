@@ -10,10 +10,11 @@ import {
 import { logQuery } from "../../db/analytics.js";
 import { getAnalyticsConfig } from "../../config.js";
 import { checkBlocklist } from "../abuse-blocklist.js";
+import { formatEmptyResult } from "../empty-result.js";
 import { oauthLog } from "../../oauth/observability.js";
 
-function formatDocsResults(results: ChunkResult[]): string {
-  if (results.length === 0) return "No results found.";
+function formatDocsResults(results: ChunkResult[], sources: string[]): string {
+  if (results.length === 0) return formatEmptyResult(sources);
   return results
     .map((r, i) =>
       [
@@ -27,8 +28,8 @@ function formatDocsResults(results: ChunkResult[]): string {
     .join("\n\n---\n\n");
 }
 
-function formatCodeResults(results: ChunkResult[]): string {
-  if (results.length === 0) return "No results found.";
+function formatCodeResults(results: ChunkResult[], sources: string[]): string {
+  if (results.length === 0) return formatEmptyResult(sources);
   return results
     .map((r, i) =>
       [
@@ -42,8 +43,8 @@ function formatCodeResults(results: ChunkResult[]): string {
     .join("\n\n---\n\n");
 }
 
-function formatRawResults(results: ChunkResult[]): string {
-  if (results.length === 0) return "No results found.";
+function formatRawResults(results: ChunkResult[], sources: string[]): string {
+  if (results.length === 0) return formatEmptyResult(sources);
   return results
     .map((r, i) =>
       [
@@ -56,14 +57,21 @@ function formatRawResults(results: ChunkResult[]): string {
     .join("\n\n---\n\n");
 }
 
-function formatResults(results: ChunkResult[], format: string): string {
+// `sources` is the tool's configured source list, used ONLY to build the
+// empty-result scope hint (see src/mcp/empty-result.ts). Non-empty results
+// are formatted exactly as before.
+function formatResults(
+  results: ChunkResult[],
+  format: string,
+  sources: string[],
+): string {
   switch (format) {
     case "docs":
-      return formatDocsResults(results);
+      return formatDocsResults(results, sources);
     case "code":
-      return formatCodeResults(results);
+      return formatCodeResults(results, sources);
     default:
-      return formatRawResults(results);
+      return formatRawResults(results, sources);
   }
 }
 
@@ -260,7 +268,9 @@ export function registerSearchTool(
           content: [
             {
               type: "text" as const,
-              text: formatResults(results, toolConfig.result_format),
+              text: formatResults(results, toolConfig.result_format, [
+                toolConfig.source,
+              ]),
             },
           ],
         };
