@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS index_state (
     source_type     TEXT NOT NULL,
     source_key      TEXT NOT NULL,
     last_commit_sha TEXT,
+    config_fingerprint TEXT,
     last_indexed_at TIMESTAMPTZ,
     status          TEXT NOT NULL DEFAULT 'idle',
     error_message   TEXT,
@@ -156,6 +157,18 @@ CREATE INDEX IF NOT EXISTS idx_query_log_client_ip ON query_log (client_ip);
 -- score_kind = 'cosine', so legacy rows are EXCLUDED rather than misread. The
 -- score-based cards therefore start empty and refill as new traffic lands.
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS score_kind TEXT;
+
+-- index_state.config_fingerprint (v1.16.1). A stable hash of the fields of a
+-- source's config that decide WHAT gets walked and how paths/URLs map. The
+-- orchestrator previously chose incremental-vs-full acquisition on the commit
+-- sha alone, so a config-only scope change (widening file_patterns, moving
+-- path, changing url_derivation) diffed HEAD against itself and indexed
+-- nothing while reporting success. Additive and nullable, so installs whose
+-- index_state predates the column read back NULL; the orchestrator treats
+-- NULL as "unknown" and takes ONE full walk per source, which persists the
+-- fingerprint — a one-time cost, not a per-boot one. The CREATE TABLE above
+-- carries the column for fresh installs.
+ALTER TABLE index_state ADD COLUMN IF NOT EXISTS config_fingerprint TEXT;
 
 -- Webhook delivery tracking
 CREATE TABLE IF NOT EXISTS webhook_deliveries (

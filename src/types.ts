@@ -635,6 +635,13 @@ export interface IndexState {
   source_type: string;
   source_key: string;
   last_commit_sha?: string | null;
+  /**
+   * Hash of the source's effective crawl configuration at the time of the
+   * last successful index (see indexing/source-fingerprint.ts). NULL means
+   * "unknown" — written before the column existed, or never indexed — and the
+   * orchestrator responds by taking a full walk.
+   */
+  config_fingerprint?: string | null;
   last_indexed_at?: Date | null;
   status?: IndexStatus;
   error_message?: string | null;

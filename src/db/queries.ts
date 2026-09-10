@@ -884,7 +884,7 @@ export async function getIndexState(
 ): Promise<IndexState | null> {
   const pool = getPool();
   const sql = `
-        SELECT source_type, source_key, last_commit_sha, last_indexed_at, status, error_message
+        SELECT source_type, source_key, last_commit_sha, config_fingerprint, last_indexed_at, status, error_message
         FROM index_state
         WHERE source_type = $1 AND source_key = $2
     `;
@@ -903,6 +903,7 @@ export async function getIndexState(
     source_type: row.source_type,
     source_key: row.source_key,
     last_commit_sha: row.last_commit_sha,
+    config_fingerprint: row.config_fingerprint ?? null,
     last_indexed_at: row.last_indexed_at,
     status: row.status as IndexStatus,
     error_message: row.error_message,
@@ -916,14 +917,15 @@ export async function upsertIndexState(state: IndexState): Promise<void> {
   const pool = getPool();
   const sql = `
         INSERT INTO index_state
-            (source_type, source_key, last_commit_sha, last_indexed_at, status, error_message)
+            (source_type, source_key, last_commit_sha, config_fingerprint, last_indexed_at, status, error_message)
         VALUES
-            ($1, $2, $3, $4, $5, $6)
+            ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (source_type, source_key) DO UPDATE SET
-            last_commit_sha = EXCLUDED.last_commit_sha,
-            last_indexed_at = EXCLUDED.last_indexed_at,
-            status          = EXCLUDED.status,
-            error_message   = EXCLUDED.error_message
+            last_commit_sha    = EXCLUDED.last_commit_sha,
+            config_fingerprint = EXCLUDED.config_fingerprint,
+            last_indexed_at    = EXCLUDED.last_indexed_at,
+            status             = EXCLUDED.status,
+            error_message      = EXCLUDED.error_message
     `;
   // Sanitize every text-typed bind. The highest-risk column here is
   // error_message: it's populated with raw upstream errors, which in the
@@ -938,6 +940,9 @@ export async function upsertIndexState(state: IndexState): Promise<void> {
     stripNulBytes(state.source_type),
     stripNulBytes(state.source_key),
     state.last_commit_sha == null ? null : stripNulBytes(state.last_commit_sha),
+    state.config_fingerprint == null
+      ? null
+      : stripNulBytes(state.config_fingerprint),
     state.last_indexed_at ?? null,
     stripNulBytes(state.status ?? "idle"),
     state.error_message == null ? null : stripNulBytes(state.error_message),
@@ -1387,7 +1392,7 @@ export async function getIndexStats(): Promise<IndexStats> {
       "SELECT count(DISTINCT repo_url)::int AS count FROM chunks WHERE repo_url IS NOT NULL",
     ),
     pool.query(
-      "SELECT source_type, source_key, last_commit_sha, last_indexed_at, status, error_message FROM index_state ORDER BY source_type, source_key",
+      "SELECT source_type, source_key, last_commit_sha, config_fingerprint, last_indexed_at, status, error_message FROM index_state ORDER BY source_type, source_key",
     ),
   ]);
 
@@ -1407,6 +1412,7 @@ export async function getIndexStats(): Promise<IndexStats> {
       source_type: r.source_type as string,
       source_key: r.source_key as string,
       last_commit_sha: r.last_commit_sha as string | null,
+      config_fingerprint: (r.config_fingerprint as string | null) ?? null,
       last_indexed_at: r.last_indexed_at as Date | null,
       status: r.status as IndexStatus,
       error_message: r.error_message as string | null,
