@@ -7,6 +7,7 @@ import type {
   FaqChunkResult,
   IndexState,
   IndexStatus,
+  ItemFailureRecord,
 } from "../types.js";
 
 /**
@@ -884,7 +885,7 @@ export async function getIndexState(
 ): Promise<IndexState | null> {
   const pool = getPool();
   const sql = `
-        SELECT source_type, source_key, last_commit_sha, config_fingerprint, last_indexed_at, status, error_message
+        SELECT source_type, source_key, last_commit_sha, config_fingerprint, last_indexed_at, status, error_message, item_failures
         FROM index_state
         WHERE source_type = $1 AND source_key = $2
     `;
@@ -907,6 +908,10 @@ export async function getIndexState(
     last_indexed_at: row.last_indexed_at,
     status: row.status as IndexStatus,
     error_message: row.error_message,
+    // node-postgres decodes jsonb for us; installs predating the column read
+    // back undefined, which normalizes to null ("no outstanding failures").
+    item_failures:
+      (row.item_failures as Record<string, ItemFailureRecord> | null) ?? null,
   };
 }
 
@@ -917,15 +922,16 @@ export async function upsertIndexState(state: IndexState): Promise<void> {
   const pool = getPool();
   const sql = `
         INSERT INTO index_state
-            (source_type, source_key, last_commit_sha, config_fingerprint, last_indexed_at, status, error_message)
+            (source_type, source_key, last_commit_sha, config_fingerprint, last_indexed_at, status, error_message, item_failures)
         VALUES
-            ($1, $2, $3, $4, $5, $6, $7)
+            ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (source_type, source_key) DO UPDATE SET
             last_commit_sha    = EXCLUDED.last_commit_sha,
             config_fingerprint = EXCLUDED.config_fingerprint,
             last_indexed_at    = EXCLUDED.last_indexed_at,
             status             = EXCLUDED.status,
-            error_message      = EXCLUDED.error_message
+            error_message      = EXCLUDED.error_message,
+            item_failures      = EXCLUDED.item_failures
     `;
   // Sanitize every text-typed bind. The highest-risk column here is
   // error_message: it's populated with raw upstream errors, which in the
@@ -946,6 +952,13 @@ export async function upsertIndexState(state: IndexState): Promise<void> {
     state.last_indexed_at ?? null,
     stripNulBytes(state.status ?? "idle"),
     state.error_message == null ? null : stripNulBytes(state.error_message),
+    // item_failures carries raw upstream error text (and item ids derived from
+    // repository paths), so it gets the same deep NUL scrub as every other
+    // jsonb bind — an unsanitized 0x00 would reject the whole UPDATE and turn
+    // the failure it is recording into a poison-pill loop.
+    state.item_failures == null || Object.keys(state.item_failures).length === 0
+      ? null
+      : JSON.stringify(stripNulBytesDeep(state.item_failures)),
   ]);
 }
 

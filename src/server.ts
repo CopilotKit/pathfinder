@@ -2112,6 +2112,12 @@ export function projectIndexStateForOperators(s: IndexState): {
   error: string | null;
   next_acquire: "full" | "incremental" | null;
   next_acquire_reason: string | null;
+  quarantined_items: Array<{
+    id: string;
+    attempts: number;
+    since: string;
+    error: string;
+  }>;
 } {
   // The source may have been removed from the config while its index_state
   // row survives; there is then no current config to compare against.
@@ -2134,6 +2140,19 @@ export function projectIndexStateForOperators(s: IndexState): {
     error: s.error_message ?? null,
     next_acquire: decision?.mode ?? null,
     next_acquire_reason: decision?.reason ?? null,
+    // Items the orchestrator gave up holding the state token for. They are
+    // NOT in the index, so listing them here is the whole point: a
+    // quarantined item must never be an invisible gap. Only quarantined
+    // entries are projected — an item mid-retry is already reflected by
+    // `status: "error"`.
+    quarantined_items: Object.entries(s.item_failures ?? {})
+      .filter(([, record]) => record.quarantined)
+      .map(([id, record]) => ({
+        id,
+        attempts: record.attempts,
+        since: record.first_failed_at,
+        error: record.last_error,
+      })),
   };
 }
 

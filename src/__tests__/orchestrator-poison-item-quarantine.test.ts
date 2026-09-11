@@ -201,7 +201,10 @@ describe("IndexingOrchestrator: a permanently failing item must not wedge the so
     });
 
     mockIncrementalAcquire.mockResolvedValue({
-      items: [{ id: "docs/ok.md", content: "a" }, { id: POISON, content: "b" }],
+      items: [
+        { id: "docs/ok.md", content: "a" },
+        { id: POISON, content: "b" },
+      ],
       removedIds: [],
       stateToken: "token-2",
     });
@@ -241,8 +244,8 @@ describe("IndexingOrchestrator: a permanently failing item must not wedge the so
     expect(failures[POISON]?.last_error).toContain("8192 tokens");
 
     const loggedQuarantine = errSpy.mock.calls
-      .map((c) => c.join(" "))
-      .some((line) => /quarantin/i.test(line) && line.includes(POISON));
+      .map((c: unknown[]) => c.join(" "))
+      .some((line: string) => /quarantin/i.test(line) && line.includes(POISON));
     expect(loggedQuarantine).toBe(true);
   });
 
@@ -273,9 +276,9 @@ describe("IndexingOrchestrator: a permanently failing item must not wedge the so
     await runSourceReindex(orchestrator);
     expect(holder.row.last_commit_sha).toBe("token-1");
     expect(holder.row.status).toBe("error");
-    expect(holder.row.item_failures?.["docs/flaky.md"]?.quarantined ?? false).toBe(
-      false,
-    );
+    expect(
+      holder.row.item_failures?.["docs/flaky.md"]?.quarantined ?? false,
+    ).toBe(false);
 
     // Run 2: it succeeds. The token advances and the failure record clears —
     // the item must NOT carry a stale strike into the future.

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS index_state (
     last_indexed_at TIMESTAMPTZ,
     status          TEXT NOT NULL DEFAULT 'idle',
     error_message   TEXT,
+    item_failures   JSONB,
     CONSTRAINT index_state_source_uniq UNIQUE (source_type, source_key)
 );
 
@@ -110,6 +111,17 @@ CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
 -- fingerprint — a one-time cost, not a per-boot one. The CREATE TABLE above
 -- carries the column for fresh installs.
 ALTER TABLE index_state ADD COLUMN IF NOT EXISTS config_fingerprint TEXT;
+
+-- index_state.item_failures. Consecutive-failure counts for the items that
+-- failed to index or remove on recent runs, keyed by item id. The orchestrator
+-- deliberately holds a source's state token when an item fails so the failure
+-- is retried rather than skipped; without a failure COUNT it cannot tell a
+-- transient failure from a permanent one, and a permanently-failing item
+-- freezes the entire source (the mcp.copilotkit.ai code source was stuck for
+-- ten days on one over-sized file). Additive and nullable: rows written before
+-- this column existed read back NULL, which the orchestrator treats as "no
+-- outstanding failures".
+ALTER TABLE index_state ADD COLUMN IF NOT EXISTS item_failures JSONB;
 
 -- Analytics: query_log table for tracking tool usage
 --

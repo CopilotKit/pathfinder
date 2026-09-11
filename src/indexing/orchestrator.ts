@@ -14,6 +14,7 @@ import { createEmbeddingProvider } from "./embeddings.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { getProvider } from "./providers/index.js";
 import { IndexingPipeline } from "./pipeline.js";
+import type { ItemFailure } from "./pipeline.js";
 import {
   computeSourceConfigFingerprint,
   decideAcquisition,
@@ -26,8 +27,79 @@ import {
 import { cleanupOldQueryLogs } from "../db/analytics.js";
 import { markAtlasCachePagesStaleForSources } from "../db/atlas.js";
 import { isAtlasSourceConfig, isFileSourceConfig } from "../types.js";
-import type { IndexState, IndexStatus, SourceConfig } from "../types.js";
+import type {
+  IndexState,
+  IndexStatus,
+  ItemFailureRecord,
+  SourceConfig,
+} from "../types.js";
 import type { ProviderOptions } from "./providers/types.js";
+
+/**
+ * How many consecutive runs an item may fail before it is quarantined.
+ *
+ * The orchestrator holds a source's state token whenever an item fails, so the
+ * failure is retried rather than silently skipped (see the hold logic in
+ * indexSourceWithState). With an unbounded retry that is a trap: an item that
+ * fails for a PERMANENT reason fails identically forever, and the source never
+ * moves. mcp.copilotkit.ai's `code` source sat at commit 0d0ea901 for ten days
+ * because one file produced a chunk larger than the embedding model's token
+ * limit — one file, and source-code search served ten-day-old results to every
+ * user the whole time.
+ *
+ * Three is the smallest bound that still distinguishes the two cases. One
+ * attempt cannot: a network blip, a rate limit, a brief upstream outage all
+ * look exactly like a poison item on their first failure, and quarantining
+ * them would trade a visible wedge for invisible data loss. Three consecutive
+ * runs — across separate webhook or nightly cycles, minutes to hours apart —
+ * is strong evidence the failure is a property of the item, not the weather.
+ */
+const MAX_ITEM_ATTEMPTS = 3;
+
+/**
+ * Fold one run's outcome into a source's per-item failure ledger.
+ *
+ * - An item that failed AGAIN has its streak incremented, and is quarantined
+ *   once the streak reaches {@link MAX_ITEM_ATTEMPTS}.
+ * - An item that was ATTEMPTED this run and succeeded is dropped entirely,
+ *   streak and quarantine both. Recovery must be complete, or a single old
+ *   strike would eventually quarantine a perfectly healthy item.
+ * - An item that was NOT attempted this run (an incremental run only walks
+ *   what changed) keeps its record untouched — absence from this run's item
+ *   list is not evidence of anything.
+ *
+ * Quarantine is advisory, not a blocklist: a quarantined item is still handed
+ * to the pipeline on every subsequent run. All it means is that the item no
+ * longer holds the state token hostage for everything else in the source.
+ */
+export function reconcileItemFailures(
+  previous: Record<string, ItemFailureRecord> | null,
+  attemptedIds: Set<string>,
+  failures: ItemFailure[],
+): Record<string, ItemFailureRecord> {
+  const now = new Date().toISOString();
+  const failedById = new Map(failures.map((f) => [f.id, f.error]));
+  const next: Record<string, ItemFailureRecord> = {};
+
+  for (const [id, record] of Object.entries(previous ?? {})) {
+    if (failedById.has(id)) continue; // handled below, with its new count
+    if (attemptedIds.has(id)) continue; // attempted and succeeded — forgiven
+    next[id] = record; // untouched this run; carry it forward verbatim
+  }
+
+  for (const [id, error] of failedById) {
+    const priorAttempts = previous?.[id]?.attempts ?? 0;
+    const attempts = priorAttempts + 1;
+    next[id] = {
+      attempts,
+      first_failed_at: previous?.[id]?.first_failed_at ?? now,
+      last_error: error,
+      quarantined: attempts >= MAX_ITEM_ATTEMPTS,
+    };
+  }
+
+  return next;
+}
 
 /**
  * Find all source configs that reference a given repo URL.
@@ -815,22 +887,39 @@ export class IndexingOrchestrator {
           // and is never re-processed (permanent silent loss). When anything
           // failed we leave the prior token in place and mark the run errored so
           // the next incremental run reprocesses the failed items.
-          const failedIds: string[] = [];
+          const failures: ItemFailure[] = [];
+          const attemptedIds = new Set<string>();
           if (result.removedIds.length > 0) {
-            const { failedIds: removeFailed } = await pipeline.removeItems(
+            for (const id of result.removedIds) attemptedIds.add(id);
+            const { failures: removeFailures } = await pipeline.removeItems(
               result.removedIds,
             );
-            failedIds.push(...removeFailed);
+            failures.push(...removeFailures);
           }
           if (result.items.length > 0) {
-            const { failedIds: indexFailed } = await pipeline.indexItems(
+            for (const item of result.items) attemptedIds.add(item.id);
+            const { failures: indexFailures } = await pipeline.indexItems(
               result.items,
               result.stateToken,
             );
-            failedIds.push(...indexFailed);
+            failures.push(...indexFailures);
           }
 
-          if (failedIds.length > 0) {
+          // Fold this run's outcome into the per-item failure ledger, which
+          // is what tells a TRANSIENT failure apart from a permanent one.
+          const itemFailures = reconcileItemFailures(
+            state?.item_failures ?? null,
+            attemptedIds,
+            failures,
+          );
+          const blocking = Object.entries(itemFailures).filter(
+            ([, record]) => !record.quarantined,
+          );
+          const quarantined = Object.entries(itemFailures).filter(
+            ([, record]) => record.quarantined,
+          );
+
+          if (blocking.length > 0) {
             // Do NOT advance last_commit_sha — setIndexStatus preserves the
             // prior token, so the next incremental run re-diffs from where we
             // were and reprocesses the items that failed this run. Return false
@@ -838,16 +927,35 @@ export class IndexingOrchestrator {
             // it is excluded from affectedSourceNames, so onReindexComplete and
             // the Atlas cache invalidation only fire for sources that fully
             // succeeded.
+            const blockingIds = blocking.map(([id]) => id);
             console.error(
-              `[orchestrator] Indexing for ${sourceConfig.name} had ${failedIds.length} failed item(s); holding state token for retry: ${failedIds.slice(0, 10).join(", ")}${failedIds.length > 10 ? " …" : ""}`,
+              `[orchestrator] Indexing for ${sourceConfig.name} had ${blockingIds.length} failed item(s); holding state token for retry: ${blockingIds.slice(0, 10).join(", ")}${blockingIds.length > 10 ? " …" : ""}`,
             );
             await this.setIndexStatus(
               sourceConfig.type,
               sourceConfig.name,
               "error",
-              `${failedIds.length} item(s) failed to index/remove; state token held for retry`,
+              `${blockingIds.length} item(s) failed to index/remove; state token held for retry`,
+              itemFailures,
             );
             return false;
+          }
+
+          if (quarantined.length > 0) {
+            // Every outstanding failure has now failed MAX_ITEM_ATTEMPTS runs
+            // in a row, so retrying it unchanged is not going to work and the
+            // rest of the source should stop going stale behind it. Advance
+            // the token, but say so LOUDLY and keep the record: a quarantined
+            // item is still re-attempted on every subsequent run, and
+            // /health plus the admin index-stats op list it with its error.
+            for (const [id, record] of quarantined) {
+              console.error(
+                `[orchestrator] ${sourceConfig.name}: QUARANTINED ${id} after ` +
+                  `${record.attempts} consecutive failed attempt(s) — advancing the ` +
+                  `state token WITHOUT it so the rest of the source can index. ` +
+                  `This item is missing from the index. Last error: ${record.last_error}`,
+              );
+            }
           }
 
           await upsertIndexState({
@@ -862,9 +970,14 @@ export class IndexingOrchestrator {
             config_fingerprint: configFingerprint,
             last_indexed_at: new Date(),
             status: "idle",
+            item_failures:
+              Object.keys(itemFailures).length > 0 ? itemFailures : null,
           });
           console.log(
-            `[orchestrator] Indexing complete for ${sourceConfig.name}`,
+            `[orchestrator] Indexing complete for ${sourceConfig.name}` +
+              (quarantined.length > 0
+                ? ` (${quarantined.length} item(s) QUARANTINED and NOT indexed)`
+                : ""),
           );
           return true;
         } catch (err) {
@@ -923,6 +1036,7 @@ export class IndexingOrchestrator {
     sourceKey: string,
     status: IndexStatus,
     errorMessage?: string,
+    itemFailures?: Record<string, ItemFailureRecord>,
   ): Promise<void> {
     const existing = await getIndexState(sourceType, sourceKey);
     await upsertIndexState({
@@ -936,6 +1050,16 @@ export class IndexingOrchestrator {
       last_indexed_at: existing?.last_indexed_at ?? null,
       status,
       error_message: errorMessage ?? null,
+      // The ledger is PRESERVED unless this call supplies a new one. A plain
+      // status write ("indexing") must not wipe the consecutive-failure
+      // counts — that would reset every item's streak on every run and make
+      // the retry bound unreachable, restoring the permanent wedge.
+      item_failures:
+        itemFailures !== undefined
+          ? Object.keys(itemFailures).length > 0
+            ? itemFailures
+            : null
+          : (existing?.item_failures ?? null),
     });
   }
 }

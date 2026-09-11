@@ -8,6 +8,18 @@ import { isFileSourceConfig } from "../types.js";
 import type { Chunk, SourceConfig } from "../types.js";
 import type { ContentItem } from "./providers/types.js";
 
+/**
+ * One item that failed to index or remove, with the error that caused it.
+ *
+ * The id alone is not enough for the caller: the orchestrator records WHY an
+ * item keeps failing so an operator can see the cause without going log
+ * spelunking in a container that rotates its output.
+ */
+export interface ItemFailure {
+  id: string;
+  error: string;
+}
+
 export class IndexingPipeline {
   private sourceConfig: SourceConfig;
   private embeddingProvider: EmbeddingProvider;
@@ -30,16 +42,16 @@ export class IndexingPipeline {
    *
    * A single item's failure must not abort the batch (the remaining items still
    * index), but it MUST be surfaced: the returned `failedIds` lists every item
-   * whose `indexItem` threw. The caller uses this to avoid advancing the index
-   * state token past items that did not actually index — otherwise a failed
-   * item falls behind the advanced token and is never re-processed (permanent
-   * silent data loss).
+   * whose `indexItem` threw, and `failures` pairs each id with its error. The
+   * caller uses this to avoid advancing the index state token past items that
+   * did not actually index — otherwise a failed item falls behind the advanced
+   * token and is never re-processed (permanent silent data loss).
    */
   async indexItems(
     items: ContentItem[],
     stateToken: string,
-  ): Promise<{ failedIds: string[] }> {
-    const failedIds: string[] = [];
+  ): Promise<{ failedIds: string[]; failures: ItemFailure[] }> {
+    const failures: ItemFailure[] = [];
     for (const item of items) {
       try {
         await this.indexItem(item, stateToken);
@@ -48,10 +60,10 @@ export class IndexingPipeline {
         // pg-level metadata survives for diagnosis; collect the id so the
         // caller can hold the state token back.
         console.error(`${this.logPrefix} Failed to index ${item.id}:`, err);
-        failedIds.push(item.id);
+        failures.push({ id: item.id, error: errorText(err) });
       }
     }
-    return { failedIds };
+    return { failedIds: failures.map((f) => f.id), failures };
   }
 
   /**
@@ -60,18 +72,20 @@ export class IndexingPipeline {
    * processed — but the failed ids are RETURNED so the caller does not advance
    * the index state token over items whose stale chunks are still in the index.
    */
-  async removeItems(ids: string[]): Promise<{ failedIds: string[] }> {
-    const failedIds: string[] = [];
+  async removeItems(
+    ids: string[],
+  ): Promise<{ failedIds: string[]; failures: ItemFailure[] }> {
+    const failures: ItemFailure[] = [];
     for (const id of ids) {
       try {
         await deleteChunksByFile(this.sourceConfig.name, id);
       } catch (err) {
         // Log the full error (not just err.message) so the stack survives.
         console.error(`${this.logPrefix} Failed to remove ${id}:`, err);
-        failedIds.push(id);
+        failures.push({ id, error: errorText(err) });
       }
     }
-    return { failedIds };
+    return { failedIds: failures.map((f) => f.id), failures };
   }
 
   private async indexItem(
@@ -154,4 +168,15 @@ export class IndexingPipeline {
     // advances its state token, which would otherwise lose the chunks forever).
     await replaceChunksForFile(this.sourceConfig.name, item.id, chunks);
   }
+}
+
+/**
+ * A single-line, storage-safe rendition of an error for the failure record.
+ * The full error (stack and all) already went to the log above; this is the
+ * short form that lands in index_state and on /health, so it is capped.
+ */
+function errorText(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > 500 ? `${oneLine.slice(0, 500)}…` : oneLine;
 }

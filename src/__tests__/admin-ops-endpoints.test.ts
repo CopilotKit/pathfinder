@@ -397,6 +397,11 @@ describe("admin ops control surface", () => {
         // that would write zero rows is now visible BEFORE it runs.
         next_acquire: "full",
         next_acquire_reason: "no-stored-config-fingerprint",
+        // No item has been quarantined, so nothing is missing from the index.
+        // The key is present regardless: an operator reading this shape must
+        // not have to guess whether an empty list means "none" or "not
+        // reported".
+        quarantined_items: [],
       },
     ]);
   });
