@@ -123,6 +123,51 @@ describe("IndexingPipeline", () => {
     expect(embeddingClient.embedBatch).not.toHaveBeenCalled();
   });
 
+  it("warns, naming the item, when an item produces zero chunks", async () => {
+    // Dropping an item from the index without a word is what let 130 stub
+    // pages vanish for months. The pipeline must say which item it dropped and
+    // that nothing was written, so the drop is greppable in the logs the way
+    // next_acquire_reason and quarantined_items are.
+    const { getChunker } = await import("../indexing/chunking/index.js");
+    vi.mocked(getChunker).mockReturnValueOnce(() => []);
+
+    const embeddingClient = new EmbeddingClient("key", "model", 1536);
+    const pipeline = new IndexingPipeline(embeddingClient, testConfig);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await pipeline.indexItems(
+        [{ id: "stub.mdx", content: "<Foo />" }],
+        "abc",
+      );
+
+      const messages = warn.mock.calls.map((c) => String(c[0]));
+      expect(messages.some((m) => m.includes("stub.mdx"))).toBe(true);
+      expect(messages.some((m) => m.includes("[pipeline:test-source]"))).toBe(
+        true,
+      );
+      expect(messages.some((m) => m.includes("zero chunks"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not warn for an item that produces chunks", async () => {
+    const embeddingClient = new EmbeddingClient("key", "model", 1536);
+    const pipeline = new IndexingPipeline(embeddingClient, testConfig);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await pipeline.indexItems(
+        [{ id: "real.md", content: "# Real\n\nprose" }],
+        "abc",
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("removes items by ID", async () => {
     const embeddingClient = new EmbeddingClient("key", "model", 1536);
     const pipeline = new IndexingPipeline(embeddingClient, testConfig);

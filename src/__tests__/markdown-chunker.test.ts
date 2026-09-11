@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -3114,5 +3114,70 @@ describe("chunkMarkdown inlined-snippet byte normalization", () => {
     for (const chunk of chunks) {
       expect(/[\u{E000}-\u{E003}]/u.test(chunk.content)).toBe(false);
     }
+  });
+  // ── Zero-chunk files must be audible ────────────────────────────────
+  //
+  // A file that chunks to nothing is dropped from the index. Silently doing
+  // that is how 130 pure-JSX stub pages — 19% of a source — stayed missing for
+  // months. Every path that returns [] has to say which file and why.
+
+  describe("zero-chunk warnings", () => {
+    it("warns, naming the file, when the content is empty", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect(chunkMarkdown("   \n\n ", "docs/blank.mdx", mkConfig())).toEqual(
+          [],
+        );
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("docs/blank.mdx"),
+        );
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("no chunks"));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("warns, naming the file and the reason, when MDX stripping empties a pure-JSX stub", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const stub = [
+          "---",
+          "title: Quickstart",
+          "---",
+          "",
+          '<Snippet file="shared/quickstart.mdx" />',
+          '<ComponentDemo name="quickstart" />',
+        ].join("\n");
+
+        expect(chunkMarkdown(stub, "docs/quickstart.mdx", mkConfig())).toEqual(
+          [],
+        );
+
+        const messages = warn.mock.calls.map((c) => String(c[0]));
+        expect(messages.some((m) => m.includes("docs/quickstart.mdx"))).toBe(
+          true,
+        );
+        // The reason must distinguish "the file was empty" from "we stripped
+        // it to empty" — they have completely different fixes.
+        expect(messages.some((m) => m.includes("MDX stripping"))).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("does not warn for a file that chunks normally", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const chunks = chunkMarkdown(
+          "# Title\n\nSome real prose.\n",
+          "docs/real.mdx",
+          mkConfig(),
+        );
+        expect(chunks.length).toBeGreaterThan(0);
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 });
