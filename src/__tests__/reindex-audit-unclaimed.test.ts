@@ -14,18 +14,25 @@
  * "these files are missing" fixture. Only the app config and the database are
  * faked.
  */
-import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  beforeEach,
+  afterAll,
+} from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const { mockGetConfig, mockGetServerConfig, mockGetIndexedItemIds } = vi.hoisted(
-  () => ({
+const { mockGetConfig, mockGetServerConfig, mockGetIndexedItemIds } =
+  vi.hoisted(() => ({
     mockGetConfig: vi.fn(),
     mockGetServerConfig: vi.fn(),
     mockGetIndexedItemIds: vi.fn(),
-  }),
-);
+  }));
 
 vi.mock("../config.js", () => ({
   getConfig: (...args: unknown[]) => mockGetConfig(...args),
@@ -81,13 +88,19 @@ beforeAll(() => {
   // Ordinary unclaimed content: a handful of scattered files.
   writeMany(`${CONTENT}/misc`, ".mdx", 3, "note");
 
-  // A tests tree the code source explicitly excludes.
-  writeMany("packages/core/tests", ".ts", 40, "spec");
-  // Claimed code, so .ts is an extension this repo indexes.
+  // Claimed code, so `.ts` is an extension this repo indexes.
   writeMany("packages/core/src", ".ts", 25, "mod");
-  // Build output: a framework's generated bundle, same extension as claimed
-  // code. Must never be walked.
-  writeMany(`${CONTENT}/../.next/static`, ".ts", 50, "chunk");
+  // A tests tree the code source explicitly excludes: its include pattern
+  // reaches these files and its exclude pattern vetoes them.
+  writeMany("packages/core/tests", ".ts", 40, "spec");
+
+  // Claimed Python, so `.py` is also an extension this repo indexes — and
+  // the two trees below are `.py` that NO include pattern reaches, sitting
+  // where the parent (the repo root) does publish `.py`. Nothing but the
+  // generated-directory skip keeps them quiet.
+  writeMany("sdks/python/agent", ".py", 20, "mod");
+  writeMany(".venv/lib/deps/requests", ".py", 60, "dep");
+  writeMany("build/lib/agent", ".py", 60, "out");
 });
 
 afterAll(() => {
@@ -101,7 +114,9 @@ afterAll(() => {
 const REPO = "https://github.com/acme/shell.git";
 
 /** The docs source AS IT WAS: walk root pinned to the prose tree. */
-function docsSource(overrides: Partial<FileSourceConfig> = {}): FileSourceConfig {
+function docsSource(
+  overrides: Partial<FileSourceConfig> = {},
+): FileSourceConfig {
   return {
     name: "docs",
     type: "markdown",
@@ -119,8 +134,20 @@ function codeSource(): FileSourceConfig {
     type: "code",
     repo: REPO,
     path: ".",
-    file_patterns: ["**/*.ts"],
+    file_patterns: ["packages/**/*.ts"],
     exclude_patterns: ["**/tests/**"],
+    chunk: {},
+  } as FileSourceConfig;
+}
+
+/** A second code source, scoped the way the real ag-ui-code source is. */
+function pythonSource(): FileSourceConfig {
+  return {
+    name: "python",
+    type: "code",
+    repo: REPO,
+    path: ".",
+    file_patterns: ["sdks/python/**/*.py"],
     chunk: {},
   } as FileSourceConfig;
 }
@@ -170,9 +197,10 @@ describe("unclaimed-content audit", () => {
         unclaimed_exempt_paths: [`${CONTENT}/snippets`],
       } as Partial<FileSourceConfig>),
       codeSource(),
+      pythonSource(),
     ]);
 
-    const findings = await runReindexAudit(["docs", "code"]);
+    const findings = await runReindexAudit(["docs", "code", "python"]);
 
     const unclaimed = findings.filter((f) => f.check === "unclaimed_content");
     expect(unclaimed).toHaveLength(1);
@@ -196,9 +224,10 @@ describe("unclaimed-content audit", () => {
         unclaimed_exempt_paths: [`${CONTENT}/snippets`],
       } as Partial<FileSourceConfig>),
       codeSource(),
+      pythonSource(),
     ]);
 
-    const findings = await runReindexAudit(["docs", "code"]);
+    const findings = await runReindexAudit(["docs", "code", "python"]);
 
     expect(findings.filter((f) => f.check === "unclaimed_content")).toEqual([]);
   });
@@ -211,7 +240,7 @@ describe("unclaimed-content audit", () => {
   it("reports a deliberately-excluded directory until it is opted out", async () => {
     // Without the opt-out, snippets/ looks exactly like the reference tree.
     setSources([docsSource(), codeSource()]);
-    const before = await runReindexAudit(["docs", "code"]);
+    const before = await runReindexAudit(["docs", "code", "python"]);
     expect(
       before
         .filter((f) => f.check === "unclaimed_content")
@@ -226,8 +255,9 @@ describe("unclaimed-content audit", () => {
         unclaimed_exempt_paths: [`${CONTENT}/snippets`],
       } as Partial<FileSourceConfig>),
       codeSource(),
+      pythonSource(),
     ]);
-    const after = await runReindexAudit(["docs", "code"]);
+    const after = await runReindexAudit(["docs", "code", "python"]);
     expect(
       after.filter((f) => f.check === "unclaimed_content").map((f) => f.path),
     ).toEqual([`${CONTENT}/reference`]);
@@ -244,15 +274,14 @@ describe("unclaimed-content audit", () => {
         unclaimed_exempt_paths: [`${CONTENT}/snippets`],
       } as Partial<FileSourceConfig>),
       codeSource(),
+      pythonSource(),
     ]);
 
-    const findings = await runReindexAudit(["docs", "code"]);
+    const findings = await runReindexAudit(["docs", "code", "python"]);
 
     // content/misc holds 3 unclaimed .mdx — real, unclaimed, and not worth
     // an alert. Only a cohesive tree clears the bar.
-    expect(
-      findings.some((f) => f.path === `${CONTENT}/misc`),
-    ).toBe(false);
+    expect(findings.some((f) => f.path === `${CONTENT}/misc`)).toBe(false);
   });
 
   it("ignores an explicitly excluded tests tree and generated build output", async () => {
@@ -266,9 +295,10 @@ describe("unclaimed-content audit", () => {
         unclaimed_exempt_paths: [`${CONTENT}/snippets`],
       } as Partial<FileSourceConfig>),
       codeSource(),
+      pythonSource(),
     ]);
 
-    const findings = await runReindexAudit(["docs", "code"]);
+    const findings = await runReindexAudit(["docs", "code", "python"]);
     const paths = findings
       .filter((f) => f.check === "unclaimed_content")
       .map((f) => f.path);
@@ -277,8 +307,10 @@ describe("unclaimed-content audit", () => {
     // directory — silent ONLY because the source's exclude_patterns already
     // say so. An explicit exclusion IS an operator decision on record.
     expect(paths).not.toContain("packages/core/tests");
-    // 50 .ts files of generated output, never walked at all.
-    expect(paths.some((p) => p?.includes(".next"))).toBe(false);
+    // 120 `.py` files that no include pattern reaches, in a repo that does
+    // publish `.py` — silent only because neither directory is ever walked.
+    expect(paths).not.toContain(".venv");
+    expect(paths).not.toContain("build");
     expect(findings.filter((f) => f.check === "unclaimed_content")).toEqual([]);
   });
 });

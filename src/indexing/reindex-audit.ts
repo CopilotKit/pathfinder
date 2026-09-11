@@ -1,6 +1,11 @@
 import { getConfig, getServerConfig } from "../config.js";
 import { getIndexedItemIds } from "../db/queries.js";
 import { walkSourceFiles } from "./utils.js";
+import {
+  findUnclaimedClusters,
+  groupSourcesByRepoRoot,
+  repoRootFor,
+} from "./unclaimed-audit.js";
 import { isFileSourceConfig } from "../types.js";
 import type { FileSourceConfig } from "../types.js";
 
@@ -43,10 +48,15 @@ export function resetAuditCache(): void {
 
 export interface AuditFinding {
   source: string;
-  check: "stale_files" | "scope_leak" | "count_divergence";
+  check:
+    "stale_files" | "scope_leak" | "count_divergence" | "unclaimed_content";
   count: number;
   samples: string[];
   direction?: "db_has_more" | "db_has_fewer";
+  /** unclaimed_content: repo-root-relative directory holding the files. */
+  path?: string;
+  /** unclaimed_content: the file extension the cluster is made of. */
+  extension?: string;
 }
 
 export async function runReindexAudit(
@@ -144,11 +154,65 @@ export async function runReindexAudit(
       }
     }
 
+    // Check 4 — Unclaimed content: files the repository holds that NO
+    // source's walk root and patterns would ever reach.
+    //
+    // Repo-scoped, not source-scoped, and deliberately so: checks 1-3 all
+    // compare disk against index using the config's own walk root, so a walk
+    // root pointed at the wrong subtree makes both sides agree perfectly on an
+    // incomplete corpus. Only a comparison anchored to the repository can see
+    // that.
+    //
+    // Claims are computed from EVERY configured source on the repo, not just
+    // the audited ones — a file claimed by a source that did not happen to
+    // reindex is still claimed.
+    const repoGroups = groupSourcesByRepoRoot(
+      serverCfg.sources.filter(isFileSourceConfig),
+      cfg.cloneDir,
+    );
+    const scannedRoots = new Set<string>();
+    for (const sourceConfig of fileSources) {
+      const repoRoot = repoRootFor(sourceConfig, cfg.cloneDir);
+      if (scannedRoots.has(repoRoot)) continue;
+      scannedRoots.add(repoRoot);
+      try {
+        const clusters = await findUnclaimedClusters(
+          repoRoot,
+          repoGroups.get(repoRoot) ?? [sourceConfig],
+        );
+        for (const cluster of clusters) {
+          findings.push({
+            // Attributed to the first AUDITED source on this repo so the
+            // dedup cache, which is cleared per audited source name, can
+            // retire the finding once it is resolved.
+            source: sourceConfig.name,
+            check: "unclaimed_content",
+            count: cluster.count,
+            samples: cluster.samples,
+            path: cluster.dir,
+            extension: cluster.extension,
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `[reindex-audit] Unclaimed-content scan of ${repoRoot} failed:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     // Always log findings to console
     for (const f of findings) {
-      const detail = f.direction ? ` (${f.direction})` : "";
       const samples =
         f.samples.length > 0 ? `: ${f.samples.slice(0, 5).join(", ")}` : "";
+      if (f.check === "unclaimed_content") {
+        console.warn(
+          `[reindex-audit] ${f.source} — unclaimed_content: ${f.count} ${f.extension} files under ${f.path}/ that no configured source claims` +
+            ` (widen a source's path/file_patterns, or record it in unclaimed_exempt_paths if it is correctly unclaimed)${samples}`,
+        );
+        continue;
+      }
+      const detail = f.direction ? ` (${f.direction})` : "";
       console.warn(
         `[reindex-audit] ${f.source} — ${f.check}: ${f.count} issues${detail}${samples}`,
       );
@@ -188,7 +252,14 @@ export async function runReindexAudit(
 
 /** Dedup identity of a finding: source + check + direction. */
 function dedupKey(f: AuditFinding): string {
-  return `${f.source}:${f.check}${f.direction ? `:${f.direction}` : ""}`;
+  // The directory is part of the identity: two unclaimed trees on one source
+  // are two findings, and keying on source+check alone would let one overwrite
+  // the other in the cache and silently suppress its alert.
+  return (
+    `${f.source}:${f.check}` +
+    (f.direction ? `:${f.direction}` : "") +
+    (f.path ? `:${f.path}:${f.extension}` : "")
+  );
 }
 
 async function sendSlackAlert(
@@ -196,6 +267,11 @@ async function sendSlackAlert(
   webhookUrl: string,
 ): Promise<void> {
   const lines = findings.map((f) => {
+    if (f.check === "unclaimed_content") {
+      let msg = `*${f.source}* — unclaimed_content: ${f.count} \`${f.extension}\` files under \`${f.path}/\` that no configured source claims`;
+      if (f.samples.length > 0) msg += `\n  ${f.samples.join("\n  ")}`;
+      return msg;
+    }
     let msg = `*${f.source}* — ${f.check}: ${f.count} issues`;
     if (f.direction) msg += ` (${f.direction})`;
     if (f.samples.length > 0) {

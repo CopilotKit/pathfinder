@@ -39,7 +39,11 @@ vi.mock("../config.js", () => ({
   getServerConfig: (...args: unknown[]) => mockGetServerConfig(...args),
 }));
 
-vi.mock("../indexing/utils.js", () => ({
+// Only walkSourceFiles is faked. The rest of the module stays real because
+// the unclaimed-content check (src/indexing/unclaimed-audit.ts) matches
+// patterns through it, and a module-shaped hole there would fail silently.
+vi.mock("../indexing/utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../indexing/utils.js")>()),
   walkSourceFiles: (...args: unknown[]) => mockWalkSourceFiles(...args),
 }));
 
