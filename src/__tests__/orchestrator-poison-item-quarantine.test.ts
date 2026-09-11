@@ -268,11 +268,20 @@ describe("IndexingOrchestrator: a permanently failing item must not wedge the so
       stateToken: "token-2",
     });
 
-    // Run 1: a one-off network blip.
-    mockIndexItems.mockResolvedValueOnce({
-      failedIds: ["docs/flaky.md"],
-      failures: [{ id: "docs/flaky.md", error: "ECONNRESET" }],
+    // Run 1 blips, run 2 succeeds. Driven by a call counter rather than
+    // mockResolvedValueOnce: an unconsumed once-value would leak into a later
+    // test, and this suite clears (not resets) mocks between tests.
+    let indexCall = 0;
+    mockIndexItems.mockImplementation(async () => {
+      indexCall++;
+      return indexCall === 1
+        ? {
+            failedIds: ["docs/flaky.md"],
+            failures: [{ id: "docs/flaky.md", error: "ECONNRESET" }],
+          }
+        : { failedIds: [], failures: [] };
     });
+
     await runSourceReindex(orchestrator);
     expect(holder.row.last_commit_sha).toBe("token-1");
     expect(holder.row.status).toBe("error");
@@ -282,7 +291,6 @@ describe("IndexingOrchestrator: a permanently failing item must not wedge the so
 
     // Run 2: it succeeds. The token advances and the failure record clears —
     // the item must NOT carry a stale strike into the future.
-    mockIndexItems.mockResolvedValue({ failedIds: [], failures: [] });
     await runSourceReindex(orchestrator);
     expect(holder.row.last_commit_sha).toBe("token-2");
     expect(holder.row.status).toBe("idle");
