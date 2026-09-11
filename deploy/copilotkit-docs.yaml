@@ -42,6 +42,25 @@ sources:
     file_patterns:
       - "showcase/shell-docs/src/content/docs/**/*.mdx"
       - "showcase/shell-docs/src/content/reference/**/*.mdx"
+    # Trees in this repo that hold .mdx but are CORRECTLY unclaimed, recorded
+    # so the unclaimed-content audit (reindex-audit Check 4) stays quiet about
+    # them. Pooled across every source reading CopilotKit/CopilotKit.
+    #   snippets/  — MDX partials inlined into pages at render time; they are
+    #                never standalone pages and their prose is already indexed
+    #                through the pages that include them.
+    #   examples/  — per-example READMEs for the demo apps, not on the site.
+    #   showcase/integrations/ — per-integration setup notes that live with
+    #                the integration app, not on docs.copilotkit.ai.
+    # NOT listed, deliberately: showcase/shell-docs/src/content/ag-ui/. Those
+    # 96 files ARE live pages (docs.copilotkit.ai/ag-ui/<slug>, all 96 in the
+    # sitemap) served by src/app/ag-ui/[[...slug]] — the same shape as the
+    # reference tree this check was built for. The audit should keep saying so
+    # until someone decides whether to index them here or leave them to
+    # docs.ag-ui.com.
+    unclaimed_exempt_paths:
+      - "showcase/shell-docs/src/content/snippets"
+      - "examples"
+      - "showcase/integrations"
     chunk:
       target_tokens: 600
       overlap_tokens: 50
@@ -136,6 +155,15 @@ sources:
       # hand-written signal
       - "**/generated/**"
       - "**/*.pb.*"
+    # Correctly unclaimed in ag-ui-protocol/ag-ui (see Check 4 above):
+    #   apps/         — the dojo demo app and its READMEs; demo code, not SDK.
+    #   sdks/dotnet/  — the only .ts under it is the cross-language Vitest
+    #                   harness that drives the .NET server.
+    # NOT listed: middlewares/. Those are six published @ag-ui/* packages
+    # whose source no search tool can reach today.
+    unclaimed_exempt_paths:
+      - "apps"
+      - "sdks/dotnet"
     skip_dirs:
       - node_modules
       - dist

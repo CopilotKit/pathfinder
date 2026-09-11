@@ -728,6 +728,12 @@
             ># Share of walked files that may be missing from the index before
             the post-reindex audit reports a shortfall (optional)</span
           >
+          <span class="key">unclaimed_exempt_paths:</span>
+          <span class="comment"
+            ># Repo-relative directories confirmed to be correctly unindexed
+            (optional)</span
+          >
+          - <span class="value">"docs/snippets"</span>
           <span class="key">category:</span> <span class="value">faq</span>
           <span class="comment"
             ># Optional. Marks content as FAQ for /faq.txt and knowledge
@@ -772,6 +778,26 @@
             <code>0</code> once a source is known to index everything it walks,
             and the audit will flag the very first regression. It does not
             affect what gets indexed, so changing it does not trigger a reindex.
+          </li>
+          <li>
+            <strong>unclaimed_exempt_paths</strong> — The shortfall check above
+            can only compare the index against the files the
+            <em>configured walk root</em> reaches, so a walk root pointed at the
+            wrong subtree leaves both halves blind in the same way and they
+            agree perfectly. A separate audit therefore walks the whole
+            repository and reports an <code>unclaimed_content</code> finding for
+            any directory tree of at least 10 files sharing one extension that
+            no source's path and <code>file_patterns</code> would ever reach —
+            when that extension is one the repository already indexes through
+            the tree's parent. Files a source's own
+            <code>exclude_patterns</code> reject are treated as accounted for,
+            since an exclusion is a decision on record. List here the
+            repo-root-relative directories (prefixes or globs) an operator has
+            reviewed and confirmed are correctly unclaimed — partials inlined at
+            render time, example apps, maintenance scripts — and the audit stops
+            reporting them. Entries are pooled across every source reading the
+            same repository. It does not affect what gets indexed, so changing
+            it does not trigger a reindex.
           </li>
           <li>
             <strong>type</strong> — Determines chunking strategy.
