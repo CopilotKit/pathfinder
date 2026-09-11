@@ -296,7 +296,87 @@ describe("runReindexAudit", () => {
       expect(divergence!.count).toBe(2); // difference: 3 - 1
     });
 
-    it("does not report divergence when disk > DB (db_has_fewer is expected from content filtering)", async () => {
+    it("returns count_divergence with direction db_has_fewer when disk > DB beyond tolerance", async () => {
+      mockGetIndexedItemIds.mockResolvedValue(new Set(["a.md"]));
+      mockWalkSourceFiles.mockResolvedValue(
+        new Set(["a.md", "b.md", "c.md", "d.md", "e.md"]),
+      );
+
+      const findings = await runReindexAudit(["docs"]);
+
+      const divergence = findings.find((f) => f.check === "count_divergence");
+      expect(divergence).toBeDefined();
+      expect(divergence!.direction).toBe("db_has_fewer");
+      expect(divergence!.count).toBe(4);
+      // Names the missing files — the whole point of the check.
+      expect(divergence!.samples).toEqual(["b.md", "c.md", "d.md", "e.md"]);
+    });
+
+    it("stays silent when the shortfall is inside the default tolerance", async () => {
+      // 3 of 200 walked files missing (1.5%), under the 5% default. A healthy
+      // source must not emit a finding on every reindex.
+      const disk = new Set(
+        Array.from({ length: 200 }, (_, i) => `page-${i}.md`),
+      );
+      const db = new Set([...disk].slice(3));
+      mockGetIndexedItemIds.mockResolvedValue(db);
+      mockWalkSourceFiles.mockResolvedValue(disk);
+
+      const findings = await runReindexAudit(["docs"]);
+
+      expect(findings).toEqual([]);
+    });
+
+    it("reports once the shortfall crosses the proportional tolerance", async () => {
+      // 11 of 200 (5.5%) is over budget (floor(200 * 0.05) = 10).
+      const disk = new Set(
+        Array.from({ length: 200 }, (_, i) => `page-${i}.md`),
+      );
+      const db = new Set([...disk].slice(11));
+      mockGetIndexedItemIds.mockResolvedValue(db);
+      mockWalkSourceFiles.mockResolvedValue(disk);
+
+      const findings = await runReindexAudit(["docs"]);
+
+      const divergence = findings.find((f) => f.check === "count_divergence");
+      expect(divergence).toBeDefined();
+      expect(divergence!.direction).toBe("db_has_fewer");
+      expect(divergence!.count).toBe(11);
+      expect(divergence!.samples).toHaveLength(10);
+    });
+
+    it("does not report 1-2 missing files on a small source (absolute floor)", async () => {
+      // 2 of 10 is 20% but only 2 files: the floor keeps small sources quiet.
+      const disk = new Set(Array.from({ length: 10 }, (_, i) => `p${i}.md`));
+      const db = new Set([...disk].slice(2));
+      mockGetIndexedItemIds.mockResolvedValue(db);
+      mockWalkSourceFiles.mockResolvedValue(disk);
+
+      const findings = await runReindexAudit(["docs"]);
+
+      expect(findings).toEqual([]);
+    });
+
+    it("honours a per-source unindexed_tolerance override of 0", async () => {
+      mockGetServerConfig.mockReturnValue(
+        serverConfig([fileSource("docs", { unindexed_tolerance: 0 })]),
+      );
+      mockGetIndexedItemIds.mockResolvedValue(new Set(["a.md"]));
+      mockWalkSourceFiles.mockResolvedValue(new Set(["a.md", "b.md"]));
+
+      const findings = await runReindexAudit(["docs"]);
+
+      const divergence = findings.find((f) => f.check === "count_divergence");
+      expect(divergence).toBeDefined();
+      expect(divergence!.direction).toBe("db_has_fewer");
+      expect(divergence!.count).toBe(1);
+      expect(divergence!.samples).toEqual(["b.md"]);
+    });
+
+    it("honours a per-source unindexed_tolerance override that widens the budget", async () => {
+      mockGetServerConfig.mockReturnValue(
+        serverConfig([fileSource("docs", { unindexed_tolerance: 0.5 })]),
+      );
       mockGetIndexedItemIds.mockResolvedValue(new Set(["a.md"]));
       mockWalkSourceFiles.mockResolvedValue(
         new Set(["a.md", "b.md", "c.md", "d.md"]),
@@ -304,8 +384,30 @@ describe("runReindexAudit", () => {
 
       const findings = await runReindexAudit(["docs"]);
 
-      const divergence = findings.find((f) => f.check === "count_divergence");
-      expect(divergence).toBeUndefined();
+      expect(findings).toEqual([]);
+    });
+
+    it("reports BOTH directions when the index is simultaneously stale and short", async () => {
+      // 6 stale rows in the index and 5 real files missing from it. Keying the
+      // dedup cache on source:check alone would let one direction overwrite the
+      // other; both must survive as separate findings.
+      mockGetIndexedItemIds.mockResolvedValue(
+        new Set([
+          "a.md",
+          ...Array.from({ length: 6 }, (_, i) => `gone-${i}.md`),
+        ]),
+      );
+      mockWalkSourceFiles.mockResolvedValue(
+        new Set(["a.md", "b.md", "c.md", "d.md", "e.md", "f.md"]),
+      );
+
+      const findings = await runReindexAudit(["docs"]);
+
+      const directions = findings
+        .filter((f) => f.check === "count_divergence")
+        .map((f) => f.direction)
+        .sort();
+      expect(directions).toEqual(["db_has_fewer", "db_has_more"]);
     });
 
     it("does not report divergence when counts match", async () => {
@@ -491,7 +593,8 @@ describe("runReindexAudit", () => {
       expect(docsStale!.count).toBe(1);
       expect(docsStale!.samples).toContain("old.md");
 
-      // code: disk > DB (db_has_fewer) is no longer reported — expected from content filtering
+      // code: 2 of 3 files unindexed. A big fraction, but only 2 files — the
+      // absolute floor keeps a source this small from alerting on noise.
       const codeDivergence = findings.find(
         (f) => f.source === "code" && f.check === "count_divergence",
       );

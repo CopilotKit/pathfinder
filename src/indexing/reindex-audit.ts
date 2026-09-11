@@ -5,8 +5,37 @@ import { isFileSourceConfig } from "../types.js";
 import type { FileSourceConfig } from "../types.js";
 
 // Dedup: only alert when findings change from the previous audit run.
-// Key = "source:check", value = count. If the counts match, skip the alert.
+// Key = "source:check:direction", value = count. If the counts match, skip the
+// alert. The direction is part of the key because a single source can produce
+// BOTH directions of count_divergence in one run (stale rows in the index AND
+// unindexed files on disk); keying on "source:check" alone would let one
+// overwrite the other and silently suppress its alert.
 const lastAuditFindings = new Map<string, number>();
+
+/**
+ * Default fraction of a source's walked files that may be absent from the
+ * index without the audit reporting a shortfall.
+ *
+ * Some shortfall is legitimate: the indexer walks and matches a file, then
+ * drops it because it carries no semantic content (an SVG, a base64 blob, an
+ * empty file). Reporting every such file would put a finding on every source
+ * on every reindex, and an alarm that always fires is an alarm that gets
+ * muted — which is exactly how the shortfall direction came to be suppressed
+ * outright. So the check reports only shortfall ABOVE a per-source baseline.
+ *
+ * 5% is deliberately loose for an unconfigured source. Once a source is known
+ * to index everything it walks, set `unindexed_tolerance: 0` on it and the
+ * audit flags the first regression instead.
+ */
+const DEFAULT_UNINDEXED_TOLERANCE = 0.05;
+
+/**
+ * Floor on the tolerance budget, so a small source does not alert on one or
+ * two legitimately-empty files (on a 20-file source, 5% rounds down to 1).
+ * Bypassed entirely when a source sets `unindexed_tolerance: 0`, which is an
+ * explicit request to hear about any shortfall at all.
+ */
+const MIN_UNINDEXED_FILES = 3;
 
 export function resetAuditCache(): void {
   lastAuditFindings.clear();
@@ -73,8 +102,7 @@ export async function runReindexAudit(
         }
       }
 
-      // Check 3 — Count divergence (db_has_more only; db_has_fewer is expected
-      // when the indexer filters low-semantic-value files like SVGs, base64, etc.)
+      // Check 3 — Count divergence, both directions.
       const dbCount = dbFiles.size;
       const diskCount = diskFiles.size;
       if (dbCount > diskCount) {
@@ -85,6 +113,34 @@ export async function runReindexAudit(
           samples: [],
           direction: "db_has_more",
         });
+      }
+
+      // Check 3b — Shortfall: files on disk that the index does not hold.
+      //
+      // Measured on the SET DIFFERENCE rather than on `diskCount - dbCount`.
+      // The raw count difference is a lossy proxy: a source holding one stale
+      // row and missing one real file has matching counts and would report
+      // nothing, which is the same blindness in miniature. The set difference
+      // fires in every case the count comparison would, plus that one — and it
+      // yields the actual file paths, so the finding names the files instead of
+      // saying "the count is off by 130".
+      const unindexed = [...diskFiles].filter((p) => !dbFiles.has(p));
+      if (unindexed.length > 0) {
+        const tolerance =
+          sourceConfig.unindexed_tolerance ?? DEFAULT_UNINDEXED_TOLERANCE;
+        const budget = Math.max(
+          tolerance > 0 ? MIN_UNINDEXED_FILES : 0,
+          Math.floor(diskCount * tolerance),
+        );
+        if (unindexed.length > budget) {
+          findings.push({
+            source: sourceConfig.name,
+            check: "count_divergence",
+            count: unindexed.length,
+            samples: unindexed.slice(0, 10),
+            direction: "db_has_fewer",
+          });
+        }
       }
     }
 
@@ -100,7 +156,7 @@ export async function runReindexAudit(
 
     // Only Slack-alert on NEW or CHANGED findings (dedup)
     const newFindings = findings.filter((f) => {
-      const key = `${f.source}:${f.check}`;
+      const key = dedupKey(f);
       const prev = lastAuditFindings.get(key);
       return prev === undefined || prev !== f.count;
     });
@@ -113,7 +169,7 @@ export async function runReindexAudit(
       }
     }
     for (const f of findings) {
-      lastAuditFindings.set(`${f.source}:${f.check}`, f.count);
+      lastAuditFindings.set(dedupKey(f), f.count);
     }
 
     if (newFindings.length > 0 && cfg.slackWebhookUrl) {
@@ -128,6 +184,11 @@ export async function runReindexAudit(
     );
     return [];
   }
+}
+
+/** Dedup identity of a finding: source + check + direction. */
+function dedupKey(f: AuditFinding): string {
+  return `${f.source}:${f.check}${f.direction ? `:${f.direction}` : ""}`;
 }
 
 async function sendSlackAlert(

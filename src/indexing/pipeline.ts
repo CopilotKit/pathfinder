@@ -101,6 +101,18 @@ export class IndexingPipeline {
     );
 
     if (chunkOutputs.length === 0) {
+      // Say so. An item that chunks to nothing is removed from the index, and
+      // a removal nobody logs is indistinguishable from a file that was never
+      // there: the shortfall only shows up later as a file count that does not
+      // add up. The chunker logs WHY (see the `[chunker] no chunks` warnings);
+      // this line records that the index actually lost the item, keyed by
+      // source and id so it is greppable alongside next_acquire_reason and
+      // quarantined_items.
+      console.warn(
+        `${this.logPrefix} ${item.id} produced zero chunks; nothing indexed ` +
+          `(any previously indexed chunks for it are being cleared)`,
+      );
+
       // The item produced zero chunks. If it previously had chunks (and is
       // routed through `items` rather than `removedIds`), early-returning here
       // would leave those stale chunks in the index forever. Clear them via the
