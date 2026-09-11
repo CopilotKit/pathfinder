@@ -138,6 +138,14 @@ export const FileSourceConfigSchema = z.object({
   // source is known to index every file, and the audit will then flag the very
   // first regression. Defaults to 0.05.
   unindexed_tolerance: z.number().min(0).max(1).optional(),
+  // Repo-root-relative directories (prefixes or globs) that this source's
+  // operator has reviewed and confirmed are CORRECTLY unclaimed, so the
+  // unclaimed-content audit stays quiet about them (see
+  // src/indexing/unclaimed-audit.ts, Check 4). Entries are pooled across every
+  // source reading the same repository, since any one of their operators can
+  // vouch for a subtree. `snippets/` — MDX partials inlined at render time —
+  // is the archetype: real content, real file type, deliberately not a page.
+  unclaimed_exempt_paths: z.array(z.string()).optional(),
 });
 
 // Slack source schema — different required fields

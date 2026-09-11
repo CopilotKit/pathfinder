@@ -36,6 +36,11 @@ sources:
       - "**/__tests__/**"
       - "**/*.test.*"
       - "**/*.spec.*"
+    # Correctly unclaimed (unclaimed-content audit, reindex-audit Check 4):
+    # scripts/ holds repo maintenance tooling (changelog radar, converters),
+    # not library code anyone searches for.
+    unclaimed_exempt_paths:
+      - "scripts"
     skip_dirs:
       - node_modules
       - dist
