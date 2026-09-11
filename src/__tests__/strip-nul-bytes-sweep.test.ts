@@ -150,6 +150,7 @@ describe("upsertIndexState NUL sanitization", () => {
       source_type: `git${NUL}hub`,
       source_key: `repo${NUL}-key`,
       last_commit_sha: `sha${NUL}123`,
+      config_fingerprint: `fp${NUL}1`,
       last_indexed_at: new Date(0),
       status: "error",
       error_message: `invalid byte sequence for encoding "UTF8": 0x${NUL}00`,
@@ -158,17 +159,19 @@ describe("upsertIndexState NUL sanitization", () => {
     expect(poolQuery).toHaveBeenCalledTimes(1);
     const [sql, params] = poolQuery.mock.calls[0];
     expect(String(sql)).toContain("INSERT INTO index_state");
-    const [sourceType, sourceKey, sha, , status, errMsg] = params as unknown[];
+    const [sourceType, sourceKey, sha, fingerprint, , status, errMsg] =
+      params as unknown[];
     expect(sourceType).toBe("github");
     expect(sourceKey).toBe("repo-key");
     expect(sha).toBe("sha123");
+    expect(fingerprint).toBe("fp1");
     expect(status).toBe("error");
     expect(String(errMsg)).not.toContain(NUL);
     expect(String(errMsg)).toBe(
       'invalid byte sequence for encoding "UTF8": 0x00',
     );
 
-    for (const v of [sourceType, sourceKey, sha, status, errMsg]) {
+    for (const v of [sourceType, sourceKey, sha, fingerprint, status, errMsg]) {
       expect(String(v)).not.toContain(NUL);
     }
   });
@@ -184,8 +187,9 @@ describe("upsertIndexState NUL sanitization", () => {
     });
 
     const [, params] = poolQuery.mock.calls[0];
-    const [, , sha, lastAt, , err] = params as unknown[];
+    const [, , sha, fingerprint, lastAt, , err] = params as unknown[];
     expect(sha).toBeNull();
+    expect(fingerprint).toBeNull();
     expect(lastAt).toBeNull();
     expect(err).toBeNull();
   });
@@ -202,7 +206,7 @@ describe("upsertIndexState NUL sanitization", () => {
       error_message: null,
     });
     const [, params] = poolQuery.mock.calls[0];
-    expect((params as unknown[])[4]).toBe("idle");
+    expect((params as unknown[])[5]).toBe("idle");
   });
 });
 

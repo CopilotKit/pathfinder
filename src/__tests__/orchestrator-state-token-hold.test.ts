@@ -115,6 +115,21 @@ vi.mock("../indexing/providers/index.js", () => ({
 }));
 
 import { IndexingOrchestrator } from "../indexing/orchestrator.js";
+import { computeSourceConfigFingerprint } from "../indexing/source-fingerprint.js";
+import type { SourceConfig } from "../types.js";
+
+// The orchestrator now chooses full-vs-incremental on the commit sha AND the
+// source's crawl-config fingerprint, so a seeded state row must carry the
+// fingerprint of the source config the mocked getServerConfig returns —
+// otherwise these tests would silently drift onto the full-acquire path and
+// stop exercising the incremental token-hold behaviour they exist to pin.
+const DOCS_SOURCE_FINGERPRINT = computeSourceConfigFingerprint({
+  name: "docs",
+  type: "markdown",
+  path: "/tmp/docs",
+  file_patterns: ["**/*.md"],
+  chunk: {},
+} as SourceConfig);
 
 /** Drive a source-reindex job to completion and return when drain settles. */
 async function runSourceReindex(
@@ -151,6 +166,7 @@ describe("IndexingOrchestrator state-token hold on item failure (C1)", () => {
       source_type: "markdown",
       source_key: "docs",
       last_commit_sha: "old-token",
+      config_fingerprint: DOCS_SOURCE_FINGERPRINT,
       last_indexed_at: new Date(),
       status: "idle",
       error_message: null,

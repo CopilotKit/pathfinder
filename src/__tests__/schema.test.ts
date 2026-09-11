@@ -107,6 +107,7 @@ describe("generateSchema", () => {
         "source_type",
         "source_key",
         "last_commit_sha",
+        "config_fingerprint",
         "last_indexed_at",
         "status",
         "error_message",
@@ -169,6 +170,29 @@ describe("generatePostSchemaMigration", () => {
     const sql = generatePostSchemaMigration();
     expect(sql).toContain(
       "CREATE INDEX IF NOT EXISTS idx_chunks_version ON chunks (version)",
+    );
+  });
+
+  it("adds index_state.config_fingerprint idempotently", () => {
+    // Additive + nullable so installs whose index_state predates the column
+    // read back NULL; the orchestrator treats NULL as "unknown" and full-walks
+    // once rather than silently trusting a stale incremental.
+    const sql = generatePostSchemaMigration();
+    expect(sql).toContain(
+      "ALTER TABLE index_state ADD COLUMN IF NOT EXISTS config_fingerprint TEXT",
+    );
+    expect(sql).not.toContain(
+      "ALTER TABLE index_state ADD COLUMN IF NOT EXISTS config_fingerprint TEXT NOT NULL",
+    );
+  });
+
+  it("places index_state DDL BEFORE the query_log marker", () => {
+    // Several PGlite tests apply only the tail of this migration, sliced from
+    // the query_log marker. index_state DDL after that marker would run
+    // against a database with no index_state table and abort the whole slice.
+    const sql = generatePostSchemaMigration();
+    expect(sql.indexOf("ALTER TABLE index_state")).toBeLessThan(
+      sql.indexOf("-- Analytics: query_log table for tracking tool usage"),
     );
   });
 

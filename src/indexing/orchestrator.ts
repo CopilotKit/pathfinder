@@ -15,6 +15,10 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { getProvider } from "./providers/index.js";
 import { IndexingPipeline } from "./pipeline.js";
 import {
+  computeSourceConfigFingerprint,
+  decideAcquisition,
+} from "./source-fingerprint.js";
+import {
   getIndexState,
   upsertIndexState,
   cleanupOldWebhookDeliveries,
@@ -184,11 +188,29 @@ export class IndexingOrchestrator {
         const currentToken = await this.getSourceStateToken(source);
         const state = await getIndexState(source.type, source.name);
 
-        if (currentToken === null || state?.last_commit_sha !== currentToken) {
+        // A KNOWN-but-different config fingerprint means the crawl scope
+        // changed since the last successful index, so "sha matches" is no
+        // longer sufficient evidence that the index is current. A NULL stored
+        // fingerprint deliberately does NOT queue here: on the first boot
+        // after this column ships every source would read NULL, and queuing
+        // them all would full-walk the whole fleet at startup. Those sources
+        // pick up their fingerprint on their next scheduled/triggered
+        // reindex, which full-walks once (see decideAcquisition).
+        const configChanged =
+          state?.config_fingerprint != null &&
+          state.config_fingerprint !== computeSourceConfigFingerprint(source);
+
+        if (
+          currentToken === null ||
+          state?.last_commit_sha !== currentToken ||
+          configChanged
+        ) {
           const reason =
             currentToken === null
               ? "source unavailable (clone missing?)"
-              : `remote ${currentToken.slice(0, 8)} differs from indexed`;
+              : configChanged
+                ? "crawl config changed since last index"
+                : `remote ${currentToken.slice(0, 8)} differs from indexed`;
           console.log(
             `[orchestrator] ${reason} for ${source.name} — queuing reindex`,
           );
@@ -756,14 +778,32 @@ export class IndexingOrchestrator {
           "indexing",
         );
 
+        const configFingerprint = computeSourceConfigFingerprint(sourceConfig);
+
         try {
           const state = await getIndexState(
             sourceConfig.type,
             sourceConfig.name,
           );
+          // The acquisition mode depends on the effective source CONFIG as
+          // well as the commit sha. Keying on the sha alone silently drops
+          // every config-scope change: widening file_patterns (or moving
+          // `path`, or changing url_derivation) leaves the sha untouched, so
+          // incrementalAcquire diffs HEAD against itself, walks nothing, and
+          // the job reports success having written zero rows.
+          const decision = decideAcquisition(
+            state?.last_commit_sha,
+            state?.config_fingerprint,
+            configFingerprint,
+          );
+          // Log the mode AND why. A no-op that reports success is exactly the
+          // failure this fix addresses, so the reason is worth one line.
+          console.log(
+            `[orchestrator] ${sourceConfig.name}: ${decision.mode} acquire (${decision.reason})`,
+          );
           let result;
-          if (state?.last_commit_sha) {
-            result = await provider.incrementalAcquire(state.last_commit_sha);
+          if (decision.mode === "incremental") {
+            result = await provider.incrementalAcquire(state!.last_commit_sha!);
           } else {
             result = await provider.fullAcquire();
           }
@@ -814,6 +854,12 @@ export class IndexingOrchestrator {
             source_type: sourceConfig.type,
             source_key: sourceConfig.name,
             last_commit_sha: result.stateToken,
+            // Persist the config fingerprint ONLY on a fully successful run,
+            // symmetric with last_commit_sha. A held/errored run leaves the
+            // prior (possibly NULL) fingerprint in place, so the next run
+            // re-evaluates and full-walks again rather than recording a
+            // config as "applied" that was never fully walked.
+            config_fingerprint: configFingerprint,
             last_indexed_at: new Date(),
             status: "idle",
           });
@@ -883,6 +929,10 @@ export class IndexingOrchestrator {
       source_type: sourceType,
       source_key: sourceKey,
       last_commit_sha: existing?.last_commit_sha ?? null,
+      // Preserve, never advance: a status write is not evidence that the
+      // current config was successfully walked. Same discipline as the state
+      // token above.
+      config_fingerprint: existing?.config_fingerprint ?? null,
       last_indexed_at: existing?.last_indexed_at ?? null,
       status,
       error_message: errorMessage ?? null,

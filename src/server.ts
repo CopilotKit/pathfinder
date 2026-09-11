@@ -38,10 +38,16 @@ import {
   isDiscordSourceConfig,
   isFileSourceConfig,
   type FaqChunkResult,
+  type IndexState,
+  type IndexStatus,
   type ServerConfig,
 } from "./types.js";
 import { IndexingOrchestrator } from "./indexing/orchestrator.js";
 import { runReindexAudit } from "./indexing/reindex-audit.js";
+import {
+  computeSourceConfigFingerprint,
+  decideAcquisition,
+} from "./indexing/source-fingerprint.js";
 
 import {
   createWebhookHandler,
@@ -2087,6 +2093,50 @@ app.post("/messages", ...sseHandlers.postHandler);
 // Health check
 // ---------------------------------------------------------------------------
 
+/**
+ * Operator-facing projection of one index_state row, shared by /health and the
+ * admin `index-stats` op so the two shapes stay in sync.
+ *
+ * `next_acquire` / `next_acquire_reason` answer the question that cost us a
+ * silent no-op in production: will the next run for this source actually walk
+ * anything? A reindex that reported success while writing zero rows was
+ * indistinguishable from a real one; now the pending decision (and WHY) is
+ * visible before the run rather than inferred afterwards from row counts.
+ */
+export function projectIndexStateForOperators(s: IndexState): {
+  type: string;
+  key: string;
+  status: IndexStatus | undefined;
+  last_indexed: Date | null | undefined;
+  commit: string | null;
+  error: string | null;
+  next_acquire: "full" | "incremental" | null;
+  next_acquire_reason: string | null;
+} {
+  // The source may have been removed from the config while its index_state
+  // row survives; there is then no current config to compare against.
+  const sourceConfig = getServerConfig().sources.find(
+    (candidate) => candidate.name === s.source_key,
+  );
+  const decision = sourceConfig
+    ? decideAcquisition(
+        s.last_commit_sha,
+        s.config_fingerprint,
+        computeSourceConfigFingerprint(sourceConfig),
+      )
+    : null;
+  return {
+    type: s.source_type,
+    key: s.source_key,
+    status: s.status,
+    last_indexed: s.last_indexed_at,
+    commit: s.last_commit_sha?.slice(0, 8) ?? null,
+    error: s.error_message ?? null,
+    next_acquire: decision?.mode ?? null,
+    next_acquire_reason: decision?.reason ?? null,
+  };
+}
+
 export interface HealthRouteDeps {
   getIndexStats?: typeof getIndexStats;
   getWebhookDeliveryStats?: typeof getWebhookDeliveryStats;
@@ -2143,14 +2193,7 @@ export function registerHealthRoute(
           total_chunks: stats.totalChunks,
           by_source: stats.bySource,
           indexed_repos: stats.indexedRepos,
-          sources: stats.indexStates.map((s) => ({
-            type: s.source_type,
-            key: s.source_key,
-            status: s.status,
-            last_indexed: s.last_indexed_at,
-            commit: s.last_commit_sha?.slice(0, 8) ?? null,
-            error: s.error_message ?? null,
-          })),
+          sources: stats.indexStates.map(projectIndexStateForOperators),
         },
         ...(deliveryStats ? { webhook_deliveries: deliveryStats } : {}),
       });
@@ -3892,14 +3935,7 @@ function buildAdminOpRegistry(
             total_chunks: stats.totalChunks,
             by_source: stats.bySource,
             indexed_repos: stats.indexedRepos,
-            sources: stats.indexStates.map((s) => ({
-              type: s.source_type,
-              key: s.source_key,
-              status: s.status,
-              last_indexed: s.last_indexed_at,
-              commit: s.last_commit_sha?.slice(0, 8) ?? null,
-              error: s.error_message ?? null,
-            })),
+            sources: stats.indexStates.map(projectIndexStateForOperators),
           },
         };
       } catch (err) {
