@@ -63,9 +63,11 @@ const codeConfig = makeFileSourceConfig(
   ],
 );
 
-// Docs source config — mirrors the real `docs` source: only *.mdx, no excludes.
-// (The source path is showcase/shell-docs/src/content/docs/, so derived paths
-// live under that tree.)
+// Docs source config — a deliberately generic *.mdx matcher for the glob
+// logic itself. The real `docs` source walks showcase/shell-docs/src/content/
+// and names its three page subtrees (docs/, reference/, ag-ui/) explicitly;
+// that shipped config is asserted against directly in
+// src/__tests__/copilotkit-docs-config.test.ts.
 const docsConfig = makeFileSourceConfig(["**/*.mdx"]);
 
 console.log("=== Path Filter Tests ===\n");
@@ -187,7 +189,7 @@ assert(
 assert(matchesPatterns("src/index.ts", codeConfig), "root src file included");
 
 // --- docs (*.mdx only) ---
-// Paths reflect the current docs source tree: showcase/shell-docs/src/content/docs/
+// Paths reflect the prose subtree of the docs source: content/docs/.
 console.log("\n--- docs (*.mdx only) ---");
 assert(
   matchesPatterns(

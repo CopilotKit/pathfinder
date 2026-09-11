@@ -34,14 +34,27 @@ sources:
       strip_suffix: ".mdx"
       strip_route_groups: true
       strip_index: true
-    # Repo-root-relative, and now load-bearing: the wider walk root also
-    # exposes snippets/ (MDX partials), ag-ui/ (owned by the ag-ui-docs
-    # source) and framework-overviews/, none of which are standalone pages.
-    # These patterns are also what scopes the incremental webhook path,
-    # which filters changed files by pattern alone with no walk-root check.
+    # Repo-root-relative, and load-bearing: the wide walk root also exposes
+    # snippets/ (MDX partials) and framework-overviews/, neither of which is
+    # a standalone page. These patterns are also what scopes the incremental
+    # webhook path, which filters changed files by pattern alone with no
+    # walk-root check.
+    #
+    # ag-ui/ IS listed: those 96 files are live pages on THIS site,
+    # docs.copilotkit.ai/ag-ui/<slug>, served by src/app/ag-ui/[[...slug]],
+    # and all 96 are in the production sitemap. CopilotKit includes AG-UI, so
+    # they belong in the CopilotKit docs index. They are near-duplicates of
+    # the upstream ag-ui-protocol/ag-ui docs tree indexed by the `ag-ui-docs`
+    # source below, but that copy answers for docs.ag-ui.com and hands back
+    # docs.ag-ui.com links; this one hands back the copilotkit.ai links a
+    # CopilotKit user is reading. The ordered strip_prefix above needs no
+    # change for them — ag-ui/ is not under content/docs/, so it falls
+    # through to the content/ prefix and keeps its directory:
+    # content/ag-ui/concepts/agents.mdx -> /ag-ui/concepts/agents.
     file_patterns:
       - "showcase/shell-docs/src/content/docs/**/*.mdx"
       - "showcase/shell-docs/src/content/reference/**/*.mdx"
+      - "showcase/shell-docs/src/content/ag-ui/**/*.mdx"
     # Trees in this repo that hold .mdx but are CORRECTLY unclaimed, recorded
     # so the unclaimed-content audit (reindex-audit Check 4) stays quiet about
     # them. Pooled across every source reading CopilotKit/CopilotKit.
@@ -51,12 +64,9 @@ sources:
     #   examples/  — per-example READMEs for the demo apps, not on the site.
     #   showcase/integrations/ — per-integration setup notes that live with
     #                the integration app, not on docs.copilotkit.ai.
-    # NOT listed, deliberately: showcase/shell-docs/src/content/ag-ui/. Those
-    # 96 files ARE live pages (docs.copilotkit.ai/ag-ui/<slug>, all 96 in the
-    # sitemap) served by src/app/ag-ui/[[...slug]] — the same shape as the
-    # reference tree this check was built for. The audit should keep saying so
-    # until someone decides whether to index them here or leave them to
-    # docs.ag-ui.com.
+    # content/ag-ui/ is deliberately absent from this list and always will
+    # be: it is not exempt, it is CLAIMED by the file_patterns above. An
+    # exemption there would re-blind the audit to a tree of live pages.
     unclaimed_exempt_paths:
       - "showcase/shell-docs/src/content/snippets"
       - "examples"
@@ -177,7 +187,7 @@ sources:
 tools:
   - name: search-docs
     type: search
-    description: "Search the CopilotKit product documentation (https://docs.copilotkit.ai) — guides, concepts, quickstarts, API reference, and how-tos for building with CopilotKit. Use this for CopilotKit usage and configuration questions. NOT for AG-UI protocol docs (use search-ag-ui-docs) and NOT for source code (use search-code). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    description: "Search the CopilotKit product documentation (https://docs.copilotkit.ai) — guides, concepts, quickstarts, API reference, how-tos for building with CopilotKit, and the AG-UI protocol pages hosted on the CopilotKit docs site (docs.copilotkit.ai/ag-ui/...). Use this for CopilotKit usage and configuration questions. For the upstream AG-UI protocol documentation at docs.ag-ui.com use search-ag-ui-docs; for source code use search-code. This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: docs
     default_limit: 5
     max_limit: 20
@@ -197,7 +207,7 @@ tools:
 
   - name: search-ag-ui-docs
     type: search
-    description: "Search the AG-UI protocol documentation (https://docs.ag-ui.com) — the Agent-User Interaction protocol spec, event types, message schemas, and framework integration guides. Use this for protocol-level questions about AG-UI. NOT for CopilotKit product docs (use search-docs) and NOT for source code (use search-ag-ui-code). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    description: "Search the upstream AG-UI protocol documentation (https://docs.ag-ui.com) — the Agent-User Interaction protocol spec, event types, message schemas, and framework integration guides. Use this for protocol-level questions about AG-UI when you want the canonical ag-ui.com source; the CopilotKit docs site hosts its own near-identical copy of these pages, which search-docs returns with docs.copilotkit.ai links. NOT for CopilotKit product docs (use search-docs) and NOT for source code (use search-ag-ui-code). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: ag-ui-docs
     default_limit: 5
     max_limit: 20
