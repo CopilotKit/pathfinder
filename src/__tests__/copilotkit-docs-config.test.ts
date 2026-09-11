@@ -51,9 +51,9 @@ describe("deploy/copilotkit-docs.yaml — docs source coverage", () => {
   });
 
   it("does not claim MDX partials, which are inlined into pages", () => {
-    expect(matchesPatterns(CONTENT + "snippets/installation.mdx", docsSource)).toBe(
-      false,
-    );
+    expect(
+      matchesPatterns(CONTENT + "snippets/installation.mdx", docsSource),
+    ).toBe(false);
   });
 
   it("leaves the ag-ui tree out of the unclaimed-audit exemptions now that it is claimed", () => {
@@ -65,7 +65,10 @@ describe("deploy/copilotkit-docs.yaml — docs source coverage", () => {
 describe("deploy/copilotkit-docs.yaml — derived URLs match the live routes", () => {
   it.each([
     // src/app/ag-ui/[[...slug]] serves the ag-ui tree UNDER /ag-ui/.
-    ["ag-ui/concepts/agents.mdx", "https://docs.copilotkit.ai/ag-ui/concepts/agents"],
+    [
+      "ag-ui/concepts/agents.mdx",
+      "https://docs.copilotkit.ai/ag-ui/concepts/agents",
+    ],
     [
       "ag-ui/sdk/js/core/events.mdx",
       "https://docs.copilotkit.ai/ag-ui/sdk/js/core/events",
