@@ -1424,6 +1424,15 @@ export function chunkMarkdown(
   absoluteFilePath?: string,
 ): ChunkOutput[] {
   if (!content || !content.trim()) {
+    // A file that chunks to nothing is dropped from the index, and a drop with
+    // no log line is invisible: the walker matched the file, the reader read
+    // it, and the pipeline writes nothing, so the only trace is a file count
+    // that quietly does not add up. Name the file and the reason at every
+    // return-[] site so an operator can grep "[chunker] no chunks" and see
+    // exactly which pages are missing and why.
+    console.warn(
+      `[chunker] no chunks for ${filePath}: file is empty or whitespace-only; it will not be indexed`,
+    );
     return [];
   }
 
@@ -1483,6 +1492,15 @@ export function chunkMarkdown(
   const cleanBody = stripMdx(inlinedBody);
 
   if (!cleanBody.trim()) {
+    // The distinct, actionable case: the file HAS content, but every byte of
+    // it was JSX/import syntax that MDX stripping removed — a pure-component
+    // stub whose prose lives somewhere the indexer does not read (an excluded
+    // snippet directory, for instance). Keep this reason separate from the
+    // empty-file one above: the fixes are entirely different.
+    console.warn(
+      `[chunker] no chunks for ${filePath}: MDX stripping left no prose ` +
+        `(the file is JSX/imports only — its text may live in a snippet or component that is not indexed); it will not be indexed`,
+    );
     return [];
   }
 
@@ -1558,6 +1576,16 @@ export function chunkMarkdown(
       headingPath,
       chunkIndex: chunks.length,
     });
+  }
+
+  if (chunks.length === 0) {
+    // The third way out with nothing: the body survived stripping but every
+    // candidate chunk trimmed away to "" and hit the `continue` above. Rare,
+    // but it drops the file just as completely as the two returns above, so it
+    // gets the same treatment rather than a silent empty array.
+    console.warn(
+      `[chunker] no chunks for ${filePath}: every split produced empty text after trimming; it will not be indexed`,
+    );
   }
 
   return chunks;
