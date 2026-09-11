@@ -69,14 +69,15 @@ import { IndexingPipeline } from "../indexing/pipeline.js";
 import { runReindexAudit, resetAuditCache } from "../indexing/reindex-audit.js";
 import type { SourceConfig } from "../types.js";
 import type { ContentItem } from "../indexing/providers/types.js";
+import type { EmbeddingProvider } from "../indexing/embeddings.js";
 
-const sourceConfig = {
+const sourceConfig: SourceConfig = {
   name: "docs",
   type: "markdown",
   path: "/repo/docs",
   file_patterns: ["**/*.mdx"],
   chunk: {},
-} satisfies Partial<SourceConfig> as SourceConfig;
+};
 
 function appConfig() {
   return {
@@ -101,7 +102,8 @@ function jsxStubPage(n: number): string {
   return `---\ntitle: Stub ${n}\n---\n\n<Snippet file="shared/intro.mdx" />\n<ComponentDemo name="demo-${n}" />\n`;
 }
 
-const embeddingProvider = {
+const embeddingProvider: EmbeddingProvider = {
+  embed: async () => [0.1, 0.2, 0.3],
   embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3]),
 };
 
@@ -113,7 +115,7 @@ async function indexCorpus(
   stubEvery: number,
   config: SourceConfig = sourceConfig,
 ): Promise<Set<string>> {
-  const pipeline = new IndexingPipeline(embeddingProvider as never, config);
+  const pipeline = new IndexingPipeline(embeddingProvider, config);
   const items: ContentItem[] = [];
   const disk = new Set<string>();
   for (let n = 0; n < 40; n++) {

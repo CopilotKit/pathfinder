@@ -722,6 +722,12 @@
           <span class="comment"
             ># Max file size in bytes to index (optional)</span
           >
+          <span class="key">unindexed_tolerance:</span>
+          <span class="value">0.05</span>
+          <span class="comment"
+            ># Share of walked files that may be missing from the index before
+            the post-reindex audit reports a shortfall (optional)</span
+          >
           <span class="key">category:</span> <span class="value">faq</span>
           <span class="comment"
             ># Optional. Marks content as FAQ for /faq.txt and knowledge
@@ -754,6 +760,19 @@
         </div>
 
         <ul>
+          <li>
+            <strong>unindexed_tolerance</strong> — After each reindex, an audit
+            compares the files walked on disk against the files present in the
+            index and reports a <code>count_divergence</code> finding (direction
+            <code>db_has_fewer</code>) naming the files the index is missing.
+            Some shortfall is normal — a file with no extractable prose is
+            walked and then dropped — so the finding only fires above this share
+            of the source's walked files (default <code>0.05</code>, with a
+            floor of 3 files so small sources stay quiet). Set it to
+            <code>0</code> once a source is known to index everything it walks,
+            and the audit will flag the very first regression. It does not
+            affect what gets indexed, so changing it does not trigger a reindex.
+          </li>
           <li>
             <strong>type</strong> — Determines chunking strategy.
             <code>markdown</code> splits on headings and uses token-based
