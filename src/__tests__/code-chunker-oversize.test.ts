@@ -91,7 +91,11 @@ describe("code chunker: template literals and the hard size backstop", () => {
     // single 80-line range of long lines still overflows the embedding model.
     const longLine = "  ".concat("const x = ", '"'.padEnd(600, "y"), '";');
     const content = Array.from({ length: 400 }, () => longLine).join("\n");
-    const chunks = chunkCode(content, "packages/dense/no-blank-lines.ts", CODE_CONFIG);
+    const chunks = chunkCode(
+      content,
+      "packages/dense/no-blank-lines.ts",
+      CODE_CONFIG,
+    );
 
     for (const chunk of chunks) {
       expect(chunk.content.length).toBeLessThanOrEqual(12_000);
@@ -105,7 +109,9 @@ describe("code chunker: template literals and the hard size backstop", () => {
     expect(chunks.length).toBeGreaterThan(1);
     // Chunks stay line-addressable and in order.
     for (let i = 1; i < chunks.length; i++) {
-      expect(chunks[i].startLine).toBeGreaterThan(chunks[i - 1].startLine);
+      expect(chunks[i].startLine ?? 0).toBeGreaterThan(
+        chunks[i - 1].startLine ?? 0,
+      );
     }
   });
 
