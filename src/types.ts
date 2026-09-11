@@ -130,6 +130,14 @@ export const FileSourceConfigSchema = z.object({
   exclude_patterns: z.array(z.string()).optional(),
   skip_dirs: z.array(z.string()).optional(),
   max_file_size: z.number().int().positive().optional(),
+  // Fraction of this source's walked files that may be absent from the index
+  // before the post-reindex audit reports a shortfall (see
+  // src/indexing/reindex-audit.ts, Check 3). Some shortfall is legitimate —
+  // the indexer drops files with no semantic content — so the audit needs a
+  // per-source baseline rather than a single global guess. Set it to 0 once a
+  // source is known to index every file, and the audit will then flag the very
+  // first regression. Defaults to 0.05.
+  unindexed_tolerance: z.number().min(0).max(1).optional(),
 });
 
 // Slack source schema — different required fields

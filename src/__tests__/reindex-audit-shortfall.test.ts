@@ -105,16 +105,19 @@ const embeddingProvider = {
   embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3]),
 };
 
-/** Index 40 pages, 8 of which are pure-JSX stubs. Returns the disk file set. */
-async function indexCorpus(): Promise<Set<string>> {
-  const pipeline = new IndexingPipeline(
-    embeddingProvider as never,
-    sourceConfig,
-  );
+/**
+ * Index 40 pages, `stubEvery`-th of which is a pure-JSX stub. Returns the disk
+ * file set. `config` lets a test exercise a per-source tolerance override.
+ */
+async function indexCorpus(
+  stubEvery: number,
+  config: SourceConfig = sourceConfig,
+): Promise<Set<string>> {
+  const pipeline = new IndexingPipeline(embeddingProvider as never, config);
   const items: ContentItem[] = [];
   const disk = new Set<string>();
   for (let n = 0; n < 40; n++) {
-    const isStub = n % 5 === 0; // 8 of 40 → a 20% shortfall
+    const isStub = n % stubEvery === 0;
     const id = `page-${n}.mdx`;
     disk.add(id);
     items.push({ id, content: isStub ? jsxStubPage(n) : prosePage(n) });
@@ -139,7 +142,7 @@ describe("post-reindex shortfall audit (zero-chunk files)", () => {
   });
 
   it("reports a db_has_fewer finding when pure-JSX stubs chunk to zero", async () => {
-    const disk = await indexCorpus();
+    const disk = await indexCorpus(5); // 8 of 40 → a 20% shortfall
     mockWalkSourceFiles.mockResolvedValue(disk);
 
     // Precondition: the pipeline really did drop the stubs (the bug's mechanism).
@@ -160,5 +163,39 @@ describe("post-reindex shortfall audit (zero-chunk files)", () => {
       expect.arrayContaining(["page-0.mdx", "page-5.mdx"]),
     );
     expect(shortfall!.samples.length).toBeLessThanOrEqual(10);
+  });
+
+  // ── Negative assertion: the new check must not become noise ─────────────
+  //
+  // Every source drops SOME files legitimately. If a normal reindex of a
+  // healthy source emits a finding, operators mute the audit and the next real
+  // shrink goes unseen — which is how the shortfall direction got suppressed in
+  // the first place. A healthy source must stay silent.
+  it("does NOT report a shortfall for a source skipping a normal share of files", async () => {
+    // 1 empty page out of 40 → 2.5%, inside the 5% default tolerance.
+    const disk = await indexCorpus(40);
+    mockWalkSourceFiles.mockResolvedValue(disk);
+    expect(chunkTable("docs").size).toBe(39);
+
+    const findings = await runReindexAudit(["docs"]);
+
+    expect(findings).toEqual([]);
+  });
+
+  it("reports that same small shortfall once the source sets unindexed_tolerance: 0", async () => {
+    // A source known to index everything it walks opts into a zero baseline,
+    // and the audit then flags the very first regression.
+    const strict = { ...sourceConfig, unindexed_tolerance: 0 };
+    mockGetServerConfig.mockReturnValue({ sources: [strict] });
+
+    const disk = await indexCorpus(40, strict);
+    mockWalkSourceFiles.mockResolvedValue(disk);
+
+    const findings = await runReindexAudit(["docs"]);
+
+    const shortfall = findings.find((f) => f.direction === "db_has_fewer");
+    expect(shortfall).toBeDefined();
+    expect(shortfall!.count).toBe(1);
+    expect(shortfall!.samples).toEqual(["page-0.mdx"]);
   });
 });
