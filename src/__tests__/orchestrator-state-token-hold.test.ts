@@ -171,8 +171,10 @@ describe("IndexingOrchestrator state-token hold on item failure (C1)", () => {
       status: "idle",
       error_message: null,
     });
-    mockIndexItems.mockResolvedValue({ failedIds: [] });
-    mockRemoveItems.mockResolvedValue({ failedIds: [] });
+    // The pipeline reports failures as {id, error} pairs; failedIds is the
+    // projection of that list. Mirror the real contract in the doubles.
+    mockIndexItems.mockResolvedValue({ failedIds: [], failures: [] });
+    mockRemoveItems.mockResolvedValue({ failedIds: [], failures: [] });
   });
 
   it("does NOT advance the state token when an item fails to index", async () => {
@@ -185,7 +187,10 @@ describe("IndexingOrchestrator state-token hold on item failure (C1)", () => {
       stateToken: "new-token",
     });
     // One item failed.
-    mockIndexItems.mockResolvedValue({ failedIds: ["docs/bad.md"] });
+    mockIndexItems.mockResolvedValue({
+      failedIds: ["docs/bad.md"],
+      failures: [{ id: "docs/bad.md", error: "boom" }],
+    });
 
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await runSourceReindex(orchestrator);
@@ -213,7 +218,10 @@ describe("IndexingOrchestrator state-token hold on item failure (C1)", () => {
       removedIds: ["docs/gone.md"],
       stateToken: "new-token",
     });
-    mockRemoveItems.mockResolvedValue({ failedIds: ["docs/gone.md"] });
+    mockRemoveItems.mockResolvedValue({
+      failedIds: ["docs/gone.md"],
+      failures: [{ id: "docs/gone.md", error: "boom" }],
+    });
 
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await runSourceReindex(orchestrator);
@@ -231,8 +239,8 @@ describe("IndexingOrchestrator state-token hold on item failure (C1)", () => {
       removedIds: ["docs/gone.md"],
       stateToken: "new-token",
     });
-    mockIndexItems.mockResolvedValue({ failedIds: [] });
-    mockRemoveItems.mockResolvedValue({ failedIds: [] });
+    mockIndexItems.mockResolvedValue({ failedIds: [], failures: [] });
+    mockRemoveItems.mockResolvedValue({ failedIds: [], failures: [] });
 
     await runSourceReindex(orchestrator);
 

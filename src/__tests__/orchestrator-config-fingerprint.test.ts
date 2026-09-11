@@ -116,11 +116,11 @@ vi.mock("../indexing/pipeline.js", () => ({
         h.indexed.add(item.id);
         h.indexedThisRun.push(item.id);
       }
-      return { failedIds: [] };
+      return { failedIds: [], failures: [] };
     }
     async removeItems(ids: string[]) {
       for (const id of ids) h.indexed.delete(id);
-      return { failedIds: [] };
+      return { failedIds: [], failures: [] };
     }
   },
 }));

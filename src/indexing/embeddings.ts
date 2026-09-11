@@ -7,6 +7,57 @@ const MAX_BATCH_SIZE = 2048;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 
+// How many times a single batch may be shrunk in response to an
+// input-too-long 400 before giving up. Each round halves the offending input,
+// so 12 rounds take a 30,000-character input below 8 characters — the bound
+// exists to guarantee termination, not because it is ever expected to be hit.
+const MAX_SHRINK_ROUNDS = 12;
+
+// Inputs are never shrunk below this. An input this small that STILL trips the
+// length error is not a length problem, and looping further would hide the
+// real one.
+const MIN_SHRINK_CHARS = 64;
+
+/**
+ * Whether an API error is the provider rejecting an input purely for being too
+ * long — recoverable by sending less text, unlike every other 400.
+ *
+ * This distinction is what kept mcp.copilotkit.ai's `code` source frozen for
+ * ten days. A single code chunk embedded to more than 8192 tokens, OpenAI
+ * answered `400 Invalid 'input[2]': maximum input length is 8192 tokens.`, the
+ * provider treated it as fatal, the item failed, and the orchestrator held the
+ * source's state token — every run, identically, for ten days.
+ */
+function isInputTooLongError(error: unknown): boolean {
+  // Duck-type the 400 rather than relying solely on `instanceof`: the SDK
+  // class is not always the same object across module boundaries (and test
+  // doubles replace it outright), while `status` is stable on every APIError.
+  const status = (error as { status?: unknown } | null)?.status;
+  const isBadRequest =
+    status === 400 ||
+    (typeof OpenAI.BadRequestError === "function" &&
+      error instanceof OpenAI.BadRequestError);
+  if (!isBadRequest) return false;
+  const message = String((error as Error | null)?.message ?? "");
+  return /maximum input length|maximum context length|reduce (?:your|the) input/i.test(
+    message,
+  );
+}
+
+/**
+ * Which input index the provider named, if it named one. OpenAI reports the
+ * FIRST offending element as `input[N]`, so shrinking just that element and
+ * retrying converges on the real limit without mangling healthy siblings in
+ * the same batch.
+ */
+function parseOffendingInputIndex(error: unknown): number | null {
+  const message = String((error as Error)?.message ?? "");
+  const match = /input\[(\d+)\]/.exec(message);
+  if (!match) return null;
+  const index = Number(match[1]);
+  return Number.isInteger(index) && index >= 0 ? index : null;
+}
+
 // Assert a provider returned exactly one vector per input text, failing LOUD
 // with context on a shortfall. A provider/proxy that streams nothing (or a mock
 // returning `{ data: [] }`) yields a results array SHORTER than the input, so
@@ -64,6 +115,39 @@ function assertEmbeddingDimensions(
 // "omit" behavior.
 function modelSupportsDimensions(model: string): boolean {
   return /^text-embedding-3-/.test(model);
+}
+
+/**
+ * Halve the length of the input(s) the provider rejected.
+ *
+ * When the error named an index, only that input is touched, so a single
+ * pathological chunk does not degrade the rest of its batch. When it did not,
+ * every input above {@link MIN_SHRINK_CHARS} is halved — a blunt instrument,
+ * but one that still converges.
+ *
+ * Returns null when nothing can usefully be shrunk, which is the signal to
+ * stop and surface the original error.
+ */
+function shrinkOversizedInputs(
+  texts: string[],
+  offendingIndex: number | null,
+): { texts: string[]; changedCount: number } | null {
+  const shouldShrink = (index: number, text: string): boolean => {
+    if (text.length <= MIN_SHRINK_CHARS) return false;
+    return offendingIndex === null || offendingIndex === index;
+  };
+
+  let changedCount = 0;
+  const next = texts.map((text, index) => {
+    if (!shouldShrink(index, text)) return text;
+    changedCount++;
+    return text.slice(
+      0,
+      Math.max(MIN_SHRINK_CHARS, Math.floor(text.length / 2)),
+    );
+  });
+
+  return changedCount === 0 ? null : { texts: next, changedCount };
 }
 
 // ── Provider interface ──────────────────────────────────────────────────────
@@ -133,7 +217,12 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   async embedBatch(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
 
-    // Truncate texts that exceed OpenAI's 8192 token limit (~32K chars with safety margin)
+    // A first-pass cap on absurd inputs. It is expressed in CHARACTERS while
+    // the API's limit is in TOKENS, so it can only ever be a heuristic: 30,000
+    // characters is ~8192 tokens at 3.66 chars/token, and dense source code
+    // tokenizes well below that ratio. Inputs that slip past this cap and get
+    // rejected are recovered by the shrink-and-retry path in embedWithRetry —
+    // that, not this constant, is what makes an over-length input non-fatal.
     const MAX_CHARS = 30_000;
     const truncated = texts.map((t) =>
       t.length > MAX_CHARS ? t.slice(0, MAX_CHARS) : t,
@@ -171,6 +260,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     texts: string[],
     batchNum: number,
     attempt: number = 1,
+    shrinkRound: number = 0,
   ): Promise<number[][]> {
     try {
       const response = await this.client.embeddings.create({
@@ -199,6 +289,36 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
       const sorted = response.data.sort((a, b) => a.index - b.index);
       return sorted.map((item) => item.embedding);
     } catch (error: unknown) {
+      // An input-too-long 400 is recoverable by sending less text, so it is
+      // handled before the generic retry bookkeeping: it is not an attempt
+      // that should count against MAX_RETRIES, and retrying it unchanged
+      // would fail identically forever.
+      if (isInputTooLongError(error)) {
+        const shrunk = shrinkOversizedInputs(
+          texts,
+          parseOffendingInputIndex(error),
+        );
+        if (shrunk && shrinkRound < MAX_SHRINK_ROUNDS) {
+          console.warn(
+            `Embedding batch ${batchNum}: input rejected as too long ` +
+              `(${(error as Error).message}); truncating ${shrunk.changedCount} ` +
+              `input(s) and retrying (shrink round ${shrinkRound + 1}/${MAX_SHRINK_ROUNDS}). ` +
+              `Indexed content for the affected chunk(s) will be TRUNCATED.`,
+          );
+          return this.embedWithRetry(
+            shrunk.texts,
+            batchNum,
+            attempt,
+            shrinkRound + 1,
+          );
+        }
+        console.error(
+          `Embedding batch ${batchNum}: input still rejected as too long after ` +
+            `${shrinkRound} shrink round(s); giving up.`,
+        );
+        throw error;
+      }
+
       if (attempt >= MAX_RETRIES) {
         console.error(
           `Embedding batch ${batchNum} failed after ${MAX_RETRIES} retries`,

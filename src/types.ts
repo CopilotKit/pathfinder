@@ -631,6 +631,33 @@ export interface ChunkOutput {
 
 export type IndexStatus = "idle" | "indexing" | "error";
 
+/**
+ * Per-item failure bookkeeping for one source, keyed by the item id the
+ * provider uses (a repo-relative file path for code/markdown sources).
+ *
+ * The orchestrator refuses to advance a source's state token past an item that
+ * failed, so the failure is retried instead of silently skipped. That is right
+ * for a transient failure and fatal for a permanent one: mcp.copilotkit.ai's
+ * `code` source sat at commit 0d0ea901 for TEN DAYS because one file's chunk
+ * was too large for the embedding model and therefore failed identically on
+ * every retry. Counting consecutive failures is what lets a permanent failure
+ * be told apart from a transient one, and bounded.
+ */
+export interface ItemFailureRecord {
+  /** Consecutive runs in which this item was attempted and failed. */
+  attempts: number;
+  /** ISO timestamp of the first failure in the current streak. */
+  first_failed_at: string;
+  /** The most recent error, so an operator can see WHY without log archaeology. */
+  last_error: string;
+  /**
+   * True once `attempts` reached the retry bound. A quarantined item no longer
+   * holds the source's state token — it is still re-attempted on every run,
+   * but it can no longer freeze everything else behind it.
+   */
+  quarantined: boolean;
+}
+
 export interface IndexState {
   source_type: string;
   source_key: string;
@@ -645,4 +672,11 @@ export interface IndexState {
   last_indexed_at?: Date | null;
   status?: IndexStatus;
   error_message?: string | null;
+  /**
+   * Item ids that failed on recent runs, with their consecutive-failure counts
+   * (see {@link ItemFailureRecord}). Absent/NULL for installs whose
+   * index_state predates the column, and cleared whenever a run completes with
+   * nothing outstanding.
+   */
+  item_failures?: Record<string, ItemFailureRecord> | null;
 }

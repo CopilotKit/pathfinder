@@ -66,90 +66,116 @@ interface BlockState {
 }
 
 /**
- * Check whether the character at `pos` is escaped by counting preceding
- * backslashes.  An odd number means the character is escaped.
+ * Advance the cross-line block state by scanning one line character by
+ * character.
+ *
+ * This is a single left-to-right pass rather than the two-stage
+ * "strip strings, then count backticks" it replaces. That older shape had a
+ * fatal ordering bug: the stripper knew about `'` and `"` but NOT about
+ * backticks, so a `//` inside a template literal —
+ *
+ *   wsUrl: `ws://127.0.0.1:5177/inspector-lab-runtime/${key}/realtime`,
+ *
+ * — read as the start of a line comment. Everything after `ws:` was discarded,
+ * including the CLOSING backtick, which left an odd backtick count and latched
+ * `inTemplateString` for the remainder of the file. With the latch stuck, no
+ * blank line qualified as a split point ever again, so ~960 lines collapsed
+ * into a single chunk that exceeded the embedding model's token limit. That
+ * one chunk failed to embed, which held the source's state token, which froze
+ * mcp.copilotkit.ai's `code` source at commit 0d0ea901 for ten days.
+ *
+ * Scanning in one pass keeps the quote/template/comment contexts mutually
+ * exclusive, which is the only way `//` can be classified correctly.
+ *
+ * Single-quote and double-quote strings are treated as line-local (JS does not
+ * carry them across lines without an explicit continuation); template literals
+ * and block comments carry across lines via the returned state. `${…}`
+ * interpolations are treated as literal template text — expressions there can
+ * technically contain nested strings and comments, but bounding the chunk size
+ * (see MAX_CHUNK_CHARS) is the backstop for anything this heuristic misreads.
  */
-function isEscaped(line: string, pos: number): boolean {
-  let backslashes = 0;
-  for (let j = pos - 1; j >= 0 && line[j] === "\\"; j--) {
-    backslashes++;
-  }
-  return backslashes % 2 === 1;
-}
-
-/**
- * Strip string literals and single-line comments from a line so that
- * block-comment and template-string detection only fires on real syntax.
- */
-function stripStringsAndLineComments(line: string): string {
-  let result = "";
-  let inSingle = false;
-  let inDouble = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-
-    if (!inSingle && !inDouble && ch === "/" && line[i + 1] === "/") {
-      break; // rest of line is a single-line comment
-    }
-
-    if (!inDouble && ch === "'" && !isEscaped(line, i)) {
-      inSingle = !inSingle;
-    } else if (!inSingle && ch === '"' && !isEscaped(line, i)) {
-      inDouble = !inDouble;
-    }
-
-    if (!inSingle && !inDouble) {
-      result += ch;
-    }
-  }
-
-  return result;
-}
-
 function trackBlockState(line: string, state: BlockState): BlockState {
-  const newState = { ...state };
-  const stripped = stripStringsAndLineComments(line);
+  let { inBlockComment, inTemplateString } = state;
+  let i = 0;
 
-  if (newState.inBlockComment) {
-    if (stripped.includes("*/")) {
-      newState.inBlockComment = false;
+  while (i < line.length) {
+    const ch = line[i];
+    const next = line[i + 1];
+
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
     }
-    return newState;
+
+    if (inTemplateString) {
+      // A backslash escapes the next character, so `\`` does not close.
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "`") {
+        inTemplateString = false;
+      }
+      i++;
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      // Real line comment — nothing after it can change the block state.
+      break;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+    if (ch === "`") {
+      inTemplateString = true;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      // Consume the whole string literal on this line. An unterminated one
+      // (the line ends first) is treated as ended, matching the line-local
+      // assumption above.
+      const quote = ch;
+      i++;
+      while (i < line.length) {
+        if (line[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (line[i] === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+
+    i++;
   }
 
-  if (newState.inTemplateString) {
-    // Count unescaped backticks
-    const backticks = (stripped.match(/(?<!\\)`/g) || []).length;
-    if (backticks % 2 === 1) {
-      newState.inTemplateString = false;
-    }
-    return newState;
-  }
-
-  // Check for block comment start (not on same line as end)
-  if (stripped.includes("/*") && !stripped.includes("*/")) {
-    newState.inBlockComment = true;
-  } else if (!newState.inBlockComment) {
-    // Only check template strings if we didn't just enter a block comment
-    const backticks = (stripped.match(/(?<!\\)`/g) || []).length;
-    if (backticks % 2 === 1) {
-      newState.inTemplateString = true;
-    }
-  }
-
-  // Python triple-quote strings — run on original line since stripping is JS-oriented
-  if (!newState.inBlockComment && !newState.inTemplateString) {
+  // Python triple-quoted strings reuse the block-comment flag. Checked on the
+  // ORIGINAL line because the scan above is JS-oriented, and only when the JS
+  // scan left us in neutral territory.
+  if (!inBlockComment && !inTemplateString) {
     if (line.includes('"""') || line.includes("'''")) {
       const tripleDouble = (line.match(/"""/g) || []).length;
       const tripleSingle = (line.match(/'''/g) || []).length;
       if (tripleDouble % 2 === 1 || tripleSingle % 2 === 1) {
-        newState.inBlockComment = true; // reuse flag for python docstrings
+        inBlockComment = true;
       }
     }
   }
 
-  return newState;
+  return { inBlockComment, inTemplateString };
 }
 
 /**
@@ -207,6 +233,85 @@ function formatChunk(
   });
 
   return breadcrumb + "\n" + numbered.join("\n");
+}
+
+/**
+ * Hard upper bound on a single chunk's formatted size, in characters.
+ *
+ * Every split heuristic above is advisory: `splitAtBoundaries` looks for blank
+ * lines, and when a file has none for hundreds of lines (generated code, an
+ * icon table, a long object literal) it falls back to slicing on `targetLines`
+ * — which bounds LINES, not characters. Nothing downstream tolerates an
+ * unbounded chunk: the embedding model rejects anything over 8192 tokens, and
+ * that rejection is a non-retryable 400 that used to freeze the whole source.
+ *
+ * 12,000 characters is deliberately conservative. Source code runs roughly
+ * 3-4 characters per token, so this lands near 3,000-4,000 tokens — well
+ * inside the limit even for unusually dense content, and small enough that a
+ * chunk still embeds to a focused vector rather than an averaged blur.
+ */
+const MAX_CHUNK_CHARS = 12_000;
+
+/**
+ * Format a line range into one or more chunks, none exceeding
+ * {@link MAX_CHUNK_CHARS}.
+ *
+ * Splits by LINES first so chunks stay line-addressable (start/end line
+ * numbers keep pointing at real code). A single line that is itself over the
+ * cap — a minified bundle, an inlined data URI — cannot be split that way, so
+ * it is sliced by characters as a last resort; those slices share the line's
+ * number, which is the honest answer for content that occupies one line.
+ */
+function emitBounded(
+  lines: string[],
+  startLine: number,
+  endLine: number,
+  filePath: string,
+  language: string,
+): Array<Omit<ChunkOutput, "chunkIndex">> {
+  const content = formatChunk(lines, startLine, filePath);
+  if (content.length <= MAX_CHUNK_CHARS) {
+    return [{ content, startLine, endLine, language }];
+  }
+
+  if (lines.length > 1) {
+    const mid = Math.ceil(lines.length / 2);
+    return [
+      ...emitBounded(
+        lines.slice(0, mid),
+        startLine,
+        startLine + mid - 1,
+        filePath,
+        language,
+      ),
+      ...emitBounded(
+        lines.slice(mid),
+        startLine + mid,
+        endLine,
+        filePath,
+        language,
+      ),
+    ];
+  }
+
+  // One line, over the cap. Slice the raw line and re-format each slice so
+  // every emitted chunk carries the breadcrumb and stays under the bound.
+  const overhead = content.length - lines[0].length;
+  const sliceSize = Math.max(1, MAX_CHUNK_CHARS - overhead);
+  const out: Array<Omit<ChunkOutput, "chunkIndex">> = [];
+  for (let i = 0; i < lines[0].length; i += sliceSize) {
+    out.push({
+      content: formatChunk(
+        [lines[0].slice(i, i + sliceSize)],
+        startLine,
+        filePath,
+      ),
+      startLine,
+      endLine,
+      language,
+    });
+  }
+  return out;
 }
 
 /**
@@ -366,13 +471,17 @@ export function chunkCode(
     const startLine = start + 1; // 1-indexed
     const endLine = end + 1; // 1-indexed
 
-    chunks.push({
-      content: formatChunk(chunkLines, startLine, filePath),
+    // Emit through the size backstop rather than pushing directly: a range
+    // that is fine by LINE count can still be enormous by character count.
+    for (const emitted of emitBounded(
+      chunkLines,
       startLine,
       endLine,
+      filePath,
       language,
-      chunkIndex: chunks.length,
-    });
+    )) {
+      chunks.push({ ...emitted, chunkIndex: chunks.length });
+    }
   }
 
   return chunks;
