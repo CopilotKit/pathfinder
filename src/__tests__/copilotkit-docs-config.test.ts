@@ -97,13 +97,49 @@ describe("deploy/copilotkit-docs.yaml — machine-relay exclusion", () => {
     (config as unknown as { analytics?: { machine_relays?: unknown[] } })
       .analytics?.machine_relays ?? [];
 
+  const byName = Object.fromEntries(
+    (relays as Array<Record<string, unknown>>).map((r) => [String(r.name), r]),
+  );
+
   it("declares the GitHub-issue triage relay by identity, not by content shape", () => {
-    expect(relays).toHaveLength(1);
-    const rule = relays[0] as Record<string, unknown>;
-    expect(rule.name).toBe("github-issue-triage");
+    const rule = byName["github-issue-triage"];
+    expect(rule).toBeDefined();
     expect(rule.user_agent).toBe("node");
     expect(rule.client_ip_cidr).toBe("152.55.176.0/20");
     // An operator reading the dashboard panel must be able to see WHY.
     expect(String(rule.reason)).toContain("triage relay");
+  });
+
+  // The ad-hoc Python replay harness: 258 rows from one workstation in one
+  // 55-second burst on 2026-09-10, 206 of its 258 distinct query texts
+  // verbatim replays of queries other clients had already logged. Pinned here
+  // because the rule is what keeps a hand-run benchmark from reading as user
+  // demand in Top Queries, the weekly Notion report and the gap analysis.
+  it("declares the ad-hoc Python replay harness by User-Agent alone", () => {
+    const rule = byName["adhoc-python-replay-harness"];
+    expect(rule).toBeDefined();
+    expect(rule.user_agent).toBe("Python-urllib/3.9");
+    // Deliberately NO CIDR: the source is a residential dynamic address, so
+    // pinning it would be brittle and would publish a home IP. The User-Agent
+    // is sufficient — no MCP client library speaks stdlib urllib.
+    expect(rule.client_ip_cidr).toBeUndefined();
+    expect(String(rule.reason)).toContain("replay harness");
+  });
+
+  it("declares only identity-shaped rules — no content-shape predicate", () => {
+    expect(relays).toHaveLength(2);
+    for (const rule of relays as Array<Record<string, unknown>>) {
+      // Every rule must carry a human-readable reason for the dashboard
+      // panel, and may only discriminate on identity (UA / source network).
+      expect(String(rule.reason ?? "")).not.toHaveLength(0);
+      expect(Object.keys(rule).sort()).toEqual(
+        expect.arrayContaining(["name", "reason"]),
+      );
+      for (const key of Object.keys(rule)) {
+        expect(["name", "reason", "user_agent", "client_ip_cidr"]).toContain(
+          key,
+        );
+      }
+    }
   });
 });
