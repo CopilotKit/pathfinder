@@ -1,4 +1,6 @@
 import { getPool } from "./client.js";
+import { getAnalyticsConfig } from "../config.js";
+import type { MachineRelayRule } from "../types.js";
 import {
   COSINE_SCORE_KIND,
   COSINE_SCORE_MAX,
@@ -135,6 +137,50 @@ export const DEFAULT_REQUEST_SOURCE: RequestSource = "user";
  * all-sources view (see {@link AnalyticsFilter.request_source}).
  */
 export const REAL_USER_REQUEST_SOURCES: readonly RequestSource[] = ["user"];
+
+// ---------------------------------------------------------------------------
+// Machine relays
+// ---------------------------------------------------------------------------
+
+/**
+ * Operator-declared fingerprints for MACHINE RELAYS — see
+ * {@link MachineRelayRuleSchema} in src/types.ts for the full rationale.
+ * Re-exported here because every consumer of the exclusion (the readers, the
+ * routes, the dashboard) reaches for it through the analytics module.
+ */
+export type { MachineRelayRule };
+
+/**
+ * Test/opt-in override for {@link getMachineRelayRules}. `null` (the default)
+ * means "read the live server config". Set to an array to pin the rules
+ * without a config file; pass `null` to restore.
+ */
+let machineRelayRulesOverride: MachineRelayRule[] | null = null;
+
+/** @internal — test seam for {@link getMachineRelayRules}. */
+export function __setMachineRelayRulesForTesting(
+  rules: MachineRelayRule[] | null,
+): void {
+  machineRelayRulesOverride = rules;
+}
+
+/**
+ * The machine-relay rules in force, from `analytics.machine_relays` in the
+ * server YAML. Defaults to NO rules: an install that has not declared a relay
+ * never gets a hidden exclusion.
+ *
+ * Config loading is wrapped because the analytics readers are also exercised
+ * in contexts with no YAML on disk (unit tests, ad-hoc scripts); a missing
+ * config must degrade to "no relay rules", never throw inside a reader.
+ */
+export function getMachineRelayRules(): MachineRelayRule[] {
+  if (machineRelayRulesOverride !== null) return machineRelayRulesOverride;
+  try {
+    return getAnalyticsConfig()?.machine_relays ?? [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Normalize an arbitrary `X-Pathfinder-Source` header value to a known
