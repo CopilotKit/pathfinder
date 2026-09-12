@@ -34,14 +34,6 @@ import {
 } from "../db/analytics.js";
 import type { MachineRelayRule } from "../types.js";
 import { generatePostSchemaMigration } from "../db/schema.js";
-import { renderMarkdown } from "../../scripts/weekly-search-report/weekly-search-report.js";
-import type {
-  AnalyticsBundle,
-  AnalyticsSummary as ReportSummary,
-  EmptyQuery as ReportEmptyQuery,
-  TopQuery as ReportTopQuery,
-  ToolBreakdownRow,
-} from "../../scripts/weekly-search-report/weekly-search-report.js";
 
 const QUERY_LOG_DDL_MARKER =
   "-- Analytics: query_log table for tracking tool usage";
@@ -280,24 +272,6 @@ describe("machine-relay exclusion from operator-facing analytics", () => {
     const empty = await getEmptyQueries(7, 200);
     expect(texts(empty).some((t) => t.includes("zagfro.com"))).toBe(false);
     expect(texts(empty)).toContain("no hits for this one");
-  });
-
-  it("keeps relay rows out of the weekly search report payload", async () => {
-    const bundle: AnalyticsBundle = {
-      summary: (await getAnalyticsSummary({}, 7)) as unknown as ReportSummary,
-      queries: (await getTopQueries(7, 200)) as unknown as ReportTopQuery[],
-      emptyQueries: (await getEmptyQueries(
-        7,
-        200,
-      )) as unknown as ReportEmptyQuery[],
-      toolBreakdown: (await getToolBreakdown(
-        7,
-        {},
-      )) as unknown as ToolBreakdownRow[],
-    };
-    const markdown = renderMarkdown(bundle, new Date("2026-09-13T09:07:00Z"), 7);
-    expect(markdown).not.toContain("1rank.app");
-    expect(markdown).not.toContain("zagfro.com");
   });
 
   it("keeps relay rows out of the summary counts", async () => {

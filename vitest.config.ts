@@ -2,7 +2,7 @@ import { defineConfig, configDefaults } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
     exclude: [...configDefaults.exclude, "dist/**", "**/.claude/**"],
 
     // Pin the suite's timezone. Unpinned, four tests that reason about UTC-day
