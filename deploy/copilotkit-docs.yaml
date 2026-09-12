@@ -304,6 +304,37 @@ analytics:
       user_agent: node
       client_ip_cidr: 152.55.176.0/20
 
+  # Measured 2026-09-12 over the full 90-day retention (22,238 rows): User-Agent
+  # `Python-urllib/3.9` accounts for 258 rows from ONE IP in ONE 55-second burst
+  # (2026-09-10 15:30 UTC) — the single largest session in retention by 3.3x
+  # (257 rows; the biggest legitimate session is 77 rows over 6 minutes). That
+  # IP is a CopilotKit engineer's workstation, and `Python-urllib/3.9` is what
+  # the macOS system `python3` (3.9.6) sends: an ad-hoc replay harness, run by
+  # hand, that fired a de-duplicated corpus of 257 queries at search-docs /
+  # search-code / search-ag-ui-*. 206 of those 258 distinct texts are VERBATIM
+  # copies of queries other clients had already logged — the harness forwards
+  # other people's text into the tools, which is exactly what this list is for.
+  #
+  # It is not abuse and it costs nothing to serve; what it does is impersonate
+  # demand. In a 7-day window it was 252 of 1,258 Top Queries rows (20%), it
+  # double-counted 20 real queries, and it contributed zero-result rows that
+  # read as documentation gaps in the bi-weekly gap analysis.
+  #
+  # IDENTITY-shaped, and deliberately UA-only: no MCP client library speaks
+  # stdlib urllib (the official Python MCP SDK uses httpx — see the
+  # `python-httpx/*` traffic, which this rule does NOT touch), so this UA is
+  # always a hand-rolled script. The source CIDR is omitted on purpose: it is a
+  # residential dynamic address, so pinning it would be both brittle and a
+  # personal-address leak in a public repo.
+  #
+  # DELETE THIS RULE once ad-hoc harnesses send `X-Pathfinder-Source: analysis`
+  # at MCP session init — that tag already excludes them, with no fingerprint.
+    - name: adhoc-python-replay-harness
+      reason: >-
+        Ad-hoc Python replay harness (macOS system python3, stdlib urllib) —
+        refires a corpus of previously-logged queries in bulk
+      user_agent: Python-urllib/3.9
+
 webhook:
   repo_sources:
     "CopilotKit/CopilotKit":
