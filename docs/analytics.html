@@ -537,6 +537,41 @@
       <tbody></tbody>
     </table>
 
+    <h2 id="relayExclusionsTitle" style="margin-bottom: 4px">
+      Excluded Machine-Relay Traffic &#x1F501;
+    </h2>
+    <p
+      id="relayExclusionsSubtitle"
+      style="
+        color: var(--text-secondary, #6b7280);
+        margin-top: 0;
+        margin-bottom: 12px;
+        font-size: 14px;
+      "
+    >
+      Machines that forward somebody else's text into the tools verbatim (our
+      GitHub-issue triage relay, for one). Real traffic, but not user queries —
+      so these rows are excluded from every panel above and from the weekly and
+      gap-analysis reports. <em>Tag</em> means the client declared itself with
+      the <code>X-Pathfinder-Source</code> header; <em>fingerprint</em> means
+      this server recognized it from an
+      <code>analytics.machine_relays</code> rule. Nothing is hidden: append
+      <code>?request_source=relay</code> to any analytics endpoint to read the
+      excluded rows.
+    </p>
+    <table id="relayExclusionsTable">
+      <thead>
+        <tr>
+          <th>Rule</th>
+          <th>How</th>
+          <th>Rows Excluded</th>
+          <th>Last Seen</th>
+          <th>Why</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
     <div
       id="login"
       style="
@@ -762,6 +797,24 @@
               source_name: "code",
               count: 7,
               last_seen: new Date(Date.now() - 3600 * 1000 * 8).toISOString(),
+            },
+          ],
+          "/api/analytics/relay-exclusions": [
+            {
+              name: "x-pathfinder-source",
+              reason:
+                "Client declared itself a machine relay via the X-Pathfinder-Source header",
+              kind: "tag",
+              count: 18,
+              last_seen: new Date(Date.now() - 900 * 1000).toISOString(),
+            },
+            {
+              name: "github-issue-triage",
+              reason:
+                "GitHub-issue triage relay forwards issue bodies verbatim into search",
+              kind: "fingerprint",
+              count: 46,
+              last_seen: new Date(Date.now() - 3600 * 1000 * 5).toISOString(),
             },
           ],
           "/api/analytics/blocked-queries": [
@@ -1811,6 +1864,10 @@
             if (m) daysParam = "?days=" + m[1];
           }
           var blockedUrl = "/api/analytics/blocked-queries" + daysParam;
+          // Relay-exclusions panel takes the same window as everything else.
+          // It deliberately ignores the audience filter: its whole job is to
+          // report what the audience filter REMOVED.
+          var relayUrl = "/api/analytics/relay-exclusions" + daysParam;
           // Same '?' / leading-'&' handling as summary above.
           var toolCountsUrl =
             "/api/analytics/tool-counts" +
@@ -1830,6 +1887,7 @@
             fetchJson(emptyUrl, gen),
             fetchJson(toolCountsUrl, gen),
             fetchJson(blockedUrl, gen),
+            fetchJson(relayUrl, gen),
           ]);
           if (gen !== loadGeneration) return; // stale response — abort
 
@@ -1867,6 +1925,11 @@
           var blockedQueries = settledValueOr(
             settled[4],
             "blocked queries",
+            [],
+          );
+          var relayExclusions = settledValueOr(
+            settled[5],
+            "relay exclusions",
             [],
           );
 
@@ -2302,6 +2365,44 @@
                 })
                 .join("") ||
               '<tr><td colspan="4">No blocked queries in this window.</td></tr>';
+          }
+
+          // Relay-exclusions title tracks the same window label.
+          var relayTitle = document.getElementById("relayExclusionsTitle");
+          if (relayTitle) {
+            relayTitle.textContent =
+              "Excluded Machine-Relay Traffic (" + winLabel + ") ";
+            var loop = document.createElement("span");
+            loop.textContent = "🔁";
+            relayTitle.appendChild(loop);
+          }
+
+          // One row per rule, INCLUDING rules that matched nothing — a
+          // declared rule with a zero count is how an operator learns a
+          // stale exclusion can be deleted.
+          var relayBody = document.querySelector("#relayExclusionsTable tbody");
+          if (relayBody) {
+            relayBody.innerHTML =
+              asArray(relayExclusions)
+                .map(function (r) {
+                  return (
+                    "<tr><td>" +
+                    esc(String(r.name)) +
+                    "</td><td>" +
+                    esc(r.kind === "tag" ? "tag" : "fingerprint") +
+                    "</td><td>" +
+                    esc(safeNumber(r.count).toLocaleString()) +
+                    "</td><td>" +
+                    esc(
+                      r.last_seen ? formatAnalyticsTimestamp(r.last_seen) : "—",
+                    ) +
+                    "</td><td>" +
+                    esc(r.reason ? String(r.reason) : "—") +
+                    "</td></tr>"
+                  );
+                })
+                .join("") ||
+              '<tr><td colspan="5">No machine-relay exclusions configured.</td></tr>';
           }
         } catch (err) {
           // Stale-response guard also applies to failures: a slow old

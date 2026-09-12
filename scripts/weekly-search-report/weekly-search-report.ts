@@ -103,11 +103,31 @@ export interface ToolBreakdownRow {
   count: number;
 }
 
+/**
+ * `/relay-exclusions` row — one per machine-relay rule the server applied.
+ * See RelayExclusion in src/db/analytics.ts.
+ */
+export interface RelayExclusionRow {
+  name: string;
+  reason: string | null;
+  kind: string;
+  count: number;
+  last_seen: string | null;
+}
+
 export interface AnalyticsBundle {
   summary: AnalyticsSummary;
   queries: TopQuery[];
   emptyQueries: EmptyQuery[];
   toolBreakdown: ToolBreakdownRow[];
+  /**
+   * What the server excluded as machine-relay traffic. OPTIONAL, and a fetch
+   * failure degrades to `undefined` rather than failing the run: this is a
+   * provenance footnote on a report whose data is already correct without it,
+   * and the endpoint may not exist yet on an older deployment. Every other
+   * endpoint stays fail-loud.
+   */
+  relayExclusions?: RelayExclusionRow[];
 }
 
 // ── Keyword categorization taxonomy (deterministic, NO LLM) ───────────────────
@@ -531,6 +551,20 @@ export function renderMarkdown(
       `(${(summary.empty_result_rate_window * 100).toFixed(1)}%)`,
   );
   lines.push(`- p95 latency: ${summary.p95_latency_ms_window} ms`);
+  // Provenance, not decoration. Every number above is computed over REAL USER
+  // traffic with machine-relay rows removed; saying so — and by how much —
+  // is what stops the next reader from wondering why the dashboard and the
+  // report disagree with a raw row count.
+  const excluded = (bundle.relayExclusions ?? []).filter((r) => r.count > 0);
+  if (excluded.length > 0) {
+    const total = excluded.reduce((a, r) => a + r.count, 0);
+    lines.push(
+      `- Excluded as machine-relay traffic: ${total} ` +
+        `(${excluded
+          .map((r) => `${sanitizeCell(r.name)}: ${r.count}`)
+          .join(", ")})`,
+    );
+  }
   lines.push("");
 
   // 2. Activity by day
@@ -1115,7 +1149,23 @@ export async function fetchBundle(
     assertToolBreakdownRow("/tool-breakdown", r, i),
   );
 
-  return { summary, queries, emptyQueries, toolBreakdown };
+  // Tolerant by design — see AnalyticsBundle.relayExclusions. A 404 from an
+  // older deployment, or any other failure here, must not cost us the report.
+  let relayExclusions: RelayExclusionRow[] | undefined;
+  try {
+    const rows = await deps.fetchJson<RelayExclusionRow[]>(
+      `/api/analytics/relay-exclusions?days=${days}`,
+    );
+    if (Array.isArray(rows)) relayExclusions = rows;
+  } catch (err) {
+    console.warn(
+      `[weekly-report] relay-exclusions unavailable (report continues): ${String(
+        err instanceof Error ? err.message : err,
+      )}`,
+    );
+  }
+
+  return { summary, queries, emptyQueries, toolBreakdown, relayExclusions };
 }
 
 /**

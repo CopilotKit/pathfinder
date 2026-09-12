@@ -9,12 +9,14 @@ const mockGetEmptyQueries = vi.fn();
 const mockGetBlockedQueries = vi.fn();
 const mockGetToolCounts = vi.fn();
 const mockGetToolBreakdown = vi.fn();
+const mockGetRelayExclusions = vi.fn();
 
 vi.mock("../db/analytics.js", () => ({
   getAnalyticsSummary: (...args: unknown[]) => mockGetAnalyticsSummary(...args),
   getTopQueries: (...args: unknown[]) => mockGetTopQueries(...args),
   getEmptyQueries: (...args: unknown[]) => mockGetEmptyQueries(...args),
   getBlockedQueries: (...args: unknown[]) => mockGetBlockedQueries(...args),
+  getRelayExclusions: (...args: unknown[]) => mockGetRelayExclusions(...args),
   getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
   getToolBreakdown: (...args: unknown[]) => mockGetToolBreakdown(...args),
 }));
@@ -92,6 +94,8 @@ function buildTestApp() {
       mockGetToolCounts(...args),
     getToolBreakdown: (...args: Parameters<typeof mockGetToolBreakdown>) =>
       mockGetToolBreakdown(...args),
+    getRelayExclusions: (...args: Parameters<typeof mockGetRelayExclusions>) =>
+      mockGetRelayExclusions(...args),
     analyticsHtmlPath,
   });
 
@@ -451,6 +455,88 @@ describe("Analytics server routes (HTTP-level)", () => {
       const body = JSON.parse(res.body);
       expect(body.error).toBe("Failed to fetch blocked queries");
       consoleErrSpy.mockRestore();
+    });
+  });
+
+  // ---- /api/analytics/relay-exclusions -------------------------------------
+
+  describe("GET /api/analytics/relay-exclusions", () => {
+    const rows = [
+      {
+        name: "x-pathfinder-source",
+        reason: "Client declared itself a machine relay",
+        kind: "tag",
+        count: 4,
+        last_seen: "2026-09-12T05:00:00.000Z",
+      },
+      {
+        name: "github-issue-triage",
+        reason: "Triage relay forwards issue bodies verbatim",
+        kind: "fingerprint",
+        count: 46,
+        last_seen: "2026-09-11T18:56:09.000Z",
+      },
+    ];
+
+    it("returns the exclusion rows with a valid token and forwards days", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+      mockGetRelayExclusions.mockResolvedValue(rows);
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/relay-exclusions?days=14",
+        { Authorization: "Bearer secret" },
+      );
+
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toEqual(rows);
+      expect(mockGetRelayExclusions).toHaveBeenCalledWith(14, {});
+    });
+
+    it("returns 401 without a token", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/relay-exclusions",
+      );
+
+      expect(res.status).toBe(401);
+      expect(mockGetRelayExclusions).not.toHaveBeenCalled();
+    });
+
+    it("rejects days=abc with 400", async () => {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "secret",
+      });
+
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/relay-exclusions?days=abc",
+        { Authorization: "Bearer secret" },
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockGetRelayExclusions).not.toHaveBeenCalled();
     });
   });
 

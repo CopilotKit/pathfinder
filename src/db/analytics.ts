@@ -1,4 +1,6 @@
 import { getPool } from "./client.js";
+import { getAnalyticsConfig } from "../config.js";
+import type { MachineRelayRule } from "../types.js";
 import {
   COSINE_SCORE_KIND,
   COSINE_SCORE_MAX,
@@ -103,12 +105,22 @@ export {
 
 /**
  * Canonical request-origin tags persisted on `query_log.request_source`.
+ *
+ * `relay` is MACHINE-RELAY traffic: a service that forwards somebody else's
+ * text into the tools verbatim (see {@link MachineRelayRule}). It is real
+ * traffic but it is NOT a user query, so it is excluded from the default
+ * real-user population the same way `synthetic`/`analysis` are.
  * Sourced from the `X-Pathfinder-Source` request header on the MCP init
  * request. Anything outside this set (including a missing header) is coerced
  * to {@link DEFAULT_REQUEST_SOURCE} at the edge so the column only ever holds
  * a known value going forward.
  */
-export const REQUEST_SOURCE_VALUES = ["user", "synthetic", "analysis"] as const;
+export const REQUEST_SOURCE_VALUES = [
+  "user",
+  "synthetic",
+  "analysis",
+  "relay",
+] as const;
 export type RequestSource = (typeof REQUEST_SOURCE_VALUES)[number];
 
 /**
@@ -136,20 +148,79 @@ export const DEFAULT_REQUEST_SOURCE: RequestSource = "user";
  */
 export const REAL_USER_REQUEST_SOURCES: readonly RequestSource[] = ["user"];
 
+// ---------------------------------------------------------------------------
+// Machine relays
+// ---------------------------------------------------------------------------
+
+/**
+ * Operator-declared fingerprints for MACHINE RELAYS — see
+ * {@link MachineRelayRuleSchema} in src/types.ts for the full rationale.
+ * Re-exported here because every consumer of the exclusion (the readers, the
+ * routes, the dashboard) reaches for it through the analytics module.
+ */
+export type { MachineRelayRule };
+
+/**
+ * Test/opt-in override for {@link getMachineRelayRules}. `null` (the default)
+ * means "read the live server config". Set to an array to pin the rules
+ * without a config file; pass `null` to restore.
+ */
+let machineRelayRulesOverride: MachineRelayRule[] | null = null;
+
+/** @internal — test seam for {@link getMachineRelayRules}. */
+export function __setMachineRelayRulesForTesting(
+  rules: MachineRelayRule[] | null,
+): void {
+  machineRelayRulesOverride = rules;
+}
+
+/**
+ * The machine-relay rules in force, from `analytics.machine_relays` in the
+ * server YAML. Defaults to NO rules: an install that has not declared a relay
+ * never gets a hidden exclusion.
+ *
+ * Config loading is wrapped because the analytics readers are also exercised
+ * in contexts with no YAML on disk (unit tests, ad-hoc scripts); a missing
+ * config must degrade to "no relay rules", never throw inside a reader.
+ */
+export function getMachineRelayRules(): MachineRelayRule[] {
+  if (machineRelayRulesOverride !== null) return machineRelayRulesOverride;
+  try {
+    return getAnalyticsConfig()?.machine_relays ?? [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Normalize an arbitrary `X-Pathfinder-Source` header value to a known
  * {@link RequestSource}. Unknown/empty/missing values fall back to
  * {@link DEFAULT_REQUEST_SOURCE}. Case-insensitive and whitespace-trimmed so
  * `"Synthetic"` / `" analysis "` still tag correctly.
  */
+/**
+ * Non-canonical `X-Pathfinder-Source` values that map onto a canonical
+ * {@link RequestSource}. This is how a relay declares itself with a name that
+ * says WHICH relay it is ("github-triage") while the analytics layer keeps a
+ * single `relay` audience: the relay does not need to know our taxonomy, and
+ * we do not need a new audience per relay.
+ *
+ * Keys are lower-cased; {@link normalizeRequestSource} trims and lower-cases
+ * before the lookup.
+ */
+export const REQUEST_SOURCE_ALIASES: Readonly<Record<string, RequestSource>> = {
+  "github-triage": "relay",
+};
+
 export function normalizeRequestSource(
   value: string | null | undefined,
 ): RequestSource {
   if (typeof value !== "string") return DEFAULT_REQUEST_SOURCE;
   const v = value.trim().toLowerCase();
-  return (REQUEST_SOURCE_VALUES as readonly string[]).includes(v)
-    ? (v as RequestSource)
-    : DEFAULT_REQUEST_SOURCE;
+  if ((REQUEST_SOURCE_VALUES as readonly string[]).includes(v)) {
+    return v as RequestSource;
+  }
+  return REQUEST_SOURCE_ALIASES[v] ?? DEFAULT_REQUEST_SOURCE;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +388,30 @@ export interface TopQuery {
    * or history predating `score_kind`).
    */
   avg_top_score: number | null;
+}
+
+/**
+ * One row of the operator-facing "excluded machine-relay traffic" panel — the
+ * answer to "what did the dashboard just stop showing me, and why".
+ *
+ * A silently filtered category is how the original blindness happened, so
+ * every exclusion this server applies is enumerable: one row per declared
+ * fingerprint rule, plus one row for traffic that TAGGED itself via
+ * `X-Pathfinder-Source`. Counts only, deliberately — the excluded text is
+ * still reachable on demand through `?request_source=relay` on any analytics
+ * endpoint, but it is never rendered into a panel or a published report.
+ */
+export interface RelayExclusion {
+  /** Rule name, or {@link RELAY_TAG_EXCLUSION_NAME} for self-declared rows. */
+  name: string;
+  /** Operator-written explanation from config; null for the tag row. */
+  reason: string | null;
+  /** How the row was identified: it said so, or we recognized it. */
+  kind: "tag" | "fingerprint";
+  /** Rows excluded in the window. */
+  count: number;
+  /** Most recent excluded row in the window, or null if none. */
+  last_seen: string | null;
 }
 
 export interface EmptyQuery {
@@ -580,9 +675,71 @@ function whereAnd(baseClauses: string[], filterClauses: string[]): string {
  * Returns `{ clauses, params, nextIdx }` shaped like {@link buildFilterClauses}
  * so callers can splice it into their base clauses + param list uniformly.
  */
+/**
+ * Build the SQL predicate that is TRUE for a row emitted by one of the
+ * declared machine relays (see {@link MachineRelayRule}).
+ *
+ * Each rule ANDs the predicates it declares; the rules OR together. Returns
+ * `null` when no usable rule is declared, which every caller reads as "no
+ * relay exclusion at all" — an install that declared nothing must behave
+ * exactly as it did before this feature existed.
+ *
+ * NULL-safety matters here because the predicate is also used NEGATED
+ * (`NOT (...)`). `user_agent`/`client_ip` are nullable, and in SQL's
+ * three-valued logic `NOT (NULL)` is NULL, which a WHERE clause drops — so an
+ * untagged row with no User-Agent would silently vanish from the dashboard.
+ * Every leg is therefore total: the UA compare goes through COALESCE, and the
+ * IP compare sits inside a CASE whose ELSE is `false`. The CASE also guards
+ * the `::inet` cast — `client_ip` is TEXT and can hold a non-address value
+ * (an IPv6 form, a proxy artefact), which would raise a cast error rather
+ * than simply not matching.
+ */
+function buildMachineRelayPredicate(
+  rules: readonly MachineRelayRule[],
+  startIdx: number,
+): { sql: string | null; params: unknown[]; nextIdx: number } {
+  const params: unknown[] = [];
+  const legs: string[] = [];
+  let idx = startIdx;
+
+  for (const rule of rules) {
+    const preds: string[] = [];
+    if (rule.user_agent) {
+      preds.push(`COALESCE(lower(user_agent), '') = $${idx}`);
+      params.push(rule.user_agent.toLowerCase());
+      idx++;
+    }
+    if (rule.client_ip_cidr) {
+      preds.push(
+        `CASE WHEN client_ip ~ '^[0-9]{1,3}(\\.[0-9]{1,3}){3}$' ` +
+          `THEN client_ip::inet <<= $${idx}::inet ELSE false END`,
+      );
+      params.push(rule.client_ip_cidr);
+      idx++;
+    }
+    // A rule with no predicate would match every row. The config schema
+    // rejects that shape, but a hand-rolled caller could still produce one —
+    // skip it rather than emptying the dashboard.
+    if (preds.length === 0) continue;
+    legs.push(`(${preds.join(" AND ")})`);
+  }
+
+  if (legs.length === 0) return { sql: null, params: [], nextIdx: startIdx };
+  return { sql: `(${legs.join(" OR ")})`, params, nextIdx: idx };
+}
+
+/**
+ * SQL that is TRUE for a row the relay TAGGED itself with, i.e. one that
+ * arrived with `X-Pathfinder-Source: github-triage` (normalized to the
+ * `relay` request source). Kept as a named constant so the fingerprint path
+ * and the tag path read as the same concept in every query.
+ */
+const RELAY_TAG_SQL = "request_source = 'relay'";
+
 function buildRequestSourceClause(
   filter: AnalyticsFilter,
   startIdx: number,
+  rules: readonly MachineRelayRule[] = getMachineRelayRules(),
 ): { clauses: string[]; params: unknown[]; nextIdx: number } {
   const rs = filter.request_source;
 
@@ -590,13 +747,41 @@ function buildRequestSourceClause(
     return { clauses: [], params: [], nextIdx: startIdx };
   }
 
+  // The relay AUDIENCE: everything this server considers machine-relay
+  // traffic, whether it declared itself via X-Pathfinder-Source or was
+  // fingerprinted. This is the operator's "show me what was excluded" view
+  // (`?request_source=relay` on every analytics endpoint).
+  if (rs === "relay") {
+    const fp = buildMachineRelayPredicate(rules, startIdx);
+    return {
+      clauses: [
+        fp.sql ? `(${RELAY_TAG_SQL} OR ${fp.sql})` : `(${RELAY_TAG_SQL})`,
+      ],
+      params: fp.params,
+      nextIdx: fp.nextIdx,
+    };
+  }
+
+  // Every other audience excludes relay traffic. The TAG half needs no
+  // clause — a row tagged 'relay' already fails `request_source = 'user'` and
+  // the exact-match branch below — so the only thing to add is the
+  // FINGERPRINT half, which catches relays that do not yet send the header.
+  // Once a relay starts tagging itself, its rows are excluded by the tag and
+  // the fingerprint rule can be deleted from the config with no behavior
+  // change.
+  const fp = buildMachineRelayPredicate(rules, startIdx + 1);
+  const relayExclusion = fp.sql ? [`NOT ${fp.sql}`] : [];
+
   // Default (undefined) and explicit "user" both mean real users, which
   // includes the untagged historical rows (request_source IS NULL).
   if (rs === undefined || rs === "user") {
     return {
-      clauses: [`(request_source = $${startIdx} OR request_source IS NULL)`],
-      params: ["user"],
-      nextIdx: startIdx + 1,
+      clauses: [
+        `(request_source = $${startIdx} OR request_source IS NULL)`,
+        ...relayExclusion,
+      ],
+      params: ["user", ...fp.params],
+      nextIdx: fp.nextIdx,
     };
   }
 
@@ -604,9 +789,38 @@ function buildRequestSourceClause(
   // not synthetic/analysis, so the bare equality (which is NULL-rejecting in
   // SQL three-valued logic) correctly excludes them.
   return {
-    clauses: [`request_source = $${startIdx}`],
-    params: [rs],
-    nextIdx: startIdx + 1,
+    clauses: [`request_source = $${startIdx}`, ...relayExclusion],
+    params: [rs, ...fp.params],
+    nextIdx: fp.nextIdx,
+  };
+}
+
+/**
+ * Standalone machine-relay exclusion, for the one reader that does NOT go
+ * through {@link buildRequestSourceClause}.
+ *
+ * {@link getAtlasRetrievalMetrics} deliberately has no request-source clause
+ * (its window is "all retrieval traffic", not "the real-user audience"), but
+ * its `total_user_queries_window` IS a user-facing denominator and must not
+ * count a relay. Both halves apply: the TAG (`request_source = 'relay'`, set
+ * when the relay sends `X-Pathfinder-Source: github-triage`) and the
+ * FINGERPRINT (User-Agent + CIDR, for a relay that does not yet send it).
+ *
+ * `IS DISTINCT FROM` rather than `<>` so the NULL request_source of a
+ * historical row reads as "not a relay" instead of dropping the row.
+ */
+function buildRelayExclusionClause(
+  startIdx: number,
+  rules: readonly MachineRelayRule[] = getMachineRelayRules(),
+): { clauses: string[]; params: unknown[]; nextIdx: number } {
+  const fp = buildMachineRelayPredicate(rules, startIdx);
+  return {
+    clauses: [
+      "request_source IS DISTINCT FROM 'relay'",
+      ...(fp.sql ? [`NOT ${fp.sql}`] : []),
+    ],
+    params: fp.params,
+    nextIdx: fp.nextIdx,
   };
 }
 
@@ -1288,6 +1502,88 @@ export async function getEmptyQueries(
 }
 
 /**
+ * Name used for the exclusion row that covers traffic which DECLARED itself a
+ * relay via `X-Pathfinder-Source` (any value that normalizes to the `relay`
+ * request source). Distinct from a config rule name because it is not
+ * operator-declared — the client asserted it.
+ */
+export const RELAY_TAG_EXCLUSION_NAME = "x-pathfinder-source";
+
+/**
+ * Enumerate what the machine-relay exclusion removed from the operator-facing
+ * surfaces in this window, one row per rule, so the exclusion is visible
+ * rather than silent. See {@link RelayExclusion}.
+ *
+ * The population matches the windowed aggregates (date window, backfilled
+ * rows excluded) MINUS the request-source clause — the whole point is to
+ * count rows the audience filter drops. Rules with a zero count are still
+ * returned: "this rule is declared and matched nothing" is the reading that
+ * tells an operator a stale rule can be deleted.
+ */
+export async function getRelayExclusions(
+  days: number = 7,
+  filter: AnalyticsFilter = {},
+  rules: readonly MachineRelayRule[] = getMachineRelayRules(),
+): Promise<RelayExclusion[]> {
+  const pool = getPool();
+
+  const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
+  const dw = buildDateWindow(filter, days, nextIdx);
+  const where = whereAnd([...dw.clauses, "latency_ms >= 0"], fc);
+
+  // One aggregate per rule (plus the tag) in a single pass, so the panel
+  // costs one query regardless of how many rules are declared.
+  const selects: string[] = [
+    `count(*) FILTER (WHERE ${RELAY_TAG_SQL})::int AS c_tag`,
+    `max(created_at) FILTER (WHERE ${RELAY_TAG_SQL})::text AS t_tag`,
+  ];
+  const params: unknown[] = [...fp, ...dw.params];
+  let idx = dw.nextIdx;
+  const usable: MachineRelayRule[] = [];
+  for (const rule of rules) {
+    const fpRule = buildMachineRelayPredicate([rule], idx);
+    if (!fpRule.sql) continue;
+    const i = usable.length;
+    selects.push(`count(*) FILTER (WHERE ${fpRule.sql})::int AS c_${i}`);
+    selects.push(
+      `max(created_at) FILTER (WHERE ${fpRule.sql})::text AS t_${i}`,
+    );
+    // The predicate is spliced twice but its params are bound once: the
+    // second splice reuses the SAME placeholders, so push the params once.
+    params.push(...fpRule.params);
+    idx = fpRule.nextIdx;
+    usable.push(rule);
+  }
+
+  const { rows } = await pool.query(
+    `SELECT ${selects.join(", ")} FROM query_log ${where}`,
+    params,
+  );
+  const row = (rows[0] ?? {}) as Record<string, unknown>;
+
+  const out: RelayExclusion[] = [
+    {
+      name: RELAY_TAG_EXCLUSION_NAME,
+      reason:
+        "Client declared itself a machine relay via the X-Pathfinder-Source header",
+      kind: "tag",
+      count: (row.c_tag as number | undefined) ?? 0,
+      last_seen: (row.t_tag as string | null | undefined) ?? null,
+    },
+  ];
+  usable.forEach((rule, i) => {
+    out.push({
+      name: rule.name,
+      reason: rule.reason ?? null,
+      kind: "fingerprint",
+      count: (row[`c_${i}`] as number | undefined) ?? 0,
+      last_seen: (row[`t_${i}`] as string | null | undefined) ?? null,
+    });
+  });
+  return out;
+}
+
+/**
  * Get rows the v1.15.2 abuse blocklist short-circuited (`blocked = true`),
  * grouped by `block_reason` so operators can see at a glance which patterns
  * are firing and how often. Counterpart to {@link getEmptyQueries}, which now
@@ -1510,13 +1806,15 @@ export async function getAtlasRetrievalMetrics(
 
   const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
   const dw = buildDateWindow(filter, days, nextIdx);
-  const redactedIdx = dw.nextIdx;
+  const relay = buildRelayExclusionClause(dw.nextIdx);
+  const redactedIdx = relay.nextIdx;
   const baseClauses = [
     ...dw.clauses,
+    ...relay.clauses,
     "latency_ms >= 0",
     `query_text != $${redactedIdx}`,
   ];
-  const params = [...fp, ...dw.params, REDACTED_QUERY_TEXT];
+  const params = [...fp, ...dw.params, ...relay.params, REDACTED_QUERY_TEXT];
   const userWhere = whereAnd(baseClauses, fc);
   const atlasWhere = whereAnd(
     [

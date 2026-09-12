@@ -173,3 +173,18 @@ indexing:
 #   enabled: true
 #   log_queries: true
 #   retention_days: 90
+#   # Machines that forward somebody else's text into the tools verbatim (an
+#   # issue-triage bot, a mirroring service). Real traffic, but not user
+#   # queries — matching rows are excluded from Top Queries, the weekly search
+#   # report, the gap analysis and the unique-IP/session counts, and are
+#   # enumerated in the dashboard's "Excluded Machine-Relay Traffic" panel.
+#   # A rule matches when EVERY predicate it declares matches.
+#   #
+#   # Prefer having the relay send `X-Pathfinder-Source: github-triage` at MCP
+#   # session init — that tags its rows directly and needs no rule here. These
+#   # fingerprints are for relays you do not control.
+#   machine_relays:
+#     - name: github-issue-triage
+#       reason: Forwards GitHub issue bodies verbatim into search
+#       user_agent: node
+#       client_ip_cidr: 152.55.176.0/20

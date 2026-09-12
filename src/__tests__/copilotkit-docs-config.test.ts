@@ -86,3 +86,24 @@ describe("deploy/copilotkit-docs.yaml — derived URLs match the live routes", (
     expect(deriveUrl(CONTENT + rel, docsSource)).toBe(expected);
   });
 });
+
+// The shipped exclusion for the GitHub-issue triage relay. It is pinned here
+// rather than left to the YAML alone because the rule is what keeps relayed
+// issue bodies — SEO spam included — out of the weekly Notion search report
+// and the gap-analysis LLM prompt until the relay starts declaring itself with
+// `X-Pathfinder-Source: github-triage`.
+describe("deploy/copilotkit-docs.yaml — machine-relay exclusion", () => {
+  const relays =
+    (config as unknown as { analytics?: { machine_relays?: unknown[] } })
+      .analytics?.machine_relays ?? [];
+
+  it("declares the GitHub-issue triage relay by identity, not by content shape", () => {
+    expect(relays).toHaveLength(1);
+    const rule = relays[0] as Record<string, unknown>;
+    expect(rule.name).toBe("github-issue-triage");
+    expect(rule.user_agent).toBe("node");
+    expect(rule.client_ip_cidr).toBe("152.55.176.0/20");
+    // An operator reading the dashboard panel must be able to see WHY.
+    expect(String(rule.reason)).toContain("triage relay");
+  });
+});

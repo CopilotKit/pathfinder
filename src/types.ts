@@ -352,11 +352,67 @@ export const WebhookConfigSchema = z.object({
 
 // ── Analytics configuration schemas ──────────────────────────────────────────
 
+/**
+ * One operator-declared MACHINE-RELAY fingerprint.
+ *
+ * A relay is a machine that forwards somebody else's text into the MCP tools
+ * verbatim (our GitHub-issue triage service is the motivating case: it posts
+ * every new issue body into `search-docs`/`search-code` within seconds of the
+ * issue being filed). Its traffic is legitimate TRAFFIC but it is not a USER
+ * QUERY, so counting it in Top Queries, the weekly search report, the
+ * bi-weekly gap analysis and the unique-IP/session KPIs renders whatever a
+ * stranger typed into a GitHub issue — SEO spam included — into
+ * operator-facing reports and into an LLM prompt whose output we publish.
+ *
+ * The durable fix is for the relay to declare itself with
+ * `X-Pathfinder-Source: github-triage` at MCP session init (that header value
+ * normalizes to the `relay` request source, which the analytics readers
+ * already exclude from the real-user population). This config is the bridge
+ * for relays that do NOT yet send the header: it identifies them by the
+ * properties we can observe today — User-Agent and source IP range.
+ *
+ * A rule matches a row when EVERY predicate it declares matches; a rule that
+ * declares no predicate at all would match everything and is rejected here
+ * rather than silently emptying the dashboard.
+ *
+ * Deliberately NOT content-shaped: "long" and "link-dense" describe one spam
+ * campaign, not a source. The longest LEGITIMATE query observed in a
+ * production week is 7,520 characters, so a length rule would delete real
+ * operator signal. Identity, not shape.
+ */
+export const MachineRelayRuleSchema = z
+  .object({
+    /** Stable operator-facing id, surfaced in the "excluded" panel. */
+    name: z.string().min(1),
+    /** Why this source is a relay. Rendered next to the excluded count. */
+    reason: z.string().min(1).optional(),
+    /** Exact User-Agent match, case-insensitive (e.g. "node"). */
+    user_agent: z.string().min(1).optional(),
+    /** IPv4 CIDR the client IP must sit inside (e.g. "152.55.176.0/20"). */
+    client_ip_cidr: z
+      .string()
+      .regex(
+        /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/,
+        "client_ip_cidr must be an IPv4 CIDR like 152.55.176.0/20",
+      )
+      .optional(),
+  })
+  .refine((r) => Boolean(r.user_agent || r.client_ip_cidr), {
+    message:
+      "machine_relays rule must declare at least one of user_agent / client_ip_cidr (a rule with no predicate would match all traffic)",
+  });
+
 export const AnalyticsConfigSchema = z.object({
   enabled: z.boolean().default(false),
   log_queries: z.boolean().default(true),
   token: z.string().min(1).optional(),
   retention_days: z.number().int().positive().default(90),
+  /**
+   * Machine relays to exclude from the operator-facing analytics surfaces.
+   * See {@link MachineRelayRuleSchema}. Optional and absent by default — no
+   * install gets a hidden exclusion it did not declare.
+   */
+  machine_relays: z.array(MachineRelayRuleSchema).optional(),
 });
 
 // ── Top-level server configuration schema ─────────────────────────────────────
@@ -519,6 +575,7 @@ export type LocalEmbeddingConfig = z.infer<typeof LocalEmbeddingConfigSchema>;
 export type IndexingConfig = z.infer<typeof IndexingConfigSchema>;
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof AnalyticsConfigSchema>;
+export type MachineRelayRule = z.infer<typeof MachineRelayRuleSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type BashCacheConfig = z.infer<typeof BashCacheConfigSchema>;
 export type BashOptions = z.infer<typeof BashOptionsSchema>;
