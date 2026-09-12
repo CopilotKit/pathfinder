@@ -30,7 +30,7 @@ import {
 } from "../../src/db/analytics.js";
 import type { MachineRelayRule } from "../../src/types.js";
 import { generatePostSchemaMigration } from "../../src/db/schema.js";
-import { renderMarkdown } from "./weekly-search-report.js";
+import { fetchBundle, renderMarkdown } from "./weekly-search-report.js";
 import type {
   AnalyticsBundle,
   AnalyticsSummary as ReportSummary,
@@ -177,14 +177,22 @@ describe("published reports exclude machine-relay traffic", () => {
   });
 
   it("renders no relayed body into the weekly Notion report", async () => {
-    const md = renderMarkdown(await bundle(), new Date("2026-09-13T09:07:00Z"), 7);
+    const md = renderMarkdown(
+      await bundle(),
+      new Date("2026-09-13T09:07:00Z"),
+      7,
+    );
     expect(md).not.toContain("1rank.app");
     expect(md).not.toContain("SEO Growth Stack");
   });
 
   it("still renders the 7,548-char legitimate query in the weekly report", async () => {
     expect(LONG_LEGIT_QUERY.length).toBeGreaterThanOrEqual(7500);
-    const md = renderMarkdown(await bundle(), new Date("2026-09-13T09:07:00Z"), 7);
+    const md = renderMarkdown(
+      await bundle(),
+      new Date("2026-09-13T09:07:00Z"),
+      7,
+    );
     expect(md).toContain("GraphQLError on streaming");
     expect(md).toContain("how do I install copilotkit");
   });
@@ -211,5 +219,135 @@ describe("published reports exclude machine-relay traffic", () => {
     );
     expect(prompt).not.toContain("1rank.app");
     expect(prompt).toContain("GraphQLError on streaming");
+  });
+});
+
+describe("weekly report provenance line", () => {
+  const base = {
+    summary: {
+      total_queries_window: 10,
+      unique_ip_count_window: 4,
+      unique_session_count_window: 5,
+      empty_result_count_window: 1,
+      empty_result_rate_window: 0.1,
+      low_confidence_count_window: 0,
+      low_confidence_rate_window: 0,
+      avg_latency_ms_window: 20,
+      p95_latency_ms_window: 40,
+      queries_by_source: [],
+      queries_per_day_window: [],
+      earliest_query_day: "2026-09-06",
+    } as ReportSummary,
+    queries: [] as ReportTopQuery[],
+    emptyQueries: [] as ReportEmptyQuery[],
+    toolBreakdown: [] as ToolBreakdownRow[],
+  };
+
+  it("states what was excluded and under which rule", () => {
+    const md = renderMarkdown(
+      {
+        ...base,
+        relayExclusions: [
+          {
+            name: "github-issue-triage",
+            reason: "relay",
+            kind: "fingerprint",
+            count: 46,
+            last_seen: null,
+          },
+          {
+            name: "x-pathfinder-source",
+            reason: null,
+            kind: "tag",
+            count: 4,
+            last_seen: null,
+          },
+        ],
+      },
+      new Date("2026-09-13T09:07:00Z"),
+      7,
+    );
+    expect(md).toContain("Excluded as machine-relay traffic: 50");
+    expect(md).toContain("github-issue-triage: 46");
+  });
+
+  it("omits the line entirely when nothing was excluded", () => {
+    const md = renderMarkdown(
+      {
+        ...base,
+        relayExclusions: [
+          {
+            name: "github-issue-triage",
+            reason: "relay",
+            kind: "fingerprint",
+            count: 0,
+            last_seen: null,
+          },
+        ],
+      },
+      new Date("2026-09-13T09:07:00Z"),
+      7,
+    );
+    expect(md).not.toContain("Excluded as machine-relay traffic");
+  });
+
+  it("still renders when the exclusions endpoint is absent", () => {
+    const md = renderMarkdown(base, new Date("2026-09-13T09:07:00Z"), 7);
+    expect(md).toContain("Header metrics");
+    expect(md).not.toContain("Excluded as machine-relay traffic");
+  });
+});
+
+describe("fetchBundle tolerance for the exclusions endpoint", () => {
+  const summary = {
+    total_queries_window: 1,
+    unique_ip_count_window: 1,
+    unique_session_count_window: 1,
+    empty_result_count_window: 0,
+    empty_result_rate_window: 0,
+    low_confidence_count_window: 0,
+    low_confidence_rate_window: 0,
+    avg_latency_ms_window: 1,
+    p95_latency_ms_window: 1,
+    queries_by_source: [],
+    queries_per_day_window: [],
+  };
+
+  it("still returns a bundle when /relay-exclusions 404s", async () => {
+    const fetchJson = async <T>(path: string): Promise<T> => {
+      if (path.startsWith("/api/analytics/relay-exclusions")) {
+        throw new Error("404 Not Found");
+      }
+      if (path.startsWith("/api/analytics/summary")) {
+        return summary as unknown as T;
+      }
+      return [] as unknown as T;
+    };
+    const b = await fetchBundle({ fetchJson }, 7);
+    expect(b.relayExclusions).toBeUndefined();
+    expect(b.summary.total_queries_window).toBe(1);
+  });
+
+  it("carries the exclusion rows through when the endpoint answers", async () => {
+    const rows = [
+      {
+        name: "github-issue-triage",
+        reason: "relay",
+        kind: "fingerprint",
+        count: 46,
+        last_seen: null,
+      },
+    ];
+    const fetchJson = async <T>(path: string): Promise<T> => {
+      if (path.startsWith("/api/analytics/relay-exclusions")) {
+        return rows as unknown as T;
+      }
+      if (path.startsWith("/api/analytics/summary")) {
+        return summary as unknown as T;
+      }
+      return [] as unknown as T;
+    };
+    const b = await fetchBundle({ fetchJson }, 7);
+    expect(b.relayExclusions).toEqual(rows);
   });
 });

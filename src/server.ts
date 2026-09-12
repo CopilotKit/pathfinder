@@ -92,6 +92,7 @@ import {
   getTopQueries,
   getEmptyQueries,
   getBlockedQueries,
+  getRelayExclusions,
   getToolCounts,
   getToolBreakdown,
   normalizeRequestSource,
@@ -3101,6 +3102,7 @@ export interface AnalyticsRouteDeps {
   getTopQueries?: typeof getTopQueries;
   getEmptyQueries?: typeof getEmptyQueries;
   getBlockedQueries?: typeof getBlockedQueries;
+  getRelayExclusions?: typeof getRelayExclusions;
   getToolCounts?: typeof getToolCounts;
   getToolBreakdown?: typeof getToolBreakdown;
   analyticsHtmlPath?: string;
@@ -3119,6 +3121,7 @@ export function registerAnalyticsRoutes(
   const _getTopQueries = deps.getTopQueries ?? getTopQueries;
   const _getEmptyQueries = deps.getEmptyQueries ?? getEmptyQueries;
   const _getBlockedQueries = deps.getBlockedQueries ?? getBlockedQueries;
+  const _getRelayExclusions = deps.getRelayExclusions ?? getRelayExclusions;
   const _getToolCounts = deps.getToolCounts ?? getToolCounts;
   const _getToolBreakdown = deps.getToolBreakdown ?? getToolBreakdown;
   const _analyticsHtmlPath =
@@ -3254,6 +3257,39 @@ export function registerAnalyticsRoutes(
           err,
         );
         res.status(500).json({ error: "Failed to fetch blocked queries" });
+      }
+    },
+  );
+
+  // What the machine-relay exclusion removed from every other panel in this
+  // window, one row per rule. The exclusion is deliberately enumerable: a
+  // silently filtered category is how relayed SEO spam reached the published
+  // reports unnoticed in the first place. Counts only — the excluded TEXT
+  // stays reachable on demand via `?request_source=relay` on the sibling
+  // endpoints, so it is never rendered into a panel or a report by default.
+  app.get(
+    "/api/analytics/relay-exclusions",
+    analyticsAuth,
+    async (req: Request, res: Response) => {
+      const parsed = parseAnalyticsFilter(req);
+      if (!parsed.ok) {
+        res.status(parsed.status).json(parsed.body);
+        return;
+      }
+      const daysParsed = parseDaysOrError(req);
+      if (!daysParsed.ok) {
+        res.status(daysParsed.status).json(daysParsed.body);
+        return;
+      }
+      try {
+        const rows = await _getRelayExclusions(daysParsed.value, parsed.filter);
+        res.json(rows);
+      } catch (err) {
+        console.error(
+          `[analytics] Relay exclusions failed (days=${daysParsed.value} ip=${clientIp(req, trustProxy)}):`,
+          err,
+        );
+        res.status(500).json({ error: "Failed to fetch relay exclusions" });
       }
     },
   );

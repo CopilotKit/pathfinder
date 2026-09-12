@@ -30,6 +30,9 @@ import {
   getToolBreakdown,
   getToolCounts,
   getTopQueries,
+  getRelayExclusions,
+  normalizeRequestSource,
+  RELAY_TAG_EXCLUSION_NAME,
   __setMachineRelayRulesForTesting,
 } from "../db/analytics.js";
 import type { MachineRelayRule } from "../types.js";
@@ -318,6 +321,67 @@ describe("machine-relay exclusion from operator-facing analytics", () => {
   it("does NOT exclude a `node` client outside the declared relay CIDR", async () => {
     const top = await getTopQueries(7, 200);
     expect(texts(top)).toContain("node sdk streaming example");
+  });
+
+  // ── Operator visibility ─────────────────────────────────────────────────
+
+  it("reports what was excluded, and why, one row per rule", async () => {
+    const rows = await getRelayExclusions(7, {});
+    const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
+
+    const fingerprint = byName["github-issue-triage"];
+    expect(fingerprint.kind).toBe("fingerprint");
+    // 6 spam + 1 relayed non-spam body + 1 relayed body with no results.
+    expect(fingerprint.count).toBe(8);
+    expect(fingerprint.reason).toContain("triage relay");
+    expect(fingerprint.last_seen).toBeTruthy();
+
+    const tagged = byName[RELAY_TAG_EXCLUSION_NAME];
+    expect(tagged.kind).toBe("tag");
+    expect(tagged.count).toBe(1);
+  });
+
+  it("still lists a declared rule that matched nothing", async () => {
+    __setMachineRelayRulesForTesting([
+      { name: "stale-rule", user_agent: "some-retired-relay" },
+    ]);
+    const rows = await getRelayExclusions(7, {});
+    const stale = rows.find((r) => r.name === "stale-rule");
+    expect(stale?.count).toBe(0);
+  });
+
+  it("lets an operator read the excluded rows back via request_source=relay", async () => {
+    const relayOnly = await getTopQueries(7, 200, {
+      request_source: "relay",
+    });
+    // Both halves of the audience: fingerprinted AND self-declared.
+    expect(texts(relayOnly)).toContain(SPAM_BODY);
+    expect(
+      texts(relayOnly).some((t) => t.includes("self-declaring relay")),
+    ).toBe(true);
+    // And nothing legitimate leaks into the inspection view.
+    expect(texts(relayOnly)).not.toContain(SHORT_LEGIT);
+    expect(texts(relayOnly)).not.toContain(LONG_LEGIT_QUERY);
+  });
+
+  // ── Convergence on the header ────────────────────────────────────────────
+
+  it("maps the relay's X-Pathfinder-Source value onto the relay audience", () => {
+    expect(normalizeRequestSource("github-triage")).toBe("relay");
+    expect(normalizeRequestSource(" GitHub-Triage ")).toBe("relay");
+    expect(normalizeRequestSource("relay")).toBe("relay");
+    // Still conservative for anything unrecognized.
+    expect(normalizeRequestSource("something-else")).toBe("user");
+  });
+
+  it("excludes a self-declared relay even with NO fingerprint rule declared", async () => {
+    __setMachineRelayRulesForTesting([]);
+    const top = await getTopQueries(7, 200);
+    expect(texts(top).some((t) => t.includes("self-declaring relay"))).toBe(
+      false,
+    );
+    // This is the convergence contract: once the relay sends the header the
+    // fingerprint rule can be deleted from config and the exclusion holds.
   });
 
   it("excludes NOTHING when no relay rules are declared", async () => {

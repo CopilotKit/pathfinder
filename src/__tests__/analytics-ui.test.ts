@@ -929,6 +929,78 @@ describe("analytics dashboard UI — Pacific timestamps (v1.15.3)", () => {
   });
 });
 
+describe("analytics dashboard UI — Excluded Machine-Relay Traffic panel", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetches /api/analytics/relay-exclusions and renders one row per rule", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 0).summary,
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
+      "/api/analytics/relay-exclusions": () => [
+        {
+          name: "x-pathfinder-source",
+          reason: "Client declared itself a machine relay",
+          kind: "tag",
+          count: 4,
+          last_seen: "2026-09-12T05:00:00.000Z",
+        },
+        {
+          name: "github-issue-triage",
+          reason: "Triage relay forwards issue bodies verbatim",
+          kind: "fingerprint",
+          count: 46,
+          last_seen: "2026-09-11T18:56:09.000Z",
+        },
+      ],
+    };
+
+    const { dom, calls } = await loadDashboard(endpoints);
+
+    expect(
+      calls.some((u) => u.startsWith("/api/analytics/relay-exclusions")),
+    ).toBe(true);
+
+    const rows = Array.from(
+      dom.window.document.querySelectorAll("#relayExclusionsTable tbody tr"),
+    );
+    expect(rows.length).toBe(2);
+    const cells = Array.from(rows[1].querySelectorAll("td")).map(
+      (c) => c.textContent ?? "",
+    );
+    expect(cells[0]).toBe("github-issue-triage");
+    expect(cells[1]).toBe("fingerprint");
+    expect(cells[2]).toBe("46");
+    // The WHY column is the point of the panel: an exclusion an operator
+    // cannot read the reason for is still a silent exclusion.
+    expect(cells[4]).toContain("forwards issue bodies verbatim");
+  });
+
+  it("renders an explicit empty state when nothing is excluded", async () => {
+    const endpoints = {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => canned(7, 0).summary,
+      "/api/analytics/tool-counts": () => [],
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
+      "/api/analytics/relay-exclusions": () => [],
+    };
+    const { dom } = await loadDashboard(endpoints);
+    const body = dom.window.document.querySelector(
+      "#relayExclusionsTable tbody",
+    );
+    expect(body?.textContent ?? "").toContain(
+      "No machine-relay exclusions configured",
+    );
+  });
+});
+
 describe("analytics dashboard UI — Blocked Queries panel (v1.15.3)", () => {
   afterEach(() => {
     vi.restoreAllMocks();

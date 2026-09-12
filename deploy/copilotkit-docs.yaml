@@ -278,6 +278,31 @@ indexing:
 
 analytics:
   enabled: true
+  # Machines that forward somebody else's text into the tools verbatim. Their
+  # traffic is real but it is NOT a user query, so it is excluded from Top
+  # Queries, the weekly search report, the gap analysis and the unique-IP /
+  # session counts. The dashboard's "Excluded Machine-Relay Traffic" panel
+  # enumerates what each rule removed; `?request_source=relay` on any
+  # analytics endpoint reads the excluded rows back.
+  #
+  # Measured 2026-09-12 over a 7-day window: this relay produced 46 of 1,318
+  # rows from ONE IP (152.55.178.126, inside Railway's 152.55.176.0/20) with
+  # User-Agent `node`, against a legitimate control of 130 IPs across 58 UAs.
+  # It had forwarded 23 SEO-spam GitHub issues into search-docs/search-code
+  # within seconds of each being filed, and those bodies — 3.3 KB of
+  # marketing copy carrying live backlinks — ranked in Top Queries and were
+  # on course to be published verbatim into Notion.
+  #
+  # DELETE THIS RULE once the relay sends `X-Pathfinder-Source: github-triage`
+  # at MCP session init: that header tags its rows `relay` and the exclusion
+  # holds without any fingerprint. The rule is the bridge, not the fix.
+  machine_relays:
+    - name: github-issue-triage
+      reason: >-
+        CopilotKit GitHub-issue triage relay (Railway) — forwards every new
+        issue body verbatim into search-docs/search-code
+      user_agent: node
+      client_ip_cidr: 152.55.176.0/20
 
 webhook:
   repo_sources:

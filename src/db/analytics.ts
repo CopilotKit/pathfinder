@@ -390,6 +390,30 @@ export interface TopQuery {
   avg_top_score: number | null;
 }
 
+/**
+ * One row of the operator-facing "excluded machine-relay traffic" panel — the
+ * answer to "what did the dashboard just stop showing me, and why".
+ *
+ * A silently filtered category is how the original blindness happened, so
+ * every exclusion this server applies is enumerable: one row per declared
+ * fingerprint rule, plus one row for traffic that TAGGED itself via
+ * `X-Pathfinder-Source`. Counts only, deliberately — the excluded text is
+ * still reachable on demand through `?request_source=relay` on any analytics
+ * endpoint, but it is never rendered into a panel or a published report.
+ */
+export interface RelayExclusion {
+  /** Rule name, or {@link RELAY_TAG_EXCLUSION_NAME} for self-declared rows. */
+  name: string;
+  /** Operator-written explanation from config; null for the tag row. */
+  reason: string | null;
+  /** How the row was identified: it said so, or we recognized it. */
+  kind: "tag" | "fingerprint";
+  /** Rows excluded in the window. */
+  count: number;
+  /** Most recent excluded row in the window, or null if none. */
+  last_seen: string | null;
+}
+
 export interface EmptyQuery {
   query_text: string;
   tool_name: string;
@@ -1475,6 +1499,88 @@ export async function getEmptyQueries(
     count: r.count as number,
     last_seen: r.last_seen as string,
   }));
+}
+
+/**
+ * Name used for the exclusion row that covers traffic which DECLARED itself a
+ * relay via `X-Pathfinder-Source` (any value that normalizes to the `relay`
+ * request source). Distinct from a config rule name because it is not
+ * operator-declared — the client asserted it.
+ */
+export const RELAY_TAG_EXCLUSION_NAME = "x-pathfinder-source";
+
+/**
+ * Enumerate what the machine-relay exclusion removed from the operator-facing
+ * surfaces in this window, one row per rule, so the exclusion is visible
+ * rather than silent. See {@link RelayExclusion}.
+ *
+ * The population matches the windowed aggregates (date window, backfilled
+ * rows excluded) MINUS the request-source clause — the whole point is to
+ * count rows the audience filter drops. Rules with a zero count are still
+ * returned: "this rule is declared and matched nothing" is the reading that
+ * tells an operator a stale rule can be deleted.
+ */
+export async function getRelayExclusions(
+  days: number = 7,
+  filter: AnalyticsFilter = {},
+  rules: readonly MachineRelayRule[] = getMachineRelayRules(),
+): Promise<RelayExclusion[]> {
+  const pool = getPool();
+
+  const { clauses: fc, params: fp, nextIdx } = buildFilterClauses(filter);
+  const dw = buildDateWindow(filter, days, nextIdx);
+  const where = whereAnd([...dw.clauses, "latency_ms >= 0"], fc);
+
+  // One aggregate per rule (plus the tag) in a single pass, so the panel
+  // costs one query regardless of how many rules are declared.
+  const selects: string[] = [
+    `count(*) FILTER (WHERE ${RELAY_TAG_SQL})::int AS c_tag`,
+    `max(created_at) FILTER (WHERE ${RELAY_TAG_SQL})::text AS t_tag`,
+  ];
+  const params: unknown[] = [...fp, ...dw.params];
+  let idx = dw.nextIdx;
+  const usable: MachineRelayRule[] = [];
+  for (const rule of rules) {
+    const fpRule = buildMachineRelayPredicate([rule], idx);
+    if (!fpRule.sql) continue;
+    const i = usable.length;
+    selects.push(`count(*) FILTER (WHERE ${fpRule.sql})::int AS c_${i}`);
+    selects.push(
+      `max(created_at) FILTER (WHERE ${fpRule.sql})::text AS t_${i}`,
+    );
+    // The predicate is spliced twice but its params are bound once: the
+    // second splice reuses the SAME placeholders, so push the params once.
+    params.push(...fpRule.params);
+    idx = fpRule.nextIdx;
+    usable.push(rule);
+  }
+
+  const { rows } = await pool.query(
+    `SELECT ${selects.join(", ")} FROM query_log ${where}`,
+    params,
+  );
+  const row = (rows[0] ?? {}) as Record<string, unknown>;
+
+  const out: RelayExclusion[] = [
+    {
+      name: RELAY_TAG_EXCLUSION_NAME,
+      reason:
+        "Client declared itself a machine relay via the X-Pathfinder-Source header",
+      kind: "tag",
+      count: (row.c_tag as number | undefined) ?? 0,
+      last_seen: (row.t_tag as string | null | undefined) ?? null,
+    },
+  ];
+  usable.forEach((rule, i) => {
+    out.push({
+      name: rule.name,
+      reason: rule.reason ?? null,
+      kind: "fingerprint",
+      count: (row[`c_${i}`] as number | undefined) ?? 0,
+      last_seen: (row[`t_${i}`] as string | null | undefined) ?? null,
+    });
+  });
+  return out;
 }
 
 /**

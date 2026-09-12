@@ -1615,6 +1615,23 @@
             <strong>retention_days</strong> — How long to keep analytics data
             before automatic cleanup. Default 90 days.
           </li>
+          <li>
+            <strong>machine_relays</strong> — Machines that forward somebody
+            else&rsquo;s text into your tools verbatim (an issue-triage bot, a
+            mirroring service). Their traffic is real, but it is not a user
+            query, so matching rows are excluded from Top Queries, the
+            empty-result panel, the unique-IP and session counts, and the
+            scheduled reports. Each rule takes a <code>name</code>, an optional
+            <code>reason</code>, and the predicates
+            <code>user_agent</code> (exact, case-insensitive) and
+            <code>client_ip_cidr</code> (IPv4 CIDR); a rule matches when every
+            predicate it declares matches. Nothing is hidden: the dashboard
+            lists every rule and what it removed, and
+            <code>?request_source=relay</code> on any analytics endpoint reads
+            the excluded rows back. Prefer having the relay send
+            <code>X-Pathfinder-Source</code> at MCP session init instead — a
+            self-declaring relay needs no rule here.
+          </li>
         </ul>
 
         <p>
@@ -1622,7 +1639,8 @@
           and latency metrics. API endpoints:
           <code>/api/analytics/summary</code>,
           <code>/api/analytics/queries</code>,
-          <code>/api/analytics/empty-queries</code>.
+          <code>/api/analytics/empty-queries</code>,
+          <code>/api/analytics/relay-exclusions</code>.
         </p>
 
         <h2 id="authentication">Authentication</h2>
