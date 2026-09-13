@@ -96,6 +96,7 @@ import {
   getToolCounts,
   getToolBreakdown,
   normalizeRequestSource,
+  isRecognizedRequestSource,
   REQUEST_SOURCE_HEADER,
   REQUEST_SOURCE_VALUES,
 } from "./db/analytics.js";
@@ -1540,13 +1541,68 @@ export async function handleExistingSessionRequest<TReq, TRes>(opts: {
  * absent/unknown values to the default ('user'). An array-shaped value (only
  * possible for set-cookie under Express) is defensively ignored.
  *
+ * A value we do not RECOGNIZE is still tagged 'user', but it is no longer
+ * silent — see the warning below.
+ *
  * Exported for tests so the header→source mapping is verified without spinning
  * up the full Express app.
  */
 export function requestSourceFromHeaders(req: Request): RequestSource {
   const raw = req.headers[REQUEST_SOURCE_HEADER];
   const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value === "string" && value.trim() !== "") {
+    warnUnrecognizedRequestSource(value);
+  }
   return normalizeRequestSource(value);
+}
+
+/**
+ * Distinct unrecognized `X-Pathfinder-Source` values already warned about in
+ * this process. The header is read once per MCP session init, so an unbounded
+ * warn would still be bounded by session rate — but a misconfigured client
+ * reconnecting in a loop would bury the line it is supposed to surface, and a
+ * client sending a per-request identifier would grow this set without limit.
+ * One line per distinct word, capped, is enough: the point is to name the
+ * word, once, early.
+ */
+const warnedRequestSources = new Set<string>();
+const WARNED_REQUEST_SOURCES_MAX = 50;
+
+/** @internal — test seam for {@link warnUnrecognizedRequestSource}. */
+export function __resetWarnedRequestSourcesForTesting(): void {
+  warnedRequestSources.clear();
+}
+
+/**
+ * Say so when a client declares an origin this server has never heard of.
+ *
+ * This is the compensation for a normalization that cannot fail: an unknown
+ * `X-Pathfinder-Source` is indistinguishable downstream from no header at all
+ * — both persist as 'user' — so a cross-service vocabulary mismatch shows up
+ * only as an audience that quietly counts zero. That is exactly how outpost's
+ * `outpost` tag went unnoticed against an alias map that knew only
+ * `github-triage`. The fix for the word is in REQUEST_SOURCE_ALIASES; this
+ * line is what makes the NEXT one take minutes instead of a quarter.
+ *
+ * The raw value is truncated and stripped of control characters before it is
+ * logged: it is attacker-controlled input going into an operator's log.
+ */
+function warnUnrecognizedRequestSource(value: string): void {
+  if (isRecognizedRequestSource(value)) return;
+  const key = value.trim().toLowerCase();
+  if (warnedRequestSources.has(key)) return;
+  // At the cap, stop warning rather than warning forever about words we can
+  // no longer remember. Fifty distinct unknown origins is already a louder
+  // signal than any one of them.
+  if (warnedRequestSources.size >= WARNED_REQUEST_SOURCES_MAX) return;
+  warnedRequestSources.add(key);
+  const safe = key.replace(/[^\x20-\x7e]/g, "?").slice(0, 64);
+  console.warn(
+    `[analytics] unrecognized ${REQUEST_SOURCE_HEADER}: "${safe}" — ` +
+      `tagging these rows as '${normalizeRequestSource(undefined)}'. If this ` +
+      `is one of ours, add it to REQUEST_SOURCE_ALIASES in ` +
+      `src/db/analytics.ts and to the wire-contract test.`,
+  );
 }
 
 app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {

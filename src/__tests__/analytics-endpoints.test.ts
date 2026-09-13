@@ -63,6 +63,7 @@ import {
   parseAnalyticsFilter,
   requestSourceFromHeaders,
   __resetAnalyticsTokenForTesting,
+  __resetWarnedRequestSourcesForTesting,
   MAX_DAYS,
 } from "../server.js";
 
@@ -577,6 +578,63 @@ describe("requestSourceFromHeaders", () => {
         mkReq({ "x-pathfinder-source": ["analysis", "user"] }),
       ),
     ).toBe("analysis");
+  });
+
+  // ── The unrecognized-value warning ──────────────────────────────────────
+  //
+  // An unknown origin and an absent header both persist as 'user', so a
+  // cross-service vocabulary mismatch is invisible in the data. These tests
+  // pin the one place it IS visible.
+
+  describe("warns about an unrecognized value", () => {
+    let warn: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      __resetWarnedRequestSourcesForTesting();
+      warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warn.mockRestore();
+      __resetWarnedRequestSourcesForTesting();
+    });
+
+    it("names the unrecognized value in the log line", () => {
+      requestSourceFromHeaders(mkReq({ "x-pathfinder-source": "crawler" }));
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0][0]);
+      expect(line).toContain("x-pathfinder-source");
+      expect(line).toContain("crawler");
+    });
+
+    it("warns once per distinct value, not once per session", () => {
+      for (let i = 0; i < 5; i++) {
+        requestSourceFromHeaders(mkReq({ "x-pathfinder-source": "crawler" }));
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+      requestSourceFromHeaders(mkReq({ "x-pathfinder-source": "scraper" }));
+      expect(warn).toHaveBeenCalledTimes(2);
+    });
+
+    it("strips control characters and truncates the logged value", () => {
+      requestSourceFromHeaders(
+        mkReq({ "x-pathfinder-source": `evil\n\r${"z".repeat(200)}` }),
+      );
+      const line = String(warn.mock.calls[0][0]);
+      expect(line).not.toContain("\n\r");
+      expect(line).not.toContain("z".repeat(65));
+    });
+
+    it("stays silent for recognized values and for an absent header", () => {
+      // Including the aliases: a client using its declared wire word is
+      // configured correctly and must not generate operator noise.
+      for (const v of ["user", "synthetic", "analysis", "outpost"]) {
+        requestSourceFromHeaders(mkReq({ "x-pathfinder-source": v }));
+      }
+      requestSourceFromHeaders(mkReq({}));
+      requestSourceFromHeaders(mkReq({ "x-pathfinder-source": "   " }));
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });
 
