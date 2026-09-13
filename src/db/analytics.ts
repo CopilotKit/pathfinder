@@ -193,25 +193,71 @@ export function getMachineRelayRules(): MachineRelayRule[] {
 }
 
 /**
- * Normalize an arbitrary `X-Pathfinder-Source` header value to a known
- * {@link RequestSource}. Unknown/empty/missing values fall back to
- * {@link DEFAULT_REQUEST_SOURCE}. Case-insensitive and whitespace-trimmed so
- * `"Synthetic"` / `" analysis "` still tag correctly.
- */
-/**
  * Non-canonical `X-Pathfinder-Source` values that map onto a canonical
  * {@link RequestSource}. This is how a relay declares itself with a name that
- * says WHICH relay it is ("github-triage") while the analytics layer keeps a
- * single `relay` audience: the relay does not need to know our taxonomy, and
- * we do not need a new audience per relay.
+ * says WHICH relay it is ("outpost") while the analytics layer keeps a single
+ * `relay` audience: the relay does not need to know our taxonomy, and we do
+ * not need a new audience per relay.
  *
- * Keys are lower-cased; {@link normalizeRequestSource} trims and lower-cases
- * before the lookup.
+ * This map is a CROSS-SERVICE CONTRACT, and the only thing that makes it one
+ * is that the sender's literal word appears here. Nothing downstream can tell
+ * an unknown word from an absent header — both become `user` — so a client
+ * whose word is missing here is not mis-tagged loudly, it is mis-tagged
+ * silently. That already happened once: outpost shipped
+ * `X-Pathfinder-Source: outpost` the same day this map shipped knowing only
+ * `github-triage`, and every relayed row logged as real user traffic while
+ * the `relay` audience counted zero. The wire values are therefore pinned in
+ * src/__tests__/request-source-wire-contract.test.ts as literal strings, so
+ * the next client that picks a new word fails CI instead of the dashboard.
+ *
+ * `outpost` is the shared pathfinder MCP client in CopilotKit's outpost
+ * service, which fronts GitHub issue triage AND the Discord/Slack/Teams bots
+ * — hence the generic service name mapping to the generic `relay` audience,
+ * not to anything GitHub-shaped.
+ *
+ * Null-prototype so a client sending `constructor` or `toString` cannot pull
+ * an inherited member out of the lookup in {@link normalizeRequestSource}.
+ * Keys are lower-cased; that function trims and lower-cases before looking up.
  */
-export const REQUEST_SOURCE_ALIASES: Readonly<Record<string, RequestSource>> = {
-  "github-triage": "relay",
-};
+export const REQUEST_SOURCE_ALIASES: Readonly<Record<string, RequestSource>> =
+  Object.freeze(
+    Object.assign(Object.create(null) as Record<string, RequestSource>, {
+      outpost: "relay",
+      "github-triage": "relay",
+    } satisfies Record<string, RequestSource>),
+  );
 
+/**
+ * True when `value` is a word this server RECOGNIZES — a canonical
+ * {@link RequestSource} or a declared alias. Exported so the request edge can
+ * tell "the client said nothing" (fine, default to `user`) apart from "the
+ * client said something we have never heard of" (a contract gap worth a log
+ * line); {@link normalizeRequestSource} answers `user` to both.
+ */
+export function isRecognizedRequestSource(
+  value: string | null | undefined,
+): boolean {
+  if (typeof value !== "string") return false;
+  const v = value.trim().toLowerCase();
+  if (v === "") return false;
+  return (
+    (REQUEST_SOURCE_VALUES as readonly string[]).includes(v) ||
+    v in REQUEST_SOURCE_ALIASES
+  );
+}
+
+/**
+ * Normalize an arbitrary `X-Pathfinder-Source` header value to a known
+ * {@link RequestSource}, via {@link REQUEST_SOURCE_ALIASES} for the
+ * non-canonical names relays declare. Unknown/empty/missing values fall back
+ * to {@link DEFAULT_REQUEST_SOURCE}. Case-insensitive and whitespace-trimmed
+ * so `"Synthetic"` / `" analysis "` still tag correctly.
+ *
+ * Kept total and silent by design — it runs in readers, scripts and tests as
+ * well as at the request edge. The operator-visible warning for an
+ * unrecognized value belongs at that edge, where a request is in hand; see
+ * `requestSourceFromHeaders` in src/server.ts.
+ */
 export function normalizeRequestSource(
   value: string | null | undefined,
 ): RequestSource {
@@ -730,8 +776,9 @@ function buildMachineRelayPredicate(
 
 /**
  * SQL that is TRUE for a row the relay TAGGED itself with, i.e. one that
- * arrived with `X-Pathfinder-Source: github-triage` (normalized to the
- * `relay` request source). Kept as a named constant so the fingerprint path
+ * arrived with an `X-Pathfinder-Source` a relay declares itself by
+ * (`outpost`, `github-triage`) and so normalized to the `relay` request
+ * source. Kept as a named constant so the fingerprint path
  * and the tag path read as the same concept in every query.
  */
 const RELAY_TAG_SQL = "request_source = 'relay'";
