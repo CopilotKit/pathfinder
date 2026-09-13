@@ -237,7 +237,7 @@ describe("empty-result reporting re-judges history against current patterns", ()
   });
 
   it("leaves the summary counts untouched", async () => {
-    const summary = await getAnalyticsSummary(30);
+    const summary = await getAnalyticsSummary({}, 30);
     // Every seeded row except the one non-empty query is empty, and the
     // summary counts write-time-blocked rows too (existing precedent).
     const expectedEmpty =

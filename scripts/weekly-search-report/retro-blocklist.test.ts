@@ -180,11 +180,12 @@ describe("published reports re-judge stale off-topic rows", () => {
     )) as unknown as ReportEmptyQuery[];
     const fetched = await fetchBundle(
       {
-        fetchJson: async <T,>(path: string): Promise<T> => {
+        fetchJson: async <T>(path: string): Promise<T> => {
           if (path.startsWith("/api/analytics/empty-queries")) {
             return emptyQueries as unknown as T;
           }
-          if (path.startsWith("/api/analytics/queries")) return [] as unknown as T;
+          if (path.startsWith("/api/analytics/queries"))
+            return [] as unknown as T;
           if (path.startsWith("/api/analytics/tool-breakdown")) {
             return [] as unknown as T;
           }
