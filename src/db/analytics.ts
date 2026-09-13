@@ -1,6 +1,7 @@
 import { getPool } from "./client.js";
 import { getAnalyticsConfig } from "../config.js";
 import type { MachineRelayRule } from "../types.js";
+import { checkBlocklist } from "../mcp/abuse-blocklist.js";
 import {
   COSINE_SCORE_KIND,
   COSINE_SCORE_MAX,
@@ -1467,6 +1468,19 @@ export async function getTopQueries(
 }
 
 /**
+ * Extra rows `getEmptyQueries` fetches beyond the caller's `limit` so the
+ * retroactive-blocklist pass can drop matches and still return a full page.
+ *
+ * Sized against production: the busiest 30-day window the bi-weekly gap
+ * analysis reads produces low-hundreds of GROUPED empty-result rows in total,
+ * of which a few dozen are off-topic. 500 rows of headroom therefore covers
+ * the whole population many times over while keeping the fetch bounded. If it
+ * is ever fully consumed the reader logs a warning rather than silently
+ * returning a short list.
+ */
+export const RETRO_BLOCKLIST_OVERFETCH = 500;
+
+/**
  * Get queries that returned zero results. Grouped by
  * (query_text, tool_name, source_name); results with the same query text
  * but different tool/source appear separately.
@@ -1477,6 +1491,29 @@ export async function getTopQueries(
  * that happens to return zero entries is not a real "user searched and found
  * nothing" gap, so surfacing a literal `<browse>` row in the Empty-Result
  * dashboard would be misleading noise.
+ *
+ * Rows are ALSO re-judged against the CURRENT abuse blocklist at read time
+ * (see {@link checkBlocklist}), not merely against the `blocked` flag written
+ * when they were logged. The blocklist runs pre-embedding at request time, so
+ * a row can only carry `blocked = true` if the pattern that describes it
+ * already existed when the query arrived. Measured consequence: in the window
+ * of the 2026-09-13 weekly Notion report, 19 of 49 empty-result rows were
+ * awards-show / election scraping that the current patterns all match, but
+ * that all read back as `blocked = false` because their last occurrence
+ * predates the first production fire of those families (2026-09-10T16:40Z).
+ * They rendered as documentation gaps in a published report and fed a
+ * published LLM prompt. Judging history by what we know NOW — rather than by
+ * what we knew the day it was logged — is what keeps a newly-added pattern
+ * from taking a full window to take effect on the operator surfaces.
+ *
+ * The cost is a bounded regex pass over an already-grouped row set, run after
+ * the SQL that produced it; see {@link RETRO_BLOCKLIST_OVERFETCH} for how the
+ * caller's `limit` is preserved across the drop.
+ *
+ * Deliberately NOT re-judged: the summary counts (which already include
+ * write-time-blocked rows — only the LIST has ever been filtered) and
+ * {@link getBlockedQueries} (which must stay the record of what the blocklist
+ * actually short-circuited, so "the blocklist caught N" keeps meaning that).
  *
  * Blocked rows (`blocked = true`) are ALSO excluded: those queries were
  * short-circuited by the abuse blocklist (v1.15.2) before they ever reached
@@ -1535,17 +1572,35 @@ export async function getEmptyQueries(
       ...rs.params,
       REDACTED_QUERY_TEXT,
       BROWSE_QUERY_TEXT,
-      limit,
+      limit + RETRO_BLOCKLIST_OVERFETCH,
     ],
   );
 
-  return rows.map((r: Record<string, unknown>) => ({
+  const all = rows.map((r: Record<string, unknown>) => ({
     query_text: r.query_text as string,
     tool_name: r.tool_name as string,
     source_name: (r.source_name as string) ?? null,
     count: r.count as number,
     last_seen: r.last_seen as string,
   }));
+
+  const kept = all.filter((r) => !checkBlocklist(r.query_text).matched);
+  const dropped = all.length - kept.length;
+  if (dropped > 0) {
+    console.log(
+      `[analytics] Empty-result list: dropped ${dropped} row(s) matching the current abuse blocklist but logged before their pattern shipped (days=${days} limit=${limit})`,
+    );
+  }
+  if (dropped >= RETRO_BLOCKLIST_OVERFETCH) {
+    // The headroom was fully consumed, so the list may be short of `limit`
+    // rows that a larger fetch would have surfaced. Loud rather than silent:
+    // a truncated gap list is exactly the failure this function exists to
+    // avoid in the other direction.
+    console.warn(
+      `[analytics] Empty-result list: retroactive-blocklist headroom exhausted (${dropped} >= ${RETRO_BLOCKLIST_OVERFETCH}); the returned list may be short. Raise RETRO_BLOCKLIST_OVERFETCH.`,
+    );
+  }
+  return kept.slice(0, limit);
 }
 
 /**
