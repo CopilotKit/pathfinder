@@ -65,8 +65,8 @@ const codeConfig = makeFileSourceConfig(
 
 // Docs source config — a deliberately generic *.mdx matcher for the glob
 // logic itself. The real `docs` source walks showcase/shell-docs/src/content/
-// and names its three page subtrees (docs/, reference/, ag-ui/) explicitly;
-// that shipped config is asserted against directly in
+// and names its page subtrees (docs/, reference/) explicitly; that shipped
+// config is asserted against directly in
 // src/__tests__/copilotkit-docs-config.test.ts.
 const docsConfig = makeFileSourceConfig(["**/*.mdx"]);
 
