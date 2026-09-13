@@ -116,14 +116,20 @@ describe("deploy/copilotkit-docs.yaml — search-docs advertises only what it in
     tools.map((t) => [String(t.name), String(t.description ?? "")]),
   );
 
+  // Naming AG-UI to route AWAY from it is correct and stays. What must not
+  // come back is a COVERAGE claim — the docs.copilotkit.ai/ag-ui/... link
+  // shape that told an LLM search-docs could answer AG-UI questions itself.
   it("does not claim to cover the retired docs.copilotkit.ai/ag-ui pages", () => {
     const description = byName["search-docs"];
     expect(description).toBeDefined();
-    expect(description).not.toMatch(/ag-ui/i);
+    expect(description).not.toMatch(/copilotkit\.ai\/ag-ui/i);
+    expect(description).not.toMatch(/hosted on the CopilotKit docs site/i);
   });
 
   it("points AG-UI protocol questions at search-ag-ui-docs", () => {
-    expect(byName["search-docs"]).toContain("search-ag-ui-docs");
+    expect(byName["search-docs"]).toMatch(
+      /NOT for AG-UI protocol docs \(use search-ag-ui-docs\)/,
+    );
   });
 
   it("describes search-ag-ui-docs as the AG-UI documentation, with no second copy", () => {
