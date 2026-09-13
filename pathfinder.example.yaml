@@ -180,9 +180,13 @@ indexing:
 #   # enumerated in the dashboard's "Excluded Machine-Relay Traffic" panel.
 #   # A rule matches when EVERY predicate it declares matches.
 #   #
-#   # Prefer having the relay send `X-Pathfinder-Source: github-triage` at MCP
-#   # session init — that tags its rows directly and needs no rule here. These
-#   # fingerprints are for relays you do not control.
+#   # Prefer having the relay send `X-Pathfinder-Source: relay` at MCP session
+#   # init — that tags its rows directly and needs no rule here. A relay that
+#   # would rather send its own service name can, but only if that name is
+#   # added to REQUEST_SOURCE_ALIASES in src/db/analytics.ts first: an
+#   # unrecognized value is tagged 'user' like any other traffic (the server
+#   # logs a warning naming it). These fingerprints are for relays you do not
+#   # control, or have not taught to tag themselves yet.
 #   machine_relays:
 #     - name: github-issue-triage
 #       reason: Forwards GitHub issue bodies verbatim into search
