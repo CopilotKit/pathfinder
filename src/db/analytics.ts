@@ -1,6 +1,8 @@
 import { getPool } from "./client.js";
 import { getAnalyticsConfig } from "../config.js";
 import type { MachineRelayRule } from "../types.js";
+import type { SessionAnalyticsContext } from "../request-context.js";
+import { cleanClientString, rateLimitedWarn } from "../request-context.js";
 import { checkBlocklist } from "../mcp/abuse-blocklist.js";
 import {
   COSINE_SCORE_KIND,
@@ -257,7 +259,7 @@ export function isRecognizedRequestSource(
  * Kept total and silent by design — it runs in readers, scripts and tests as
  * well as at the request edge. The operator-visible warning for an
  * unrecognized value belongs at that edge, where a request is in hand; see
- * `requestSourceFromHeaders` in src/server.ts.
+ * `requestSourceFromHeaders` in src/request-context.ts.
  */
 export function normalizeRequestSource(
   value: string | null | undefined,
@@ -338,6 +340,79 @@ export interface QueryLogEntry {
    * `pattern:<name>` tag from the abuse blocklist). NULL when not blocked.
    */
   block_reason?: string | null;
+  /**
+   * Transport the request arrived on. Optional; absent or unrecognised
+   * persists as NULL.
+   */
+  transport?: SessionAnalyticsContext["transport"] | null;
+  /**
+   * Protocol era of the request; defined at
+   * SessionAnalyticsContext.protocol_era (src/request-context.ts). Absent or
+   * unrecognised persists as NULL.
+   */
+  protocol_era?: SessionAnalyticsContext["protocol_era"] | null;
+  /**
+   * MCP protocol version the client requested in its initialize request
+   * (`params.protocolVersion`), not the version the server answers with.
+   * Normalised at the write boundary by {@link normalizeRequestContextField}.
+   */
+  protocol_version?: string | null;
+  /**
+   * MCP `clientInfo.name`. Normalised at the write boundary by
+   * {@link normalizeRequestContextField}.
+   */
+  client_name?: string | null;
+  /**
+   * OAuth client id of the authenticated caller. Cleaned at the write
+   * boundary by `cleanClientString` (src/request-context.ts); a value over
+   * {@link AUTH_CLIENT_ID_MAX_LEN} code points is stored as NULL.
+   */
+  auth_client_id?: string | null;
+}
+
+/**
+ * Hard cap, in code points, on the request-context columns `transport`,
+ * `protocol_era`, `protocol_version` and `client_name`, applied at the write
+ * boundary to bound row size. `handshakeOf` in src/request-context.ts applies
+ * the same cap through the same cleaner ({@link cleanClientString}).
+ */
+export const REQUEST_CONTEXT_FIELD_MAX_LEN = 64;
+
+/**
+ * Cap, in code points, on `auth_client_id`. It is an identity key (the
+ * unique-client count keys on it), so a longer value is stored as NULL, never
+ * as a prefix that could merge two distinct clients.
+ */
+export const AUTH_CLIENT_ID_MAX_LEN = 256;
+
+const TRANSPORT_VALUES: ReadonlySet<string> = new Set<
+  SessionAnalyticsContext["transport"]
+>(["streamable_http", "sse"]);
+const PROTOCOL_ERA_VALUES: ReadonlySet<string> = new Set<
+  SessionAnalyticsContext["protocol_era"]
+>(["legacy", "modern"]);
+
+/**
+ * Normalise one request-context value for storage with
+ * {@link cleanClientString} (non-string, control characters, lone
+ * surrogates, trim, code-point cap, empty -> NULL). When `allowed` is given,
+ * a value outside `allowed.values` becomes NULL, so the column only holds
+ * values the counters recognise, and a rate-limited warning names the field.
+ * The rejected value is not logged, as it is client-influenced. Never throws.
+ */
+function normalizeRequestContextField(
+  value: unknown,
+  allowed?: { field: string; values: ReadonlySet<string> },
+): string | null {
+  const out = cleanClientString(value, REQUEST_CONTEXT_FIELD_MAX_LEN);
+  if (out !== null && allowed && !allowed.values.has(out)) {
+    rateLimitedWarn(
+      `analytics-unknown-${allowed.field}`,
+      `[analytics] logQuery: ${allowed.field} outside the allowed set; storing NULL`,
+    );
+    return null;
+  }
+  return out;
 }
 
 /**
@@ -610,9 +685,27 @@ export async function logQuery(
   const scoreKind =
     topScore == null ? null : (entry.score_kind ?? COSINE_SCORE_KIND);
   try {
+    // Normalise the client-influenced request-context fields for storage.
+    const transport = normalizeRequestContextField(entry.transport, {
+      field: "transport",
+      values: TRANSPORT_VALUES,
+    });
+    const protocolEra = normalizeRequestContextField(entry.protocol_era, {
+      field: "protocol_era",
+      values: PROTOCOL_ERA_VALUES,
+    });
+    const protocolVersion = normalizeRequestContextField(
+      entry.protocol_version,
+    );
+    const clientName = normalizeRequestContextField(entry.client_name);
+    const authClientId = cleanClientString(
+      entry.auth_client_id,
+      AUTH_CLIENT_ID_MAX_LEN,
+      "null",
+    );
     await pool.query(
-      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, score_kind, latency_ms, source_name, session_id, request_source, client_ip, user_agent, blocked, block_reason)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, score_kind, latency_ms, source_name, session_id, request_source, client_ip, user_agent, blocked, block_reason, transport, protocol_era, protocol_version, client_name, auth_client_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
       [
         entry.tool_name,
         text,
@@ -627,6 +720,11 @@ export async function logQuery(
         userAgent,
         blocked,
         blockReason,
+        transport,
+        protocolEra,
+        protocolVersion,
+        clientName,
+        authClientId,
       ],
     );
   } catch (err) {

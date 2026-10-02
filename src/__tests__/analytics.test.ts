@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the pool before importing analytics module
 const mockQuery = vi.fn();
@@ -26,6 +26,7 @@ import {
   ROLLING_WINDOW_CAP_DAYS,
 } from "../db/analytics.js";
 import type { QueryLogEntry } from "../db/analytics.js";
+import { __resetRateLimitedWarnForTesting } from "../request-context.js";
 
 beforeEach(() => {
   // resetAllMocks (not clearAllMocks) so any queued `.mockResolvedValueOnce`
@@ -80,6 +81,12 @@ describe("logQuery", () => {
       null,
       false,
       null,
+      // Request-context columns ($14-$18): absent on baseEntry, so NULL.
+      null,
+      null,
+      null,
+      null,
+      null,
     ]);
   });
 
@@ -106,6 +113,12 @@ describe("logQuery", () => {
       null,
       null,
       false,
+      null,
+      // Request-context columns ($14-$18): absent on baseEntry, so NULL.
+      null,
+      null,
+      null,
+      null,
       null,
     ]);
     // And pin the literal so the constant can never silently drift to a
@@ -221,6 +234,243 @@ describe("logQuery", () => {
     const [, params] = mockQuery.mock.calls[0];
     expect(params[11]).toBe(false);
     expect(params[12]).toBeNull();
+  });
+
+  it("persists the request-context fields as params $14-$18 in order", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery({
+      ...baseEntry,
+      transport: "streamable_http",
+      protocol_era: "modern",
+      protocol_version: "2025-06-18",
+      client_name: "claude-code",
+      auth_client_id: "client-abc",
+    });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toContain(
+      "transport, protocol_era, protocol_version, client_name, auth_client_id",
+    );
+    // Exactly one placeholder per column, numbered $1..$18 in order, and one
+    // param per placeholder. A dropped or doubled placeholder fails here.
+    const columns = /INSERT INTO query_log \(([^)]*)\)/
+      .exec(sql)![1]
+      .split(",")
+      .map((c: string) => c.trim());
+    const placeholders = [...(sql as string).matchAll(/\$(\d+)/g)].map((m) =>
+      Number(m[1]),
+    );
+    expect(columns).toHaveLength(18);
+    expect(placeholders).toEqual(Array.from({ length: 18 }, (_, i) => i + 1));
+    expect(params).toHaveLength(18);
+    expect(params.slice(13)).toEqual([
+      "streamable_http",
+      "modern",
+      "2025-06-18",
+      "claude-code",
+      "client-abc",
+    ]);
+  });
+
+  it("truncates protocol_version and client_name to 64 code points", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery({
+      ...baseEntry,
+      protocol_version: "v".repeat(500),
+      client_name: "c".repeat(500),
+    });
+
+    const [, params] = mockQuery.mock.calls[0];
+    // params[15] = protocol_version, params[16] = client_name. 64 is the
+    // value of REQUEST_CONTEXT_FIELD_MAX_LEN, asserted as a literal.
+    expect((params[15] as string).length).toBe(64);
+    expect((params[16] as string).length).toBe(64);
+  });
+
+  it("persists an empty auth_client_id as null", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery({ ...baseEntry, auth_client_id: "" });
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[17]).toBeNull();
+  });
+
+  describe("request-context field normalisation", () => {
+    // Build an entry that carries values the static type forbids, the way an
+    // untyped caller (or a future refactor) could hand them to the writer.
+    function looseEntry(fields: Record<string, unknown>): QueryLogEntry {
+      const entry: unknown = { ...baseEntry, ...fields };
+      return entry as QueryLogEntry;
+    }
+
+    it("resolves (does not reject) and stores NULL for non-string values", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      await expect(
+        logQuery(
+          looseEntry({
+            transport: 7,
+            protocol_era: {},
+            protocol_version: 2025,
+            client_name: 42,
+            auth_client_id: ["x"],
+          }),
+        ),
+      ).resolves.toBeUndefined();
+
+      const [, params] = mockQuery.mock.calls[0];
+      expect(params.slice(13)).toEqual([null, null, null, null, null]);
+    });
+
+    it("stores an empty or whitespace-only string as NULL for every field", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      await logQuery(
+        looseEntry({
+          transport: "",
+          protocol_era: "  ",
+          protocol_version: "",
+          client_name: "",
+          auth_client_id: "   ",
+        }),
+      );
+
+      const [, params] = mockQuery.mock.calls[0];
+      expect(params.slice(13)).toEqual([null, null, null, null, null]);
+    });
+
+    it("trims surrounding whitespace before storing", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      // The enum fields are padded too: the trim must run BEFORE the
+      // allowed-value check, or " sse " would be stored as NULL.
+      await logQuery(
+        looseEntry({
+          transport: " sse ",
+          protocol_era: "\tmodern ",
+          protocol_version: " 2025-06-18 ",
+          client_name: "  cursor\t",
+        }),
+      );
+
+      const [, params] = mockQuery.mock.calls[0];
+      expect(params[13]).toBe("sse");
+      expect(params[14]).toBe("modern");
+      expect(params[15]).toBe("2025-06-18");
+      expect(params[16]).toBe("cursor");
+    });
+
+    describe("out-of-vocabulary values", () => {
+      afterEach(() => {
+        __resetRateLimitedWarnForTesting();
+      });
+
+      it("stores an unknown transport or protocol_era as NULL and warns per field without the value", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          mockQuery.mockResolvedValueOnce({ rows: [] });
+          await logQuery(
+            looseEntry({ transport: "websocket", protocol_era: "future" }),
+          );
+
+          const [, params] = mockQuery.mock.calls[0];
+          expect(params[13]).toBeNull();
+          expect(params[14]).toBeNull();
+          const lines = warn.mock.calls.map((c) => String(c[0]));
+          expect(lines).toHaveLength(2);
+          expect(lines.every((l) => l.startsWith("[analytics]"))).toBe(true);
+          expect(lines.some((l) => l.includes("transport"))).toBe(true);
+          expect(lines.some((l) => l.includes("protocol_era"))).toBe(true);
+          for (const l of lines) {
+            expect(l).not.toContain("websocket");
+            expect(l).not.toContain("future");
+          }
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it("rate-limits the warning for a repeated unknown transport", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          mockQuery.mockResolvedValue({ rows: [] });
+          await logQuery(looseEntry({ transport: "websocket" }));
+          await logQuery(looseEntry({ transport: "carrier-pigeon" }));
+          expect(warn).toHaveBeenCalledTimes(1);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it("does not warn for an in-vocabulary or absent value", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          mockQuery.mockResolvedValue({ rows: [] });
+          await logQuery({
+            ...baseEntry,
+            transport: "sse",
+            protocol_era: "legacy",
+          });
+          await logQuery(looseEntry({ transport: "" }));
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      });
+    });
+
+    it("cuts a 65-code-point value to its first 64 code points", async () => {
+      // Distinct characters so a cut from the wrong end cannot pass.
+      const chars = Array.from({ length: 65 }, (_, i) =>
+        String.fromCodePoint(0x4e00 + i),
+      );
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      await logQuery({
+        ...baseEntry,
+        protocol_version: chars.join(""),
+        client_name: chars.join(""),
+      });
+
+      const [, params] = mockQuery.mock.calls[0];
+      const expected = chars.slice(0, 64).join("");
+      expect(params[15]).toBe(expected);
+      expect(params[16]).toBe(expected);
+    });
+
+    it("never splits a surrogate pair that sits on the 64 boundary", async () => {
+      // The first 64 code points (63 ASCII + one astral emoji) are 65 UTF-16
+      // units; the trailing "b" is the 65th code point and is cut.
+      const value = "a".repeat(63) + "\u{1F600}" + "b";
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      await logQuery({ ...baseEntry, client_name: value });
+
+      const [, params] = mockQuery.mock.calls[0];
+      expect(params[16]).toBe("a".repeat(63) + "\u{1F600}");
+      expect(params[16]).not.toContain("\uFFFD");
+      expect(/[\uD800-\uDBFF]$/.test(params[16] as string)).toBe(false);
+    });
+
+    it("keeps auth_client_id up to 256 code points and stores NULL above, never a prefix", async () => {
+      const chars = Array.from({ length: 257 }, (_, i) =>
+        String.fromCodePoint(0x4e00 + i),
+      );
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      await logQuery({
+        ...baseEntry,
+        auth_client_id: chars.slice(0, 256).join(""),
+      });
+      await logQuery({ ...baseEntry, auth_client_id: chars.join("") });
+
+      expect(mockQuery.mock.calls[0][1][17]).toBe(chars.slice(0, 256).join(""));
+      expect(mockQuery.mock.calls[1][1][17]).toBeNull();
+    });
+  });
+
+  it("writes five NULLs when none of the request-context fields are given", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await logQuery(baseEntry);
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params).toHaveLength(18);
+    expect(params.slice(13)).toEqual([null, null, null, null, null]);
   });
 });
 
