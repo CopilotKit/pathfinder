@@ -55,7 +55,6 @@
   "dependencies": {
     "@discordjs/rest": "^2.6.1",
     "@modelcontextprotocol/node": "^2.1.0",
-    "@modelcontextprotocol/sdk": "^1.25.2",
     "@modelcontextprotocol/server": "^2.2.0",
     "@modelcontextprotocol/server-legacy": "^2.2.0",
     "@notionhq/client": "^5.17.0",
