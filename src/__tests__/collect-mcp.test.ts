@@ -128,5 +128,13 @@ describe("collect tool via MCP protocol", () => {
     });
 
     expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0]
+      .text;
+    expect(text).toContain("Input validation error");
+    for (const field of ["query", "rating", "comment"]) {
+      expect(text).toMatch(new RegExp(`(?:^|[\\s,])${field}: `));
+    }
+    expect(text).not.toMatch(new RegExp(`(?:^|[\\s,])tool_name: `));
+    expect(insertCollectedData).not.toHaveBeenCalled();
   });
 });
