@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Bash } from "just-bash";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { registerBashTool } from "../mcp/tools/bash.js";
 import { BashSessionState } from "../mcp/tools/bash-session.js";
 import type { BashToolConfig } from "../types.js";

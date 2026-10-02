@@ -90,7 +90,7 @@ import { startInProcessServer } from "./helpers/inProcessServer.js";
 import type { InProcessServer } from "./helpers/inProcessServer.js";
 import { logQuery } from "../db/analytics.js";
 import { signJWT } from "../oauth/jwt.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 
 const mockLogQuery = vi.mocked(logQuery);
 

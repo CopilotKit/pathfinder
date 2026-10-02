@@ -7,9 +7,8 @@ import {
   beforeEach,
   afterAll,
 } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { registerCollectTool } from "../mcp/tools/collect.js";
 import type { CollectToolConfig } from "../types.js";
 
@@ -129,5 +128,13 @@ describe("collect tool via MCP protocol", () => {
     });
 
     expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0]
+      .text;
+    expect(text).toContain("Input validation error");
+    for (const field of ["query", "rating", "comment"]) {
+      expect(text).toMatch(new RegExp(`(?:^|[\\s,])${field}: `));
+    }
+    expect(text).not.toMatch(new RegExp(`(?:^|[\\s,])tool_name: `));
+    expect(insertCollectedData).not.toHaveBeenCalled();
   });
 });

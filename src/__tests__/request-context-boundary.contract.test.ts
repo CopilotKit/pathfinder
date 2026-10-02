@@ -18,7 +18,7 @@ import {
   vi,
 } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { isInitializeRequest } from "@modelcontextprotocol/server";
 import type { Request } from "express";
 import { __setPoolForTesting, __resetPoolForTesting } from "../db/client.js";
 import { logQuery } from "../db/analytics.js";

@@ -112,10 +112,16 @@ describe("registerKnowledgeTool", () => {
 
     const { registerKnowledgeTool } = await import("../mcp/tools/knowledge.js");
 
-    const toolArgs: Array<[string, string, unknown, unknown]> = [];
+    const toolArgs: Array<
+      [string, { description?: string; inputSchema?: unknown }, unknown]
+    > = [];
     const mockServer = {
-      tool: (...args: unknown[]) => {
-        toolArgs.push(args as [string, string, unknown, unknown]);
+      registerTool: (
+        name: string,
+        config: { description?: string; inputSchema?: unknown },
+        handler: unknown,
+      ) => {
+        toolArgs.push([name, config, handler]);
       },
     };
 
@@ -139,6 +145,12 @@ describe("registerKnowledgeTool", () => {
 
     expect(toolArgs).toHaveLength(1);
     expect(toolArgs[0][0]).toBe("get-faq");
-    expect(toolArgs[0][1]).toBe("Get FAQ content");
+    expect(toolArgs[0][1].description).toBe("Get FAQ content");
+    expect(
+      Object.keys(
+        (toolArgs[0][1].inputSchema as { shape: object }).shape,
+      ).sort(),
+    ).toEqual(["limit", "min_confidence", "query"]);
+    expect(typeof toolArgs[0][2]).toBe("function");
   });
 });

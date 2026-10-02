@@ -1,7 +1,7 @@
 import type { Request, Response, RequestHandler } from "express";
 import { randomUUID } from "node:crypto";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { bearerMiddleware } from "./oauth/handlers.js";
 import type { IpSessionLimiter } from "./ip-limiter.js";
 import type { P2PTelemetry } from "./p2p-telemetry.js";
@@ -13,7 +13,7 @@ import {
 } from "./rate-limit-response.js";
 import type { WorkspaceManager } from "./workspace.js";
 import { clientIp } from "./ip-util.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { isInitializeRequest } from "@modelcontextprotocol/server";
 import {
   recordHandshake,
   handshakeOf,
@@ -326,11 +326,6 @@ export function createSseHandlers(deps: SseHandlerDeps): {
           currentCount,
           retryAfterSeconds,
         });
-        // Clean up the map entries we pre-registered. The transport was
-        // never connected, so onclose will NOT drive a clean tear-down —
-        // which is exactly why we must call transport.close() explicitly
-        // below. SSEServerTransport holds timers/listeners/file handles
-        // from its constructor; skipping close leaks them per rejected race.
         delete sseTransports[sessionId];
         delete sessionLastActivity[sessionId];
         res.setHeader("Retry-After", String(retryAfterSeconds));

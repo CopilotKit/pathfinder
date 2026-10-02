@@ -1,5 +1,5 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod-v4";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type { SearchToolConfig, ChunkResult } from "../../types.js";
 import {
@@ -106,7 +106,7 @@ export function registerSearchTool(
     getAnalyticsContext?: () => SessionAnalyticsContext | undefined;
   },
 ): void {
-  const inputSchema = {
+  const inputSchema = z.object({
     query: z.string().describe("The search query"),
     limit: z
       .number()
@@ -136,12 +136,11 @@ export function registerSearchTool(
       .string()
       .optional()
       .describe("Filter results to a specific documentation version"),
-  };
+  });
 
-  server.tool(
+  server.registerTool(
     toolConfig.name,
-    toolConfig.description,
-    inputSchema,
+    { description: toolConfig.description, inputSchema },
     async ({ query, limit, min_score, version }) => {
       options?.onToolCall?.();
       const effectiveLimit = limit ?? toolConfig.default_limit;

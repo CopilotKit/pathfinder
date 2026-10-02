@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type {
   SearchToolConfig,
   KnowledgeToolConfig,

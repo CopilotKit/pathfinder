@@ -7,9 +7,9 @@ import {
   beforeEach,
   afterAll,
 } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { Client } from "@modelcontextprotocol/client";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
 import type { SearchToolConfig } from "../types.js";
 import { makeChunkResult, makeKeywordResult } from "./helpers/chunkFixtures.js";
 import { mockQueriesModule } from "./helpers/queriesMock.js";

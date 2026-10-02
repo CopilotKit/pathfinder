@@ -1,6 +1,6 @@
-import { z } from "zod";
+import { z } from "zod-v4";
 import type { Bash } from "just-bash";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { BashToolConfig } from "../../types.js";
 import { BashSessionState } from "./bash-session.js";
 import { parseGrepCommand, parseQmdCommand, vectorGrep } from "./bash-grep.js";
@@ -89,16 +89,15 @@ export function registerBashTool(
     return resolvedSessionState;
   }
 
-  const inputSchema = {
+  const inputSchema = z.object({
     command: z
       .string()
       .describe("Bash command to execute (e.g., find, grep, cat, head, ls)"),
-  };
+  });
 
-  server.tool(
+  server.registerTool(
     toolConfig.name,
-    toolConfig.description,
-    inputSchema,
+    { description: toolConfig.description, inputSchema },
     async ({ command }) => {
       options?.onToolCall?.();
       try {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { z } from "zod";
+import { z } from "zod-v4";
 import { yamlSchemaToZod } from "../mcp/tools/collect.js";
 import type { CollectToolConfig } from "../types.js";
 

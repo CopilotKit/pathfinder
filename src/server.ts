@@ -9,9 +9,9 @@ import cors from "cors";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
 import { Bash } from "just-bash";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { isInitializeRequest } from "@modelcontextprotocol/server";
+import type { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { createMcpServer } from "./mcp/server.js";
 import {
   requestContext,
@@ -619,7 +619,7 @@ app.post("/revoke", revocationHandler);
 // MCP endpoint — session-based (initialize once, then tool calls reuse session)
 // ---------------------------------------------------------------------------
 
-const transports: Record<string, StreamableHTTPServerTransport> = {};
+const transports: Record<string, NodeStreamableHTTPServerTransport> = {};
 const sseTransports: Record<string, SSEServerTransport> = {};
 const sessionLastActivity: Record<string, number> = {};
 let SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes default, overridden by config
@@ -954,55 +954,7 @@ function reapIdleSessionsTick(): void {
   });
 }
 
-/**
- * Race-fallback handler for the /mcp `onsessioninitialized` callback. When
- * the IP limiter rejects inside onsessioninitialized (rare: the pre-check
- * above should have caught it, but two concurrent inits from the same IP
- * can still race between pre-check and counter increment), we must:
- *
- * 1. Best-effort emit a JSON-RPC error frame on the transport so the client
- *    sees a descriptive rejection reason instead of a silent disconnect.
- * 2. Close the transport.
- * 3. Delete transports[sid] / sessionLastActivity[sid] INLINE — we cannot
- *    rely on onclose firing for this sid since the transport is torn down
- *    mid-stream-setup.
- *
- * Asymmetry note (vs /sse race fallback in src/sse-handlers.ts):
- *   /sse race-fallback returns a 429 JSON body to the client — the SSE
- *   handler still has a response object in hand at that point. /mcp
- *   race-fallback, by contrast, fires inside the SDK's
- *   `onsessioninitialized` callback AFTER the transport has taken ownership
- *   of the response stream and BEFORE the stream controller is wired
- *   (`transport.send()` throws "Not connected"). We cannot write a JSON
- *   body here, so the losing client sees a silent TCP close. The loud
- *   `console.warn` below is the operator-side compensation.
- *
- *   If a future MCP SDK version exposes a way to emit a protocol-level
- *   error frame during onsessioninitialized, both transports can
- *   converge on the same "descriptive rejection" shape and this helper
- *   can stop being the quiet one. Until then the silent-disconnect is
- *   the documented SDK-imposed behavior — not a TODO, a constraint.
- *
- * Note on step 1: the MCP SDK's `StreamableHTTPServerTransport.send()`
- * requires a live SSE stream (see node_modules/.../webStandardStreamableHttp
- * where send throws "Not connected" without one). Inside
- * `onsessioninitialized`, the enclosing `handleRequest` call has not yet
- * wired the stream controller — `send()` would throw "Not connected" and
- * the rejected promise would surface as an unhandled rejection. Rather
- * than emit a JSON-RPC error the client can't possibly see, we accept the
- * silent-disconnect footgun as documented SDK behavior and compensate
- * with:
- *   - A loud `console.warn` that includes the sid prefix, IP, counter, AND
- *     the clamped retry-after hint so operators can correlate client
- *     disconnects with rate-limit trips and know how long clients were
- *     told to back off.
- *   - The outer pre-check catches the common case (non-race) with a proper
- *     429 + `Retry-After` + structured body, so this fallback path only
- *     fires for genuine concurrent-init races.
- *
- * Exported so tests can exercise this directly without driving the full
- * Express app + SDK lifecycle.
- */
+// Defensive; not reached in production today.
 export function handleSessionInitRaceFallback(opts: {
   transport: { close: () => Promise<void> | void };
   sid: string;
@@ -1025,11 +977,11 @@ export function handleSessionInitRaceFallback(opts: {
   // Clamp to the same ceiling the JSON body uses so the log hint matches
   // what clients would have received on the happy (pre-check) path.
   const retryAfterSeconds = clampRetryAfterSeconds(opts.retryAfterSeconds);
-  // Loud log — this path is the "silent disconnect" case; the log is the
-  // only signal operators get that a client was rejected. Shape mirrors
+  // Loud log — we write no rate-limit response on this path, so this log is
+  // the only rate-limit signal. Shape mirrors
   // the pre-check log so both surfaces are greppable together, and carries
-  // the retry-after hint so ops can correlate disconnects with the backoff
-  // window.
+  // the retry-after hint so ops can correlate rejected initializes with the
+  // backoff window.
   console.warn(
     `[mcp] IP rate limit exceeded for ${ip} (${currentCount}/${limit}), closing session ${sid.slice(0, 8)} (race fallback, retry-after: ${retryAfterSeconds}s)`,
   );
@@ -1196,31 +1148,12 @@ export function handleSessionInitAccept(opts: {
  * Rollback helper for the `server.connect(transport)` /
  * `completeInitRequestSafely` path in the /mcp POST initialize handler.
  *
- * Motivation (Z-1): after handleSessionInitAccept succeeds the handler has
- * already:
- *   - registered transports[preSid] + sessionLastActivity[preSid]
- *   - incremented the ipLimiter counter (tryAdd succeeded pre-accept)
- *   - ensureSession'd the workspace
- *   - wired transport.onclose to cleanup
- * It then calls `server.connect(transport)` followed by handleRequest via
- * completeInitRequestSafely. If EITHER throws (createMcpServer wiring bug,
- * bash-instance lookup failure, OOM during construction, closed-stream mid-
- * handleRequest without an onsessioninitialized race), NOTHING calls
- * transport.close() — so onclose never fires — and the session is stranded
- * against max_sessions_per_ip until the 30-minute TTL reaper cleans it.
- *
  * Design invariant: cleanup runs EXACTLY ONCE for this sid.
  *
- * The obvious "seed rejectedSids then close()" approach is unsound when the
- * onclose handler IS wired (our case): close() fires onclose, onclose reads
- * rejectedSids.has(sid), drains the marker, then runs the suppression branch
- * — but only if the marker is still present when onclose runs. If we drain
- * inline to keep the Set bounded regardless of whether onclose fires, the
- * later-firing onclose sees an empty Set and runs the cleanup chain a second
- * time. We avoid both horns by DETACHING transport.onclose before calling
- * close(). The inline rollback below is the sole owner of the cleanup chain;
- * any onclose invocation from the SDK lands on our neutralized handler and
- * is a no-op.
+ * The inline rollback below owns the cleanup chain. It seeds `rejectedSids`
+ * first, then wraps transport.onclose and forwards to the prior handler; the
+ * prior (route) handler sees the marker and skips its cleanup. The marker is
+ * drained in the close() `.finally`, after onclose has had its chance to run.
  *
  * Per-step try/catch on each cleanup mirrors the onclose + reaper +
  * handleSessionInitAccept rollback pattern: a throw from one step must not
@@ -1257,34 +1190,16 @@ export function rollbackSessionAfterConnectFailure(opts: {
     workspaceManager: workspace,
   } = opts;
 
-  // Detach the wired onclose handler BEFORE we fire close(). The MCP SDK may
-  // invoke onclose as part of stream teardown; replacing it with a wrapper
-  // (rather than a no-op) preserves any prior onclose the SDK or surrounding
-  // code had attached for its OWN bookkeeping, while suppressing OUR cleanup
-  // branch so the inline rollback below remains the single cleanup run.
-  //
-  // Saving `priorOnclose` matters because the MCP SDK wires internal state
-  // teardown on its StreamableHTTPServerTransport.onclose at construction;
-  // blindly clobbering with `() => {}` would leak SDK-internal listeners
-  // (request-queue drain, in-flight response rejection) and mask those
-  // failures from the runtime. The wrapper invokes it in a try/catch so a
-  // prior-handler throw never reaches this rollback's own per-step errors.
+  // Wrap, not clobber: the inline rollback stays the single cleanup run and any
+  // prior onclose still runs.
   const priorOnclose = transport.onclose ?? null;
-  // Seed the rejected-sid marker BEFORE wiring the wrapper so that when the
-  // prior handler (the cleanup-running onclose from handleSessionInitAccept,
-  // or any other application-level listener gated on rejectedSids) executes,
-  // it self-detects the rollback-in-progress case and skips its own cleanup
-  // chain. Its SDK-internal bookkeeping (request-queue drain, in-flight
-  // response rejection) still runs — only the application cleanup short-
-  // circuits. The inline rollback below then drains the marker by running
-  // exactly once.
+  // Seed the rejected-sid marker BEFORE wiring the wrapper so the prior
+  // handler (the cleanup onclose wired in the POST /mcp route) skips its
+  // cleanup chain; the inline rollback below then runs exactly once.
   rejectedSids.add(sid);
   transport.onclose = () => {
-    // Our application cleanup branch is guarded by rejectedSids.has(sid) on
-    // the prior handler side; because we seeded the marker, the prior
-    // handler's application cleanup is a no-op. Forward the invocation so
-    // any SDK-internal onclose wiring (stream teardown listeners, request-
-    // queue drain) still fires.
+    // The seeded marker makes the prior handler's cleanup a no-op; forward
+    // the call so anything else chained onto onclose still runs.
     if (priorOnclose) {
       try {
         priorOnclose();
@@ -1346,12 +1261,11 @@ export function rollbackSessionAfterConnectFailure(opts: {
 /**
  * Drive `transport.handleRequest(req, res, body)` with defensive handling
  * for the onsessioninitialized-race case. `onsessioninitialized` fires
- * INSIDE `handleRequest`, so when the defensive race-fallback inside that
- * callback closes the transport mid-flight the SDK's subsequent write
- * attempts can throw ("Not connected", "Cannot set headers after sent",
- * etc.). Before this helper existed the throw escaped to the outer `try`
- * in the /mcp handler and produced a 500 write on top of the 429 the
- * race-fallback had already streamed — a double response to the client.
+ * INSIDE `handleRequest`, and the race-fallback inside that callback closes
+ * the transport mid-flight.
+ *
+ * The catch is defensive; not reached on SDK v2 today. It keeps a throw after
+ * a race-fallback rejection from producing a second (500) response.
  *
  * Contract:
  *   - Always awaits handleRequest.
@@ -1378,10 +1292,8 @@ export async function completeInitRequestSafely<TReq, TRes, TBody>(
     await transport.handleRequest(req, res, body);
   } catch (err) {
     if (initOutcome.rejected) {
-      // Race-fallback already closed the transport and wrote its own
-      // teardown path; the SDK's residual write attempt naturally throws
-      // on a closed socket. Suppress the throw so the outer catch-all
-      // doesn't pile a 500 on top of the 429.
+      // Race-fallback already closed the transport; suppress the throw so the
+      // outer catch-all does not write a second (500) response.
       console.warn(
         "[mcp] handleRequest threw after race-fallback rejected session; suppressed:",
         err,
@@ -1835,7 +1747,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       // handler. The ensureSession rollback path now runs synchronously
       // BEFORE handleRequest and sets this directly.
       const initOutcome: { rejected: boolean } = { rejected: false };
-      const transport = new StreamableHTTPServerTransport({
+      const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: () => preSid,
         enableJsonResponse: true,
         onsessioninitialized: (sid) => {
@@ -2050,22 +1962,17 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         () => analyticsCtx,
       );
       // Z-1: server.connect(transport) can throw AFTER handleSessionInitAccept
-      // committed maps + ipLimiter counter + ensureSession + onclose wiring.
-      // Without an explicit rollback, the session is stranded against
+      // committed maps + ipLimiter counter + onclose wiring. Without an
+      // explicit rollback, the session is stranded against
       // max_sessions_per_ip until TTL reap because nothing calls
-      // transport.close(), so onclose never fires. Wrap BOTH server.connect
-      // and completeInitRequestSafely so the rollback chain runs regardless
-      // of where the throw originates (connect wiring bug OR handleRequest
-      // mid-flight throw that completeInitRequestSafely rethrows). Rethrow
-      // into the outer catch-all so the 500 response behavior is preserved.
+      // transport.close(), so onclose never fires. The rollback covers a
+      // connect throw; a completeInitRequestSafely rethrow is also covered
+      // (defensive; not reached on SDK v2 today). Rethrow into the outer
+      // catch-all so the 500 response behavior is preserved.
       try {
         await server.connect(transport);
-        // completeInitRequestSafely swallows throws from handleRequest when
-        // onsessioninitialized's defensive race-fallback closed the transport
-        // mid-flight (initOutcome.rejected=true). The fallback already handled
-        // the response lifecycle; a naked await here would bubble the closed-
-        // transport throw into the outer catch-all and produce a 500 write on
-        // top of the 429 the fallback already streamed.
+        // Swallows a handleRequest throw after a race-fallback rejection
+        // (see completeInitRequestSafely). Defensive; not reached today.
         await completeInitRequestSafely(
           transport,
           req,

@@ -1,15 +1,12 @@
-// Shared fixtures for suites that build a full server through createMcpServer.
-//
-// search-analytics.test.ts and knowledge-analytics.test.ts share the `Config`
-// literal below, so a new required `Config` field is added in one place. They
-// call createMcpServer through createMcpServerWith, by argument name, not by
-// position.
+// Shared fixtures for suites that build a full server through createMcpServer:
+// one `baseConfig` literal (a new required `Config` field is added here once)
+// and createMcpServerWith, which calls createMcpServer by argument name.
 //
 // The caller's own `vi.mock("../config.js", ...)` and friends still apply:
 // vitest mocks by resolved module id, so the import below sees the same mocks.
 import { expect, vi } from "vitest";
 import type { MockInstance } from "vitest";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { createMcpServer } from "../../mcp/server.js";
 import type { Config } from "../../config.js";
 import type { SessionAnalyticsContext } from "../../request-context.js";
