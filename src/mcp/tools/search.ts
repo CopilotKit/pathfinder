@@ -10,6 +10,10 @@ import {
 } from "../../db/queries.js";
 import { maxCosineScore, topCosineScore } from "../../relevance.js";
 import { logQuery } from "../../db/analytics.js";
+import {
+  analyticsContextFields,
+  type SessionAnalyticsContext,
+} from "../../request-context.js";
 import { getAnalyticsConfig } from "../../config.js";
 import { checkBlocklist } from "../abuse-blocklist.js";
 import { formatEmptyResult } from "../empty-result.js";
@@ -96,6 +100,10 @@ export function registerSearchTool(
     // optional; absent values land in query_log as NULL.
     getClientIp?: () => string | undefined;
     getUserAgent?: () => string | undefined;
+    // Per-session analytics context (see SessionAnalyticsContext), read once
+    // per query_log row. Optional; an absent accessor or context lands in
+    // query_log as NULL.
+    getAnalyticsContext?: () => SessionAnalyticsContext | undefined;
   },
 ): void {
   const inputSchema = {
@@ -163,6 +171,7 @@ export function registerSearchTool(
             user_agent: options?.getUserAgent?.() ?? null,
             blocked: true,
             block_reason: blocked.reason ?? null,
+            ...analyticsContextFields(options?.getAnalyticsContext),
           },
           logQueries,
         ).catch((err) => {
@@ -330,6 +339,7 @@ export function registerSearchTool(
             user_agent: options?.getUserAgent?.() ?? null,
             blocked: false,
             block_reason: null,
+            ...analyticsContextFields(options?.getAnalyticsContext),
           },
           logQueries,
         ).catch((err) => {

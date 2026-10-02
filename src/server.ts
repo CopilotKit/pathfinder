@@ -13,7 +13,13 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcp/server.js";
-import { requestSourceFromHeaders } from "./request-context.js";
+import {
+  requestContext,
+  handshakeOf,
+  handshakeFor,
+  safeLogToken,
+} from "./request-context.js";
+import type { SessionAnalyticsContext } from "./request-context.js";
 import { createSseHandlers, reapIdleSseSessions } from "./sse-handlers.js";
 import { buildBashFilesMap, rebuildBashInstance } from "./mcp/tools/bash-fs.js";
 import { initializeSchema, closePool } from "./db/client.js";
@@ -83,7 +89,6 @@ import { consentHandler } from "./oauth/consent-handler.js";
 import {
   setTrustingProxy,
   assertOauthIpResolverInjected,
-  oauthClientIp,
 } from "./oauth/trusted-client-ip.js";
 import { WorkspaceManager } from "./workspace.js";
 import { generateLlmsTxt, generateLlmsFullTxt } from "./llms-txt.js";
@@ -1737,11 +1742,13 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
+    // Classify once per request; the handshake below reuses the result.
+    const initialize = isInitializeRequest(req.body) ? req.body : undefined;
     const disposition = classifyMcpSessionRequest({
       method: "POST",
       sessionId,
       hasTransport: false,
-      isInitialize: isInitializeRequest(req.body),
+      isInitialize: initialize !== undefined,
     });
 
     // Unknown or expired session id on a non-initialize request: 404 (see
@@ -2006,22 +2013,25 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
           : ` (${total} active)`;
         console.log(`[mcp] Session ${sid.slice(0, 8)} closed${capInfo}`);
       };
-      // Capture the request-origin tag from the init request. Each session
-      // gets its own server instance, so closing over this constant tags every
-      // subsequent tool call in the session with the origin the client
-      // declared on initialize.
-      const requestSource = requestSourceFromHeaders(req);
-      // Same idea for the per-request client IP and User-Agent — captured
-      // once at init via the same trust-proxy boundary the oauth surface
-      // uses (oauthClientIp), then closed over for the lifetime of the
-      // session so every tool call records identical attribution. UA is
-      // truncated by the analytics writer (USER_AGENT_MAX_LEN), so we
-      // hand over the raw header here.
-      const sessionClientIp = oauthClientIp(req);
-      const rawUserAgent = req.headers["user-agent"];
-      const sessionUserAgent = Array.isArray(rawUserAgent)
-        ? rawUserAgent[0]
-        : rawUserAgent;
+      // Capture the request-origin tag, client IP, User-Agent and auth client
+      // id from the init request via requestContext (same trust-proxy
+      // boundary the oauth surface uses). Each session gets its own server
+      // instance, so closing over these constants tags every subsequent tool
+      // call in the session with the init request's values; later requests
+      // in the session do not change them. UA is truncated by the analytics
+      // writer (USER_AGENT_MAX_LEN), so the raw header is handed over here.
+      const ctx = requestContext(req);
+      const hs = handshakeOf(initialize);
+      const requestSource = ctx.requestSource;
+      const sessionClientIp = ctx.ip;
+      const sessionUserAgent = ctx.userAgent;
+      const analyticsCtx: SessionAnalyticsContext = Object.freeze({
+        transport: "streamable_http",
+        protocol_era: "legacy",
+        protocol_version: hs.protocolVersion,
+        client_name: hs.clientName,
+        auth_client_id: ctx.authClientId,
+      });
       const server = createMcpServer(
         bashInstances,
         sessionStateManager,
@@ -2037,6 +2047,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         () => requestSource,
         () => sessionClientIp,
         () => sessionUserAgent,
+        () => analyticsCtx,
       );
       // Z-1: server.connect(transport) can throw AFTER handleSessionInitAccept
       // committed maps + ipLimiter counter + ensureSession + onclose wiring.
@@ -2073,6 +2084,18 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
           workspaceManager,
         });
         throw connectErr;
+      }
+      // Log the initialize only when connect and completeInitRequestSafely
+      // did not throw (a throw leaves above), initOutcome.rejected is false,
+      // and res.statusCode is below 400.
+      if (!initOutcome.rejected && res.statusCode < 400) {
+        console.log(
+          `[mcp] initialize protocol=${
+            hs.protocolVersion ? safeLogToken(hs.protocolVersion) : "none"
+          } client=${
+            hs.clientName ? safeLogToken(hs.clientName) : "none"
+          } [${safeLogToken(String(sessionClientIp))}]`,
+        );
       }
       return;
     }
@@ -2221,18 +2244,32 @@ const sseHandlers = createSseHandlers({
     // Capture the request-origin tag from the /sse init request (when the
     // handler provides it) so every tool call in this SSE session records the
     // declared origin. Defaults to 'user' when the header/req is absent.
-    const requestSource = req
-      ? requestSourceFromHeaders(req)
+    // requestContext(req) also reads the auth client id that bearerMiddleware
+    // set on GET /sse. It is taken at GET /sse only; a bearer on a later
+    // POST /messages does not change it. Absent `req`, the fallbacks below
+    // apply.
+    const ctx = req ? requestContext(req) : undefined;
+    const requestSource = ctx
+      ? ctx.requestSource
       : normalizeRequestSource(undefined);
     // Same per-session capture for client IP + User-Agent. When `req` is
-    // absent (older SSE bootstrapping paths) both fall back to undefined and
-    // the analytics writer persists NULL for the row — preserving the
-    // pre-v1.15.2 shape on that code path instead of guessing.
-    const sessionClientIp = req ? oauthClientIp(req) : undefined;
-    const rawUserAgent = req?.headers["user-agent"];
-    const sessionUserAgent = Array.isArray(rawUserAgent)
-      ? rawUserAgent[0]
-      : rawUserAgent;
+    // absent (a caller that omits it) both are undefined and the analytics
+    // writer stores NULL.
+    const sessionClientIp = ctx?.ip;
+    const sessionUserAgent = ctx?.userAgent;
+    // GET /sse carries no initialize body: protocol version and client name
+    // come from the initialize POSTed to /messages (recordHandshake, keyed by
+    // the transport), read lazily on every call.
+    const getAnalyticsContext = (): SessionAnalyticsContext => {
+      const hs = handshakeFor(transportRef);
+      return {
+        transport: "sse",
+        protocol_era: "legacy",
+        protocol_version: hs?.protocolVersion ?? null,
+        client_name: hs?.clientName ?? null,
+        auth_client_id: ctx?.authClientId ?? null,
+      };
+    };
     // The handler creates the transport first, then calls createMcpServer()
     // and connect(transport). We need the sessionId late-bound so bash tools
     // can discover it via getSessionId().
@@ -2251,6 +2288,7 @@ const sseHandlers = createSseHandlers({
       () => requestSource,
       () => sessionClientIp,
       () => sessionUserAgent,
+      getAnalyticsContext,
     );
     // Intercept connect() so we can capture the transport reference for
     // the getSessionId closure above.

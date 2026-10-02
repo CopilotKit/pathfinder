@@ -13,6 +13,12 @@ import {
 } from "./rate-limit-response.js";
 import type { WorkspaceManager } from "./workspace.js";
 import { clientIp } from "./ip-util.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import {
+  recordHandshake,
+  handshakeOf,
+  safeLogToken,
+} from "./request-context.js";
 
 /**
  * Minimal structural shape of WorkspaceManager that sse-handlers actually
@@ -66,8 +72,9 @@ export interface SseHandlerDeps {
     IpSessionLimiter | undefined | (() => IpSessionLimiter | undefined);
   /**
    * Factory for a per-session MCP server. Receives the originating GET /sse
-   * request so the factory can read per-session request context (e.g. the
-   * X-Pathfinder-Source origin tag) off `req.headers`. The param is optional
+   * request so the factory can read per-session request context: the
+   * X-Pathfinder-Source origin tag, client IP and User-Agent, and the auth
+   * client id that bearerMiddleware sets on `req.auth`. The param is optional
    * to stay backward-compatible with callers/tests that ignore the request.
    */
   createMcpServer: (req?: Request) => McpServer;
@@ -348,7 +355,8 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       // Attach a per-session MCP server. createMcpServer().connect() calls
       // transport.start() internally which writes SSE headers + the
       // "endpoint" event to the response stream. Pass `req` so the factory can
-      // read the X-Pathfinder-Source origin tag off the init request headers.
+      // read the origin tag, client IP, User-Agent and auth client id off the
+      // init request.
       const server = createMcpServer(req);
       await server.connect(transport);
 
@@ -425,6 +433,10 @@ export function createSseHandlers(deps: SseHandlerDeps): {
     // idle-reaper stamp on every failed call and never time out. The stamp
     // is updated inside the try block AFTER a successful await, so a throw
     // propagates to the catch below without updating it.
+    //
+    // Classify once per request; the handshake is recorded only after the
+    // transport accepts the message (below).
+    const initialize = isInitializeRequest(req.body) ? req.body : undefined;
     try {
       await transport.handlePostMessage(req, res, req.body);
       sessionLastActivity[sessionId] = Date.now();
@@ -442,6 +454,25 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       );
       if (!res.headersSent) {
         res.status(500).json({ error: "Message handling failed" });
+      }
+      return;
+    }
+    // The initialize message carries protocolVersion + clientInfo. Record it
+    // on the transport so the session analytics context can read it, but only
+    // when the transport accepted the message (it answers 202; a rejection
+    // writes 4xx and returns), and only for the first accepted initialize of
+    // the session. A later initialize does not change attribution.
+    if (initialize !== undefined && res.statusCode === 202) {
+      const hs = handshakeOf(initialize);
+      if (recordHandshake(transport, hs)) {
+        const trustProxy = resolve(deps.trustProxy ?? false) ?? false;
+        console.log(
+          `[mcp] SSE initialize protocol=${
+            hs.protocolVersion ? safeLogToken(hs.protocolVersion) : "none"
+          } client=${
+            hs.clientName ? safeLogToken(hs.clientName) : "none"
+          } sid=${sessionId.slice(0, 8)} ip=${safeLogToken(clientIp(req, trustProxy))}`,
+        );
       }
     }
   };

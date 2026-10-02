@@ -25,18 +25,33 @@ vi.mock("../db/analytics.js", () => ({
   logQuery: vi.fn(),
 }));
 vi.mock("../config.js", () => ({
+  getConfig: vi.fn(),
   getServerConfig: vi.fn(),
   getAnalyticsConfig: vi.fn(),
 }));
+vi.mock("../indexing/embeddings.js", () => ({
+  createEmbeddingProvider: vi.fn(() => ({ embed: vi.fn() })),
+}));
 
 import { registerKnowledgeTool } from "../mcp/tools/knowledge.js";
+import {
+  __resetRateLimitedWarnForTesting,
+  type SessionAnalyticsContext,
+} from "../request-context.js";
+import {
+  baseConfig,
+  createMcpServerWith,
+  expectSettledCallCount,
+} from "./helpers/mcpServerFixtures.js";
 import {
   getFaqChunks,
   getFaqChunksByIds,
   searchChunks,
 } from "../db/queries.js";
 import { logQuery } from "../db/analytics.js";
-import { getAnalyticsConfig } from "../config.js";
+import { getAnalyticsConfig, getConfig, getServerConfig } from "../config.js";
+import { ServerConfigSchema } from "../types.js";
+import type { EmbeddingProvider } from "../indexing/embeddings.js";
 
 const mockGetFaqChunks = vi.mocked(getFaqChunks);
 const mockGetFaqChunksByIds = vi.mocked(getFaqChunksByIds);
@@ -44,6 +59,12 @@ const mockSearchChunks = vi.mocked(searchChunks);
 const mockLogQuery = vi.mocked(logQuery);
 const mockGetAnalyticsConfig = vi.mocked(getAnalyticsConfig);
 const mockEmbed = vi.fn();
+const embeddingDouble: EmbeddingProvider = {
+  embed: mockEmbed,
+  embedBatch: vi.fn(),
+};
+const mockGetConfig = vi.mocked(getConfig);
+const mockGetServerConfig = vi.mocked(getServerConfig);
 
 /**
  * A vector candidate as `searchChunks` really returns it: `similarity` and
@@ -103,11 +124,7 @@ describe("knowledge tool analytics instrumentation", () => {
 
   beforeAll(async () => {
     server = new McpServer({ name: "test", version: "1.0.0" });
-    registerKnowledgeTool(
-      server as never,
-      { embed: mockEmbed } as never,
-      toolConfig,
-    );
+    registerKnowledgeTool(server, embeddingDouble, toolConfig);
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await server.connect(st);
     client = new Client({ name: "tc", version: "1.0.0" });
@@ -115,7 +132,7 @@ describe("knowledge tool analytics instrumentation", () => {
   });
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   afterAll(async () => {
@@ -133,9 +150,7 @@ describe("knowledge tool analytics instrumentation", () => {
     mockLogQuery.mockResolvedValueOnce(undefined);
 
     await client.callTool({ name: "faq", arguments: {} });
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(mockLogQuery).toHaveBeenCalledTimes(1);
+    await expectSettledCallCount(mockLogQuery, 1);
     const [entry] = mockLogQuery.mock.calls[0];
     expect(entry.query_text).toBe("<browse>");
     expect(entry.tool_name).toBe("faq");
@@ -149,16 +164,13 @@ describe("knowledge tool analytics instrumentation", () => {
     });
     mockEmbed.mockResolvedValueOnce([0.1]);
     mockSearchChunks.mockResolvedValueOnce([]);
-    mockGetFaqChunks.mockResolvedValueOnce([]);
     mockLogQuery.mockResolvedValueOnce(undefined);
 
     await client.callTool({
       name: "faq",
       arguments: { query: "how to deploy" },
     });
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(mockLogQuery).toHaveBeenCalledTimes(1);
+    await expectSettledCallCount(mockLogQuery, 1);
     const [entry] = mockLogQuery.mock.calls[0];
     expect(entry.query_text).toBe("how to deploy");
   });
@@ -169,9 +181,7 @@ describe("knowledge tool analytics instrumentation", () => {
     mockLogQuery.mockResolvedValueOnce(undefined);
 
     await client.callTool({ name: "faq", arguments: {} });
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(mockLogQuery).toHaveBeenCalledTimes(1);
+    await expectSettledCallCount(mockLogQuery, 1);
     const [, logText] = mockLogQuery.mock.calls[0];
     expect(logText).toBe(true);
   });
@@ -208,8 +218,7 @@ describe("knowledge tool analytics instrumentation", () => {
         name: "faq",
         arguments: { query: "how to deploy", ...args },
       });
-      await new Promise((r) => setTimeout(r, 10));
-      expect(mockLogQuery).toHaveBeenCalledTimes(1);
+      await expectSettledCallCount(mockLogQuery, 1);
       return mockLogQuery.mock.calls[0][0];
     }
 
@@ -305,5 +314,292 @@ describe("knowledge tool analytics instrumentation", () => {
       expect(entry.result_count).toBe(1);
       expect(entry.top_score).toBeNull();
     });
+  });
+});
+
+describe("knowledge tool session analytics context", () => {
+  // Arbitrary values: the tool passes the context through unchanged.
+  const ctx: SessionAnalyticsContext = {
+    transport: "sse",
+    protocol_era: "legacy",
+    protocol_version: "2025-06-18",
+    client_name: "claude-code",
+    auth_client_id: "client-abc",
+  };
+
+  const NULL_FIELDS = {
+    transport: null,
+    protocol_era: null,
+    protocol_version: null,
+    client_name: null,
+    auth_client_id: null,
+  };
+
+  async function connect(
+    options?: Parameters<typeof registerKnowledgeTool>[3],
+  ): Promise<{ client: Client; server: McpServer }> {
+    const server = new McpServer({ name: "test", version: "1.0.0" });
+    registerKnowledgeTool(server, embeddingDouble, toolConfig, options);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const client = new Client({ name: "tc", version: "1.0.0" });
+    await client.connect(ct);
+    return { client, server };
+  }
+
+  /** Connect, run `body`, and always close the pair, even when it throws. */
+  async function withConnected(
+    options: Parameters<typeof registerKnowledgeTool>[3] | undefined,
+    body: (client: Client) => Promise<void>,
+  ): Promise<void> {
+    const { client, server } = await connect(options);
+    try {
+      await body(client);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
+
+  const paths: Array<{
+    name: string;
+    args: { query?: string };
+    arrange: () => void;
+    // What the logged row must look like, so each case proves WHICH
+    // logQuery call site wrote it, not just that some row carried the context.
+    expected: {
+      query_text: string;
+      blocked: boolean;
+      block_reason: string | null;
+    };
+  }> = [
+    {
+      // "box office" matches the movie-box-office blocklist pattern
+      // (src/mcp/abuse-blocklist.ts), so the handler logs and returns before
+      // any embed or retrieval. That is why nothing is arranged.
+      name: "blocked",
+      args: { query: "box office" },
+      arrange: () => {},
+      expected: {
+        query_text: "box office",
+        blocked: true,
+        block_reason: "pattern:movie-box-office",
+      },
+    },
+    {
+      name: "browse",
+      args: {},
+      arrange: () => mockGetFaqChunks.mockResolvedValueOnce([]),
+      expected: { query_text: "<browse>", blocked: false, block_reason: null },
+    },
+    {
+      // One candidate with matching FAQ metadata, so the merge and slice run
+      // before logQuery.
+      name: "search",
+      args: { query: "how to deploy" },
+      arrange: () => {
+        mockEmbed.mockResolvedValueOnce([0.1]);
+        mockSearchChunks.mockResolvedValueOnce([candidate(1, 0.8)]);
+        mockGetFaqChunksByIds.mockResolvedValueOnce([faqRow(1, 0.9)]);
+      },
+      expected: {
+        query_text: "how to deploy",
+        blocked: false,
+        block_reason: null,
+      },
+    },
+  ];
+
+  /** A named class, so the tests can check the warning names it. */
+  class AccessorBoom extends Error {}
+  const ACCESSOR_WARNING = "[analytics] getAnalyticsContext threw AccessorBoom";
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    // The accessor warning is rate-limited per process; start each test with
+    // a clear limiter so a throwing test can see its own warning.
+    __resetRateLimitedWarnForTesting();
+    mockGetAnalyticsConfig.mockReturnValue(undefined);
+    mockLogQuery.mockResolvedValue(undefined);
+  });
+
+  for (const p of paths) {
+    it(`${p.name} path carries the analytics context when the accessor is given`, async () => {
+      await withConnected(
+        { getAnalyticsContext: () => ctx },
+        async (client) => {
+          p.arrange();
+          await client.callTool({ name: "faq", arguments: p.args });
+          await expectSettledCallCount(mockLogQuery, 1);
+          const [entry] = mockLogQuery.mock.calls[0];
+          expect(entry).toMatchObject(p.expected);
+          expect(entry).toMatchObject(ctx);
+        },
+      );
+    });
+
+    it(`${p.name} path still succeeds with null fields when the accessor throws`, async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let accessorCalls = 0;
+      try {
+        await withConnected(
+          {
+            getAnalyticsContext: () => {
+              accessorCalls++;
+              throw new AccessorBoom("accessor boom");
+            },
+          },
+          async (client) => {
+            p.arrange();
+            const result = await client.callTool({
+              name: "faq",
+              arguments: p.args,
+            });
+            await expectSettledCallCount(mockLogQuery, 1);
+
+            expect(result.isError).toBeFalsy();
+            const text = (result.content as Array<{ text: string }>)[0].text;
+            expect(text).not.toMatch(/Error querying FAQ/);
+            if (p.name === "blocked") {
+              expect(JSON.parse(text)).toMatchObject({ blocked: true });
+            }
+            const [entry] = mockLogQuery.mock.calls[0];
+            expect(entry).toMatchObject(p.expected);
+            expect(entry).toMatchObject(NULL_FIELDS);
+            // The nulls come from the accessor throwing, and the failure is
+            // logged with the error's class name.
+            expect(accessorCalls).toBe(1);
+            expect(warn).toHaveBeenCalledWith(
+              expect.stringContaining(ACCESSOR_WARNING),
+            );
+          },
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it(`${p.name} path writes null for all five fields when no accessor is given`, async () => {
+      await withConnected(undefined, async (client) => {
+        p.arrange();
+        await client.callTool({ name: "faq", arguments: p.args });
+        await expectSettledCallCount(mockLogQuery, 1);
+        const [entry] = mockLogQuery.mock.calls[0];
+        expect(entry).toMatchObject(p.expected);
+        expect(entry).toMatchObject(NULL_FIELDS);
+      });
+    });
+
+    it(`${p.name} path reads the context per call, not at registration`, async () => {
+      // The SSE /messages handler (src/sse-handlers.ts) records the
+      // handshake only after it accepts the initialize, and the context
+      // changes after that. A context read at registration, or read once and
+      // cached, would be stale. Two calls with different contexts on ONE
+      // server prove each row reads it fresh.
+      const secondCtx: SessionAnalyticsContext = {
+        transport: "streamable_http",
+        protocol_era: "modern",
+        protocol_version: "2025-11-25",
+        client_name: "second-client",
+        auth_client_id: "client-second",
+      };
+      let currentCtx: SessionAnalyticsContext | undefined = undefined;
+      let accessorCalls = 0;
+      await withConnected(
+        {
+          getAnalyticsContext: () => {
+            accessorCalls++;
+            return currentCtx;
+          },
+        },
+        async (client) => {
+          expect(accessorCalls).toBe(0);
+
+          currentCtx = ctx;
+          p.arrange();
+          await client.callTool({ name: "faq", arguments: p.args });
+          await expectSettledCallCount(mockLogQuery, 1);
+
+          currentCtx = secondCtx;
+          p.arrange();
+          await client.callTool({ name: "faq", arguments: p.args });
+          await expectSettledCallCount(mockLogQuery, 2);
+
+          const [first] = mockLogQuery.mock.calls[0];
+          const [second] = mockLogQuery.mock.calls[1];
+          expect(first).toMatchObject(p.expected);
+          expect(first).toMatchObject(ctx);
+          expect(second).toMatchObject(p.expected);
+          expect(second).toMatchObject(secondCtx);
+          expect(accessorCalls).toBe(2);
+        },
+      );
+    });
+  }
+
+  it("writes nulls when the accessor returns undefined", async () => {
+    let accessorCalls = 0;
+    await withConnected(
+      {
+        getAnalyticsContext: () => {
+          accessorCalls++;
+          return undefined;
+        },
+      },
+      async (client) => {
+        mockGetFaqChunks.mockResolvedValueOnce([]);
+        await client.callTool({ name: "faq", arguments: {} });
+        await expectSettledCallCount(mockLogQuery, 1);
+        const [entry] = mockLogQuery.mock.calls[0];
+        expect(entry).toMatchObject(NULL_FIELDS);
+        // The nulls come from reading the accessor, not from skipping it.
+        expect(accessorCalls).toBe(1);
+      },
+    );
+  });
+});
+
+describe("createMcpServer threads getAnalyticsContext to the knowledge tool", () => {
+  it("a knowledge call's logQuery payload carries the context values", async () => {
+    vi.resetAllMocks();
+    const ctx: SessionAnalyticsContext = {
+      transport: "streamable_http",
+      protocol_era: "modern",
+      protocol_version: "2025-11-25",
+      client_name: "factory-client",
+      auth_client_id: "client-factory",
+    };
+    mockGetConfig.mockReturnValue({ ...baseConfig, openaiApiKey: "k" });
+    mockGetServerConfig.mockReturnValue(
+      ServerConfigSchema.parse({
+        server: { name: "test", version: "1.0.0" },
+        embedding: { provider: "openai", model: "m", dimensions: 1 },
+        sources: [{ name: "slack-faq", type: "slack", channels: ["C1"] }],
+        tools: [toolConfig],
+      }),
+    );
+    mockGetAnalyticsConfig.mockReturnValue({
+      enabled: true,
+      log_queries: true,
+      retention_days: 90,
+    });
+    mockGetFaqChunks.mockResolvedValueOnce([]);
+    mockLogQuery.mockResolvedValueOnce(undefined);
+
+    const server = createMcpServerWith({ getAnalyticsContext: () => ctx });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    await client.connect(clientTransport);
+    try {
+      await client.callTool({ name: "faq", arguments: {} });
+      await expectSettledCallCount(mockLogQuery, 1);
+      const [entry] = mockLogQuery.mock.calls[0];
+      expect(entry).toMatchObject(ctx);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
