@@ -1,7 +1,8 @@
 /**
  * Unknown or expired Mcp-Session-Id must answer 404 (JSON-RPC -32001) so
  * clients re-initialize. These tests cover the helpers server.ts exports for
- * that: the request classifier, the 404 writer, and the live-transport lookup.
+ * that: the request classifier, the 404 writer with its per-method counter
+ * flush, and the live-transport lookup.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Response } from "express";
@@ -115,7 +116,7 @@ describe("classifyMcpSessionRequest", () => {
   );
 });
 
-describe("writeUnknownSession404", () => {
+describe("writeUnknownSession404 and flushUnknownSession404Counts", () => {
   const NOT_FOUND_BODY = {
     jsonrpc: "2.0",
     error: { code: -32001, message: "Session not found" },
@@ -156,6 +157,8 @@ describe("writeUnknownSession404", () => {
     error = vi.spyOn(console, "error").mockImplementation(() => {});
     clock = T0;
     vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const { flushUnknownSession404Counts } = await import("../server.js");
+    flushUnknownSession404Counts();
     warn.mockClear();
     log.mockClear();
     error.mockClear();
@@ -193,6 +196,84 @@ describe("writeUnknownSession404", () => {
       expect(json).toHaveBeenCalledWith({ ...NOT_FOUND_BODY, id: expectedId });
     },
   );
+
+  it("counts every unknown-session 404 in the flush window, with no per-id state", async () => {
+    const { writeUnknownSession404, flushUnknownSession404Counts } =
+      await import("../server.js");
+    for (let i = 0; i < 60; i++) {
+      const { res, status } = fakeRes();
+      writeUnknownSession404(res, unknownReq("GET"));
+      expect(status).toHaveBeenCalledWith(404);
+    }
+    const { res, status, json } = fakeRes();
+    writeUnknownSession404(res, unknownReq("POST"));
+    expect(status).toHaveBeenCalledWith(404);
+    expect(json).toHaveBeenCalledWith(NOT_FOUND_BODY);
+
+    flushUnknownSession404Counts();
+    expect(consoleOutput()).toEqual([
+      "[mcp] 404 unknown-session-id window_s=0 total=61 GET=60 POST=1 DELETE=0",
+    ]);
+  });
+
+  it("counts each method separately", async () => {
+    const { writeUnknownSession404, flushUnknownSession404Counts } =
+      await import("../server.js");
+    const plan: Record<Method, number> = { GET: 2, POST: 3, DELETE: 4 };
+    for (const method of METHODS) {
+      for (let i = 0; i < plan[method]; i++) {
+        writeUnknownSession404(fakeRes().res, unknownReq(method));
+      }
+    }
+    flushUnknownSession404Counts();
+    expect(consoleOutput()).toEqual([
+      "[mcp] 404 unknown-session-id window_s=0 total=9 GET=2 POST=3 DELETE=4",
+    ]);
+  });
+
+  it("resets the counts on flush and emits nothing when the count is 0", async () => {
+    const { writeUnknownSession404, flushUnknownSession404Counts } =
+      await import("../server.js");
+    flushUnknownSession404Counts();
+    expect(consoleOutput()).toEqual([]);
+
+    writeUnknownSession404(fakeRes().res, unknownReq("DELETE"));
+    flushUnknownSession404Counts();
+    expect(consoleOutput()).toEqual([
+      "[mcp] 404 unknown-session-id window_s=0 total=1 GET=0 POST=0 DELETE=1",
+    ]);
+
+    flushUnknownSession404Counts();
+    expect(consoleOutput()).toHaveLength(1);
+
+    writeUnknownSession404(fakeRes().res, unknownReq("GET"));
+    flushUnknownSession404Counts();
+    expect(consoleOutput()).toEqual([
+      "[mcp] 404 unknown-session-id window_s=0 total=1 GET=0 POST=0 DELETE=1",
+      "[mcp] 404 unknown-session-id window_s=0 total=1 GET=1 POST=0 DELETE=0",
+    ]);
+  });
+
+  it("reports the whole seconds since the last reset, not the reaper period", async () => {
+    const { writeUnknownSession404, flushUnknownSession404Counts } =
+      await import("../server.js");
+    // A partial window, as on shutdown() or stop().
+    writeUnknownSession404(fakeRes().res, unknownReq("GET"));
+    clock = T0 + 137_400;
+    flushUnknownSession404Counts();
+
+    // An empty flush writes nothing but still starts a new window.
+    clock = T0 + 200_000;
+    flushUnknownSession404Counts();
+
+    writeUnknownSession404(fakeRes().res, unknownReq("POST"));
+    clock = T0 + 211_600;
+    flushUnknownSession404Counts();
+    expect(consoleOutput()).toEqual([
+      "[mcp] 404 unknown-session-id window_s=137 total=1 GET=1 POST=0 DELETE=0",
+      "[mcp] 404 unknown-session-id window_s=12 total=1 GET=0 POST=1 DELETE=0",
+    ]);
+  });
 });
 
 describe("getLiveTransport", () => {

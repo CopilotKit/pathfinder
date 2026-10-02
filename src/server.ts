@@ -895,8 +895,12 @@ export function reapIdleSessionsTickForTesting(opts: {
 
 // Session reaper tick — started from startServer() so importing this module
 // (including from tests) doesn't leak a 5-minute setInterval into the loop.
-// Thin closure over module state that delegates to the parametric form.
+// Flushes the unknown-session 404 counts, warns at 80% session capacity, then
+// runs the parametric form over module state. The parametric form does not
+// flush.
 function reapIdleSessionsTick(): void {
+  flushUnknownSession404Counts();
+
   // 80% capacity warning
   if (MAX_SESSIONS !== undefined) {
     const total = getTotalSessionCount(transports, sseTransports);
@@ -1570,9 +1574,66 @@ export function classifyMcpSessionRequest(opts: {
   return "no-session";
 }
 
+/** Period of the idle-session reaper tick, which also flushes the 404 counts. */
+export const SESSION_REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Unknown-session 404s per method since the last reset (module load, boot,
+ * a flush, or the test seam). The count holds no client-supplied bytes, so
+ * the flushed line cannot carry them.
+ */
+const unknownSession404Counts: Record<"POST" | "GET" | "DELETE", number> = {
+  POST: 0,
+  GET: 0,
+  DELETE: 0,
+};
+
+/**
+ * Date.now() when unknownSession404Counts were last reset (module load, boot,
+ * a flush, or the test seam). The flushed line reports the time since then
+ * as its window.
+ */
+let unknownSession404WindowStartMs = Date.now();
+
+/** Zero the unknown-session 404 counts and start a new window at `now`. */
+function resetUnknownSession404Counts(now: number): void {
+  unknownSession404Counts.GET = 0;
+  unknownSession404Counts.POST = 0;
+  unknownSession404Counts.DELETE = 0;
+  unknownSession404WindowStartMs = now;
+}
+
+/**
+ * Write one `[mcp] 404 unknown-session-id window_s=<N> ...` line with the
+ * per-method counts of unknown-session 404s since the last reset, then reset
+ * the counts. N is the elapsed time since that reset, rounded to the
+ * nearest second. It is about the reaper period for each tick, and shorter
+ * for the flushes on shutdown() and stop(). Writes nothing when the total is
+ * 0, but still starts a new window. Exported so tests can flush without
+ * waiting for the tick.
+ */
+export function flushUnknownSession404Counts(): void {
+  const now = Date.now();
+  const windowS = Math.round((now - unknownSession404WindowStartMs) / 1000);
+  const { GET, POST, DELETE } = unknownSession404Counts;
+  const total = GET + POST + DELETE;
+  resetUnknownSession404Counts(now);
+  if (total > 0) {
+    console.warn(
+      `[mcp] 404 unknown-session-id window_s=${windowS} total=${total} GET=${GET} POST=${POST} DELETE=${DELETE}`,
+    );
+  }
+}
+
+/** @internal — test seam: zeroes the unknown-session 404 counts and starts a new window now. */
+export function __resetUnknownSession404CountsForTesting(): void {
+  resetUnknownSession404Counts(Date.now());
+}
+
 /**
  * Write the 404 JSON-RPC "Session not found" response for an /mcp request
- * that carried an unknown or expired Mcp-Session-Id. MCP Streamable HTTP,
+ * that carried an unknown or expired Mcp-Session-Id, and count it under its
+ * method for {@link flushUnknownSession404Counts}. MCP Streamable HTTP,
  * session management: a client that gets this 404 must start a new session
  * with an initialize request that carries no session id.
  */
@@ -1580,6 +1641,7 @@ export function writeUnknownSession404(
   res: Response,
   opts: { method: "POST" | "GET" | "DELETE"; body?: unknown },
 ): void {
+  unknownSession404Counts[opts.method] += 1;
   // JSON-RPC 2.0: the response id echoes the request id, and is null only
   // when it cannot be determined. Only a single message with a string or
   // number id qualifies; GET/DELETE carry no body, so they stay null.
@@ -4386,7 +4448,11 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
   // Start the idle-session reaper. Running it from here (rather than at
   // module import) keeps test imports free of leaked timers.
   if (!sessionReaperInterval) {
-    sessionReaperInterval = setInterval(reapIdleSessionsTick, 5 * 60 * 1000);
+    resetUnknownSession404Counts(Date.now());
+    sessionReaperInterval = setInterval(
+      reapIdleSessionsTick,
+      SESSION_REAPER_INTERVAL_MS,
+    );
   }
   console.log(
     `[startup] IP rate limit: ${maxSessionsPerIp} sessions/IP, TTL: ${serverCfg.server.session_ttl_minutes ?? 30}m, unused TTL: ${serverCfg.server.session_unused_ttl_minutes ?? 15}m, global cap: ${MAX_SESSIONS}`,
@@ -4565,6 +4631,7 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
       clearInterval(telemetryFlushInterval);
       telemetryFlushInterval = undefined;
     }
+    flushUnknownSession404Counts();
     if (sessionReaperInterval) {
       clearInterval(sessionReaperInterval);
       sessionReaperInterval = undefined;
