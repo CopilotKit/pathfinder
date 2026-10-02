@@ -7,6 +7,7 @@ import express, {
 import compression from "compression";
 import cors from "cors";
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import type { Server as HttpServer } from "node:http";
 import { Bash } from "just-bash";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -116,6 +117,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export interface ServerOptions {
   port?: number;
   configPath?: string;
+}
+
+/**
+ * What startServer() resolves to. Production callers ignore it. `stop` is a
+ * test seam with a narrow scope. It closes this HTTP server and its
+ * connections (also when the bind has not finished), writes out the pending
+ * unknown-session 404 counts, clears the module's session reaper and
+ * telemetry flush intervals, and removes the SIGINT/SIGTERM listeners that
+ * this startServer() call added. It does not call process.exit.
+ *
+ * It does NOT undo the rest of startServer(): the routes mounted on the
+ * module-level app, the nightly-reindex interval, the DB pool, live MCP
+ * transports, workspace and telemetry state, and the server's "error"
+ * listener (which calls shutdown() and process.exit) all remain.
+ *
+ * The intervals, the 404 counts and the other state above are shared by the
+ * whole module instance, not owned by one server. Run one in-process server
+ * at a time per test file, and stop it before the file boots another.
+ */
+export interface StartedServer {
+  server: HttpServer;
+  stop(): Promise<void>;
 }
 
 const app = express();
@@ -4293,7 +4316,9 @@ export function registerAdminOpsRoutes(
 // Startup
 // ---------------------------------------------------------------------------
 
-export async function startServer(options?: ServerOptions): Promise<void> {
+export async function startServer(
+  options?: ServerOptions,
+): Promise<StartedServer> {
   // Top-level try/catch around the entire startup sequence so synchronous
   // throws from getConfig/getServerConfig AND async failures from
   // initializeSchema/checkAndIndex carry a uniform '[startup] fatal:' log
@@ -4310,7 +4335,9 @@ export async function startServer(options?: ServerOptions): Promise<void> {
   }
 }
 
-async function startServerInner(options?: ServerOptions): Promise<void> {
+async function startServerInner(
+  options?: ServerOptions,
+): Promise<StartedServer> {
   if (options?.configPath) {
     process.env.PATHFINDER_CONFIG = options.configPath;
   }
@@ -4665,6 +4692,35 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
     process.exit(0);
   }
 
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  const onSigint = () => shutdown("SIGINT");
+  const onSigterm = () => shutdown("SIGTERM");
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+
+  return {
+    server,
+    async stop() {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      if (telemetryFlushInterval) {
+        clearInterval(telemetryFlushInterval);
+        telemetryFlushInterval = undefined;
+      }
+      flushUnknownSession404Counts();
+      if (sessionReaperInterval) {
+        clearInterval(sessionReaperInterval);
+        sessionReaperInterval = undefined;
+      }
+      // close() also cancels a bind that is still pending. Its callback then
+      // gets ERR_SERVER_NOT_RUNNING, which is not a failure here.
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((err?: NodeJS.ErrnoException) =>
+          !err || err.code === "ERR_SERVER_NOT_RUNNING"
+            ? resolve()
+            : reject(err),
+        ),
+      );
+    },
+  };
 }
