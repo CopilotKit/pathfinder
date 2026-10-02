@@ -1531,6 +1531,72 @@ export async function handleExistingSessionRequest<TReq, TRes>(opts: {
 }
 
 /**
+ * Look up the transport for a client-sent Mcp-Session-Id. Own keys only:
+ * the session maps are plain objects, so a bare `map[sid]` resolves ids
+ * such as "constructor" or "__proto__" to inherited Object.prototype
+ * members. Those ids get undefined here, so the routes answer them as
+ * unknown sessions.
+ */
+export function getLiveTransport<T>(
+  map: Record<string, T>,
+  sessionId: string | undefined,
+): T | undefined {
+  return sessionId && Object.hasOwn(map, sessionId)
+    ? map[sessionId]
+    : undefined;
+}
+
+/**
+ * Classify an /mcp request by its Mcp-Session-Id header. Rules, in order
+ * (an empty header counts as absent):
+ *   1. header present and a transport exists -> "route"
+ *   2. POST initialize (header absent or unknown) -> "new-session"
+ *   3. header present but unknown -> "unknown-session" (the route answers 404)
+ *   4. otherwise -> "no-session" (400 for POST and DELETE, 405 for GET)
+ *
+ * POST routes a live session before it calls this, so it always passes
+ * hasTransport: false. Exported so tests can cover the decision table
+ * without Express.
+ */
+export function classifyMcpSessionRequest(opts: {
+  method: "POST" | "GET" | "DELETE";
+  sessionId: string | undefined;
+  hasTransport: boolean;
+  isInitialize: boolean;
+}): "route" | "new-session" | "unknown-session" | "no-session" {
+  if (opts.sessionId && opts.hasTransport) return "route";
+  if (opts.method === "POST" && opts.isInitialize) return "new-session";
+  if (opts.sessionId) return "unknown-session";
+  return "no-session";
+}
+
+/**
+ * Write the 404 JSON-RPC "Session not found" response for an /mcp request
+ * that carried an unknown or expired Mcp-Session-Id. MCP Streamable HTTP,
+ * session management: a client that gets this 404 must start a new session
+ * with an initialize request that carries no session id.
+ */
+export function writeUnknownSession404(
+  res: Response,
+  opts: { method: "POST" | "GET" | "DELETE"; body?: unknown },
+): void {
+  // JSON-RPC 2.0: the response id echoes the request id, and is null only
+  // when it cannot be determined. Only a single message with a string or
+  // number id qualifies; GET/DELETE carry no body, so they stay null.
+  const bodyId =
+    typeof opts.body === "object" && opts.body !== null
+      ? (opts.body as { id?: unknown }).id
+      : undefined;
+  const id =
+    typeof bodyId === "string" || typeof bodyId === "number" ? bodyId : null;
+  res.status(404).json({
+    jsonrpc: "2.0",
+    error: { code: -32001, message: "Session not found" },
+    id,
+  });
+}
+
+/**
  * Read and normalize the request-origin tag from the X-Pathfinder-Source
  * header. Captured ONCE at MCP-session init and closed over for the lifetime
  * of the session (each session gets its own server + transport), so every
@@ -1611,7 +1677,8 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
     const ip = clientIp(req, isTrustingProxy());
 
     // Existing session — route to its transport
-    if (sessionId && transports[sessionId]) {
+    const existingTransport = getLiveTransport(transports, sessionId);
+    if (sessionId && existingTransport) {
       const method = req.body?.method as string | undefined;
       if (method === "tools/call") {
         const params = req.body?.params as Record<string, unknown> | undefined;
@@ -1648,7 +1715,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       // success-vs-throw contract unit-testable without spinning up Express.
       await handleExistingSessionRequest({
         sid: sessionId,
-        transport: transports[sessionId],
+        transport: existingTransport,
         req,
         res,
         sessionLastActivity,
@@ -1656,8 +1723,24 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
-    // New session — must be an initialize request
-    if (!sessionId && isInitializeRequest(req.body)) {
+    const disposition = classifyMcpSessionRequest({
+      method: "POST",
+      sessionId,
+      hasTransport: false,
+      isInitialize: isInitializeRequest(req.body),
+    });
+
+    // Unknown or expired session id on a non-initialize request: 404 (see
+    // writeUnknownSession404).
+    if (disposition === "unknown-session") {
+      writeUnknownSession404(res, { method: "POST", body: req.body });
+      return;
+    }
+
+    // New session — must be an initialize request. An initialize that carries
+    // a stale Mcp-Session-Id also lands here. That is safe: the SDK skips
+    // session validation for initialize, and nothing below reads the header.
+    if (disposition === "new-session") {
       // Global session cap — reject before doing any per-IP work.
       if (isAtGlobalCapacity(transports, sseTransports, MAX_SESSIONS)) {
         const total = getTotalSessionCount(transports, sseTransports);
@@ -2003,9 +2086,10 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
 });
 
 // SSE stream for server-initiated notifications.
-// Returns 405 when no valid session — the SDK interprets this as
-// "server doesn't offer SSE at GET" which is the expected no-auth path.
-// Returning 400 instead would cause the SDK to throw and trigger auth flow.
+// Returns 405 when the Mcp-Session-Id header is missing or empty — the SDK
+// interprets this as "server doesn't offer SSE at GET" which is the expected
+// no-auth path. Returning 400 instead would cause the SDK to throw and trigger
+// auth flow. An unknown session id gets 404 (see writeUnknownSession404).
 //
 // Intentionally NOT wrapped in `bearerMiddleware`. An unauthenticated
 // client that probes GET /mcp without a Mcp-Session-Id expects a
@@ -2020,8 +2104,19 @@ app.get("/mcp", async (req: Request, res: Response) => {
   // than escaping to Express's default error handler.
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (sessionId && transports[sessionId]) {
-      await transports[sessionId].handleRequest(req, res);
+    const transport = getLiveTransport(transports, sessionId);
+    const disposition = classifyMcpSessionRequest({
+      method: "GET",
+      sessionId,
+      hasTransport: !!transport,
+      isInitialize: false,
+    });
+    if (disposition === "unknown-session") {
+      writeUnknownSession404(res, { method: "GET" });
+      return;
+    }
+    if (disposition === "route" && transport) {
+      await transport.handleRequest(req, res);
     } else {
       res.status(405).json({
         jsonrpc: "2.0",
@@ -2048,12 +2143,23 @@ app.delete("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   // structured 500 than leak the throw.
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (sessionId && transports[sessionId]) {
-      await transports[sessionId].handleRequest(req, res);
+    const transport = getLiveTransport(transports, sessionId);
+    const disposition = classifyMcpSessionRequest({
+      method: "DELETE",
+      sessionId,
+      hasTransport: !!transport,
+      isInitialize: false,
+    });
+    if (disposition === "unknown-session") {
+      writeUnknownSession404(res, { method: "DELETE" });
+      return;
+    }
+    if (disposition === "route" && transport) {
+      await transport.handleRequest(req, res);
     } else {
       res.status(400).json({
         jsonrpc: "2.0",
-        error: { code: -32000, message: "Invalid or missing session ID" },
+        error: { code: -32000, message: "Missing session ID" },
         id: null,
       });
     }
