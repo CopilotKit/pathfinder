@@ -11,8 +11,8 @@
 import express from "express";
 import cors from "cors";
 import { randomUUID } from "node:crypto";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { isInitializeRequest } from "@modelcontextprotocol/server";
 import { initializeSchema, getPool } from "../src/db/client.js";
 import { getConfig, getServerConfig } from "../src/config.js";
 import { createEmbeddingProvider } from "../src/indexing/embeddings.js";
@@ -416,7 +416,7 @@ async function startTestServer(): Promise<{ server: Server; port: number }> {
   app.use(express.json());
 
   // Session-based transport so initialize + tool calls work across requests
-  const transports: Record<string, StreamableHTTPServerTransport> = {};
+  const transports: Record<string, NodeStreamableHTTPServerTransport> = {};
 
   app.post("/mcp", async (req, res) => {
     try {
@@ -428,7 +428,7 @@ async function startTestServer(): Promise<{ server: Server; port: number }> {
       }
 
       if (!sessionId && isInitializeRequest(req.body)) {
-        const transport = new StreamableHTTPServerTransport({
+        const transport = new NodeStreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
             transports[sid] = transport;

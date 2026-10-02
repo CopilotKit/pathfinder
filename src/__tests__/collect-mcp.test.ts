@@ -7,9 +7,8 @@ import {
   beforeEach,
   afterAll,
 } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { registerCollectTool } from "../mcp/tools/collect.js";
 import type { CollectToolConfig } from "../types.js";
 

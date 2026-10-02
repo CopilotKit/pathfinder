@@ -1,5 +1,5 @@
 import type { Bash } from "just-bash";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { createEmbeddingProvider } from "../indexing/embeddings.js";
 import type { EmbeddingProvider } from "../indexing/embeddings.js";
 import { getConfig, getServerConfig } from "../config.js";

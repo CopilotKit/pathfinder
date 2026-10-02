@@ -1,5 +1,5 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod-v4";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { CollectToolConfig } from "../../types.js";
 import { insertCollectedData } from "../../db/queries.js";
 
@@ -58,12 +58,11 @@ export function registerCollectTool(
   toolConfig: CollectToolConfig,
   options?: { onToolCall?: () => void },
 ): void {
-  const zodShape = yamlSchemaToZod(toolConfig.schema);
+  const inputSchema = z.object(yamlSchemaToZod(toolConfig.schema));
 
-  server.tool(
+  server.registerTool(
     toolConfig.name,
-    toolConfig.description,
-    zodShape,
+    { description: toolConfig.description, inputSchema },
     async (input) => {
       options?.onToolCall?.();
       try {

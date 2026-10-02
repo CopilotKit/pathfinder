@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createSseHandlers } from "../sse-handlers.js";
 import type { Request, Response } from "express";
-import type { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import type { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse";
 
 describe("/messages handlePostMessage 500 log includes client IP (R3 #10)", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;

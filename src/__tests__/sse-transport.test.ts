@@ -1261,7 +1261,7 @@ describe("SSE transport hardening (Round 3)", () => {
       next: unknown,
     ) => Promise<void>;
 
-    // Minimal Request stub — enough for clientIp + transport constructor.
+    // Minimal Request stub for the handler.
     const req = {
       ip: "127.0.0.1",
       socket: { remoteAddress: "127.0.0.1" },
@@ -1272,10 +1272,8 @@ describe("SSE transport hardening (Round 3)", () => {
       once: vi.fn(),
     };
 
-    // Response stub that reports destroyed=true post-construction. The
-    // SSEServerTransport constructor inspects `res` but doesn't fail fast
-    // on a destroyed socket; it's the handler's job to observe the state.
-    // Also capture writes/statuses to prove no 200/500 payload lands.
+    // Response stub that reports destroyed=true from the start; the handler
+    // must observe it.
     const closeListeners: Array<() => void> = [];
     const res = {
       destroyed: true,
@@ -1364,12 +1362,6 @@ describe("SSE transport hardening (Round 4)", () => {
   });
 
   it("/sse race-fallback calls transport.close() on the rejected transport", async () => {
-    // R4 finding 1: /sse race-fallback wrote a 429 body and deleted map
-    // entries but never called transport.close(). The SDK's
-    // SSEServerTransport may hold timers, listeners, and file handles — all
-    // leaked per rejected race. Mirror /mcp race-fallback: schedule
-    // transport.close() on a microtask and log any async rejection.
-    //
     // To exercise the race path deterministically, inject a limiter whose
     // pre-check passes (under cap) but whose tryAdd() returns false — this
     // is the race window between pre-check and atomic tryAdd.
@@ -1392,11 +1384,11 @@ describe("SSE transport hardening (Round 4)", () => {
     // Spy on SSEServerTransport.close via prototype — every transport
     // constructed in-handler will share this prototype method.
     const { SSEServerTransport } =
-      await import("@modelcontextprotocol/sdk/server/sse.js");
+      await import("@modelcontextprotocol/server-legacy/sse");
     const closeSpy = vi
       .spyOn(SSEServerTransport.prototype, "close")
       .mockImplementation(async function () {
-        // No-op: the real close() writes to res which may already be ended.
+        // No-op: we only count calls.
       });
 
     const { app, deps } = buildApp({ ipLimiter: raceLimiter });
@@ -1443,7 +1435,7 @@ describe("SSE transport hardening (Round 4)", () => {
     } as unknown as IpSessionLimiter;
 
     const { SSEServerTransport } =
-      await import("@modelcontextprotocol/sdk/server/sse.js");
+      await import("@modelcontextprotocol/server-legacy/sse");
     const closeSpy = vi
       .spyOn(SSEServerTransport.prototype, "close")
       .mockImplementation(async function () {

@@ -1,6 +1,6 @@
 import type { Request } from "express";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import type { InitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { isInitializeRequest } from "@modelcontextprotocol/server";
+import type { InitializeRequest } from "@modelcontextprotocol/server";
 import {
   normalizeRequestSource,
   isRecognizedRequestSource,

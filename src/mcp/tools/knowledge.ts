@@ -1,5 +1,5 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod-v4";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { EmbeddingProvider } from "../../indexing/embeddings.js";
 import type {
   KnowledgeToolConfig,
@@ -95,7 +95,7 @@ export function registerKnowledgeTool(
     getAnalyticsContext?: () => SessionAnalyticsContext | undefined;
   },
 ): void {
-  const inputSchema = {
+  const inputSchema = z.object({
     query: z
       .string()
       .optional()
@@ -116,12 +116,11 @@ export function registerKnowledgeTool(
       .describe(
         `Override minimum confidence threshold (default: ${toolConfig.min_confidence})`,
       ),
-  };
+  });
 
-  server.tool(
+  server.registerTool(
     toolConfig.name,
-    toolConfig.description,
-    inputSchema,
+    { description: toolConfig.description, inputSchema },
     async ({ query, limit, min_confidence }) => {
       options?.onToolCall?.();
       const effectiveLimit = limit ?? toolConfig.default_limit;
