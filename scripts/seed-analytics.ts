@@ -8,6 +8,7 @@
 //   PATHFINDER_CONFIG=fixtures/analytics-test/pathfinder.yaml \
 //   npx tsx scripts/seed-analytics.ts
 
+import { getAnalyticsSummary, ALL_TIME_DAYS } from "../src/db/analytics.js";
 import { initializeSchema, getPool, closePool } from "../src/db/client.js";
 
 // ---------------------------------------------------------------------------
@@ -16,6 +17,16 @@ import { initializeSchema, getPool, closePool } from "../src/db/client.js";
 
 const TOOL_NAMES = ["search-docs", "search-code", "get-knowledge"];
 const SOURCE_NAMES = ["docs", "code", "community"];
+const PROTOCOL_VERSIONS = ["2025-03-26", "2025-06-18", "2025-11-25"];
+const CLIENT_NAMES = ["claude-code", "cursor", "mcp-inspector"];
+const AUTH_CLIENT_IDS = ["client_a1b2c3", "client_d4e5f6", "client_g7h8i9"];
+const USER_AGENTS = [
+  "claude-code/1.0.30",
+  "Cursor/0.50.5",
+  "mcp-inspector/0.14.0",
+  "node",
+];
+const SESSION_POOL_SIZE = 14;
 
 const QUERIES = [
   "how to authenticate",
@@ -89,6 +100,41 @@ function randomTimestamp(): Date {
   return base;
 }
 
+// A seeded session: one set of context values shared by its rows. Anonymous
+// sessions carry no auth_client_id, so the unique-client metric falls back to
+// their client_ip|user_agent pair.
+interface SeedSession {
+  session_id: string;
+  transport: string;
+  protocol_era: string;
+  protocol_version: string;
+  client_name: string;
+  auth_client_id: string | null;
+  client_ip: string;
+  user_agent: string;
+}
+
+function buildSessionPool(): SeedSession[] {
+  const pool: SeedSession[] = [];
+  for (let i = 0; i < SESSION_POOL_SIZE; i++) {
+    pool.push({
+      session_id: `sess_${1000 + i}`,
+      transport: Math.random() < 0.85 ? "streamable_http" : "sse",
+      // Legacy era, as every current writer stamps (see
+      // SessionAnalyticsContext.protocol_era in src/request-context.ts).
+      protocol_era: "legacy",
+      protocol_version: pick(PROTOCOL_VERSIONS),
+      client_name: pick(CLIENT_NAMES),
+      // ~30% authenticated; never the empty string.
+      auth_client_id: Math.random() < 0.3 ? pick(AUTH_CLIENT_IDS) : null,
+      // Documentation range 203.0.113.0/24; distinct per session.
+      client_ip: `203.0.113.${10 + i}`,
+      user_agent: pick(USER_AGENTS),
+    });
+  }
+  return pool;
+}
+
 interface SeedRow {
   tool_name: string;
   query_text: string;
@@ -98,6 +144,13 @@ interface SeedRow {
   source_name: string;
   session_id: string | null;
   request_source: string | null;
+  transport: string;
+  protocol_era: string;
+  protocol_version: string;
+  client_name: string;
+  auth_client_id: string | null;
+  client_ip: string;
+  user_agent: string;
   created_at: Date;
 }
 
@@ -111,7 +164,8 @@ function pickRequestSource(): string | null {
   return null; // untagged historical row
 }
 
-function generateRow(): SeedRow {
+function generateRow(pool: SeedSession[]): SeedRow {
+  const session = pick(pool);
   const isEmptyResult = Math.random() < 0.15; // ~15% empty
   const resultCount = isEmptyResult ? 0 : randomInt(1, 20);
   const topScore = isEmptyResult
@@ -125,8 +179,16 @@ function generateRow(): SeedRow {
     top_score: topScore,
     latency_ms: randomInt(50, 500),
     source_name: pick(SOURCE_NAMES),
-    session_id: Math.random() < 0.6 ? `sess_${randomInt(1000, 9999)}` : null,
+    // ~40% of rows carry no session id but still come from a known client.
+    session_id: Math.random() < 0.6 ? session.session_id : null,
     request_source: pickRequestSource(),
+    transport: session.transport,
+    protocol_era: session.protocol_era,
+    protocol_version: session.protocol_version,
+    client_name: session.client_name,
+    auth_client_id: session.auth_client_id,
+    client_ip: session.client_ip,
+    user_agent: session.user_agent,
     created_at: randomTimestamp(),
   };
 }
@@ -142,17 +204,18 @@ async function main() {
   const pool = getPool();
   const count = 200;
   const rows: SeedRow[] = [];
+  const sessionPool = buildSessionPool();
 
   for (let i = 0; i < count; i++) {
-    rows.push(generateRow());
+    rows.push(generateRow(sessionPool));
   }
 
   console.log(`[seed] Inserting ${count} query_log entries...`);
 
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, request_source, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO query_log (tool_name, query_text, result_count, top_score, latency_ms, source_name, session_id, request_source, transport, protocol_era, protocol_version, client_name, auth_client_id, client_ip, user_agent, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
       [
         row.tool_name,
         row.query_text,
@@ -162,6 +225,13 @@ async function main() {
         row.source_name,
         row.session_id,
         row.request_source,
+        row.transport,
+        row.protocol_era,
+        row.protocol_version,
+        row.client_name,
+        row.auth_client_id,
+        row.client_ip,
+        row.user_agent,
         row.created_at,
       ],
     );
@@ -180,6 +250,18 @@ async function main() {
   const sourceRes = await pool.query(
     "SELECT source_name, count(*)::int AS count FROM query_log WHERE source_name IS NOT NULL GROUP BY source_name ORDER BY count DESC",
   );
+  // Unique-client count comes from the real summary reader so the seed can
+  // never drift from the dashboard's definition of a client.
+  const summary = await getAnalyticsSummary({}, ALL_TIME_DAYS);
+  const authedRes = await pool.query(
+    "SELECT count(*) FILTER (WHERE auth_client_id IS NOT NULL)::int AS authed_rows FROM query_log",
+  );
+  const ctxByCol = async (col: string) =>
+    (
+      await pool.query(
+        `SELECT ${col} AS value, count(*)::int AS count FROM query_log GROUP BY ${col} ORDER BY count DESC`,
+      )
+    ).rows;
 
   console.log("\n--- Seed Summary ---");
   console.log(`Total entries:  ${totalRes.rows[0].count}`);
@@ -191,6 +273,22 @@ async function main() {
   console.log("\nBy source:");
   for (const r of sourceRes.rows) {
     console.log(`  ${r.source_name}: ${r.count}`);
+  }
+  console.log(
+    `\nClients: ${summary.unique_client_count_window} unique (${summary.unique_session_count_window} sessions, ${summary.unique_ip_count_window} IPs, ${authedRes.rows[0].authed_rows} authenticated rows)`,
+  );
+  for (const col of [
+    "transport",
+    "protocol_era",
+    "protocol_version",
+    "client_name",
+    "auth_client_id",
+    "user_agent",
+  ]) {
+    console.log(`\nBy ${col}:`);
+    for (const r of await ctxByCol(col)) {
+      console.log(`  ${r.value ?? "(none)"}: ${r.count}`);
+    }
   }
 
   console.log(`
@@ -210,7 +308,12 @@ To view the dashboard:
   await closePool();
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("[seed] Fatal error:", err);
+  try {
+    await closePool();
+  } catch (closeErr) {
+    console.error("[seed] closePool failed:", closeErr);
+  }
   process.exit(1);
 });
