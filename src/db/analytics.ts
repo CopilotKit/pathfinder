@@ -465,6 +465,41 @@ export interface AnalyticsSummary {
    * ignored. Headline input for the weekly search report.
    */
   unique_session_count_window: number;
+  /**
+   * Distinct clients in the window, over the same population and predicates
+   * as unique_ip_count_window. A client is its OAuth `auth_client_id` when
+   * non-empty (key `c:<id>`), otherwise its `client_ip|user_agent` pair (key
+   * `ip:<ip>|<ua>`); the prefixes keep the two key spaces from colliding.
+   * Rows with neither an IP nor an auth client id are not counted. A missing
+   * user_agent counts as '' (key `ip:<ip>|`). A caller with both
+   * authenticated and anonymous rows counts twice (one `c:` key, one `ip:`
+   * key). The auth key is the OAuth client application, so all users of one
+   * shared client id count as one client.
+   */
+  unique_client_count_window: number;
+  /**
+   * Rows in the window with `protocol_era = 'legacy'`. Rows with a NULL or
+   * unknown era are in neither era count; see
+   * unclassified_era_query_count_window.
+   */
+  legacy_query_count_window: number;
+  /** Rows in the window with `protocol_era = 'modern'`. */
+  modern_query_count_window: number;
+  /**
+   * Rows in the window with `transport = 'streamable_http'`. Rows with a NULL
+   * or unknown transport are in neither transport count; see
+   * unclassified_transport_query_count_window.
+   */
+  streamable_http_query_count_window: number;
+  /** Rows in the window with `transport = 'sse'`. */
+  sse_query_count_window: number;
+  /**
+   * Rows in the window whose `protocol_era` is NULL or outside the vocabulary.
+   * With the legacy and modern counts it partitions total_queries_window.
+   */
+  unclassified_era_query_count_window: number;
+  /** As unclassified_era_query_count_window, for `transport`. */
+  unclassified_transport_query_count_window: number;
   p95_latency_ms_window: number;
   /**
    * True when the p95 latency was computed over a random sample capped at
@@ -1254,6 +1289,11 @@ export async function getAnalyticsSummary(
   // it. It excludes legacy rows written before score_kind existed, whose
   // top_score may hold an RRF rank score (ceiling ~0.033) that would compare
   // below ANY cosine threshold and flag 100% of scored queries.
+  //
+  // unique_client_count_window: the key is documented on AnalyticsSummary.
+  // A client_ip of '' or 'unknown' (the clientIp() fallback in
+  // src/ip-util.ts) counts as no IP, the same as NULL, so unresolved callers
+  // do not collapse into one key.
   const summaryRes = await pool.query(
     `SELECT
         count(*)::int AS total,
@@ -1266,7 +1306,15 @@ export async function getAnalyticsSummary(
         )::int AS low_confidence,
         COALESCE(avg(latency_ms)::int, 0) AS avg_latency,
         COUNT(DISTINCT client_ip) FILTER (WHERE client_ip IS NOT NULL)::int AS unique_ip_count_window,
-        COUNT(DISTINCT session_id) FILTER (WHERE session_id IS NOT NULL)::int AS unique_session_count_window
+        COUNT(DISTINCT session_id) FILTER (WHERE session_id IS NOT NULL)::int AS unique_session_count_window,
+        (COUNT(DISTINCT COALESCE('c:' || NULLIF(auth_client_id, ''), 'ip:' || NULLIF(NULLIF(client_ip, ''), 'unknown') || '|' || COALESCE(user_agent, '')))
+          FILTER (WHERE NULLIF(NULLIF(client_ip, ''), 'unknown') IS NOT NULL OR NULLIF(auth_client_id, '') IS NOT NULL))::int AS unique_client_count_window,
+        count(*) FILTER (WHERE protocol_era = 'legacy')::int AS legacy_query_count_window,
+        count(*) FILTER (WHERE protocol_era = 'modern')::int AS modern_query_count_window,
+        count(*) FILTER (WHERE transport = 'streamable_http')::int AS streamable_http_query_count_window,
+        count(*) FILTER (WHERE transport = 'sse')::int AS sse_query_count_window,
+        count(*) FILTER (WHERE protocol_era IS NULL OR protocol_era NOT IN ('legacy', 'modern'))::int AS unclassified_era_query_count_window,
+        count(*) FILTER (WHERE transport IS NULL OR transport NOT IN ('streamable_http', 'sse'))::int AS unclassified_transport_query_count_window
     FROM query_log
     ${summaryWhere}`,
     [
@@ -1433,13 +1481,26 @@ export async function getAnalyticsSummary(
   const emptyWindow = toFiniteNumber(s.empty);
   const lowConfidenceWindow = toFiniteNumber(s.low_confidence);
   const avgLatencyWindow = toFiniteNumber(s.avg_latency);
-  // Unique IP / session counts over the SAME windowed population as
-  // total_queries_window (they're columns on the windowed summary subquery).
-  // Coerced defensively because node-postgres can deserialize the ::int
-  // COUNT(DISTINCT ...) as a string, and a missing column must default to 0.
+  // Unique IP / session / client counts and the era/transport counts, over
+  // the SAME windowed population as total_queries_window (they're columns on
+  // the windowed summary subquery).
+  // Coerced defensively: a missing column must default to 0.
   const uniqueIpCountWindow = toFiniteNumber(s.unique_ip_count_window);
   const uniqueSessionCountWindow = toFiniteNumber(
     s.unique_session_count_window,
+  );
+  const uniqueClientCountWindow = toFiniteNumber(s.unique_client_count_window);
+  const legacyQueryCountWindow = toFiniteNumber(s.legacy_query_count_window);
+  const modernQueryCountWindow = toFiniteNumber(s.modern_query_count_window);
+  const streamableHttpQueryCountWindow = toFiniteNumber(
+    s.streamable_http_query_count_window,
+  );
+  const sseQueryCountWindow = toFiniteNumber(s.sse_query_count_window);
+  const unclassifiedEraQueryCountWindow = toFiniteNumber(
+    s.unclassified_era_query_count_window,
+  );
+  const unclassifiedTransportQueryCountWindow = toFiniteNumber(
+    s.unclassified_transport_query_count_window,
   );
   // Normalize undefined (truly missing) to null so consumers get a
   // consistent shape regardless of whether the DB returned an empty
@@ -1469,6 +1530,14 @@ export async function getAnalyticsSummary(
     avg_latency_ms_window: avgLatencyWindow,
     unique_ip_count_window: uniqueIpCountWindow,
     unique_session_count_window: uniqueSessionCountWindow,
+    unique_client_count_window: uniqueClientCountWindow,
+    legacy_query_count_window: legacyQueryCountWindow,
+    modern_query_count_window: modernQueryCountWindow,
+    streamable_http_query_count_window: streamableHttpQueryCountWindow,
+    sse_query_count_window: sseQueryCountWindow,
+    unclassified_era_query_count_window: unclassifiedEraQueryCountWindow,
+    unclassified_transport_query_count_window:
+      unclassifiedTransportQueryCountWindow,
     p95_latency_ms_window: p95Latency,
     // Only set when the cap was actually hit so existing consumers (tests,
     // older UI builds) can treat the absence of the flag as "exact".

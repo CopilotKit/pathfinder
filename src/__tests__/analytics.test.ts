@@ -2314,6 +2314,48 @@ describe("getAnalyticsSummary unique IP/session counts", () => {
     expect(result.unique_ip_count_window).toBe(37);
     expect(result.unique_session_count_window).toBe(0);
   });
+
+  it("coerces the unique-client and protocol-mix counts the same way (string → number; missing → 0)", async () => {
+    mockSummary({
+      total: 200,
+      empty: 10,
+      avg_latency: 45,
+      unique_client_count_window: "11",
+      legacy_query_count_window: "12",
+      modern_query_count_window: "13",
+      streamable_http_query_count_window: "14",
+      sse_query_count_window: "15",
+      unclassified_era_query_count_window: "16",
+      unclassified_transport_query_count_window: "17",
+    });
+
+    const coerced = await getAnalyticsSummary();
+
+    expect(coerced).toMatchObject({
+      unique_client_count_window: 11,
+      legacy_query_count_window: 12,
+      modern_query_count_window: 13,
+      streamable_http_query_count_window: 14,
+      sse_query_count_window: 15,
+      unclassified_era_query_count_window: 16,
+      unclassified_transport_query_count_window: 17,
+    });
+
+    // All seven columns absent from the driver row.
+    mockSummary({ total: 200, empty: 10, avg_latency: 45 });
+
+    const missing = await getAnalyticsSummary();
+
+    expect(missing).toMatchObject({
+      unique_client_count_window: 0,
+      legacy_query_count_window: 0,
+      modern_query_count_window: 0,
+      streamable_http_query_count_window: 0,
+      sse_query_count_window: 0,
+      unclassified_era_query_count_window: 0,
+      unclassified_transport_query_count_window: 0,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
