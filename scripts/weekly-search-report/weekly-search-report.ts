@@ -64,6 +64,13 @@ export interface AnalyticsSummary {
   total_queries_window: number;
   unique_ip_count_window: number;
   unique_session_count_window: number;
+  // Optional: absent or null when the server does not report them. Read them
+  // through parseOptionalCounts, never directly.
+  unique_client_count_window?: number | null;
+  legacy_query_count_window?: number | null;
+  modern_query_count_window?: number | null;
+  streamable_http_query_count_window?: number | null;
+  sse_query_count_window?: number | null;
   empty_result_count_window: number;
   empty_result_rate_window: number;
   low_confidence_count_window: number;
@@ -90,8 +97,8 @@ export interface TopQuery {
 export interface EmptyQuery {
   query_text: string;
   tool_name: string;
-  // The analytics API returns source_name nullable — a NULL must render as an
-  // empty cell, NOT the literal text "null".
+  // The analytics API returns source_name nullable — a NULL renders as
+  // `(none)`, NOT the literal text "null".
   source_name: string | null;
   count: number;
   last_seen: string;
@@ -398,7 +405,82 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
-/** Throw a descriptive Error if the summary payload is missing required fields. */
+const OPTIONAL_SUMMARY_NUMS = [
+  "unique_client_count_window",
+  "legacy_query_count_window",
+  "modern_query_count_window",
+  "streamable_http_query_count_window",
+  "sse_query_count_window",
+] as const satisfies readonly (keyof AnalyticsSummary)[];
+
+export type OptionalCounts = Record<
+  (typeof OPTIONAL_SUMMARY_NUMS)[number],
+  number | undefined
+>;
+
+/**
+ * Read the optional summary counts without changing `s`. Absent and JSON
+ * `null` both mean "not reported" and give `undefined`. Any other value must
+ * be a non-negative integer, or this throws so the run fails loud.
+ */
+export function parseOptionalCounts(s: object): OptionalCounts {
+  const o = s as Record<string, unknown>;
+  const out: Partial<OptionalCounts> = {};
+  for (const k of OPTIONAL_SUMMARY_NUMS) {
+    const v = o[k];
+    if (v === undefined || v === null) {
+      out[k] = undefined;
+      continue;
+    }
+    if (!(typeof v === "number" && Number.isInteger(v) && v >= 0)) {
+      throw new Error(`summary.${k} present but not a non-negative integer`);
+    }
+    out[k] = v;
+  }
+  return out as OptionalCounts;
+}
+
+/**
+ * "A% / B% (C of N calls classified)": shares over the pair's own sum C, with
+ * coverage against the window total N. Rows that neither side counts are
+ * unclassified. The other outputs, all with "n/a" shares:
+ * - both sides absent (an older server): no suffix;
+ * - one side absent: "(partial: <side> not reported)";
+ * - C > N: "(inconsistent: C of N calls classified)", not clamped;
+ * - C = 0: "(0 of N calls classified)", so a broken capture stays visible.
+ */
+function pairShare(
+  labelA: string,
+  a: number | undefined,
+  labelB: string,
+  b: number | undefined,
+  total: number,
+): string {
+  const na = `${labelA} n/a / ${labelB} n/a`;
+  if (a === undefined && b === undefined) {
+    return na;
+  }
+  if (a === undefined || b === undefined) {
+    return `${na} (partial: ${a === undefined ? labelA : labelB} not reported)`;
+  }
+  const sum = a + b;
+  if (sum > total) {
+    return `${na} (inconsistent: ${sum} of ${total} calls classified)`;
+  }
+  const coverage = ` (${sum} of ${total} calls classified)`;
+  if (sum === 0) {
+    return `${na}${coverage}`;
+  }
+  return (
+    `${labelA} ${((a / sum) * 100).toFixed(1)}% / ` +
+    `${labelB} ${((b / sum) * 100).toFixed(1)}%${coverage}`
+  );
+}
+
+/**
+ * Throw a descriptive Error if the summary payload is missing a required
+ * field, or if {@link parseOptionalCounts} rejects an optional count.
+ */
 export function assertValidSummary(s: unknown): asserts s is AnalyticsSummary {
   if (!s || typeof s !== "object") {
     throw new Error("summary payload is not an object");
@@ -417,6 +499,7 @@ export function assertValidSummary(s: unknown): asserts s is AnalyticsSummary {
       throw new Error(`summary.${k} missing or not a number`);
     }
   }
+  parseOptionalCounts(o);
   if (!Array.isArray(o.queries_per_day_window)) {
     throw new Error("summary.queries_per_day_window is not an array");
   }
@@ -488,8 +571,7 @@ function assertEmptyQueryRow(
   if (typeof r.tool_name !== "string") {
     throw new Error(`${name} row ${i}: tool_name missing or not a string`);
   }
-  // source_name may be string|null (handled in rendering by a separate fix);
-  // reject only other types.
+  // source_name may be string|null; reject only other types.
   if (r.source_name !== null && typeof r.source_name !== "string") {
     throw new Error(`${name} row ${i}: source_name must be a string or null`);
   }
@@ -546,6 +628,12 @@ export function renderMarkdown(
   lines.push(`- Total tool calls: ${summary.total_queries_window}`);
   lines.push(`- Unique IPs: ${summary.unique_ip_count_window}`);
   lines.push(`- Unique sessions: ${summary.unique_session_count_window}`);
+  const opt = parseOptionalCounts(summary);
+  lines.push(`- Unique clients: ${opt.unique_client_count_window ?? "n/a"}`);
+  lines.push(
+    `- Protocol mix: ${pairShare("legacy", opt.legacy_query_count_window, "modern", opt.modern_query_count_window, summary.total_queries_window)}; ` +
+      `transport: ${pairShare("streamable_http", opt.streamable_http_query_count_window, "sse", opt.sse_query_count_window, summary.total_queries_window)}`,
+  );
   lines.push(
     `- Empty-result count: ${summary.empty_result_count_window} ` +
       `(${(summary.empty_result_rate_window * 100).toFixed(1)}%)`,
@@ -688,7 +776,7 @@ export function sanitizeInline(text: string): string {
 }
 
 /**
- * Deterministic observations from the CURRENT 7-day window only. The report is
+ * Deterministic observations from the CURRENT report window only. The report is
  * stateless (no prior-run history), so observations must NOT reference
  * cross-week baselines / medians / trends.
  */
@@ -1248,8 +1336,8 @@ export async function run(deps: RunDeps): Promise<void> {
 
 /**
  * Build the one-line Slack mrkdwn SUCCESS digest posted to #engr after a healthy
- * publish. The Notion link is rendered as an `<url|report>` hyperlink (a
- * `[report]` link, NOT the raw url); when there is no url (publish returned
+ * publish. The Notion link is rendered as an `<url|report>` hyperlink (link
+ * text "report", NOT the raw url); when there is no url (publish returned
  * null) the trailing segment is the plain text `(report published)` instead.
  * The `top:` segment is omitted when there are no categorized queries.
  */

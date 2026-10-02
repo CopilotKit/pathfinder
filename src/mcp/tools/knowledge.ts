@@ -13,6 +13,10 @@ import {
 } from "../../db/queries.js";
 import { topCosineScore } from "../../relevance.js";
 import { logQuery } from "../../db/analytics.js";
+import {
+  analyticsContextFields,
+  type SessionAnalyticsContext,
+} from "../../request-context.js";
 import { getAnalyticsConfig } from "../../config.js";
 import { checkBlocklist } from "../abuse-blocklist.js";
 import { formatEmptyResult } from "../empty-result.js";
@@ -86,6 +90,9 @@ export function registerKnowledgeTool(
     // Per-session client IP / User-Agent — see registerSearchTool.
     getClientIp?: () => string | undefined;
     getUserAgent?: () => string | undefined;
+    // Per-session transport / protocol era / version / client name / OAuth
+    // client id — see registerSearchTool. Read once per logQuery call.
+    getAnalyticsContext?: () => SessionAnalyticsContext | undefined;
   },
 ): void {
   const inputSchema = {
@@ -142,6 +149,7 @@ export function registerKnowledgeTool(
               request_source: options?.getRequestSource?.() ?? null,
               client_ip: sessionClientIp ?? null,
               user_agent: options?.getUserAgent?.() ?? null,
+              ...analyticsContextFields(options?.getAnalyticsContext),
               blocked: true,
               block_reason: blocked.reason ?? null,
             },
@@ -199,6 +207,7 @@ export function registerKnowledgeTool(
               request_source: options?.getRequestSource?.() ?? null,
               client_ip: options?.getClientIp?.() ?? null,
               user_agent: options?.getUserAgent?.() ?? null,
+              ...analyticsContextFields(options?.getAnalyticsContext),
               blocked: false,
               block_reason: null,
             },
@@ -321,6 +330,7 @@ export function registerKnowledgeTool(
               request_source: options?.getRequestSource?.() ?? null,
               client_ip: options?.getClientIp?.() ?? null,
               user_agent: options?.getUserAgent?.() ?? null,
+              ...analyticsContextFields(options?.getAnalyticsContext),
               blocked: false,
               block_reason: null,
             },

@@ -10,6 +10,7 @@ import { registerBashTool } from "./tools/bash.js";
 import { SessionStateManager } from "./tools/bash-session.js";
 import type { BashTelemetry } from "./tools/bash-telemetry.js";
 import type { WorkspaceManager } from "../workspace.js";
+import type { SessionAnalyticsContext } from "../request-context.js";
 
 /**
  * Creates a new McpServer instance with all tools registered.
@@ -35,6 +36,11 @@ export function createMcpServer(
   // optional; absent values persist as NULL in the new columns.
   getClientIp?: () => string | undefined,
   getUserAgent?: () => string | undefined,
+  // Per-session analytics context (see SessionAnalyticsContext), read on
+  // every logged tool call. Threaded the same way as the accessors above into
+  // the search and knowledge handlers so each query_log row carries it.
+  // Optional; absent values persist as NULL.
+  getAnalyticsContext?: () => SessionAnalyticsContext | undefined,
 ): McpServer {
   const cfg = getConfig();
   const serverCfg = getServerConfig();
@@ -71,6 +77,7 @@ export function createMcpServer(
           getRequestSource,
           getClientIp,
           getUserAgent,
+          getAnalyticsContext,
         });
         break;
       case "bash": {
@@ -112,6 +119,7 @@ export function createMcpServer(
           getRequestSource,
           getClientIp,
           getUserAgent,
+          getAnalyticsContext,
         });
         break;
       default: {

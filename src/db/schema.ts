@@ -143,6 +143,11 @@ CREATE TABLE IF NOT EXISTS query_log (
     request_source  TEXT,
     client_ip       TEXT,
     user_agent      TEXT,
+    transport       TEXT,
+    protocol_era    TEXT,
+    protocol_version TEXT,
+    client_name     TEXT,
+    auth_client_id  TEXT,
     blocked         BOOLEAN NOT NULL DEFAULT FALSE,
     block_reason    TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -186,6 +191,21 @@ CREATE INDEX IF NOT EXISTS idx_query_log_client_ip ON query_log (client_ip);
 -- score_kind = 'cosine', so legacy rows are EXCLUDED rather than misread. The
 -- score-based cards therefore start empty and refill as new traffic lands.
 ALTER TABLE query_log ADD COLUMN IF NOT EXISTS score_kind TEXT;
+
+-- Era/transport instrumentation. These five columns record HOW a query
+-- reached the server: transport (streamable_http | sse), protocol_era
+-- (legacy | modern), protocol_version (the version the client requested in
+-- initialize) and client_name (clientInfo.name from initialize), and
+-- auth_client_id (the OAuth client, when the request was authenticated).
+-- Additive and nullable with no default and no index: rows written before
+-- these columns existed read back NULL, and there is deliberately NO BACKFILL
+-- because the values are not recoverable per-row after the fact. The CREATE
+-- TABLE above carries them for fresh installs.
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS transport TEXT;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS protocol_era TEXT;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS protocol_version TEXT;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS client_name TEXT;
+ALTER TABLE query_log ADD COLUMN IF NOT EXISTS auth_client_id TEXT;
 
 -- Webhook delivery tracking
 CREATE TABLE IF NOT EXISTS webhook_deliveries (

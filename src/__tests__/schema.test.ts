@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { PGlite } from "@electric-sql/pglite";
 import {
   generateSchema,
   generateMigration,
@@ -267,5 +268,132 @@ describe("generatePostSchemaMigration", () => {
     const sql = generatePostSchemaMigration();
     expect(sql).not.toContain("CREATE TRIGGER");
     expect(sql).not.toContain("chunks_tsv_trigger");
+  });
+});
+
+describe("query_log era/transport columns", () => {
+  const NEW_COLS = [
+    "transport",
+    "protocol_era",
+    "protocol_version",
+    "client_name",
+    "auth_client_id",
+  ];
+  const MARKER = "-- Analytics: query_log table for tracking tool usage";
+
+  const CREATE = "CREATE TABLE IF NOT EXISTS query_log";
+
+  // indexOf that fails loudly, naming what it looked for. A bare -1 would
+  // slice from the wrong place and surface later as a confusing error.
+  function indexOrThrow(haystack: string, needle: string, from = 0): number {
+    const idx = haystack.indexOf(needle, from);
+    if (idx < 0) {
+      throw new Error(
+        `schema DDL fixture: ${JSON.stringify(needle)} not found`,
+      );
+    }
+    return idx;
+  }
+
+  function analyticsDdl(): string {
+    const full = generatePostSchemaMigration();
+    return full.slice(indexOrThrow(full, MARKER));
+  }
+
+  // The current query_log CREATE TABLE with the five column lines removed, as
+  // a stand-in for a table created before these columns existed. The strip
+  // expects each column line to end in a comma (another column follows).
+  function oldCreateTable(): string {
+    const ddl = analyticsDdl();
+    const start = indexOrThrow(ddl, CREATE);
+    const end = indexOrThrow(ddl, ");", start) + 2;
+    let stmt = ddl.slice(start, end);
+    for (const col of NEW_COLS) {
+      const next = stmt.replace(new RegExp(`^\\s+${col}\\s+TEXT,\\n`, "m"), "");
+      // Fail loudly, naming the column, if the DDL layout changed so the
+      // strip no longer matches: the fixture would otherwise keep the column.
+      if (next === stmt) {
+        throw new Error(
+          `oldCreateTable: could not strip column "${col}" from the query_log CREATE TABLE`,
+        );
+      }
+      stmt = next;
+    }
+    return stmt;
+  }
+
+  async function columnInfo(db: PGlite) {
+    const res = await db.query<{
+      column_name: string;
+      is_nullable: string;
+      column_default: string | null;
+      data_type: string;
+    }>(
+      `SELECT column_name, is_nullable, column_default, data_type
+         FROM information_schema.columns
+        WHERE table_name = 'query_log' AND column_name = ANY($1)`,
+      [NEW_COLS],
+    );
+    return res.rows;
+  }
+
+  function expectFiveNullableTextColumns(
+    rows: Awaited<ReturnType<typeof columnInfo>>,
+  ) {
+    expect(rows.map((r) => r.column_name).sort()).toEqual([...NEW_COLS].sort());
+    for (const r of rows) {
+      expect(r.is_nullable).toBe("YES");
+      expect(r.column_default).toBeNull();
+      expect(r.data_type).toBe("text");
+    }
+  }
+
+  it("old-DDL fixture really lacks the new columns", async () => {
+    const db = new PGlite();
+    try {
+      await db.exec(oldCreateTable());
+      expect(await columnInfo(db)).toEqual([]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("adds the five nullable columns to a table created by the OLD DDL, idempotently", async () => {
+    const db = new PGlite();
+    try {
+      await db.exec(oldCreateTable());
+      await db.exec(
+        "INSERT INTO query_log (tool_name, query_text, result_count, latency_ms) VALUES ('search','old',0,1)",
+      );
+      await db.exec(analyticsDdl());
+      await db.exec(analyticsDdl());
+      expectFiveNullableTextColumns(await columnInfo(db));
+      const old = await db.query<Record<string, unknown>>(
+        `SELECT ${NEW_COLS.join(", ")} FROM query_log WHERE query_text = 'old'`,
+      );
+      expect(old.rows).toHaveLength(1);
+      for (const c of NEW_COLS) expect(old.rows[0][c]).toBeNull();
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("creates the five nullable columns on a fresh table, idempotently", async () => {
+    const db = new PGlite();
+    try {
+      await db.exec(analyticsDdl());
+      await db.exec(analyticsDdl());
+      expectFiveNullableTextColumns(await columnInfo(db));
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("fresh CREATE TABLE carries the columns without relying on the ALTERs", () => {
+    const ddl = analyticsDdl();
+    const start = indexOrThrow(ddl, CREATE);
+    const create = ddl.slice(start, indexOrThrow(ddl, ");", start));
+    for (const c of NEW_COLS)
+      expect(create).toMatch(new RegExp(`\\b${c}\\s+TEXT`));
   });
 });

@@ -677,6 +677,7 @@
             empty_result_count_window: 95,
             avg_latency_ms_window: 142,
             p95_latency_ms_window: 318,
+            unique_client_count_window: 211,
             queries_per_day_window: [
               { day: dayOffset(6), count: 172 },
               { day: dayOffset(5), count: 198 },
@@ -2012,6 +2013,24 @@
               label: "Queries (" + winLabel + ")",
               value: safeNumber(summary.total_queries_window).toLocaleString(),
             });
+          }
+          // When the server does not send unique_client_count_window (an
+          // older server), omit the tile rather than render a misleading 0.
+          // A value that is present but not a non-negative integer (a
+          // string, NaN, Infinity, a negative or a fraction) is malformed:
+          // hide the tile and warn, so a broken server is not mistaken for
+          // an old one.
+          var uniqueClients = summary.unique_client_count_window;
+          if (Number.isInteger(uniqueClients) && uniqueClients >= 0) {
+            statCards.push({
+              label: "Unique Clients (" + winLabel + ")",
+              value: uniqueClients.toLocaleString(),
+            });
+          } else if (uniqueClients !== undefined && uniqueClients !== null) {
+            console.warn(
+              "[analytics] summary.unique_client_count_window malformed; tile hidden",
+              { value: uniqueClients },
+            );
           }
           // Guard the percentage: NaN * 100 = NaN, and (NaN).toFixed(1) is
           // "NaN", so an undefined or non-finite rate from the server would

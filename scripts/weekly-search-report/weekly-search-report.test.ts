@@ -27,6 +27,7 @@ import {
   type NotionClientLike,
   type RunDeps,
   type EmptyQuery,
+  type AnalyticsSummary,
 } from "./weekly-search-report.js";
 import {
   SUMMARY_FIXTURE,
@@ -1037,5 +1038,254 @@ describe("publishNotionWithClient: archive partial page on append failure", () =
         multiBatchMarkdown,
       ),
     ).rejects.toThrow("original append error");
+  });
+});
+
+describe("header metrics: unique clients and protocol mix", () => {
+  const mk = (summary: AnalyticsSummary): AnalyticsBundle => ({
+    summary,
+    queries: QUERIES_FIXTURE,
+    emptyQueries: EMPTY_QUERIES_FIXTURE,
+    toolBreakdown: TOOL_BREAKDOWN_FIXTURE,
+  });
+  const now = new Date("2026-06-21T09:07:00Z");
+
+  it("renders Unique clients and Protocol mix right after Unique sessions", () => {
+    const md = renderMarkdown(mk(SUMMARY_FIXTURE), now, 7);
+    expect(md).toContain(
+      "- Unique sessions: 142\n- Unique clients: 61\n" +
+        "- Protocol mix: legacy 75.0% / modern 25.0% (400 of 1234 calls classified); " +
+        "transport: streamable_http 90.0% / sse 10.0% (400 of 1234 calls classified)\n",
+    );
+  });
+
+  it("keeps the Protocol mix line as one intact bullet through the Notion block conversion", () => {
+    const md = renderMarkdown(mk(SUMMARY_FIXTURE), now, 7);
+    const line =
+      "Protocol mix: legacy 75.0% / modern 25.0% (400 of 1234 calls classified); " +
+      "transport: streamable_http 90.0% / sse 10.0% (400 of 1234 calls classified)";
+    const bullets = markdownToNotionBlocks(md).filter(
+      (b) =>
+        b.type === "bulleted_list_item" &&
+        blockText(b).startsWith("Protocol mix:"),
+    );
+    expect(bullets).toHaveLength(1);
+    expect(blockText(bullets[0])).toBe(line);
+  });
+
+  it("renders n/a when the server omits the unique-client and protocol-mix fields", () => {
+    const old: AnalyticsSummary = { ...SUMMARY_FIXTURE };
+    delete old.unique_client_count_window;
+    delete old.legacy_query_count_window;
+    delete old.modern_query_count_window;
+    delete old.streamable_http_query_count_window;
+    delete old.sse_query_count_window;
+    const md = renderMarkdown(mk(old), now, 7);
+    expect(md).toContain("- Unique clients: n/a");
+    expect(md).toContain(
+      "- Protocol mix: legacy n/a / modern n/a; transport: streamable_http n/a / sse n/a\n",
+    );
+  });
+
+  it("renders 0 of N classified for a present pair whose sum is 0, unlike an absent pair", () => {
+    const zero = renderMarkdown(
+      mk({
+        ...SUMMARY_FIXTURE,
+        legacy_query_count_window: 0,
+        modern_query_count_window: 0,
+      }),
+      now,
+      7,
+    );
+    expect(zero).toContain(
+      "- Protocol mix: legacy n/a / modern n/a (0 of 1234 calls classified); " +
+        "transport: streamable_http 90.0% / sse 10.0% (400 of 1234 calls classified)\n",
+    );
+    const absent: AnalyticsSummary = { ...SUMMARY_FIXTURE };
+    delete absent.legacy_query_count_window;
+    delete absent.modern_query_count_window;
+    const absentMd = renderMarkdown(mk(absent), now, 7);
+    expect(absentMd).toContain("- Protocol mix: legacy n/a / modern n/a; ");
+    expect(absentMd).not.toContain("(0 of 1234 calls classified)");
+  });
+
+  it("assertValidSummary rejects a present non-number optional field and accepts its absence", () => {
+    expect(() =>
+      assertValidSummary({
+        ...SUMMARY_FIXTURE,
+        unique_client_count_window: "7",
+      }),
+    ).toThrow(/unique_client_count_window/);
+    expect(() =>
+      assertValidSummary({ ...SUMMARY_FIXTURE, sse_query_count_window: NaN }),
+    ).toThrow(/sse_query_count_window/);
+    const { unique_client_count_window: _omit, ...rest } = SUMMARY_FIXTURE;
+    expect(() => assertValidSummary(rest)).not.toThrow();
+  });
+
+  it("a JSON null in an optional field is treated as absent and does not abort the run", async () => {
+    const nullSummary = {
+      ...SUMMARY_FIXTURE,
+      unique_client_count_window: null,
+      legacy_query_count_window: null,
+      modern_query_count_window: null,
+      streamable_http_query_count_window: null,
+      sse_query_count_window: null,
+    };
+    const rec = makeRecorder({
+      fetchJson: async <T>(path: string): Promise<T> => {
+        if (path.includes("/summary")) return nullSummary as unknown as T;
+        if (path.includes("/tool-breakdown"))
+          return TOOL_BREAKDOWN_FIXTURE as unknown as T;
+        if (path.includes("/empty-queries"))
+          return EMPTY_QUERIES_FIXTURE as unknown as T;
+        if (path.includes("/queries")) return QUERIES_FIXTURE as unknown as T;
+        throw new Error(`unexpected path ${path}`);
+      },
+    });
+    await runCatchingExit(rec.deps);
+    expect(rec.exitCodes).toEqual([]);
+    expect(rec.slackCalls).toEqual([]);
+    expect(rec.notionCalls).toHaveLength(1);
+    const md = rec.notionCalls[0].markdown;
+    expect(md).toContain("- Unique clients: n/a");
+    expect(md).toContain(
+      "- Protocol mix: legacy n/a / modern n/a; transport: streamable_http n/a / sse n/a\n",
+    );
+  });
+
+  it("assertValidSummary rejects a negative or infinite optional count", () => {
+    expect(() =>
+      assertValidSummary({ ...SUMMARY_FIXTURE, legacy_query_count_window: -5 }),
+    ).toThrow(/legacy_query_count_window/);
+    expect(() =>
+      assertValidSummary({
+        ...SUMMARY_FIXTURE,
+        unique_client_count_window: -1,
+      }),
+    ).toThrow(/unique_client_count_window/);
+    expect(() =>
+      assertValidSummary({
+        ...SUMMARY_FIXTURE,
+        sse_query_count_window: Infinity,
+      }),
+    ).toThrow(/sse_query_count_window/);
+  });
+
+  it("assertValidSummary accepts a zero optional count", () => {
+    for (const k of [
+      "unique_client_count_window",
+      "legacy_query_count_window",
+      "modern_query_count_window",
+      "streamable_http_query_count_window",
+      "sse_query_count_window",
+    ] as const) {
+      expect(() =>
+        assertValidSummary({ ...SUMMARY_FIXTURE, [k]: 0 }),
+      ).not.toThrow();
+    }
+  });
+
+  it("assertValidSummary rejects a fractional optional count", () => {
+    expect(() =>
+      assertValidSummary({
+        ...SUMMARY_FIXTURE,
+        legacy_query_count_window: 2.5,
+      }),
+    ).toThrow(/legacy_query_count_window/);
+    expect(() =>
+      assertValidSummary({
+        ...SUMMARY_FIXTURE,
+        unique_client_count_window: 0.5,
+      }),
+    ).toThrow(/unique_client_count_window/);
+  });
+
+  it("assertValidSummary does not change the caller's object", () => {
+    const input = {
+      ...SUMMARY_FIXTURE,
+      unique_client_count_window: null,
+      legacy_query_count_window: null,
+      modern_query_count_window: null,
+    };
+    const before = structuredClone(input);
+    assertValidSummary(input);
+    expect(input).toEqual(before);
+    expect(Object.keys(input)).toEqual(Object.keys(before));
+  });
+
+  it("marks a pair whose sum exceeds the window total as inconsistent, without clamping", () => {
+    const md = renderMarkdown(
+      mk({
+        ...SUMMARY_FIXTURE,
+        total_queries_window: 400,
+        legacy_query_count_window: 300,
+        modern_query_count_window: 200,
+      }),
+      now,
+      7,
+    );
+    expect(md).toContain(
+      "- Protocol mix: legacy n/a / modern n/a (inconsistent: 500 of 400 calls classified); " +
+        "transport: streamable_http 90.0% / sse 10.0% (400 of 400 calls classified)\n",
+    );
+  });
+
+  it("marks a pair with one side present and the other absent as partial", () => {
+    const half: AnalyticsSummary = { ...SUMMARY_FIXTURE };
+    delete half.modern_query_count_window;
+    const md = renderMarkdown(mk(half), now, 7);
+    expect(md).toContain(
+      "- Protocol mix: legacy n/a / modern n/a (partial: modern not reported); " +
+        "transport: streamable_http 90.0% / sse 10.0% (400 of 1234 calls classified)\n",
+    );
+    const nullSide = renderMarkdown(
+      mk({
+        ...SUMMARY_FIXTURE,
+        streamable_http_query_count_window: null,
+      }),
+      now,
+      7,
+    );
+    expect(nullSide).toContain(
+      "transport: streamable_http n/a / sse n/a (partial: streamable_http not reported)\n",
+    );
+  });
+
+  it("ignores a malformed summary field the report does not read instead of aborting the run", async () => {
+    // The server may send counts the report does not use. Only the fields in
+    // the report's own summary type are validated.
+    const summary = {
+      ...SUMMARY_FIXTURE,
+      not_a_report_field_window: "garbage",
+      another_unread_count_window: -1,
+    };
+    const rec = makeRecorder({
+      fetchJson: async <T>(path: string): Promise<T> => {
+        if (path.includes("/summary")) return summary as unknown as T;
+        if (path.includes("/tool-breakdown"))
+          return TOOL_BREAKDOWN_FIXTURE as unknown as T;
+        if (path.includes("/empty-queries"))
+          return EMPTY_QUERIES_FIXTURE as unknown as T;
+        if (path.includes("/queries")) return QUERIES_FIXTURE as unknown as T;
+        throw new Error(`unexpected path ${path}`);
+      },
+    });
+    await runCatchingExit(rec.deps);
+    expect(rec.exitCodes).toEqual([]);
+    expect(rec.slackCalls).toEqual([]);
+    expect(rec.notionCalls).toHaveLength(1);
+  });
+
+  it("renders 0.0% / 100.0% when one side of a pair is zero", () => {
+    const md = renderMarkdown(
+      mk({ ...SUMMARY_FIXTURE, legacy_query_count_window: 0 }),
+      now,
+      7,
+    );
+    expect(md).toContain(
+      "- Protocol mix: legacy 0.0% / modern 100.0% (100 of 1234 calls classified); " +
+        "transport: streamable_http 90.0% / sse 10.0% (400 of 1234 calls classified)\n",
+    );
   });
 });

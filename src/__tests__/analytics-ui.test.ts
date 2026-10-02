@@ -1814,6 +1814,10 @@ describe("analytics dashboard UI — preview mode (?preview=1)", () => {
     // Locale-formatted as "6,128" when rendered.
     const statsHtml = dom.window.document.getElementById("stats")!.innerHTML;
     expect(statsHtml).toContain("6,128");
+    // The Unique Clients tile renders in preview too, so a screenshot
+    // review in preview mode can see it. 211 is the CANNED literal.
+    expect(statsHtml).toContain("Unique Clients (Last 7 days)");
+    expect(statsHtml).toContain(">211<");
 
     // "MOCK DATA" watermark banner must be visible so screenshots can't
     // be confused for live dashboards.
@@ -3433,5 +3437,158 @@ describe("analytics dashboard UI — Avg Cosine empty-cell contract", () => {
 
     expect(tip).toContain("—");
     expect(tip).not.toMatch(/\bblank\b/i);
+  });
+});
+
+describe("analytics dashboard UI — Unique Clients tile", () => {
+  function endpointsWith(extra: Record<string, unknown>) {
+    return {
+      "/api/analytics/auth-mode": () => ({ dev: true }),
+      "/api/analytics/summary": () => ({
+        ...canned(7, 1234).summary,
+        ...extra,
+      }),
+      "/api/analytics/tool-counts": () => canned(1, 0).toolCounts,
+      "/api/analytics/queries": () => [],
+      "/api/analytics/empty-queries": () => [],
+      "/api/analytics/blocked-queries": () => [],
+    };
+  }
+
+  async function selectPreset(dom: JSDOM, days: number) {
+    const doc = dom.window.document;
+    const click = () =>
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true });
+    doc.getElementById("datePill")!.dispatchEvent(click());
+    const preset = doc.querySelector(`.preset[data-days="${days}"]`);
+    expect(preset).not.toBeNull();
+    preset!.dispatchEvent(click());
+    await flushAsync();
+  }
+
+  // Returns the tile's value text, or null when no tile has that label.
+  // Optional chaining keeps a card with missing markup from throwing a
+  // TypeError that would hide the real assertion failure.
+  function tileValue(dom: JSDOM, label: string): string | null {
+    const cards = Array.from(
+      dom.window.document.querySelectorAll("#stats .stat-card"),
+    );
+    const card = cards.find(
+      (c) => c.querySelector(".label")?.textContent === label,
+    );
+    return card?.querySelector(".value")?.textContent ?? null;
+  }
+
+  it("renders the tile with its value when the summary has the field", async () => {
+    const { dom } = await loadDashboard(
+      endpointsWith({ unique_client_count_window: 7 }),
+    );
+    expect(tileValue(dom, "Unique Clients (Last 7 days)")).toBe("7");
+  });
+
+  // Summary handler whose unique_client_count_window depends on the
+  // requested `days`, so a test can tell a fresh value from a stale one.
+  function endpointsByDays(valueFor: (days: number) => unknown) {
+    return {
+      ...endpointsWith({}),
+      "/api/analytics/summary": (qs: string) => {
+        const p = parseQS(qs);
+        const days = p.days ? parseInt(p.days, 10) : 7;
+        // Cap the per-day series: All time is days=99999, and 99999 chart
+        // points made one test take 2.4s alone and hit the 5s limit under load.
+        return {
+          ...canned(Math.min(days, 30), 1234).summary,
+          unique_client_count_window: valueFor(days),
+        };
+      },
+    };
+  }
+
+  it("labels the tile with the active window and re-reads its value", async () => {
+    const { dom } = await loadDashboard(
+      endpointsByDays((days) => (days === 30 ? 5678 : 1234)),
+    );
+    expect(tileValue(dom, "Unique Clients (Last 7 days)")).toBe("1,234");
+    await selectPreset(dom, 30);
+    expect(tileValue(dom, "Unique Clients (Last 30 days)")).toBe("5,678");
+    expect(tileValue(dom, "Unique Clients (Last 7 days)")).toBeNull();
+  });
+
+  it("renders a value of 0 as a real tile", async () => {
+    const { dom } = await loadDashboard(
+      endpointsWith({ unique_client_count_window: 0 }),
+    );
+    expect(tileValue(dom, "Unique Clients (Last 7 days)")).toBe("0");
+  });
+
+  it("renders the tile under All time, like the other windowed tiles", async () => {
+    // All time drops only the windowed Queries tile, because it would
+    // duplicate Total Queries. Unique Clients duplicates nothing, so it
+    // stays, the same as Empty Result Rate and the latency tiles.
+    const { dom } = await loadDashboard(
+      endpointsByDays((days) => (days === 99999 ? 4321 : 7)),
+    );
+    await selectPreset(dom, 99999);
+    expect(tileValue(dom, "Queries (All time)")).toBeNull();
+    expect(tileValue(dom, "Empty Result Rate (All time)")).not.toBeNull();
+    expect(tileValue(dom, "Unique Clients (All time)")).toBe("4,321");
+  });
+
+  for (const bad of [-3, 2.5, "7"]) {
+    it(`hides the tile and warns for a malformed value (${JSON.stringify(bad)})`, async () => {
+      // The first load is valid. The spy goes on after it, and the 30-day
+      // reload carries the malformed value.
+      const { dom } = await loadDashboard(
+        endpointsByDays((days) => (days === 30 ? bad : 7)),
+      );
+      expect(tileValue(dom, "Unique Clients (Last 7 days)")).toBe("7");
+      const warnSpy = vi
+        .spyOn(dom.window.console, "warn")
+        .mockImplementation(() => {});
+      await selectPreset(dom, 30);
+      // Positive control: the reload rendered the 30-day cards.
+      expect(tileValue(dom, "Queries (Last 30 days)")).not.toBeNull();
+      expect(
+        dom.window.document.getElementById("stats")!.innerHTML,
+      ).not.toContain("Unique Clients");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[analytics] summary.unique_client_count_window malformed; tile hidden",
+        { value: bad },
+      );
+    });
+  }
+
+  it("renders no tile when the server omits the field", async () => {
+    const { dom } = await loadDashboard(endpointsWith({}));
+    // Positive control: the stat cards did render, so the absence below
+    // is the gate working and not an empty or failed render.
+    expect(tileValue(dom, "Total Queries")).not.toBeNull();
+    expect(tileValue(dom, "Queries (Last 7 days)")).not.toBeNull();
+    expect(
+      dom.window.document.getElementById("stats")!.innerHTML,
+    ).not.toContain("Unique Clients");
+  });
+
+  it("renders no tile for a non-finite value instead of a misleading 0", async () => {
+    // JSON.stringify turns NaN into null, so a stubbed NaN would only test
+    // the null branch. The number literal 1e999 is valid JSON and parses to
+    // Infinity, the only non-finite value JSON can deliver. This server's
+    // JSON.stringify never emits it; a proxy or a non-JS producer could.
+    const summaryJson = JSON.stringify(canned(7, 1234).summary).replace(
+      /}$/,
+      ',"unique_client_count_window":1e999}',
+    );
+    const { dom } = await loadDashboard({
+      ...endpointsWith({}),
+      "/api/analytics/summary": () => ({
+        status: 200,
+        rawBody: summaryJson,
+        contentType: "application/json",
+      }),
+    });
+    expect(tileValue(dom, "Total Queries")).toBe("1,234");
+    expect(
+      dom.window.document.getElementById("stats")!.innerHTML,
+    ).not.toContain("Unique Clients");
   });
 });
