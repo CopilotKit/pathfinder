@@ -7,6 +7,7 @@ import express, {
 import compression from "compression";
 import cors from "cors";
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import type { Server as HttpServer } from "node:http";
 import { Bash } from "just-bash";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -116,6 +117,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export interface ServerOptions {
   port?: number;
   configPath?: string;
+}
+
+/**
+ * What startServer() resolves to. Production callers ignore it. `stop` is a
+ * test seam with a narrow scope. It closes this HTTP server and its
+ * connections (also when the bind has not finished), writes out the pending
+ * unknown-session 404 counts, clears the module's session reaper and
+ * telemetry flush intervals, and removes the SIGINT/SIGTERM listeners that
+ * this startServer() call added. It does not call process.exit.
+ *
+ * It does NOT undo the rest of startServer(): the routes mounted on the
+ * module-level app, the nightly-reindex interval, the DB pool, live MCP
+ * transports, workspace and telemetry state, and the server's "error"
+ * listener (which calls shutdown() and process.exit) all remain.
+ *
+ * The intervals, the 404 counts and the other state above are shared by the
+ * whole module instance, not owned by one server. Run one in-process server
+ * at a time per test file, and stop it before the file boots another.
+ */
+export interface StartedServer {
+  server: HttpServer;
+  stop(): Promise<void>;
 }
 
 const app = express();
@@ -895,8 +918,12 @@ export function reapIdleSessionsTickForTesting(opts: {
 
 // Session reaper tick — started from startServer() so importing this module
 // (including from tests) doesn't leak a 5-minute setInterval into the loop.
-// Thin closure over module state that delegates to the parametric form.
+// Flushes the unknown-session 404 counts, warns at 80% session capacity, then
+// runs the parametric form over module state. The parametric form does not
+// flush.
 function reapIdleSessionsTick(): void {
+  flushUnknownSession404Counts();
+
   // 80% capacity warning
   if (MAX_SESSIONS !== undefined) {
     const total = getTotalSessionCount(transports, sseTransports);
@@ -1531,6 +1558,130 @@ export async function handleExistingSessionRequest<TReq, TRes>(opts: {
 }
 
 /**
+ * Look up the transport for a client-sent Mcp-Session-Id. Own keys only:
+ * the session maps are plain objects, so a bare `map[sid]` resolves ids
+ * such as "constructor" or "__proto__" to inherited Object.prototype
+ * members. Those ids get undefined here, so the routes answer them as
+ * unknown sessions.
+ */
+export function getLiveTransport<T>(
+  map: Record<string, T>,
+  sessionId: string | undefined,
+): T | undefined {
+  return sessionId && Object.hasOwn(map, sessionId)
+    ? map[sessionId]
+    : undefined;
+}
+
+/**
+ * Classify an /mcp request by its Mcp-Session-Id header. Rules, in order
+ * (an empty header counts as absent):
+ *   1. header present and a transport exists -> "route"
+ *   2. POST initialize (header absent or unknown) -> "new-session"
+ *   3. header present but unknown -> "unknown-session" (the route answers 404)
+ *   4. otherwise -> "no-session" (400 for POST and DELETE, 405 for GET)
+ *
+ * POST routes a live session before it calls this, so it always passes
+ * hasTransport: false. Exported so tests can cover the decision table
+ * without Express.
+ */
+export function classifyMcpSessionRequest(opts: {
+  method: "POST" | "GET" | "DELETE";
+  sessionId: string | undefined;
+  hasTransport: boolean;
+  isInitialize: boolean;
+}): "route" | "new-session" | "unknown-session" | "no-session" {
+  if (opts.sessionId && opts.hasTransport) return "route";
+  if (opts.method === "POST" && opts.isInitialize) return "new-session";
+  if (opts.sessionId) return "unknown-session";
+  return "no-session";
+}
+
+/** Period of the idle-session reaper tick, which also flushes the 404 counts. */
+export const SESSION_REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Unknown-session 404s per method since the last reset (module load, boot,
+ * a flush, or the test seam). The count holds no client-supplied bytes, so
+ * the flushed line cannot carry them.
+ */
+const unknownSession404Counts: Record<"POST" | "GET" | "DELETE", number> = {
+  POST: 0,
+  GET: 0,
+  DELETE: 0,
+};
+
+/**
+ * Date.now() when unknownSession404Counts were last reset (module load, boot,
+ * a flush, or the test seam). The flushed line reports the time since then
+ * as its window.
+ */
+let unknownSession404WindowStartMs = Date.now();
+
+/** Zero the unknown-session 404 counts and start a new window at `now`. */
+function resetUnknownSession404Counts(now: number): void {
+  unknownSession404Counts.GET = 0;
+  unknownSession404Counts.POST = 0;
+  unknownSession404Counts.DELETE = 0;
+  unknownSession404WindowStartMs = now;
+}
+
+/**
+ * Write one `[mcp] 404 unknown-session-id window_s=<N> ...` line with the
+ * per-method counts of unknown-session 404s since the last reset, then reset
+ * the counts. N is the elapsed time since that reset, rounded to the
+ * nearest second. It is about the reaper period for each tick, and shorter
+ * for the flushes on shutdown() and stop(). Writes nothing when the total is
+ * 0, but still starts a new window. Exported so tests can flush without
+ * waiting for the tick.
+ */
+export function flushUnknownSession404Counts(): void {
+  const now = Date.now();
+  const windowS = Math.round((now - unknownSession404WindowStartMs) / 1000);
+  const { GET, POST, DELETE } = unknownSession404Counts;
+  const total = GET + POST + DELETE;
+  resetUnknownSession404Counts(now);
+  if (total > 0) {
+    console.warn(
+      `[mcp] 404 unknown-session-id window_s=${windowS} total=${total} GET=${GET} POST=${POST} DELETE=${DELETE}`,
+    );
+  }
+}
+
+/** @internal — test seam: zeroes the unknown-session 404 counts and starts a new window now. */
+export function __resetUnknownSession404CountsForTesting(): void {
+  resetUnknownSession404Counts(Date.now());
+}
+
+/**
+ * Write the 404 JSON-RPC "Session not found" response for an /mcp request
+ * that carried an unknown or expired Mcp-Session-Id, and count it under its
+ * method for {@link flushUnknownSession404Counts}. MCP Streamable HTTP,
+ * session management: a client that gets this 404 must start a new session
+ * with an initialize request that carries no session id.
+ */
+export function writeUnknownSession404(
+  res: Response,
+  opts: { method: "POST" | "GET" | "DELETE"; body?: unknown },
+): void {
+  unknownSession404Counts[opts.method] += 1;
+  // JSON-RPC 2.0: the response id echoes the request id, and is null only
+  // when it cannot be determined. Only a single message with a string or
+  // number id qualifies; GET/DELETE carry no body, so they stay null.
+  const bodyId =
+    typeof opts.body === "object" && opts.body !== null
+      ? (opts.body as { id?: unknown }).id
+      : undefined;
+  const id =
+    typeof bodyId === "string" || typeof bodyId === "number" ? bodyId : null;
+  res.status(404).json({
+    jsonrpc: "2.0",
+    error: { code: -32001, message: "Session not found" },
+    id,
+  });
+}
+
+/**
  * Read and normalize the request-origin tag from the X-Pathfinder-Source
  * header. Captured ONCE at MCP-session init and closed over for the lifetime
  * of the session (each session gets its own server + transport), so every
@@ -1611,7 +1762,8 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
     const ip = clientIp(req, isTrustingProxy());
 
     // Existing session — route to its transport
-    if (sessionId && transports[sessionId]) {
+    const existingTransport = getLiveTransport(transports, sessionId);
+    if (sessionId && existingTransport) {
       const method = req.body?.method as string | undefined;
       if (method === "tools/call") {
         const params = req.body?.params as Record<string, unknown> | undefined;
@@ -1648,7 +1800,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       // success-vs-throw contract unit-testable without spinning up Express.
       await handleExistingSessionRequest({
         sid: sessionId,
-        transport: transports[sessionId],
+        transport: existingTransport,
         req,
         res,
         sessionLastActivity,
@@ -1656,8 +1808,24 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
-    // New session — must be an initialize request
-    if (!sessionId && isInitializeRequest(req.body)) {
+    const disposition = classifyMcpSessionRequest({
+      method: "POST",
+      sessionId,
+      hasTransport: false,
+      isInitialize: isInitializeRequest(req.body),
+    });
+
+    // Unknown or expired session id on a non-initialize request: 404 (see
+    // writeUnknownSession404).
+    if (disposition === "unknown-session") {
+      writeUnknownSession404(res, { method: "POST", body: req.body });
+      return;
+    }
+
+    // New session — must be an initialize request. An initialize that carries
+    // a stale Mcp-Session-Id also lands here. That is safe: the SDK skips
+    // session validation for initialize, and nothing below reads the header.
+    if (disposition === "new-session") {
       // Global session cap — reject before doing any per-IP work.
       if (isAtGlobalCapacity(transports, sseTransports, MAX_SESSIONS)) {
         const total = getTotalSessionCount(transports, sseTransports);
@@ -2003,9 +2171,10 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
 });
 
 // SSE stream for server-initiated notifications.
-// Returns 405 when no valid session — the SDK interprets this as
-// "server doesn't offer SSE at GET" which is the expected no-auth path.
-// Returning 400 instead would cause the SDK to throw and trigger auth flow.
+// Returns 405 when the Mcp-Session-Id header is missing or empty — the SDK
+// interprets this as "server doesn't offer SSE at GET" which is the expected
+// no-auth path. Returning 400 instead would cause the SDK to throw and trigger
+// auth flow. An unknown session id gets 404 (see writeUnknownSession404).
 //
 // Intentionally NOT wrapped in `bearerMiddleware`. An unauthenticated
 // client that probes GET /mcp without a Mcp-Session-Id expects a
@@ -2020,8 +2189,19 @@ app.get("/mcp", async (req: Request, res: Response) => {
   // than escaping to Express's default error handler.
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (sessionId && transports[sessionId]) {
-      await transports[sessionId].handleRequest(req, res);
+    const transport = getLiveTransport(transports, sessionId);
+    const disposition = classifyMcpSessionRequest({
+      method: "GET",
+      sessionId,
+      hasTransport: !!transport,
+      isInitialize: false,
+    });
+    if (disposition === "unknown-session") {
+      writeUnknownSession404(res, { method: "GET" });
+      return;
+    }
+    if (disposition === "route" && transport) {
+      await transport.handleRequest(req, res);
     } else {
       res.status(405).json({
         jsonrpc: "2.0",
@@ -2048,12 +2228,23 @@ app.delete("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   // structured 500 than leak the throw.
   try {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (sessionId && transports[sessionId]) {
-      await transports[sessionId].handleRequest(req, res);
+    const transport = getLiveTransport(transports, sessionId);
+    const disposition = classifyMcpSessionRequest({
+      method: "DELETE",
+      sessionId,
+      hasTransport: !!transport,
+      isInitialize: false,
+    });
+    if (disposition === "unknown-session") {
+      writeUnknownSession404(res, { method: "DELETE" });
+      return;
+    }
+    if (disposition === "route" && transport) {
+      await transport.handleRequest(req, res);
     } else {
       res.status(400).json({
         jsonrpc: "2.0",
-        error: { code: -32000, message: "Invalid or missing session ID" },
+        error: { code: -32000, message: "Missing session ID" },
         id: null,
       });
     }
@@ -4125,7 +4316,9 @@ export function registerAdminOpsRoutes(
 // Startup
 // ---------------------------------------------------------------------------
 
-export async function startServer(options?: ServerOptions): Promise<void> {
+export async function startServer(
+  options?: ServerOptions,
+): Promise<StartedServer> {
   // Top-level try/catch around the entire startup sequence so synchronous
   // throws from getConfig/getServerConfig AND async failures from
   // initializeSchema/checkAndIndex carry a uniform '[startup] fatal:' log
@@ -4142,7 +4335,9 @@ export async function startServer(options?: ServerOptions): Promise<void> {
   }
 }
 
-async function startServerInner(options?: ServerOptions): Promise<void> {
+async function startServerInner(
+  options?: ServerOptions,
+): Promise<StartedServer> {
   if (options?.configPath) {
     process.env.PATHFINDER_CONFIG = options.configPath;
   }
@@ -4280,7 +4475,11 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
   // Start the idle-session reaper. Running it from here (rather than at
   // module import) keeps test imports free of leaked timers.
   if (!sessionReaperInterval) {
-    sessionReaperInterval = setInterval(reapIdleSessionsTick, 5 * 60 * 1000);
+    resetUnknownSession404Counts(Date.now());
+    sessionReaperInterval = setInterval(
+      reapIdleSessionsTick,
+      SESSION_REAPER_INTERVAL_MS,
+    );
   }
   console.log(
     `[startup] IP rate limit: ${maxSessionsPerIp} sessions/IP, TTL: ${serverCfg.server.session_ttl_minutes ?? 30}m, unused TTL: ${serverCfg.server.session_unused_ttl_minutes ?? 15}m, global cap: ${MAX_SESSIONS}`,
@@ -4459,6 +4658,7 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
       clearInterval(telemetryFlushInterval);
       telemetryFlushInterval = undefined;
     }
+    flushUnknownSession404Counts();
     if (sessionReaperInterval) {
       clearInterval(sessionReaperInterval);
       sessionReaperInterval = undefined;
@@ -4492,6 +4692,35 @@ async function startServerInner(options?: ServerOptions): Promise<void> {
     process.exit(0);
   }
 
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  const onSigint = () => shutdown("SIGINT");
+  const onSigterm = () => shutdown("SIGTERM");
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+
+  return {
+    server,
+    async stop() {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      if (telemetryFlushInterval) {
+        clearInterval(telemetryFlushInterval);
+        telemetryFlushInterval = undefined;
+      }
+      flushUnknownSession404Counts();
+      if (sessionReaperInterval) {
+        clearInterval(sessionReaperInterval);
+        sessionReaperInterval = undefined;
+      }
+      // close() also cancels a bind that is still pending. Its callback then
+      // gets ERR_SERVER_NOT_RUNNING, which is not a failure here.
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((err?: NodeJS.ErrnoException) =>
+          !err || err.code === "ERR_SERVER_NOT_RUNNING"
+            ? resolve()
+            : reject(err),
+        ),
+      );
+    },
+  };
 }
