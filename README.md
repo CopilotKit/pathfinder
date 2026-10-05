@@ -111,18 +111,18 @@ one in a single pass before starting the server.
 **Fatal at boot when `NODE_ENV=production`** (in development both are
 generated ephemerally with a warning):
 
-| Variable                      | Generate with          | Purpose                                                                          |
-| ----------------------------- | ---------------------- | -------------------------------------------------------------------------------- |
-| `MCP_JWT_SECRET`              | `openssl rand -hex 32` | Signs MCP session JWTs                                                            |
-| `PATHFINDER_CONSENT_HMAC_KEY` | `openssl rand -hex 32` | Signs the OAuth consent-screen nonce; comma-separate values to rotate keys       |
+| Variable                      | Generate with          | Purpose                                                                    |
+| ----------------------------- | ---------------------- | -------------------------------------------------------------------------- |
+| `MCP_JWT_SECRET`              | `openssl rand -hex 32` | Signs MCP session JWTs                                                     |
+| `PATHFINDER_CONSENT_HMAC_KEY` | `openssl rand -hex 32` | Signs the OAuth consent-screen nonce; comma-separate values to rotate keys |
 
 **Source-gated** — required only when a matching source is configured:
 
-| Source type | Required variables                                                    |
-| ----------- | --------------------------------------------------------------------- |
-| `slack`     | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `OPENAI_API_KEY`           |
+| Source type | Required variables                                                               |
+| ----------- | -------------------------------------------------------------------------------- |
+| `slack`     | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `OPENAI_API_KEY`                      |
 | `discord`   | `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY` (+ `OPENAI_API_KEY` for text channels) |
-| `notion`    | `NOTION_TOKEN`                                                        |
+| `notion`    | `NOTION_TOKEN`                                                                   |
 
 `DATABASE_URL` and `OPENAI_API_KEY` are required whenever search/knowledge/
 collect tools or semantic bash grep are configured.
@@ -135,7 +135,9 @@ Step-by-step migration guide: **[Migrate from Mintlify](https://pathfinder.copil
 
 **Self-hosted Pathfinder sends nothing externally.** No phone-home, no analytics. The telemetry code path is gated on a CopilotKit-internal env var that isn't set in any image you pull or any package you install — running your own copy is opt-out by default, with no flag to flip.
 
-**The hosted instance at `mcp.pathfinder.copilotkit.dev`** records one event per MCP client connection — fired when a fresh client (claude.ai, Cursor, a custom MCP client) opens a session against the hosted server. The event contains:
+**The hosted instance at `mcp.pathfinder.copilotkit.dev`** records one of two events, depending on the protocol the MCP client uses. The server sends these events; the client sends nothing extra.
+
+For session-based connections, the server sends one event named `pathfinder.session.created` per MCP client connection — when a fresh client (claude.ai, Cursor, a custom MCP client) opens a session against the hosted server. It contains:
 
 - the client's IP address
 - the User-Agent string
@@ -143,9 +145,19 @@ Step-by-step migration guide: **[Migrate from Mintlify](https://pathfinder.copil
 - the first 8 characters of the session ID (for log correlation)
 - whether the client presented an OAuth bearer token
 
-What it does **not** contain: search queries, knowledge tool inputs, response content, full session IDs, or JWT subjects — anything inside an MCP request stays on the hosted server. There is no per-tool-call event of any kind.
+Connections that use the 2026-07-28 (stateless) protocol have no session, so for them the server sends a separate event named `pathfinder.client.seen`. It is sent only when `PATHFINDER_MODERN_PROTOCOL` is enabled on the server (it is off by default), and, on a best-effort basis, once per IP address and User-Agent per 24 hours per server process (the server tracks up to 10,000 recently seen clients, so an evicted client can be sent again sooner). It contains:
 
-The event is sent to a CopilotKit-controlled endpoint and forwarded to a small set of third-party analytics providers, which use the IP for company-level attribution — i.e., figuring out which organizations are evaluating the hosted instance. There's no individual-user identification; the IP is the only personal data point in the payload, and it's processed by those providers per their published terms.
+- the client's IP address
+- the User-Agent string
+- the MCP transport (`streamable_http`)
+- the protocol era (`modern`)
+- whether the client presented an OAuth bearer token
+
+It has no session ID prefix.
+
+What neither event contains: search queries, knowledge tool inputs, response content, full session IDs, or JWT subjects — anything inside an MCP request stays on the hosted server. There is no per-tool-call event of any kind.
+
+Both events are sent to a CopilotKit-controlled endpoint and forwarded to a small set of third-party analytics providers, which use the IP for company-level attribution — i.e., figuring out which organizations are evaluating the hosted instance. There's no individual-user identification; the IP is the only personal data point in the payload, and it's processed by those providers per their published terms.
 
 If you'd rather not have any of this happen, run your own copy — Quick Start above gets you there in two commands. Same code, same features, no telemetry env vars set.
 
