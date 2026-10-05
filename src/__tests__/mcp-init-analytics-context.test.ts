@@ -37,6 +37,9 @@ vi.mock("../config.js", async (importOriginal) => ({
     p2pTelemetryUrl: undefined,
     p2pTelemetryDisabled: false,
     packageVersion: "test",
+    // On, so the same server also serves the modern (stateless) leg. The
+    // legacy tests below then show a legacy session still records "legacy".
+    modernProtocol: true,
   }),
   getServerConfig: vi.fn().mockReturnValue({
     server: {
@@ -304,6 +307,59 @@ describe("POST /mcp initialize stamps the session analytics context", () => {
       protocol_era: "legacy",
       auth_client_id: null,
     });
+  });
+
+  it("a modern (stateless) tools/call logs streamable_http / modern / its _meta version, client name, and the request's ip, user agent and source", async () => {
+    const modernVersion = "2026-07-28";
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${bearer("client-modern")}`,
+        "mcp-protocol-version": modernVersion,
+        "mcp-method": "tools/call",
+        "mcp-name": "faq",
+        "user-agent": "modern-ctx-probe/2.0",
+        "x-pathfinder-source": "synthetic",
+        // trust_proxy is false, so this must NOT become client_ip.
+        "x-forwarded-for": "203.0.113.88",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "faq",
+          arguments: {},
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": modernVersion,
+            "io.modelcontextprotocol/clientInfo": {
+              name: "modern-probe",
+              version: "1",
+            },
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    });
+    await res.text();
+    expect(res.status).toBe(200);
+    // A modern request has no session.
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+    await waitForLogQueryCalls(1);
+    expect(mockLogQuery.mock.calls[0][0]).toMatchObject({
+      transport: "streamable_http",
+      protocol_era: "modern",
+      protocol_version: modernVersion,
+      client_name: "modern-probe",
+      auth_client_id: "client-modern",
+      request_source: "synthetic",
+      user_agent: "modern-ctx-probe/2.0",
+    });
+    expect(mockLogQuery.mock.calls[0][0].client_ip).toMatch(
+      /^(::ffff:127\.0\.0\.1|127\.0\.0\.1|::1)$/,
+    );
   });
 
   it("logs the initialize line with version and client, control characters stripped", async () => {
