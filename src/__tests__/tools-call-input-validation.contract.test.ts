@@ -2,7 +2,7 @@
 // advertises, for the 4 tools search-docs, ask-docs, explore-docs and
 // submit-feedback. tools-list-input-schema.contract.test.ts pins what is
 // advertised; this file pins that a call outside it is rejected before the
-// handler reaches the embedding provider, the DB, or the bash exec.
+// handler reaches the embedding provider, the DB, or the shared bash filesystem.
 //
 // The constraints below are a fixed copy of the pinned schemas in
 // tools-list-input-schema.contract.test.ts. They are not read from the live
@@ -146,7 +146,10 @@ type ToolSpec = {
 };
 
 const bash = new Bash({ files: { "/docs/a.md": "hello" }, cwd: "/" });
-const bashExec = vi.spyOn(bash, "exec");
+// The bash tool runs each command in its own Bash over a read-only view of
+// this shared filesystem, so the shared fs is where a command arrives.
+const bashReaddir = vi.spyOn(bash.fs, "readdir");
+const bashStat = vi.spyOn(bash.fs, "stat");
 
 // Fixed copy of the pinned inputSchema constraints (types, bounds, enum,
 // required). None of the 4 schemas declares an integer, so there are no
@@ -192,13 +195,14 @@ const TOOLS: Record<string, ToolSpec> = {
     required: ["command"],
     valid: { command: "ls /docs" },
     downstream: () => [
-      bashExec as unknown as Mock,
+      bashReaddir as unknown as Mock,
+      bashStat as unknown as Mock,
       mockEmbed,
       vi.mocked(searchChunks),
       vi.mocked(textSearchChunks),
       vi.mocked(hybridSearchChunks),
     ],
-    reached: () => bashExec as unknown as Mock,
+    reached: () => bashReaddir as unknown as Mock,
   },
   "submit-feedback": {
     properties: {
