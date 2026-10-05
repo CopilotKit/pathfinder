@@ -4,7 +4,7 @@ server:
   max_sessions: 1000
   session_ttl_minutes: 30
   session_unused_ttl_minutes: 15
-  # Anthropic crawler — bypasses per-IP session limit (requires trust_proxy: true to match the forwarded IP)
+  # Anthropic crawler — bypasses the per-IP session limit and the modern per-IP rate limit (requires trust_proxy: true to match the forwarded IP)
   allowlist: ["160.79.106.35"]
   # Safe to enable: Railway's edge discards any client-supplied X-Forwarded-For
   # and sets its own trusted value, so the leftmost XFF entry is the real peer.
@@ -288,7 +288,7 @@ analytics:
   # on course to be published verbatim into Notion.
   #
   # DELETE THIS RULE once the relay sends `X-Pathfinder-Source: github-triage`
-  # at MCP session init: that header tags its rows `relay` and the exclusion
+  # on every request (2026-07-28 clients) or at session init (2025-era clients): that header tags its rows `relay` and the exclusion
   # holds without any fingerprint. The rule is the bridge, not the fix.
   machine_relays:
     - name: github-issue-triage
@@ -322,7 +322,7 @@ analytics:
     # personal-address leak in a public repo.
     #
     # DELETE THIS RULE once ad-hoc harnesses send `X-Pathfinder-Source: analysis`
-    # at MCP session init — that tag already excludes them, with no fingerprint.
+    # on every request (2026-07-28 clients) or at session init (2025-era clients) — that tag already excludes them, with no fingerprint.
     - name: adhoc-python-replay-harness
       reason: >-
         Ad-hoc Python replay harness (macOS system python3, stdlib urllib) —

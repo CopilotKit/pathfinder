@@ -42,6 +42,7 @@ vi.mock("../config.js", () => ({
     oauthConsentHmacKeys: ["a".repeat(64)],
     p2pTelemetryUrl: undefined,
     p2pTelemetryDisabled: false,
+    modernProtocol: false,
     packageVersion: "test",
     slackWebhookUrl: "",
   }),
@@ -1256,6 +1257,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         oauthConsentHmacKeys: ["a".repeat(64)],
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
+        modernProtocol: false,
         packageVersion: "test",
         slackWebhookUrl: "",
       });
@@ -1298,6 +1300,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         oauthConsentHmacKeys: ["a".repeat(64)],
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
+        modernProtocol: false,
         packageVersion: "test",
         slackWebhookUrl: "",
       });
@@ -1326,6 +1329,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         oauthConsentHmacKeys: ["a".repeat(64)],
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
+        modernProtocol: false,
         packageVersion: "test",
         slackWebhookUrl: "",
       });
@@ -1367,6 +1371,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         oauthConsentHmacKeys: ["a".repeat(64)],
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
+        modernProtocol: false,
         packageVersion: "test",
         slackWebhookUrl: "",
       });
@@ -1422,6 +1427,7 @@ describe("Analytics server routes (HTTP-level)", () => {
         oauthConsentHmacKeys: ["a".repeat(64)],
         p2pTelemetryUrl: undefined,
         p2pTelemetryDisabled: false,
+        modernProtocol: false,
         packageVersion: "test",
         slackWebhookUrl: "",
       });

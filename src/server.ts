@@ -14,6 +14,11 @@ import type { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { createMcpServer } from "./mcp/server.js";
 import {
+  createModernMcpRoute,
+  logModernMcpError,
+  type ModernMcpRoute,
+} from "./modern-mcp.js";
+import {
   requestContext,
   handshakeOf,
   handshakeFor,
@@ -65,14 +70,22 @@ import { createSlackWebhookHandler } from "./webhooks/slack.js";
 import { createDiscordWebhookHandler } from "./webhooks/discord.js";
 import { SessionStateManager } from "./mcp/tools/bash-session.js";
 import { BashTelemetry } from "./mcp/tools/bash-telemetry.js";
-import { P2PTelemetry } from "./p2p-telemetry.js";
+import {
+  P2PTelemetry,
+  ClientSeenDeduper,
+  CLIENT_SEEN_EVENT,
+} from "./p2p-telemetry.js";
 import type { AuthContext } from "./oauth/handlers.js";
 import { insertCollectedData } from "./db/queries.js";
 import { IpSessionLimiter } from "./ip-limiter.js";
+import { ModernRateLimiter } from "./modern-rate-limit.js";
+import { InflightCeiling } from "./modern-inflight.js";
 import {
   jsonRpcRateLimitError,
   clampRetryAfterSeconds,
   buildCapacityPayload,
+  JSONRPC_RATE_LIMIT_CODE,
+  JSONRPC_CAPACITY_CODE,
 } from "./rate-limit-response.js";
 import { clientIp } from "./ip-util.js";
 import ipaddr from "ipaddr.js";
@@ -104,6 +117,7 @@ import {
   getToolBreakdown,
   normalizeRequestSource,
   REQUEST_SOURCE_VALUES,
+  USER_AGENT_MAX_LEN,
 } from "./db/analytics.js";
 import type { AnalyticsFilter, RequestSource } from "./db/analytics.js";
 import {
@@ -257,6 +271,16 @@ let orchestratorRef: IndexingOrchestrator | null = null;
 const startedAt = new Date();
 const bashInstances = new Map<string, Bash>();
 const sessionStateManager = new SessionStateManager();
+// The 2026-07-28 (stateless) route for POST /mcp. Built in startServer only
+// when the PATHFINDER_MODERN_PROTOCOL kill switch is on; undefined otherwise,
+// so every request takes the legacy path.
+let modernRoute: ModernMcpRoute | undefined;
+// Admission control and client.seen dedup for the modern route. Built in
+// startServer next to modernRoute, and only when it is built: legacy
+// requests never reach them.
+let modernLimiter: ModernRateLimiter | undefined;
+let modernCeiling: InflightCeiling | undefined;
+let clientSeenDeduper: ClientSeenDeduper | undefined;
 let bashTelemetry: BashTelemetry | undefined;
 let telemetryFlushInterval: ReturnType<typeof setInterval> | undefined;
 // P2P telemetry client — constructed once in startServer() from config so
@@ -1602,43 +1626,256 @@ export {
   __resetWarnedRequestSourcesForTesting,
 } from "./request-context.js";
 
+/**
+ * Write the per-tool `[mcp]` line for a tools/call or tools/list body. The
+ * legacy existing-session branch and the modern (stateless) branch of
+ * POST /mcp both call this, so operators and log consumers see the same
+ * line for the same call on either protocol era. Other methods log nothing.
+ * Every value written here comes from the client (on the modern leg this runs
+ * before SDK validation): the tool name, the args, and the ip (from
+ * X-Forwarded-For when trust_proxy is on). Each goes through safeLogToken:
+ * printable ASCII is logged unchanged, and CR/LF, U+2028/U+2029, C1 controls
+ * and DEL (which JSON.stringify keeps raw) cannot forge lines.
+ */
+function logMcpCall(body: unknown, rawIp: string): void {
+  const ip = safeLogToken(rawIp);
+  const rpc = body as Record<string, unknown> | undefined;
+  const method = rpc?.method as string | undefined;
+  if (method === "tools/call") {
+    const params = rpc?.params as Record<string, unknown> | undefined;
+    const rawToolName = params?.name ?? "unknown";
+    const toolName = safeLogToken(String(rawToolName));
+    const args = params?.arguments as Record<string, unknown> | undefined;
+    const toolCfg = getServerConfig().tools.find((t) => t.name === rawToolName);
+    if (toolCfg?.type === "collect") {
+      try {
+        const dataPreview = safeLogToken(
+          JSON.stringify(args ?? {}).slice(0, 200),
+        );
+        console.log(`[mcp] ${toolName}(${dataPreview}) [${ip}]`);
+      } catch {
+        console.log(`[mcp] ${toolName}(<unserializable>) [${ip}]`);
+      }
+    } else if (toolCfg?.type === "bash") {
+      const cmd = safeLogToken(
+        JSON.stringify(args?.command ?? "").slice(0, 200),
+      );
+      console.log(`[mcp] ${toolName}(${cmd}) [${ip}]`);
+    } else {
+      const query = safeLogToken(String(args?.query ?? ""));
+      const limit = args?.limit;
+      const extra = limit ? ` limit=${safeLogToken(String(limit))}` : "";
+      console.log(`[mcp] ${toolName}("${query}"${extra}) [${ip}]`);
+    }
+  } else if (method === "tools/list") {
+    console.log(`[mcp] tools/list [${ip}]`);
+  }
+}
+
+/**
+ * Classify a POST /mcp as modern or legacy. When classification throws, this
+ * writes the answer itself (or, for a client abort, nothing) and returns
+ * "answered", so the outer catch never sees it:
+ * - the SDK's RequestBodyTooLargeError (body over its size limit) answers the
+ *   same 413 JSON-RPC error that toNodeHandler writes, with connection: close;
+ * - a client abort mid-body returns quietly, since nobody is listening;
+ * - anything else logs "[mcp] era classification failed" and answers 500,
+ *   echoing the parsed body's id when there is one.
+ * The SDK does not export RequestBodyTooLargeError, so it is matched by name
+ * and status, as the SDK's toWebRequest docstring describes.
+ */
+async function classifyEra(
+  route: ModernMcpRoute,
+  req: Request,
+  res: Response,
+): Promise<"modern" | "legacy" | "answered"> {
+  try {
+    return (await route.isModern(req)) ? "modern" : "legacy";
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      err.name === "RequestBodyTooLargeError" &&
+      Reflect.get(err, "status") === 413
+    ) {
+      if (!res.headersSent) {
+        res
+          .status(413)
+          .set("Connection", "close")
+          .json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: err.message },
+            id: null,
+          });
+      }
+      return "answered";
+    }
+    // req.destroyed is no signal here: Node sets it once the body has been
+    // read in full, which is the normal case. A gone client shows as a
+    // destroyed socket or response, or as the "aborted" ECONNRESET error.
+    if (
+      req.socket?.destroyed ||
+      res.destroyed ||
+      (err instanceof Error && Reflect.get(err, "code") === "ECONNRESET")
+    ) {
+      return "answered";
+    }
+    console.error(
+      `[mcp] era classification failed [${clientIp(req, isTrustingProxy())}]:`,
+      err,
+    );
+    if (!res.headersSent) {
+      const bodyId =
+        typeof req.body === "object" && req.body !== null
+          ? Reflect.get(req.body, "id")
+          : undefined;
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal server error" },
+        id:
+          typeof bodyId === "string" || typeof bodyId === "number"
+            ? bodyId
+            : null,
+      });
+    }
+    return "answered";
+  }
+}
+
 app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   try {
+    // Modern (2026-07-28, stateless) requests go to the per-request handler.
+    // Every POST is classified, including one whose req.body is undefined: a
+    // `req.body !== undefined` guard would send a modern body with a non-JSON
+    // Content-Type to the legacy leg, and it would not get the modern 415.
+    // When express.json did not parse the body (a non-JSON or missing
+    // Content-Type), the classifier reads the request stream, up to the SDK's
+    // 4 MiB limit, before any admission control runs. A small body still
+    // reaches the legacy transport's 415 with no hang. The read can fail: an
+    // oversized body answers 413 (on either leg), a client abort ends the
+    // request quietly, and any other failure is logged and answers 500. See
+    // classifyEra.
+    //
+    // Origin policy: the modern path allows every Origin and never answers
+    // 403. Pathfinder is a public, unauthenticated, read-only documentation
+    // server that is never bound to localhost in production, and the
+    // DNS-rebinding attack the spec's Origin rule defends against needs a
+    // privileged local server to target. The app-wide cors({ origin: "*" })
+    // stays. An opt-in Origin allowlist for localhost self-hosting is in
+    // the backlog.
+    const era = modernRoute
+      ? await classifyEra(modernRoute, req, res)
+      : "legacy";
+    if (era === "answered") return;
+    if (era === "modern" && modernRoute) {
+      // Admission order: per-IP rate limit, then the global in-flight
+      // ceiling, then client.seen, then the per-tool log line and the
+      // handler. A 429 or 503 is never counted as seen or logged as a call.
+      const ip = clientIp(req, isTrustingProxy());
+      const bodyId =
+        typeof req.body === "object" && req.body !== null
+          ? Reflect.get(req.body, "id")
+          : undefined;
+      const reqId =
+        typeof bodyId === "string" || typeof bodyId === "number"
+          ? bodyId
+          : null;
+
+      const limit = modernLimiter?.take(ip);
+      if (limit && !limit.ok) {
+        console.warn(`[mcp] modern rate limit exceeded for ${ip}`);
+        res
+          .status(429)
+          .set("Retry-After", String(limit.retryAfterSeconds))
+          .json({
+            jsonrpc: "2.0",
+            id: reqId,
+            error: {
+              code: JSONRPC_RATE_LIMIT_CODE,
+              message: "Rate limited: too many requests from this IP",
+              data: { retryAfterSeconds: limit.retryAfterSeconds },
+            },
+          });
+        return;
+      }
+
+      // A subscriptions/listen request is an open-ended SSE stream that
+      // stays open until the client goes away. It does not take a ceiling
+      // slot: if it did, a few clients holding listen streams could pin
+      // every slot, and all other modern requests would answer 503. Listen
+      // streams are still rate limited per IP above, and the SDK caps the
+      // number of open streams (maxSubscriptions).
+      const isListen =
+        typeof req.body === "object" &&
+        req.body !== null &&
+        Reflect.get(req.body, "method") === "subscriptions/listen";
+
+      // The slot is held until handle() settles, not until the response
+      // closes. On a client abort the response closes while the tool still
+      // runs; handle() waits for the tool (ModernServerContext.trackWork),
+      // but no longer than server.modern_request_timeout_ms, so a tool that
+      // never settles cannot hold the slot forever. Freeing the slot on close would let abort-and-repeat run any number
+      // of handlers at once. The finally below also frees the slot for a
+      // response that closed before admission, and when a step throws.
+      let releaseSlot: (() => void) | undefined;
+      if (modernCeiling && !isListen) {
+        const release = modernCeiling.tryAcquire();
+        if (!release) {
+          console.warn(
+            `[mcp] modern in-flight ceiling reached, rejecting request [${ip}]`,
+          );
+          res
+            .status(503)
+            .set("Retry-After", "1")
+            .json({
+              jsonrpc: "2.0",
+              id: reqId,
+              error: {
+                code: JSONRPC_CAPACITY_CODE,
+                message: "Server busy: too many requests in flight",
+                data: { retryAfterSeconds: 1 },
+              },
+            });
+          return;
+        }
+        releaseSlot = release;
+      }
+
+      try {
+        // Cap the UA (same USER_AGENT_MAX_LEN the analytics writer applies) so
+        // the dedup key and the outbound payload stay bounded: a raw header can
+        // be many KB, and a UA that varies only past the cap must not count as
+        // a new client and trigger another POST.
+        const userAgent = (req.headers["user-agent"] ?? "").slice(
+          0,
+          USER_AGENT_MAX_LEN,
+        );
+        if (
+          p2pTelemetry?.isEnabled() &&
+          clientSeenDeduper?.shouldEmit(ip, userAgent)
+        ) {
+          p2pTelemetry.emit(CLIENT_SEEN_EVENT, {
+            client_ip: ip,
+            user_agent: userAgent,
+            transport: "streamable_http",
+            protocol_era: "modern",
+            authenticated: !!(req as Request & { auth?: AuthContext }).auth,
+          });
+        }
+
+        logMcpCall(req.body, ip);
+        await modernRoute.handle(req, res);
+      } finally {
+        releaseSlot?.();
+      }
+      return;
+    }
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const ip = clientIp(req, isTrustingProxy());
 
     // Existing session — route to its transport
     const existingTransport = getLiveTransport(transports, sessionId);
     if (sessionId && existingTransport) {
-      const method = req.body?.method as string | undefined;
-      if (method === "tools/call") {
-        const params = req.body?.params as Record<string, unknown> | undefined;
-        const toolName = params?.name ?? "unknown";
-        const args = params?.arguments as Record<string, unknown> | undefined;
-        const toolCfg = getServerConfig().tools.find(
-          (t) => t.name === toolName,
-        );
-        if (toolCfg?.type === "collect") {
-          try {
-            const dataPreview = JSON.stringify(args ?? {}).slice(0, 200);
-            console.log(`[mcp] ${toolName}(${dataPreview}) [${ip}]`);
-          } catch {
-            console.log(`[mcp] ${toolName}(<unserializable>) [${ip}]`);
-          }
-        } else if (toolCfg?.type === "bash") {
-          const cmd = args?.command ?? "";
-          console.log(
-            `[mcp] ${toolName}(${JSON.stringify(cmd).slice(0, 200)}) [${ip}]`,
-          );
-        } else {
-          const query = args?.query ?? "";
-          const limit = args?.limit;
-          const extra = limit ? ` limit=${limit}` : "";
-          console.log(`[mcp] ${toolName}("${query}"${extra}) [${ip}]`);
-        }
-      } else if (method === "tools/list") {
-        console.log(`[mcp] tools/list [${ip}]`);
-      }
+      logMcpCall(req.body, ip);
       // R4-3 — update sessionLastActivity AFTER handleRequest returns
       // successfully, not before. Pre-refresh let a consistently-throwing
       // transport keep bumping its stamp on every failed request and evade
@@ -4342,7 +4579,7 @@ async function startServerInner(
   ipLimiter = new IpSessionLimiter(maxSessionsPerIp, { allowlist });
   if (allowlist.length > 0) {
     console.log(
-      `[startup] IP allowlist: ${allowlist.length} entr${allowlist.length === 1 ? "y" : "ies"} (bypasses session cap)`,
+      `[startup] IP allowlist: ${allowlist.length} entr${allowlist.length === 1 ? "y" : "ies"} (bypasses max_sessions_per_ip, and the modern per-IP rate limit when PATHFINDER_MODERN_PROTOCOL is on; not modern_max_inflight)`,
     );
   }
 
@@ -4369,6 +4606,54 @@ async function startServerInner(
     workspaceManager = new WorkspaceManager(workspaceDir);
     console.log(`[startup] Workspace manager enabled (dir: ${workspaceDir})`);
   }
+
+  // Kill switch (PATHFINDER_MODERN_PROTOCOL, read at startup). Off: no modern
+  // route, so POST /mcp serves only the legacy protocol. The factory runs per
+  // request, so the module-level bashTelemetry and workspaceManager are read
+  // when a request arrives, not here.
+  if (cfg.modernProtocol) {
+    modernLimiter = new ModernRateLimiter({
+      rpm: serverCfg.server.modern_rpm_per_ip ?? 120,
+      burst: serverCfg.server.modern_burst_per_ip ?? 60,
+      allowlist,
+    });
+    modernCeiling = new InflightCeiling(
+      serverCfg.server.modern_max_inflight ?? 200,
+    );
+    clientSeenDeduper = new ClientSeenDeduper();
+  } else {
+    modernLimiter = undefined;
+    modernCeiling = undefined;
+    clientSeenDeduper = undefined;
+  }
+  modernRoute = cfg.modernProtocol
+    ? createModernMcpRoute({
+        onerror: logModernMcpError,
+        requestTimeoutMs: serverCfg.server.modern_request_timeout_ms ?? 60000,
+        buildServer: (ctx) => {
+          const analyticsCtx: SessionAnalyticsContext = Object.freeze({
+            transport: "streamable_http",
+            protocol_era: "modern",
+            protocol_version: ctx.protocolVersion,
+            client_name: ctx.clientName,
+            auth_client_id: ctx.authClientId,
+          });
+          return createMcpServer(
+            bashInstances,
+            sessionStateManager,
+            () => undefined,
+            bashTelemetry,
+            workspaceManager,
+            undefined,
+            () => ctx.requestSource,
+            () => ctx.ip,
+            () => ctx.userAgent,
+            () => analyticsCtx,
+            { era: "modern", trackWork: ctx.trackWork, signal: ctx.signal },
+          );
+        },
+      })
+    : undefined;
 
   const needsDb =
     hasSearchTools() ||

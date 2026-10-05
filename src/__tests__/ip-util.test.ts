@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { AddressInfo } from "node:net";
+import express from "express";
 import type { Request } from "express";
+import { parse as parseYaml } from "yaml";
 import { clientIp } from "../ip-util.js";
+import { ServerConfigSchema } from "../types.js";
 
 /**
  * Minimal Request-shaped object. We construct the exact surface area clientIp
@@ -107,5 +114,47 @@ describe("clientIp", () => {
       const req = makeReq({ ip: "", remoteAddress: "" });
       expect(clientIp(req, true)).toBe("unknown");
     });
+  });
+});
+
+// D4 local guard. The modern per-IP limiter is keyed on clientIp(req, true),
+// which returns the leftmost X-Forwarded-For entry Express resolves. That is
+// only correct while every shipped deploy config sets trust_proxy: true.
+const DEPLOY_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../deploy",
+);
+
+describe("trust_proxy: true regression guard (shipped deploy configs)", () => {
+  for (const name of [
+    "copilotkit-docs",
+    "pathfinder-docs",
+    "aimock-docs",
+  ] as const) {
+    it(`deploy/${name}.yaml parses through ServerConfigSchema with server.trust_proxy === true`, () => {
+      const config = ServerConfigSchema.parse(
+        parseYaml(readFileSync(resolve(DEPLOY_DIR, `${name}.yaml`), "utf8")),
+      );
+      expect(config.server?.trust_proxy).toBe(true);
+    });
+  }
+
+  it("under a real Express app with trust proxy true, clientIp returns the leftmost XFF entry", async () => {
+    const app = express();
+    app.set("trust proxy", true);
+    app.get("/ip", (req, res) => {
+      res.json({ ip: clientIp(req, true) });
+    });
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const res = await fetch(`http://127.0.0.1:${port}/ip`, {
+        headers: { "X-Forwarded-For": "198.51.100.1, 10.0.0.1" },
+      });
+      expect(((await res.json()) as { ip: string }).ip).toBe("198.51.100.1");
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });

@@ -18,7 +18,21 @@ server:
   # session_unused_ttl_minutes: 15    # Idle session timeout for unused sessions (default: 15)
   #                                   # "Unused" = connected but never invoked a tool.
   #                                   # Set to match Railway's 15-min SSE hard limit.
-  # allowlist:                        # IPs / CIDRs that bypass max_sessions_per_ip. Empty by default.
+  # modern_rpm_per_ip: 120            # 2026-07-28 (stateless) clients: sustained requests per minute per IP (default: 120)
+  #                                   # Token-bucket refill rate. IPs in allowlist bypass it.
+  #                                   # Over the limit: HTTP 429 with a JSON-RPC error (code -32005, the request id
+  #                                   # echoed, data.retryAfterSeconds) and a matching Retry-After header.
+  # modern_burst_per_ip: 60           # 2026-07-28 (stateless) clients: largest instant burst per IP (default: 60)
+  #                                   # Token-bucket capacity. IPs in allowlist bypass it.
+  #                                   # Over the limit: the same 429 JSON-RPC error (-32005) with Retry-After.
+  # modern_max_inflight: 200          # 2026-07-28 (stateless) clients: global ceiling on in-flight requests (default: 200)
+  #                                   # The allowlist does NOT bypass this ceiling. Open subscriptions/listen
+  #                                   # streams do not count against it.
+  #                                   # Over the ceiling: HTTP 503 with a JSON-RPC error (code -32006, the request id
+  #                                   # echoed) and Retry-After: 1.
+  # modern_request_timeout_ms: 60000  # 2026-07-28 (stateless) clients: deadline per request, in ms (default: 60000)
+  #                                   # When it passes, the request's in-flight slot is released and bash commands are aborted.
+  # allowlist:                        # IPs / CIDRs that bypass max_sessions_per_ip and the modern_* per-IP limits. Empty by default.
   #   - "160.79.106.35"               # Example: Anthropic Assistant crawler
   #   - "10.0.0.0/8"                  # Example: internal health-probe CIDR
   # NOTE: behind a reverse proxy (Railway, Fly, etc.), allowlist entries only match
@@ -180,8 +194,9 @@ indexing:
 #   # enumerated in the dashboard's "Excluded Machine-Relay Traffic" panel.
 #   # A rule matches when EVERY predicate it declares matches.
 #   #
-#   # Prefer having the relay send `X-Pathfinder-Source: relay` at MCP session
-#   # init — that tags its rows directly and needs no rule here. A relay that
+#   # Prefer having the relay send `X-Pathfinder-Source: relay` on every
+#   # request (2026-07-28 clients) or at session init (2025-era clients) —
+#   # that tags its rows directly and needs no rule here. A relay that
 #   # would rather send its own service name can, but only if that name is
 #   # added to REQUEST_SOURCE_ALIASES in src/db/analytics.ts first: an
 #   # unrecognized value is tagged 'user' like any other traffic (the server

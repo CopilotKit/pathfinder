@@ -11,6 +11,37 @@ import { SessionStateManager } from "./tools/bash-session.js";
 import type { BashTelemetry } from "./tools/bash-telemetry.js";
 import type { WorkspaceManager } from "../workspace.js";
 import type { SessionAnalyticsContext } from "../request-context.js";
+import type { EmbeddingConfig } from "../types.js";
+
+// One embedding provider per process, shared by every McpServer instance.
+// Lazily created — only when a RAG tool needs it. Memoised by the `embedding`
+// config object (identity) and the OpenAI key, so a config reload, which
+// yields a new object, gets a new provider.
+let sharedEmbedding: {
+  embedding: EmbeddingConfig;
+  openaiApiKey: string | undefined;
+  provider: EmbeddingProvider;
+} | null = null;
+
+function getSharedEmbeddingProvider(
+  embedding: EmbeddingConfig | undefined,
+  openaiApiKey: string | undefined,
+): EmbeddingProvider {
+  if (!embedding) {
+    throw new Error("embedding config is required for search tools");
+  }
+  if (
+    sharedEmbedding?.embedding !== embedding ||
+    sharedEmbedding.openaiApiKey !== openaiApiKey
+  ) {
+    sharedEmbedding = {
+      embedding,
+      openaiApiKey,
+      provider: createEmbeddingProvider(embedding, openaiApiKey),
+    };
+  }
+  return sharedEmbedding.provider;
+}
 
 /**
  * Creates a new McpServer instance with all tools registered.
@@ -41,29 +72,62 @@ export function createMcpServer(
   // the search and knowledge handlers so each query_log row carries it.
   // Optional; absent values persist as NULL.
   getAnalyticsContext?: () => SessionAnalyticsContext | undefined,
+  // Protocol era of the connection this server serves. "modern" (2026-07-28,
+  // stateless) adds the tools/list cache hints and builds bash tools with
+  // `era: "modern"`. Absent or "legacy" builds the server exactly as before.
+  // trackWork, when given, receives the promise of every tool call this
+  // server runs (see ModernServerContext.trackWork). signal, when given, is
+  // the request's deadline signal (ModernServerContext.signal); bash tools
+  // pass it to exec. Legacy callers omit both.
+  opts?: {
+    era?: "legacy" | "modern";
+    trackWork?: (work: Promise<unknown>) => void;
+    signal?: AbortSignal;
+  },
 ): McpServer {
   const cfg = getConfig();
   const serverCfg = getServerConfig();
 
-  // Lazily created — only when a RAG tool needs it
-  let embeddingProvider: EmbeddingProvider | null = null;
-  function getEmbeddingProvider(): EmbeddingProvider {
-    if (!embeddingProvider) {
-      if (!serverCfg.embedding) {
-        throw new Error("embedding config is required for search tools");
-      }
-      embeddingProvider = createEmbeddingProvider(
-        serverCfg.embedding,
-        cfg.openaiApiKey || undefined,
-      );
-    }
-    return embeddingProvider;
-  }
+  const getEmbeddingProvider = (): EmbeddingProvider =>
+    getSharedEmbeddingProvider(
+      serverCfg.embedding,
+      cfg.openaiApiKey || undefined,
+    );
 
-  const server = new McpServer({
+  const modern = opts?.era === "modern";
+  const info = {
     name: serverCfg.server.name,
     version: serverCfg.server.version,
-  });
+  };
+  const server = modern
+    ? new McpServer(info, {
+        cacheHints: { "tools/list": { cacheScope: "public", ttlMs: 3600000 } },
+      })
+    : new McpServer(info);
+
+  const trackWork = opts?.trackWork;
+  if (trackWork) {
+    // Report each tool callback's result to trackWork. Every tool below is
+    // registered through server.registerTool, so wrapping it on this one
+    // instance covers them all without changing the register functions.
+    const registerTool: unknown = server.registerTool;
+    if (typeof registerTool !== "function") {
+      throw new Error("McpServer.registerTool is not a function");
+    }
+    Reflect.set(server, "registerTool", (...args: unknown[]): unknown => {
+      const cb = args[2];
+      if (typeof cb === "function") {
+        args[2] = (...cbArgs: unknown[]): Promise<unknown> => {
+          const work = Promise.resolve().then(() =>
+            Reflect.apply(cb, undefined, cbArgs),
+          );
+          trackWork(work);
+          return work;
+        };
+      }
+      return Reflect.apply(registerTool, server, args);
+    });
+  }
 
   for (const tool of serverCfg.tools) {
     switch (tool.type) {
@@ -109,6 +173,8 @@ export function createMcpServer(
           workspace: needsWorkspace ? workspace : undefined,
           getSessionId: needsWorkspace ? getSessionId : undefined,
           onToolCall: hooks?.onToolCall,
+          ...(modern ? { era: "modern" as const } : {}),
+          ...(opts?.signal ? { signal: opts.signal } : {}),
         });
         break;
       }

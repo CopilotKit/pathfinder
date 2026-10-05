@@ -14,6 +14,11 @@ export function generateSkillMd(config: ServerConfig): string {
   const hasWorkspace = config.tools.some(
     (t) => t.type === "bash" && t.bash?.workspace === true,
   );
+  // cd persists only through BashSessionState, which bash.ts enables only for
+  // a 2025-era (session) connection on a tool with session_state: true.
+  const hasSessionState = config.tools.some(
+    (t) => t.type === "bash" && t.bash?.session_state === true,
+  );
   const hasQmd = config.tools.some(
     (t) =>
       t.type === "bash" &&
@@ -54,7 +59,9 @@ export function generateSkillMd(config: ServerConfig): string {
     lines.push("- `cat /path/to/file.mdx` — read file contents");
     lines.push("- `ls /path/` — list directory contents");
     lines.push(
-      "- `cd /path/` — change working directory (persists across calls)",
+      hasSessionState
+        ? "- `cd /path/` — change working directory (persists across calls only on 2025-era (session) connections; on 2026-07-28 connections it does not persist, so use absolute paths or `cd X && <cmd>`)"
+        : "- `cd /path/` — change working directory (does not persist between calls; use absolute paths or `cd X && <cmd>`)",
     );
     if (hasQmd) {
       lines.push(
@@ -72,6 +79,9 @@ export function generateSkillMd(config: ServerConfig): string {
       );
       lines.push('- Use `echo "content" > /workspace/notes.md` to save files');
       lines.push("- Workspace is session-scoped and size-limited");
+      lines.push(
+        "- /workspace is available only on 2025-era (session) connections.",
+      );
     }
     lines.push("");
   }
@@ -101,7 +111,16 @@ export function generateSkillMd(config: ServerConfig): string {
 
   lines.push("## Limitations");
   lines.push("");
-  lines.push("- Filesystem is read-only (except /workspace/)");
+  if (bashTools.length > 0) {
+    lines.push(
+      "- The filesystem is read-only except /tmp, which is private scratch space: on 2025-era (session) connections it lasts for your session; on 2026-07-28 connections it is discarded after each call",
+    );
+    if (hasWorkspace) {
+      lines.push(
+        "- /workspace/ is writable and private to your session (2025-era connections only)",
+      );
+    }
+  }
   lines.push("- File content is from the last index update, not real-time");
   lines.push("- Pipes in bash commands are limited to basic patterns");
 

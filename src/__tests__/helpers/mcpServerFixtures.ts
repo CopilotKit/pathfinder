@@ -30,6 +30,7 @@ export const baseConfig: Config = {
   oauthConsentHmacKeys: [],
   p2pTelemetryUrl: undefined,
   p2pTelemetryDisabled: true,
+  modernProtocol: false,
   packageVersion: "0.0.0",
   slackWebhookUrl: "",
 };
@@ -76,7 +77,7 @@ export type SlotTypesMatch = Assert<
   >
 >;
 export type ParameterCountPinned = Assert<
-  Equal<Required<CreateMcpServerArgs>["length"], 10>
+  Equal<Required<CreateMcpServerArgs>["length"], 11>
 >;
 
 /** Call createMcpServer with named arguments, each placed at its SLOT. */

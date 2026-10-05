@@ -1624,6 +1624,37 @@ describe("config.ts", () => {
     });
   });
 
+  // ── modernProtocol kill switch ───────────────────────────────────────────
+
+  describe("modernProtocol (PATHFINDER_MODERN_PROTOCOL)", () => {
+    async function loadModernProtocol(value: string | undefined) {
+      process.env.PATHFINDER_CONFIG = "/tmp/test.yaml";
+      process.env.DATABASE_URL = "postgresql://test";
+      process.env.OPENAI_API_KEY = "sk-test";
+      if (value === undefined) {
+        delete process.env.PATHFINDER_MODERN_PROTOCOL;
+      } else {
+        process.env.PATHFINDER_MODERN_PROTOCOL = value;
+      }
+      mockedExistsSync.mockReturnValue(true);
+      mockedReadFileSync.mockReturnValue(makeYaml());
+      const { getConfig } = await freshImport();
+      return getConfig().modernProtocol;
+    }
+
+    it("is false when unset", async () => {
+      expect(await loadModernProtocol(undefined)).toBe(false);
+    });
+
+    it.each(["true", " TRUE ", "1"])("is true for %j", async (value) => {
+      expect(await loadModernProtocol(value)).toBe(true);
+    });
+
+    it.each(["false", "0", "yes", ""])("is false for %j", async (value) => {
+      expect(await loadModernProtocol(value)).toBe(false);
+    });
+  });
+
   // ── Config proxy ─────────────────────────────────────────────────────────
 
   describe("config proxy", () => {

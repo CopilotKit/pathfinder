@@ -572,7 +572,8 @@
           >
           <span class="key">allowlist:</span>
           <span class="comment"
-            ># IPs / CIDRs that bypass max_sessions_per_ip (default: [])</span
+            ># IPs / CIDRs that bypass max_sessions_per_ip and the modern per-IP
+            rate limit (default: [])</span
           >
           <span class="comment"
             ># NOTE: entries match the per-request client IP only. Behind a
@@ -600,6 +601,26 @@
           <span class="key">trust_proxy:</span> <span class="value">false</span>
           <span class="comment"
             ># Honor X-Forwarded-For (default: false — see warning below)</span
+          >
+          <span class="key">modern_rpm_per_ip:</span>
+          <span class="value">120</span>
+          <span class="comment"
+            ># 2026-07-28 requests per minute per IP (default: 120)</span
+          >
+          <span class="key">modern_burst_per_ip:</span>
+          <span class="value">60</span>
+          <span class="comment"
+            ># 2026-07-28 burst size per IP (default: 60)</span
+          >
+          <span class="key">modern_max_inflight:</span>
+          <span class="value">200</span>
+          <span class="comment"
+            ># Max 2026-07-28 requests in flight at once (default: 200)</span
+          >
+          <span class="key">modern_request_timeout_ms:</span>
+          <span class="value">60000</span>
+          <span class="comment"
+            ># Deadline per 2026-07-28 request, in ms (default: 60000)</span
           >
         </div>
 
@@ -639,21 +660,72 @@
           </li>
           <li>
             <strong>allowlist</strong> — Array of IPv4/IPv6 addresses or CIDR
-            ranges that bypass <code>max_sessions_per_ip</code> entirely. Use
-            for trusted crawlers (e.g. <code>160.79.106.35</code> — Anthropic
-            Assistant) or internal health-probe ranges. Optional, defaults to
-            empty. Entries are matched against the per-request client IP —
+            ranges that bypass <code>max_sessions_per_ip</code> and the modern
+            per-IP rate limit (<code>modern_rpm_per_ip</code> and
+            <code>modern_burst_per_ip</code>), but not
+            <code>modern_max_inflight</code>. Use for trusted crawlers (e.g.
+            <code>160.79.106.35</code> — Anthropic Assistant) or internal
+            health-probe ranges. Optional, defaults to empty. Entries are
+            matched against the per-request client IP —
             <strong
               >behind a reverse proxy this requires
               <code>trust_proxy: true</code></strong
             >; with the default <code>trust_proxy: false</code> the server only
             sees the proxy's TCP socket address and no upstream client IP will
             ever match. Directly-exposed servers use the socket peer and need no
-            extra config. Clients that hit the limit receive a
+            extra config. Clients that hit the
+            <code>max_sessions_per_ip</code> limit receive a
             <code>429</code> with a descriptive JSON body (<code>error</code>,
             <code>reason</code>, <code>limit</code>, <code>currentCount</code>,
             <code>retryAfterSeconds</code>, <code>contact</code>) and a
             <code>Retry-After</code> header.
+          </li>
+          <li>
+            <strong>modern_rpm_per_ip</strong> — Steady request rate, in
+            requests per minute, allowed per client IP on 2026-07-28 (stateless)
+            connections to <code>/mcp</code>. These connections hold no session,
+            so <code>max_sessions_per_ip</code> does not apply to them. Entries
+            in <code>allowlist</code> bypass this limit. A request over the
+            limit gets HTTP <code>429</code> with a JSON-RPC error (code
+            <code>-32005</code>, the request <code>id</code> echoed,
+            <code>data.retryAfterSeconds</code>) and a
+            <code>Retry-After</code> header with the same number of seconds.
+            Optional, defaults to 120.
+          </li>
+          <li>
+            <strong>modern_burst_per_ip</strong> — Burst size (token-bucket
+            capacity) per client IP for 2026-07-28 connections. Entries in
+            <code>allowlist</code> bypass this limit. Over the limit, the reply
+            is the same <code>429</code> JSON-RPC error (<code>-32005</code>)
+            with <code>Retry-After</code>, as for
+            <code>modern_rpm_per_ip</code>. Optional, defaults to 60.
+          </li>
+          <li>
+            <strong>modern_max_inflight</strong> — Ceiling on 2026-07-28
+            requests being handled at the same moment, across all IPs. The
+            allowlist does not bypass this ceiling. Open
+            <code>subscriptions/listen</code> streams do not count against it. A
+            request over the ceiling gets HTTP <code>503</code> with a JSON-RPC
+            error (code <code>-32006</code>, the request <code>id</code> echoed)
+            and <code>Retry-After: 1</code>. Optional, defaults to 200.
+          </li>
+          <li>
+            <strong>modern_request_timeout_ms</strong> — Wall-clock deadline for
+            one 2026-07-28 request, in milliseconds. When it passes, the request
+            releases its <code>modern_max_inflight</code> slot, a warn line is
+            logged, and a running bash command is aborted. Open
+            <code>subscriptions/listen</code> streams are not subject to the
+            deadline. At most 2147483647; a larger value fails config load.
+            Optional, defaults to 60000 (the MCP SDK's default client request
+            timeout).
+          </li>
+          <li>
+            <strong>PATHFINDER_MODERN_PROTOCOL</strong> (environment variable,
+            not a YAML key) — Turns on 2026-07-28 stateless serving on
+            <code>/mcp</code>. Set it to <code>1</code> or
+            <code>true</code> (case-insensitive); any other value, or unset,
+            leaves it off. It is off by default and is read at startup. The four
+            <code>modern_*</code> keys apply only when it is on.
           </li>
           <li>
             <strong>trust_proxy</strong> — Whether to honor the
@@ -668,7 +740,8 @@
             <code>X-Forwarded-For</code> AND sets its own trusted value. If the
             proxy passes through client-supplied <code>X-Forwarded-For</code>,
             attackers can send <code>X-Forwarded-For: 160.79.106.35</code> to be
-            seen as an allowlisted IP and bypass the rate limiter entirely. When
+            seen as an allowlisted IP and bypass the session limiter and the
+            modern per-IP rate limiter entirely. When
             <code>false</code> (default), <code>X-Forwarded-For</code> is
             ignored and the server uses the TCP socket's peer address.
           </li>
@@ -1335,9 +1408,13 @@
             falls back to semantic if no results.
           </li>
           <li>
-            <strong>workspace</strong> — When true, agents can write files to
-            <code>/workspace/</code>. Requires a persistent volume in production
-            (see <a href="/deploy">Deploy Guide</a>).
+            <strong>workspace</strong> — When true, agents on 2025-era (session)
+            connections can write files to <code>/workspace/</code>. Requires a
+            persistent volume in production (see
+            <a href="/deploy">Deploy Guide</a>). Apart from that, the bash
+            filesystem is read-only for every client. Only <code>/tmp</code> is
+            writable, and it is private: it lasts for the session on 2025-era
+            connections and for one call on 2026-07-28 connections.
           </li>
           <li>
             <strong>session_state</strong> — When true, <code>cd</code> persists
@@ -1629,7 +1706,8 @@
             lists every rule and what it removed, and
             <code>?request_source=relay</code> on any analytics endpoint reads
             the excluded rows back. Prefer having the relay send
-            <code>X-Pathfinder-Source</code> at MCP session init instead — a
+            <code>X-Pathfinder-Source</code> instead — send it on every request
+            (2026-07-28 clients); at session init (2025-era clients). A
             self-declaring relay needs no rule here.
           </li>
         </ul>

@@ -5,8 +5,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const configState: {
   throwFrom: "getConfig" | "getServerConfig" | null;
   error: Error;
+  allowlist: string[];
 } = {
   throwFrom: null,
+  allowlist: [],
   error: new Error("synthetic config failure"),
 };
 
@@ -41,7 +43,7 @@ vi.mock("../config.js", () => ({
         version: "0.0.0",
         max_sessions_per_ip: 20,
         session_ttl_minutes: 30,
-        allowlist: [],
+        allowlist: configState.allowlist,
         trust_proxy: false,
       },
       sources: [],
@@ -49,6 +51,8 @@ vi.mock("../config.js", () => ({
     };
   }),
   getAnalyticsConfig: vi.fn(),
+  assertDocumentPeerDepsForSources: vi.fn().mockResolvedValue(undefined),
+  assertLocalEmbeddingDepForProvider: vi.fn().mockResolvedValue(undefined),
   hasSearchTools: vi.fn().mockReturnValue(false),
   hasKnowledgeTools: vi.fn().mockReturnValue(false),
   hasCollectTools: vi.fn().mockReturnValue(false),
@@ -63,6 +67,7 @@ describe("startServer top-level error wrapping (R3 #4)", () => {
   beforeEach(() => {
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     configState.throwFrom = null;
+    configState.allowlist = [];
   });
 
   afterEach(() => {
@@ -96,5 +101,30 @@ describe("startServer top-level error wrapping (R3 #4)", () => {
       return msg.includes("[startup] fatal:");
     });
     expect(fatalCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("startup allowlist line names the session cap and the modern per-IP rate limit, not the in-flight ceiling", async () => {
+    configState.allowlist = ["10.0.0.1"];
+    // Abort boot right after the allowlist line so the test never reaches
+    // database or listener setup.
+    const logSpy = vi.spyOn(console, "log").mockImplementation((msg) => {
+      if (String(msg).includes("[startup] IP allowlist:")) {
+        throw new Error("stop-after-allowlist-line");
+      }
+    });
+    try {
+      await expect(startServer()).rejects.toThrow("stop-after-allowlist-line");
+      const line = logSpy.mock.calls
+        .map((args: unknown[]) => String(args[0] ?? ""))
+        .find((m) => m.includes("[startup] IP allowlist:"));
+      expect(line).toBeDefined();
+      expect(line).toContain("1 entry");
+      expect(line).toContain("max_sessions_per_ip");
+      expect(line).toContain(
+        "modern per-IP rate limit when PATHFINDER_MODERN_PROTOCOL is on",
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
