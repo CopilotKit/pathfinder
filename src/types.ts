@@ -423,10 +423,38 @@ export const ServerConfigSchema = z
       name: z.string().min(1),
       version: z.string().min(1),
       max_sessions_per_ip: z.number().int().positive().optional(),
+      // Sustained requests per minute allowed per client IP on the stateless
+      // 2026-07-28 leg (token bucket refill rate). Default 120 (applied in
+      // server.ts). IPs in `allowlist` bypass this key.
+      modern_rpm_per_ip: z.number().int().positive().optional(),
+      // Token bucket capacity per client IP on the stateless 2026-07-28 leg
+      // (largest instant burst). Default 60 (applied in server.ts). IPs in
+      // `allowlist` bypass this key.
+      modern_burst_per_ip: z.number().int().positive().optional(),
+      // Global ceiling on concurrently in-flight stateless 2026-07-28
+      // requests across all IPs. Default 200 (applied in server.ts). Unlike
+      // the per-IP keys, the allowlist does not bypass this ceiling. Open
+      // subscriptions/listen streams do not count against it.
+      modern_max_inflight: z.number().int().positive().optional(),
+      // Wall-clock deadline, in ms, for one stateless 2026-07-28 request.
+      // When it passes, the request's in-flight ceiling slot is released, a
+      // warn line is logged, and bash commands are aborted. Open
+      // subscriptions/listen streams are not subject to it. Default 60000
+      // (applied in server.ts), the MCP SDK's default client request timeout.
+      // At most 2147483647 (2^31-1): Node's setTimeout turns a larger delay
+      // into 1 ms, which would expire every request at once.
+      modern_request_timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .max(2_147_483_647)
+        .optional(),
       session_ttl_minutes: z.number().int().positive().optional(),
       max_sessions: z.number().int().positive().optional(),
       session_unused_ttl_minutes: z.number().int().positive().optional(),
-      // IP/CIDR entries that bypass max_sessions_per_ip. Empty by default.
+      // IP/CIDR entries that bypass max_sessions_per_ip and the modern per-IP
+      // rate limit (modern_rpm_per_ip, modern_burst_per_ip). They do not
+      // bypass modern_max_inflight. Empty by default.
       // Example: ["160.79.106.35"] to allowlist the Anthropic Assistant
       // crawler, or ["10.0.0.0/8"] for an internal health probe range.
       allowlist: z.array(AllowlistEntrySchema).optional(),
@@ -441,7 +469,8 @@ export const ServerConfigSchema = z
       // headers. Enabling it on a server directly exposed to the public
       // internet lets any client spoof their source IP by sending an
       // `X-Forwarded-For` header — which would let them claim to be an
-      // allowlisted IP and bypass the per-IP session limiter.
+      // allowlisted IP and bypass the per-IP session limiter and the modern
+      // per-IP rate limiter.
       //
       // Accepted shapes (all passed through verbatim to
       // `app.set("trust proxy", …)` — see Express docs for semantics:

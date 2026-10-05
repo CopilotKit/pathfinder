@@ -76,6 +76,7 @@ vi.mock("../config.js", async (importOriginal) => {
       oauthConsentHmacKeys: ["a".repeat(64)],
       p2pTelemetryUrl: undefined,
       p2pTelemetryDisabled: false,
+      modernProtocol: false,
       packageVersion: "test",
       slackWebhookUrl: "",
     })),
@@ -108,6 +109,7 @@ const DEFAULT_TEST_CONFIG = {
   oauthConsentHmacKeys: ["a".repeat(64)],
   p2pTelemetryUrl: undefined,
   p2pTelemetryDisabled: false,
+  modernProtocol: false,
   packageVersion: "test",
   slackWebhookUrl: "",
 };

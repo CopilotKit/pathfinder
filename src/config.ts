@@ -79,6 +79,12 @@ export interface Config {
    * rollback. When true, emit() no-ops even if the URL is set.
    */
   p2pTelemetryDisabled: boolean;
+  /**
+   * 2026-07-28 stateless serving on /mcp; default off; read at startup
+   * (PATHFINDER_MODERN_PROTOCOL). True only for trimmed, lower-cased "1" or
+   * "true".
+   */
+  modernProtocol: boolean;
   /** Pathfinder package version, read from package.json at startup. */
   packageVersion: string;
   /** Slack webhook URL for operational alerts (reindex audit, deploy health). */
@@ -270,6 +276,11 @@ function parseConfig(): Config {
   const p2pTelemetryDisabled =
     rawP2pDisabled === "1" || rawP2pDisabled === "true";
 
+  const rawModernProtocol =
+    process.env.PATHFINDER_MODERN_PROTOCOL?.trim().toLowerCase();
+  const modernProtocol =
+    rawModernProtocol === "1" || rawModernProtocol === "true";
+
   return {
     databaseUrl,
     openaiApiKey: openaiApiKey ?? "",
@@ -288,6 +299,7 @@ function parseConfig(): Config {
     oauthConsentHmacKeys,
     p2pTelemetryUrl,
     p2pTelemetryDisabled,
+    modernProtocol,
     packageVersion: readPackageVersion(),
     slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? "",
   };

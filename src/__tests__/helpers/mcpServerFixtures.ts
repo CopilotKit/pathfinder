@@ -30,6 +30,7 @@ export const baseConfig: Config = {
   oauthConsentHmacKeys: [],
   p2pTelemetryUrl: undefined,
   p2pTelemetryDisabled: true,
+  modernProtocol: false,
   packageVersion: "0.0.0",
   slackWebhookUrl: "",
 };
