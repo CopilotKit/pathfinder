@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { P2PTelemetry } from "../p2p-telemetry.js";
+import {
+  P2PTelemetry,
+  ClientSeenDeduper,
+  CLIENT_SEEN_EVENT,
+} from "../p2p-telemetry.js";
 
 /**
  * Build a P2PTelemetry instance with a mocked fetch so tests can assert on
@@ -132,5 +136,73 @@ describe("P2PTelemetry", () => {
     // the timeout to fire. 50ms covers both with margin.
     await new Promise((r) => setTimeout(r, 50));
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ClientSeenDeduper", () => {
+  const HOUR = 3_600_000;
+  const UA = "claude-code/1.0";
+
+  it("exposes the event name", () => {
+    expect(CLIENT_SEEN_EVENT).toBe("pathfinder.client.seen");
+  });
+
+  it("returns true on first sight and false on repeats within ttl", () => {
+    let t = 1_000;
+    const d = new ClientSeenDeduper({ now: () => t });
+    expect(d.shouldEmit("1.2.3.4", UA)).toBe(true);
+    expect(d.shouldEmit("1.2.3.4", UA)).toBe(false);
+    t += 5 * HOUR;
+    expect(d.shouldEmit("1.2.3.4", UA)).toBe(false);
+  });
+
+  it("keys on ip and user-agent together", () => {
+    const d = new ClientSeenDeduper({ now: () => 0 });
+    expect(d.shouldEmit("1.2.3.4", UA)).toBe(true);
+    expect(d.shouldEmit("1.2.3.5", UA)).toBe(true);
+    expect(d.shouldEmit("1.2.3.4", "other")).toBe(true);
+    // NUL separator: ("a", "bc") must not collide with ("ab", "c")
+    expect(d.shouldEmit("a", "bc")).toBe(true);
+    expect(d.shouldEmit("ab", "c")).toBe(true);
+  });
+
+  it("24h boundary: 23:59:59 -> false, 24:00:00 -> true", () => {
+    let t = 0;
+    const d = new ClientSeenDeduper({ now: () => t });
+    expect(d.shouldEmit("1.2.3.4", UA)).toBe(true);
+    t = 24 * HOUR - 1_000;
+    expect(d.shouldEmit("1.2.3.4", UA)).toBe(false);
+    t = 24 * HOUR;
+    expect(d.shouldEmit("1.2.3.4", UA)).toBe(true);
+    // window restarts from the re-emit
+    t = 24 * HOUR + 1_000;
+    expect(d.shouldEmit("1.2.3.4", UA)).toBe(false);
+  });
+
+  it("honours a custom ttlMs", () => {
+    let t = 0;
+    const d = new ClientSeenDeduper({ ttlMs: 100, now: () => t });
+    expect(d.shouldEmit("ip", UA)).toBe(true);
+    t = 99;
+    expect(d.shouldEmit("ip", UA)).toBe(false);
+    t = 100;
+    expect(d.shouldEmit("ip", UA)).toBe(true);
+  });
+
+  it("evicts the least-recently-seen key at max", () => {
+    const d = new ClientSeenDeduper({ max: 2, now: () => 0 });
+    expect(d.shouldEmit("a", UA)).toBe(true);
+    expect(d.shouldEmit("b", UA)).toBe(true);
+    // touch a so b becomes least recently seen
+    expect(d.shouldEmit("a", UA)).toBe(false);
+    expect(d.shouldEmit("c", UA)).toBe(true); // evicts b
+    expect(d.shouldEmit("a", UA)).toBe(false); // a survived
+    expect(d.shouldEmit("b", UA)).toBe(true); // b was evicted
+  });
+
+  it("works with default options", () => {
+    const d = new ClientSeenDeduper();
+    expect(d.shouldEmit("1.1.1.1", UA)).toBe(true);
+    expect(d.shouldEmit("1.1.1.1", UA)).toBe(false);
   });
 });
