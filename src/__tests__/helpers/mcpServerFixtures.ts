@@ -77,7 +77,7 @@ export type SlotTypesMatch = Assert<
   >
 >;
 export type ParameterCountPinned = Assert<
-  Equal<Required<CreateMcpServerArgs>["length"], 10>
+  Equal<Required<CreateMcpServerArgs>["length"], 11>
 >;
 
 /** Call createMcpServer with named arguments, each placed at its SLOT. */
