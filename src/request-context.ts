@@ -1,6 +1,6 @@
 import type { Request } from "express";
 import { isInitializeRequest } from "@modelcontextprotocol/server";
-import type { InitializeRequest } from "@modelcontextprotocol/server";
+import type { AuthInfo, InitializeRequest } from "@modelcontextprotocol/server";
 import {
   normalizeRequestSource,
   isRecognizedRequestSource,
@@ -90,6 +90,20 @@ export interface PathfinderRequestContext {
   userAgent: string | undefined;
   requestSource: RequestSource;
   authClientId: string | null;
+  /**
+   * SDK-shaped auth info for the modern (stateless) leg. Set only when
+   * `req.auth` is set. Carries the bearer token, so it is never logged.
+   */
+  sdkAuthInfo?: AuthInfo;
+}
+
+/** The bearer token, parsed the way the opportunistic bearer middleware does. */
+function bearerTokenOf(req: Request): string {
+  const header = req.headers.authorization;
+  if (typeof header !== "string") return "";
+  const trimmed = header.trim();
+  if (!/^Bearer(\s|$)/i.test(trimmed)) return "";
+  return trimmed.slice("Bearer".length).trim();
 }
 
 /**
@@ -102,11 +116,20 @@ export function requestContext(
   req: Request & { auth?: AuthContext },
 ): PathfinderRequestContext {
   const ua = req.headers["user-agent"];
+  const authClientId = req.auth?.client_id || null;
   return {
     ip: oauthClientIp(req),
     userAgent: Array.isArray(ua) ? ua[0] : ua,
     requestSource: requestSourceFromHeaders(req),
-    authClientId: req.auth?.client_id || null,
+    authClientId,
+    ...(req.auth && {
+      sdkAuthInfo: {
+        token: bearerTokenOf(req),
+        clientId: authClientId ?? "",
+        scopes: ["mcp"],
+        extra: { sub: req.auth.sub },
+      },
+    }),
   };
 }
 

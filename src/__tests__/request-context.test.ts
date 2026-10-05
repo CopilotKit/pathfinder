@@ -56,6 +56,46 @@ describe("requestContext", () => {
     expect(req.auth).toEqual({ sub: "anonymous", client_id: "" });
   });
 
+  describe("sdkAuthInfo", () => {
+    it("is undefined when there is no req.auth", () => {
+      expect(requestContext(mkReq()).sdkAuthInfo).toBeUndefined();
+    });
+
+    it("is built from req.auth and the Authorization header", () => {
+      const req = mkReq(
+        { authorization: "Bearer tok-123" },
+        { sub: "alice", client_id: "c1" },
+      );
+      const ctx = requestContext(req);
+      expect(ctx.sdkAuthInfo).toEqual({
+        token: "tok-123",
+        clientId: "c1",
+        scopes: ["mcp"],
+        extra: { sub: "alice" },
+      });
+      expect(ctx.authClientId).toBe("c1");
+    });
+
+    it("keeps authClientId null and clientId empty for an empty client_id", () => {
+      const req = mkReq(
+        { authorization: "bearer tok-9" },
+        { sub: "anonymous", client_id: "" },
+      );
+      const ctx = requestContext(req);
+      expect(ctx.authClientId).toBeNull();
+      expect(ctx.sdkAuthInfo?.clientId).toBe("");
+      expect(ctx.sdkAuthInfo?.token).toBe("tok-9");
+    });
+
+    it("never reassigns req.auth", () => {
+      const auth: AuthContext = { sub: "alice", client_id: "c1" };
+      const req = mkReq({ authorization: "Bearer t" }, auth);
+      requestContext(req);
+      expect(req.auth).toBe(auth);
+      expect(req.auth).toEqual({ sub: "alice", client_id: "c1" });
+    });
+  });
+
   it("uses the first user-agent when the header is an array", () => {
     const req = mkReq({ "user-agent": ["ua-one", "ua-two"] });
     expect(requestContext(req).userAgent).toBe("ua-one");
