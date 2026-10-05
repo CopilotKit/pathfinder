@@ -111,6 +111,112 @@ describe("skill.md generation", () => {
     expect(result).toContain("/workspace/");
   });
 
+  it("states that /workspace is 2025-era only when workspace is enabled", () => {
+    const config = makeConfig({
+      tools: [
+        {
+          name: "explore",
+          type: "bash",
+          description: "Explore filesystem",
+          sources: ["docs"],
+          bash: { workspace: true },
+        },
+      ],
+    });
+    const result = generateSkillMd(config);
+
+    expect(result).toContain(
+      "/workspace is available only on 2025-era (session) connections.",
+    );
+    expect(result).toContain(
+      "- The filesystem is read-only except /tmp, which is private scratch space: on 2025-era (session) connections it lasts for your session; on 2026-07-28 connections it is discarded after each call",
+    );
+    expect(result).toContain(
+      "- /workspace/ is writable and private to your session (2025-era connections only)",
+    );
+    expect(result).not.toContain("visible to other clients");
+  });
+
+  it("does not claim cd persists when no bash tool has session_state", () => {
+    const result = generateSkillMd(makeConfig());
+    const cdLine = result.split("\n").find((l) => l.startsWith("- `cd "));
+
+    expect(cdLine).toBeDefined();
+    expect(cdLine).not.toContain("persists across calls");
+    expect(cdLine).toContain("does not persist between calls");
+    expect(cdLine).toContain("use absolute paths or `cd X && <cmd>`");
+  });
+
+  it("limits cd persistence to 2025-era session connections when session_state is on", () => {
+    const config = makeConfig({
+      tools: [
+        {
+          name: "explore",
+          type: "bash",
+          description: "Explore filesystem",
+          sources: ["docs"],
+          bash: { session_state: true },
+        },
+      ],
+    });
+    const result = generateSkillMd(config);
+    const cdLine = result.split("\n").find((l) => l.startsWith("- `cd "));
+
+    expect(cdLine).toBe(
+      "- `cd /path/` — change working directory (persists across calls only on 2025-era (session) connections; on 2026-07-28 connections it does not persist, so use absolute paths or `cd X && <cmd>`)",
+    );
+  });
+
+  it("output with workspace off is unchanged (snapshot)", () => {
+    const config = makeConfig();
+    const result = generateSkillMd(config);
+
+    expect(result).not.toContain("/workspace");
+    expect(result).toMatchInlineSnapshot(`
+      "# Test Server
+
+      Pathfinder is an MCP server providing semantic search and filesystem exploration over documentation and code.
+
+      ## Available Tools
+
+      ### Semantic Search
+      - **search_docs**: Search indexed content by meaning. Use for conceptual queries like "how does auth work?"
+
+      ### Filesystem Exploration
+      - **explore**: Run bash commands (find, grep, cat, ls, head, tail, cd) over a virtual filesystem of docs/code
+
+      #### Supported Commands
+      - \`find / -name "*.mdx"\` — find files by pattern
+      - \`grep -rl "pattern" /path\` — search file contents (standard grep, all flags work)
+      - \`cat /path/to/file.mdx\` — read file contents
+      - \`ls /path/\` — list directory contents
+      - \`cd /path/\` — change working directory (does not persist between calls; use absolute paths or \`cd X && <cmd>\`)
+      - \`related /path/to/file.mdx\` — find semantically similar files
+
+      ### Data Collection
+      - **submit_feedback**: Submit structured data
+
+      ## When to Use Search vs Explore
+
+      | Need | Tool |
+      |------|------|
+      | Conceptual question ("how does X work?") | search |
+      | Find exact code or config | explore (grep) |
+      | Browse directory structure | explore (find, ls) |
+      | Read a specific file | explore (cat) |
+
+      ## Sources
+
+      - docs (markdown)
+
+      ## Limitations
+
+      - The filesystem is read-only except /tmp, which is private scratch space: on 2025-era (session) connections it lasts for your session; on 2026-07-28 connections it is discarded after each call
+      - File content is from the last index update, not real-time
+      - Pipes in bash commands are limited to basic patterns"
+    `);
+  });
+
   it("includes qmd command when grep_strategy is vector", () => {
     const config = makeConfig({
       tools: [
