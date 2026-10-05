@@ -82,16 +82,16 @@ export function registerKnowledgeTool(
   toolConfig: KnowledgeToolConfig,
   options?: {
     onToolCall?: () => void;
-    // Per-session accessors resolved at call time — see registerSearchTool for
-    // the rationale. getSessionId persists session_id; getRequestSource
-    // persists the X-Pathfinder-Source origin tag on each query_log row.
+    // Per-connection accessors resolved at call time; see registerSearchTool.
+    // getSessionId persists session_id; getRequestSource persists the
+    // X-Pathfinder-Source origin tag on each query_log row.
     getSessionId?: () => string | undefined;
     getRequestSource?: () => string | undefined;
-    // Per-session client IP / User-Agent — see registerSearchTool.
+    // Per-connection client IP / User-Agent; see registerSearchTool.
     getClientIp?: () => string | undefined;
     getUserAgent?: () => string | undefined;
-    // Per-session transport / protocol era / version / client name / OAuth
-    // client id — see registerSearchTool. Read once per logQuery call.
+    // Per-connection transport / protocol era / version / client name / OAuth
+    // client id; see registerSearchTool. Read once per logQuery call.
     getAnalyticsContext?: () => SessionAnalyticsContext | undefined;
   },
 ): void {

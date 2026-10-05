@@ -87,21 +87,19 @@ export function registerSearchTool(
   toolConfig: SearchToolConfig,
   options?: {
     onToolCall?: () => void;
-    // Per-session accessors resolved at call time (the MCP session id isn't
-    // known until the transport connects). getSessionId persists a real
+    // Per-connection accessors resolved at call time. getSessionId persists
     // session_id on each query_log row; getRequestSource persists the
-    // X-Pathfinder-Source origin tag. Both optional so older callers/tests
-    // keep working — the analytics writer defaults a missing source to 'user'.
+    // X-Pathfinder-Source origin tag. Optional; the analytics writer defaults
+    // a missing source to 'user'.
     getSessionId?: () => string | undefined;
     getRequestSource?: () => string | undefined;
-    // Per-session client IP / User-Agent captured at MCP init. Same pattern
-    // as getRequestSource — closed over for the lifetime of the session so
-    // every tool call records the attribution from the init request. Both
-    // optional; absent values land in query_log as NULL.
+    // Per-connection client IP / User-Agent: captured at session init for
+    // 2025-era sessions, per request for 2026-07-28 (stateless) requests.
+    // Optional; absent values land in query_log as NULL.
     getClientIp?: () => string | undefined;
     getUserAgent?: () => string | undefined;
-    // Per-session analytics context (see SessionAnalyticsContext), read once
-    // per query_log row. Optional; an absent accessor or context lands in
+    // Per-connection analytics context (see SessionAnalyticsContext), read
+    // once per query_log row. Optional; an absent accessor or context lands in
     // query_log as NULL.
     getAnalyticsContext?: () => SessionAnalyticsContext | undefined;
   },
