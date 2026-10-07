@@ -436,4 +436,165 @@ describe("summary unique_client_count_window and protocol mix", () => {
     expect(withSvc.unique_client_count_window).toBe(2);
     expect(withSvc.sse_query_count_window).toBe(2);
   });
+
+  describe("sharedClientIds", () => {
+    const modern = {
+      transport: "streamable_http",
+      protocolEra: "modern",
+    } as const;
+
+    async function seedSharedAndSolo(): Promise<void> {
+      // A shared id used from three different IP+UA pairs.
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.0.1",
+        userAgent: "ua1",
+        authClientId: "shared",
+      });
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.0.2",
+        userAgent: "ua1",
+        authClientId: "shared",
+      });
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.0.2",
+        userAgent: "ua2",
+        authClientId: "shared",
+      });
+      // A non-shared id used from two IPs: still one client.
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.1.1",
+        userAgent: "uaS",
+        authClientId: "solo",
+      });
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.1.2",
+        userAgent: "uaS",
+        authClientId: "solo",
+      });
+    }
+
+    it("keys a shared id's rows by ip|ua and leaves other ids keyed by id", async () => {
+      await seedSharedAndSolo();
+      const plain = await getAnalyticsSummary({}, 7);
+      expect(plain.unique_client_count_window).toBe(2);
+      expect(plain.shared_client_ids_applied).toBeUndefined();
+
+      const shared = await getAnalyticsSummary({}, 7, {
+        sharedClientIds: ["shared"],
+      });
+      expect(shared.unique_client_count_window).toBe(4);
+      expect(shared.shared_client_ids_applied).toBe(1);
+    });
+
+    it("merges a shared-id row with an anonymous row on the same ip|ua", async () => {
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.0.1",
+        userAgent: "ua1",
+        authClientId: "shared",
+      });
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.0.1",
+        userAgent: "ua1",
+        authClientId: null,
+      });
+      // Without the list the two rows are two clients (`c:shared` and
+      // `ip:10.0.0.1|ua1`); with it they share one ip|ua key. So listing an
+      // id can lower the count.
+      const plain = await getAnalyticsSummary({}, 7);
+      expect(plain.unique_client_count_window).toBe(2);
+      const s = await getAnalyticsSummary({}, 7, {
+        sharedClientIds: ["shared"],
+      });
+      expect(s.unique_client_count_window).toBe(1);
+    });
+
+    it("keys a shared-id row that has no usable IP by its id", async () => {
+      for (const clientIp of [null, "unknown", ""]) {
+        await insertRow(db, {
+          ...modern,
+          clientIp,
+          userAgent: "ua1",
+          authClientId: "shared",
+        });
+      }
+      const s = await getAnalyticsSummary({}, 7, {
+        sharedClientIds: ["shared"],
+      });
+      // No ip|ua key exists, so all three rows fall back to `c:shared`.
+      expect(s.unique_client_count_window).toBe(1);
+    });
+
+    it("a listed id's no-IP rows still count after listing", async () => {
+      // One no-IP row and two IP rows on the shared id.
+      await insertRow(db, {
+        ...modern,
+        clientIp: null,
+        userAgent: "ua1",
+        authClientId: "shared",
+      });
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.0.1",
+        userAgent: "ua1",
+        authClientId: "shared",
+      });
+      await insertRow(db, {
+        ...modern,
+        clientIp: "10.0.0.2",
+        userAgent: "ua1",
+        authClientId: "shared",
+      });
+      // A second listed id seen only without an IP.
+      await insertRow(db, {
+        ...modern,
+        clientIp: "unknown",
+        userAgent: "ua1",
+        authClientId: "noip",
+      });
+      const plain = await getAnalyticsSummary({}, 7);
+      const listed = await getAnalyticsSummary({}, 7, {
+        sharedClientIds: ["shared", "noip"],
+      });
+      expect(plain.unique_client_count_window).toBe(2);
+      expect(listed.unique_client_count_window).toBeGreaterThanOrEqual(
+        plain.unique_client_count_window,
+      );
+      // 10.0.0.1|ua1, 10.0.0.2|ua1, c:shared (no-IP row), c:noip.
+      expect(listed.unique_client_count_window).toBe(4);
+    });
+
+    it("an empty list or an unlisted id changes nothing, and duplicates count once", async () => {
+      await seedSharedAndSolo();
+      const empty = await getAnalyticsSummary({}, 7, { sharedClientIds: [] });
+      expect(empty.unique_client_count_window).toBe(2);
+      expect(empty.shared_client_ids_applied).toBeUndefined();
+      const other = await getAnalyticsSummary({}, 7, {
+        sharedClientIds: ["not-present", "not-present"],
+      });
+      expect(other.unique_client_count_window).toBe(2);
+      expect(other.shared_client_ids_applied).toBe(1);
+    });
+
+    it("leaves the IP and session counts unchanged", async () => {
+      await seedSharedAndSolo();
+      const plain = await getAnalyticsSummary({}, 7);
+      const shared = await getAnalyticsSummary({}, 7, {
+        sharedClientIds: ["shared", "solo"],
+      });
+      expect(shared.unique_ip_count_window).toBe(plain.unique_ip_count_window);
+      expect(shared.unique_session_count_window).toBe(
+        plain.unique_session_count_window,
+      );
+      expect(shared.total_queries_window).toBe(plain.total_queries_window);
+      // Both ids shared: every row keys by ip|ua (5 distinct pairs).
+      expect(shared.unique_client_count_window).toBe(5);
+    });
+  });
 });

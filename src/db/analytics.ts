@@ -456,7 +456,7 @@ export interface AnalyticsSummary {
    * NOT NULL)`) so it shares total_queries_window's exact predicates (date
    * window, latency_ms >= 0, redacted exclusion, request-source,
    * buildFilterClauses) and reconciles with it. NULL IPs are ignored. Headline
-   * input for the weekly search report ("M unique IPs across S sessions").
+   * input for the weekly search report ("N unique clients (M unique IPs)").
    */
   unique_ip_count_window: number;
   /**
@@ -474,7 +474,14 @@ export interface AnalyticsSummary {
    * user_agent counts as '' (key `ip:<ip>|`). A caller with both
    * authenticated and anonymous rows counts twice (one `c:` key, one `ip:`
    * key). The auth key is the OAuth client application, so all users of one
-   * shared client id count as one client.
+   * shared client id count as one client, unless the caller lists that id in
+   * `sharedClientIds` (see {@link AnalyticsSummaryOptions}). A listed id is
+   * ignored and its rows key on `ip:<ip>|<ua>` instead. A listed-id row with
+   * no usable IP (NULL, '' or 'unknown') keeps its `c:<id>` key, so it never
+   * drops out of the count. A listed-id row with an IP shares its
+   * `ip:<ip>|<ua>` key with every other row on that ip|ua (anonymous or
+   * another listed id), so listing an id can lower the count when those rows
+   * are one client by ip|ua.
    */
   unique_client_count_window: number;
   /**
@@ -509,6 +516,15 @@ export interface AnalyticsSummary {
    * omitted so existing consumers can treat absence as "exact".
    */
   p95_latency_sampled?: boolean;
+  /**
+   * The number of distinct ids in
+   * {@link AnalyticsSummaryOptions.sharedClientIds} that the server received
+   * and applied to the unique-client key, whether or not any row carries
+   * them. It proves that the server supports the list; it does not prove
+   * that each id matched traffic. Set only when the list is non-empty;
+   * omitted otherwise.
+   */
+  shared_client_ids_applied?: number;
   queries_by_source: Array<{ source_name: string; count: number }>;
   queries_per_day_window: Array<{ day: string; count: number }>;
   /**
@@ -1222,11 +1238,26 @@ function computeP95(latencies: number[]): number {
  * supplies `filter.from`/`filter.to`, that explicit range takes precedence
  * and `days` is ignored — see {@link buildDateWindow}.
  */
+/** Most shared client ids one summary request may list. */
+export const SHARED_CLIENT_IDS_MAX = 50;
+
+export interface AnalyticsSummaryOptions {
+  /**
+   * OAuth client ids that many different users share (for example, a hosted
+   * connector that reuses one DCR registration). For rows with one of these
+   * ids, unique_client_count_window ignores `auth_client_id` and keys on
+   * `client_ip|user_agent`. Empty or absent: every id is its own client.
+   */
+  sharedClientIds?: readonly string[];
+}
+
 export async function getAnalyticsSummary(
   filter: AnalyticsFilter = {},
   days: number = 7,
+  opts: AnalyticsSummaryOptions = {},
 ): Promise<AnalyticsSummary> {
   const pool = getPool();
+  const sharedClientIds = [...new Set(opts.sharedClientIds ?? [])];
 
   const { clauses: fc, params: fp } = buildFilterClauses(filter);
 
@@ -1270,6 +1301,14 @@ export async function getAnalyticsSummary(
   const redactedIdx2 = rs2.nextIdx;
   const lowConfIdx2 = redactedIdx2 + 1;
   const scoreKindIdx2 = lowConfIdx2 + 1;
+  const sharedIdsIdx2 = scoreKindIdx2 + 1;
+  // The auth half of the unique-client key. An id in sharedClientIds counts
+  // as no id, so the row falls back to its ip|ua key. A listed-id row with no
+  // usable IP has no ip|ua key, so the third COALESCE arm keys it on its id
+  // again and it never drops out of the count. A listed-id row with an IP
+  // merges with every other row on the same ip|ua (anonymous or another
+  // listed id), so listing an id can lower the count.
+  const clientAuthKey = `CASE WHEN auth_client_id = ANY($${sharedIdsIdx2}::text[]) THEN NULL ELSE NULLIF(auth_client_id, '') END`;
   const summaryBase = [
     ...dw2.clauses,
     ...rs2.clauses,
@@ -1307,7 +1346,7 @@ export async function getAnalyticsSummary(
         COALESCE(avg(latency_ms)::int, 0) AS avg_latency,
         COUNT(DISTINCT client_ip) FILTER (WHERE client_ip IS NOT NULL)::int AS unique_ip_count_window,
         COUNT(DISTINCT session_id) FILTER (WHERE session_id IS NOT NULL)::int AS unique_session_count_window,
-        (COUNT(DISTINCT COALESCE('c:' || NULLIF(auth_client_id, ''), 'ip:' || NULLIF(NULLIF(client_ip, ''), 'unknown') || '|' || COALESCE(user_agent, '')))
+        (COUNT(DISTINCT COALESCE('c:' || ${clientAuthKey}, 'ip:' || NULLIF(NULLIF(client_ip, ''), 'unknown') || '|' || COALESCE(user_agent, ''), 'c:' || NULLIF(auth_client_id, '')))
           FILTER (WHERE NULLIF(NULLIF(client_ip, ''), 'unknown') IS NOT NULL OR NULLIF(auth_client_id, '') IS NOT NULL))::int AS unique_client_count_window,
         count(*) FILTER (WHERE protocol_era = 'legacy')::int AS legacy_query_count_window,
         count(*) FILTER (WHERE protocol_era = 'modern')::int AS modern_query_count_window,
@@ -1324,6 +1363,7 @@ export async function getAnalyticsSummary(
       REDACTED_QUERY_TEXT,
       LOW_CONFIDENCE_SCORE_THRESHOLD,
       COSINE_SCORE_KIND,
+      sharedClientIds,
     ],
   );
 
@@ -1542,6 +1582,9 @@ export async function getAnalyticsSummary(
     // Only set when the cap was actually hit so existing consumers (tests,
     // older UI builds) can treat the absence of the flag as "exact".
     ...(p95Sampled ? { p95_latency_sampled: true } : {}),
+    ...(sharedClientIds.length > 0
+      ? { shared_client_ids_applied: sharedClientIds.length }
+      : {}),
     queries_by_source: bySourceRes.rows.map((r: Record<string, unknown>) => ({
       source_name: r.source_name as string,
       count: r.count as number,

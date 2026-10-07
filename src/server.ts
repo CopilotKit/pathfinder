@@ -118,6 +118,8 @@ import {
   normalizeRequestSource,
   REQUEST_SOURCE_VALUES,
   USER_AGENT_MAX_LEN,
+  AUTH_CLIENT_ID_MAX_LEN,
+  SHARED_CLIENT_IDS_MAX,
 } from "./db/analytics.js";
 import type { AnalyticsFilter, RequestSource } from "./db/analytics.js";
 import {
@@ -3436,6 +3438,49 @@ function parseDaysOrError(req: Request): NumberParseResult {
   return { ok: true, value: result };
 }
 
+type SharedClientIdsParseResult =
+  | { ok: true; value: string[] }
+  | { ok: false; status: number; body: Record<string, unknown> };
+
+/**
+ * Parse `?shared_client_ids=a,b` for the summary endpoint: a comma-separated
+ * list of OAuth client ids that many users share. Entries are trimmed, empty
+ * entries are dropped and duplicates are removed. Absent gives `[]`. An array
+ * value, more than {@link SHARED_CLIENT_IDS_MAX} ids, or an id longer than
+ * {@link AUTH_CLIENT_ID_MAX_LEN} gives a 400.
+ */
+export function parseSharedClientIds(req: Request): SharedClientIdsParseResult {
+  const raw = req.query.shared_client_ids;
+  const bad = (description: string): SharedClientIdsParseResult => ({
+    ok: false,
+    status: 400,
+    body: { error: "invalid_request", error_description: description },
+  });
+  if (raw === undefined) return { ok: true, value: [] };
+  if (typeof raw !== "string") {
+    return bad("shared_client_ids must be a single string value");
+  }
+  const ids = [
+    ...new Set(
+      raw
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    ),
+  ];
+  if (ids.length > SHARED_CLIENT_IDS_MAX) {
+    return bad(
+      `shared_client_ids lists more than ${SHARED_CLIENT_IDS_MAX} ids`,
+    );
+  }
+  if (ids.some((id) => [...id].length > AUTH_CLIENT_ID_MAX_LEN)) {
+    return bad(
+      `shared_client_ids has an id longer than ${AUTH_CLIENT_ID_MAX_LEN} characters`,
+    );
+  }
+  return { ok: true, value: ids };
+}
+
 function parseLimitOrError(req: Request): NumberParseResult {
   const result = parsePositiveIntParam(req.query.limit, 50, MAX_LIMIT);
   if (typeof result === "object") {
@@ -3504,10 +3549,16 @@ export function registerAnalyticsRoutes(
         res.status(daysParsed.status).json(daysParsed.body);
         return;
       }
+      const sharedParsed = parseSharedClientIds(req);
+      if (!sharedParsed.ok) {
+        res.status(sharedParsed.status).json(sharedParsed.body);
+        return;
+      }
       try {
         const summary = await _getAnalyticsSummary(
           parsed.filter,
           daysParsed.value,
+          { sharedClientIds: sharedParsed.value },
         );
         res.json(summary);
       } catch (err) {
