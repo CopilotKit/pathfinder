@@ -53,7 +53,6 @@
     },
     "tautological-not-tocontain": {
       "src/__tests__/atlas-adapter-memory.test.ts": 1,
-      "src/__tests__/atlas-cli.test.ts": 1,
       "src/__tests__/atlas-harvest-cli.test.ts": 1,
       "src/__tests__/bash-related.test.ts": 1,
       "src/__tests__/discord-provider.test.ts": 1
