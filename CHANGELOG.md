@@ -1,5 +1,25 @@
 # @copilotkit/pathfinder
 
+## 1.17.0
+
+### Minor Changes
+
+- **MCP 2026-07-28 stateless protocol, behind a switch (off by default).** With `PATHFINDER_MODERN_PROTOCOL=true`, POST `/mcp` serves the 2026-07-28 stateless protocol with no session. Legacy sessions and `/sse` keep working. New `server.modern_*` keys bound modern requests: `modern_rpm_per_ip`, `modern_burst_per_ip`, `modern_max_inflight` and `modern_request_timeout_ms`. A new `pathfinder.client.seen` telemetry event is sent once per client per 24 hours. With the switch on, a sessionless legacy `initialize` sent as `application/json; charset=...` opens a session (it got 400 before) (#175)
+- **The bash tool's shared filesystem is now read-only on both protocol eras, even with the switch off.** Writes work only under a private `/tmp`: one per session on the legacy era, one per request on the modern era. A write outside `/tmp` fails with `EROFS`. `ls /` now lists `tmp` (#175)
+- **MCP SDK v2.** The server moves to the v2 MCP packages. Tool `inputSchema` in `tools/list` now uses JSON Schema 2020-12. A `tools/call` for an unknown tool returns JSON-RPC error `-32602`, not an `isError` result (#174)
+- **Unknown or expired MCP session IDs return 404** (JSON-RPC `-32001`) on POST, GET and DELETE `/mcp`, so clients re-initialize after a redeploy. An `initialize` with a stale session ID opens a new session (#172)
+- **`atlas` CLI negotiates the protocol.** It uses the v2 MCP client, takes the stateless protocol when the server offers it and falls back to a legacy session if not. Calls are now bounded at 10 minutes (#178)
+- **Query analytics record how queries arrive:** transport, protocol era and version, client name and OAuth client id. The dashboard and weekly report show unique clients and the protocol mix (#173)
+
+### Patch Changes
+
+- **Search quality:** hybrid mode logs a cosine relevance score, not an RRF rank score (#146). Empty search and knowledge results carry a scope hint (#158)
+- **Indexing:** the CopilotKit API reference (#159) and the AG-UI pages on docs.copilotkit.ai (#164) are indexed. The deleted AG-UI documentation mirror is no longer indexed (#169). A reindex picks up crawl-configuration changes (#160). The code source no longer wedges (#161)
+- **Index audits:** the reindex audit reports index shortfalls (#162) and repository content that no source claims (#163). Index-health HEAD-fetch failures are attributable and retried (#133)
+- **Analytics hygiene:** machine-relay traffic (#165), the Python replay harness (#166) and outpost-tagged relay rows (#167) are excluded from operator analytics. Empty-result reporting is re-judged against the current blocklist (#168). The blocklist covers the awards-show and election scraping wave (#156)
+- **Atlas:** harvest production-readiness (#135), concrete specifics kept in distillation rewrites (#136), candidate body in the review artifact (#137), and a scoped, sanitized corpus for external builders (#138)
+- **Packaging and CI:** missing local-embedding peer dependency fails loudly, and a `-local` Docker image ships (#131). The release-to-Docker publish pipeline is fixed (#130). Gap analysis runs bi-weekly (#144). GitHub Actions updates moved to Renovate (#84)
+
 ## 1.16.0
 
 ### Minor Changes
