@@ -1,44 +1,410 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { randomUUID } from "node:crypto";
 import fs from "fs";
+import type { Server } from "node:http";
 import path from "path";
 import { pathToFileURL } from "url";
+import express, { type Request, type Response } from "express";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { isInitializeRequest, McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod-v4";
 import {
+  ATLAS_REQUEST_SOURCE,
   buildFeedbackArguments,
   isAtlasCliEntrypoint,
   runAtlasCli,
 } from "../atlas-cli.js";
 import { runAtlasHarvestCli } from "../atlas/harvest-cli.js";
+import { createModernMcpRoute } from "../modern-mcp.js";
+import { requestSourceFromHeaders } from "../request-context.js";
 
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 
-function jsonResponse(
-  body: unknown,
-  init?: ResponseInit & { sessionId?: string },
-): Response {
-  const headers = new Headers(init?.headers);
-  headers.set("content-type", "application/json");
-  if (init?.sessionId) {
-    headers.set("mcp-session-id", init.sessionId);
-  }
-  return new Response(JSON.stringify(body), { ...init, headers });
+// ---------------------------------------------------------------------------
+// A real MCP server over HTTP, on both protocol eras.
+//
+// atlas talks to it through @modelcontextprotocol/client over real sockets.
+// The modern leg is Pathfinder's own createModernMcpRoute; the legacy leg
+// follows the /mcp POST handler in server.ts: a known session is routed, a
+// session-less initialize opens a session, anything else gets the 400
+// "No valid session" (which is also what a legacy-only server answers to the
+// modern server/discover probe).
+// ---------------------------------------------------------------------------
+
+/** One entry per HTTP request the server received. */
+interface RecordedRequest {
+  httpMethod: string;
+  rpcMethod: string | undefined;
+  rpcId: unknown;
+  toolName: string | undefined;
+  toolArguments: unknown;
+  /** Raw X-Pathfinder-Source header, exactly as it arrived. */
+  sourceHeader: string | undefined;
+  authorization: string | undefined;
+  sessionId: string | undefined;
 }
 
-function sseResponse(
-  body: string,
-  init?: ResponseInit & { sessionId?: string },
-): Response {
-  const headers = new Headers(init?.headers);
-  headers.set("content-type", "text/event-stream");
-  if (init?.sessionId) {
-    headers.set("mcp-session-id", init.sessionId);
+/** How the server-side request edge read the request source, per era. */
+interface ServerSeenSource {
+  era: "modern" | "legacy";
+  requestSource: string;
+}
+
+interface TestMcpServer {
+  url: string;
+  requests: RecordedRequest[];
+  serverSeenSources: ServerSeenSource[];
+  /**
+   * Hold the next POST for `rpcMethod`: the server does not answer it until
+   * release() is called. `arrived` resolves when the request comes in.
+   */
+  holdNext(rpcMethod: string): { arrived: Promise<void>; release(): void };
+  reset(): void;
+  close(): Promise<void>;
+}
+
+function headerValue(req: Request, name: string): string | undefined {
+  const raw = req.headers[name];
+  return Array.isArray(raw) ? raw[0] : raw;
+}
+
+function buildToolServer(): McpServer {
+  const server = new McpServer({ name: "atlas-cli-test", version: "0.0.1" });
+  server.registerTool(
+    "atlas-search",
+    {
+      description: "Echo the search arguments.",
+      inputSchema: {
+        query: z.string(),
+        limit: z.number().optional(),
+        min_score: z.number().optional(),
+      },
+    },
+    async (args) => ({
+      content: [
+        { type: "text" as const, text: `searched ${JSON.stringify(args)}` },
+      ],
+    }),
+  );
+  server.registerTool(
+    "atlas_search",
+    {
+      description: "Second name, for --tool.",
+      inputSchema: {
+        query: z.string(),
+        limit: z.number().optional(),
+        min_score: z.number().optional(),
+      },
+    },
+    async () => ({ content: [{ type: "text" as const, text: "json result" }] }),
+  );
+  server.registerTool(
+    "submit-feedback",
+    {
+      description: "Record feedback.",
+      inputSchema: {
+        tool_name: z.string(),
+        query: z.string(),
+        rating: z.enum(["helpful", "not_helpful"]),
+        comment: z.string(),
+      },
+    },
+    async () => ({
+      content: [
+        { type: "text" as const, text: "Feedback recorded. Thank you." },
+      ],
+    }),
+  );
+  server.registerTool(
+    "collect-feedback",
+    {
+      description: "A second feedback tool, for --tool.",
+      inputSchema: {
+        tool_name: z.string(),
+        query: z.string(),
+        rating: z.enum(["helpful", "not_helpful"]),
+        comment: z.string(),
+      },
+    },
+    async () => ({
+      content: [{ type: "text" as const, text: "Feedback collected." }],
+    }),
+  );
+  server.registerTool(
+    "fails",
+    { description: "Reports a tool error.", inputSchema: {} },
+    async () => ({
+      isError: true,
+      content: [{ type: "text" as const, text: "search backend unavailable" }],
+    }),
+  );
+  server.registerTool(
+    "empty",
+    { description: "Returns no content.", inputSchema: {} },
+    async () => ({ content: [] }),
+  );
+  return server;
+}
+
+async function startTestMcpServer(opts: {
+  modern: boolean;
+}): Promise<TestMcpServer> {
+  const requests: RecordedRequest[] = [];
+  const serverSeenSources: ServerSeenSource[] = [];
+  const sessions = new Map<string, NodeStreamableHTTPServerTransport>();
+  let hold:
+    { rpcMethod: string; arrive(): void; released: Promise<void> } | undefined;
+  const modernRoute = opts.modern
+    ? createModernMcpRoute({
+        buildServer: (ctx) => {
+          serverSeenSources.push({
+            era: "modern",
+            requestSource: ctx.requestSource,
+          });
+          return buildToolServer();
+        },
+        onerror: () => {},
+        requestTimeoutMs: 60000,
+      })
+    : undefined;
+
+  const app = express();
+  app.use(express.json());
+  app.use("/mcp", (req: Request, _res: Response, next) => {
+    const body = (req.body ?? {}) as {
+      method?: string;
+      id?: unknown;
+      params?: { name?: string; arguments?: unknown };
+    };
+    requests.push({
+      httpMethod: req.method,
+      rpcMethod: req.method === "POST" ? body.method : undefined,
+      rpcId: req.method === "POST" ? body.id : undefined,
+      toolName: body.method === "tools/call" ? body.params?.name : undefined,
+      toolArguments:
+        body.method === "tools/call" ? body.params?.arguments : undefined,
+      sourceHeader: headerValue(req, "x-pathfinder-source"),
+      authorization: headerValue(req, "authorization"),
+      sessionId: headerValue(req, "mcp-session-id"),
+    });
+    const held = hold;
+    if (req.method === "POST" && held && body.method === held.rpcMethod) {
+      hold = undefined;
+      held.arrive();
+      held.released.then(() => next(), next);
+      return;
+    }
+    next();
+  });
+
+  app.post("/mcp", async (req: Request, res: Response) => {
+    if (modernRoute && (await modernRoute.isModern(req))) {
+      await modernRoute.handle(req, res);
+      return;
+    }
+    const sid = headerValue(req, "mcp-session-id");
+    const known = sid === undefined ? undefined : sessions.get(sid);
+    if (known) {
+      await known.handleRequest(req, res, req.body);
+      return;
+    }
+    if (sid === undefined && isInitializeRequest(req.body)) {
+      serverSeenSources.push({
+        era: "legacy",
+        requestSource: requestSourceFromHeaders(req),
+      });
+      const transport = new NodeStreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        enableJsonResponse: true,
+        onsessioninitialized: (id) => {
+          sessions.set(id, transport);
+        },
+      });
+      await buildToolServer().connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+    res.status(400).json({
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message:
+          "Bad Request: No valid session. Send an initialize request first.",
+      },
+      id: null,
+    });
+  });
+  app.get("/mcp", (_req: Request, res: Response) => {
+    res.status(405).end();
+  });
+  app.delete("/mcp", async (req: Request, res: Response) => {
+    const sid = headerValue(req, "mcp-session-id");
+    const transport = sid === undefined ? undefined : sessions.get(sid);
+    if (!transport || sid === undefined) {
+      res.status(404).end();
+      return;
+    }
+    sessions.delete(sid);
+    await transport.close();
+    res.status(200).end();
+  });
+
+  const server: Server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  const addr = server.address();
+  if (addr === null || typeof addr === "string") {
+    throw new Error("test MCP server has no TCP address");
   }
-  return new Response(body, { ...init, headers });
+
+  return {
+    url: `http://127.0.0.1:${addr.port}/mcp`,
+    requests,
+    serverSeenSources,
+    holdNext(rpcMethod) {
+      let arrive = () => {};
+      let release = () => {};
+      const arrived = new Promise<void>((resolve) => {
+        arrive = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      hold = { rpcMethod, arrive, released };
+      return { arrived, release };
+    },
+    reset() {
+      hold = undefined;
+      requests.length = 0;
+      serverSeenSources.length = 0;
+    },
+    async close() {
+      for (const transport of sessions.values()) {
+        await transport.close();
+      }
+      sessions.clear();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// A raw legacy server that answers with exact bytes.
+//
+// It speaks just enough of the 2025 protocol to get past the handshake (it
+// refuses the server/discover probe the way a legacy-only server does), then
+// hands the tools/call request to the test, which writes the answer itself.
+// This reaches cases the real SDK server never produces: a proxy that echoes
+// the id as a string, HTTP errors with a body, error frames with no id.
+// ---------------------------------------------------------------------------
+
+interface RpcBody {
+  method?: string;
+  id?: unknown;
+  params?: { protocolVersion?: string };
+}
+
+type RawHandler = (
+  req: Request,
+  res: Response,
+  body: RpcBody,
+) => void | Promise<void>;
+
+interface RawLegacyServer {
+  url: string;
+  close(): Promise<void>;
+}
+
+async function startRawLegacyServer(handlers: {
+  /** Answers every POST, before any handshake logic. */
+  onEveryPost?: RawHandler;
+  /** Answers the tools/call POST. */
+  onToolsCall: RawHandler;
+}): Promise<RawLegacyServer> {
+  const app = express();
+  app.use(express.json());
+  app.post("/mcp", async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as RpcBody;
+    if (handlers.onEveryPost) {
+      await handlers.onEveryPost(req, res, body);
+      return;
+    }
+    if (body.method === "initialize") {
+      res.setHeader("mcp-session-id", "raw-session");
+      res.json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: body.params?.protocolVersion,
+          capabilities: { tools: {} },
+          serverInfo: { name: "raw-legacy", version: "0.0.1" },
+        },
+      });
+      return;
+    }
+    if (body.method === "tools/call") {
+      await handlers.onToolsCall(req, res, body);
+      return;
+    }
+    if (body.id === undefined) {
+      // A notification (notifications/initialized).
+      res.status(202).end();
+      return;
+    }
+    // Anything else, the server/discover probe included.
+    res.status(400).json({
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message:
+          "Bad Request: No valid session. Send an initialize request first.",
+      },
+      id: null,
+    });
+  });
+  app.delete("/mcp", (_req: Request, res: Response) => {
+    res.status(200).end();
+  });
+
+  const server: Server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  const addr = server.address();
+  if (addr === null || typeof addr === "string") {
+    throw new Error("raw legacy server has no TCP address");
+  }
+
+  return {
+    url: `http://127.0.0.1:${addr.port}/mcp`,
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
 }
 
 describe("atlas CLI", () => {
   const originalEnv = { ...process.env };
   let stdout = "";
   let stderr = "";
+  const io = {
+    stdout: (text: string) => {
+      stdout += text;
+    },
+    stderr: (text: string) => {
+      stderr += text;
+    },
+  };
 
   beforeEach(() => {
     // Run against a known-clean env so the default-URL/token assertions do not
@@ -49,6 +415,7 @@ describe("atlas CLI", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     process.env = { ...originalEnv };
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -64,673 +431,566 @@ describe("atlas CLI", () => {
     expect(packageJson.bin?.atlas).toBe("dist/atlas-cli.js");
   });
 
-  it("uses env fallbacks and calls the configured MCP search tool", async () => {
-    process.env.ATLAS_MCP_URL = "https://atlas.example.test/mcp";
-    process.env.ATLAS_TOKEN = "secret-token";
+  it("ships the MCP client as a runtime dependency", () => {
+    // atlas ships in the package (bin above), so the client it imports must
+    // install for consumers, not only in this repo's dev tree.
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(PROJECT_ROOT, "package.json"), "utf-8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
 
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: {
-            content: [
-              { type: "text", text: "Atlas says: use the provider boundary." },
-            ],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("Atlas says: use the provider boundary.");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-
-    const [initUrl, initRequest] = fetchMock.mock.calls[0] as [
-      string,
-      RequestInit,
-    ];
-    expect(initUrl).toBe("https://atlas.example.test/mcp");
-    expect(initRequest.headers).toMatchObject({
-      Authorization: "Bearer secret-token",
-      Accept: "application/json, text/event-stream",
-    });
-    expect(JSON.parse(initRequest.body as string)).toMatchObject({
-      jsonrpc: "2.0",
-      method: "initialize",
-      id: 0,
-    });
-
-    const [, notifyRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
-    expect(notifyRequest.headers).toMatchObject({
-      "Mcp-Session-Id": "session-1",
-    });
-    expect(JSON.parse(notifyRequest.body as string)).toMatchObject({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-    });
-
-    const [, callRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
-    expect(callRequest.headers).toMatchObject({
-      "Mcp-Session-Id": "session-1",
-    });
-    expect(JSON.parse(callRequest.body as string)).toEqual({
-      jsonrpc: "2.0",
-      method: "tools/call",
-      id: 1,
-      params: {
-        name: "atlas-search",
-        arguments: {
-          query: "provider boundary",
-        },
-      },
-    });
+    expect(packageJson.dependencies?.["@modelcontextprotocol/client"]).toBe(
+      "^2.2.0",
+    );
+    expect(
+      packageJson.devDependencies?.["@modelcontextprotocol/client"],
+    ).toBeUndefined();
   });
 
-  it("terminates the MCP session after a successful search", async () => {
+  it("tags its traffic as user traffic", () => {
+    expect(ATLAS_REQUEST_SOURCE).toBe("user");
+  });
+
+  it("uses the default Pathfinder URL when neither --url nor ATLAS_MCP_URL is set", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: {
-            content: [{ type: "text", text: "result before close" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+      .mockRejectedValue(new TypeError("fetch failed"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const exitCode = await runAtlasCli(
-      ["search", "provider boundary", "--token", "secret-token"],
-      {
-        stdout: (text) => {
-          stdout += text;
-        },
-        stderr: (text) => {
-          stderr += text;
-        },
+    const exitCode = await runAtlasCli(["search", "provider boundary"], io);
+
+    expect(exitCode).toBe(1);
+    expect(fetchMock).toHaveBeenCalled();
+    const [firstUrl] = fetchMock.mock.calls[0] as [URL | string];
+    expect(String(firstUrl)).toBe("https://mcp.pathfinder.copilotkit.dev/mcp");
+  });
+
+  describe.each([
+    {
+      era: "modern" as const,
+      modern: true,
+      // The probe finds the 2026-07-28 era: no session, one POST per call.
+      expectedRpc: ["server/discover", "tools/call"],
+      // The requests atlas must wait on with no time limit.
+      slowRpc: ["server/discover", "tools/call"],
+    },
+    {
+      era: "legacy" as const,
+      modern: false,
+      // The probe is refused, so the client falls back to the 2025
+      // handshake, and atlas ends the session afterwards.
+      expectedRpc: [
+        "server/discover",
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+      ],
+      slowRpc: ["server/discover", "initialize", "tools/call"],
+    },
+  ])("against a $era server", ({ era, modern, expectedRpc, slowRpc }) => {
+    let mcp: TestMcpServer;
+
+    beforeAll(async () => {
+      mcp = await startTestMcpServer({ modern });
+    });
+
+    afterAll(async () => {
+      await mcp.close();
+    });
+
+    beforeEach(() => {
+      mcp.reset();
+      // The modern route logs one line per request.
+      vi.spyOn(console, "log").mockImplementation(() => {});
+    });
+
+    it(`speaks the ${era} protocol and prints the tool text`, async () => {
+      const exitCode = await runAtlasCli(
+        ["search", "ratification queue", "--url", mcp.url],
+        io,
+      );
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(stdout).toBe('searched {"query":"ratification queue"}\n');
+      const rpc = mcp.requests
+        .map((r) => r.rpcMethod)
+        .filter((m): m is string => m !== undefined);
+      expect(rpc).toEqual(expectedRpc);
+    });
+
+    it("sends X-Pathfinder-Source on every request", async () => {
+      const exitCode = await runAtlasCli(
+        ["search", "ratification queue", "--url", mcp.url],
+        io,
+      );
+
+      expect(exitCode).toBe(0);
+      expect(mcp.requests.length).toBeGreaterThan(0);
+      for (const request of mcp.requests) {
+        expect(
+          request.sourceHeader,
+          `${request.httpMethod} ${request.rpcMethod ?? ""}`,
+        ).toBe("user");
+      }
+      // The server's own request edge reads the tag as `user` (the modern
+      // leg builds a server per request, so there is one entry per POST).
+      expect(mcp.serverSeenSources.length).toBeGreaterThan(0);
+      for (const seen of mcp.serverSeenSources) {
+        expect(seen).toEqual({ era, requestSource: "user" });
+      }
+    });
+
+    it("uses ATLAS_MCP_URL and ATLAS_TOKEN, sending the bearer on every request", async () => {
+      process.env.ATLAS_MCP_URL = mcp.url;
+      process.env.ATLAS_TOKEN = "secret-token";
+
+      const exitCode = await runAtlasCli(["search", "provider boundary"], io);
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(mcp.requests.length).toBeGreaterThan(0);
+      for (const request of mcp.requests) {
+        expect(request.authorization).toBe("Bearer secret-token");
+      }
+    });
+
+    it("sends the --token bearer on every request", async () => {
+      const exitCode = await runAtlasCli(
+        ["search", "provider boundary", "--url", mcp.url, "--token", "flag"],
+        io,
+      );
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(mcp.requests.length).toBeGreaterThan(0);
+      for (const request of mcp.requests) {
+        expect(request.authorization).toBe("Bearer flag");
+      }
+    });
+
+    it("prefers --url and --token over ATLAS_MCP_URL and ATLAS_TOKEN", async () => {
+      // Nothing listens on port 1, so the run fails if atlas uses the env URL.
+      process.env.ATLAS_MCP_URL = "http://127.0.0.1:1/mcp";
+      process.env.ATLAS_TOKEN = "env-token";
+
+      const exitCode = await runAtlasCli(
+        [
+          "search",
+          "provider boundary",
+          "--url",
+          mcp.url,
+          "--token",
+          "flag-token",
+        ],
+        io,
+      );
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(mcp.requests.length).toBeGreaterThan(0);
+      for (const request of mcp.requests) {
+        expect(request.authorization).toBe("Bearer flag-token");
+      }
+    });
+
+    it("defaults to the Atlas search tool configured in pathfinder.example.yaml", async () => {
+      const exitCode = await runAtlasCli(
+        ["search", "provider boundary", "--url", mcp.url],
+        io,
+      );
+
+      expect(exitCode).toBe(0);
+      const call = mcp.requests.find((r) => r.rpcMethod === "tools/call");
+      expect(call?.toolName).toBe("atlas-search");
+    });
+
+    it("honors CLI options and prints the raw JSON-RPC frame with --json", async () => {
+      const exitCode = await runAtlasCli(
+        [
+          "search",
+          "ratification queue",
+          "--url",
+          mcp.url,
+          "--tool",
+          "atlas_search",
+          "--limit",
+          "4",
+          "--min-score",
+          "0.62",
+          "--json",
+        ],
+        io,
+      );
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const call = mcp.requests.find((r) => r.rpcMethod === "tools/call");
+      // The --json output is a contract: the tools/call response frame, keys
+      // in the order result, jsonrpc, id, with id the request's own id.
+      const printed = JSON.parse(stdout) as Record<string, unknown>;
+      expect(Object.keys(printed)).toEqual(["result", "jsonrpc", "id"]);
+      expect(printed.jsonrpc).toBe("2.0");
+      expect(printed.id).toBe(call?.rpcId);
+      expect(printed.result).toMatchObject({
+        content: [{ type: "text", text: "json result" }],
+      });
+      if (era === "legacy") {
+        // Byte-for-byte what atlas printed before the v2 client.
+        expect(stdout).toBe(
+          `${JSON.stringify(
+            {
+              result: { content: [{ type: "text", text: "json result" }] },
+              jsonrpc: "2.0",
+              id: 1,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+      expect(call?.toolName).toBe("atlas_search");
+      expect(call?.toolArguments).toEqual({
+        query: "ratification queue",
+        limit: 4,
+        min_score: 0.62,
+      });
+    });
+
+    it.each(slowRpc)(
+      "waits past the SDK's 60 s default for a slow %s answer",
+      async (rpcMethod) => {
+        // Before the v2 client, atlas put no time limit on any request. Fake
+        // only setTimeout (the clock still runs, so zero-delay timers fire and
+        // the real sockets keep working), and hold the answer until 61 s of
+        // fake time have passed.
+        vi.useFakeTimers({
+          toFake: ["setTimeout", "clearTimeout"],
+          shouldAdvanceTime: true,
+        });
+        const hold = mcp.holdNext(rpcMethod);
+        const run = runAtlasCli(
+          ["search", "ratification queue", "--url", mcp.url],
+          io,
+        );
+        await hold.arrived;
+        await vi.advanceTimersByTimeAsync(61_000);
+        vi.useRealTimers();
+        hold.release();
+        const exitCode = await run;
+
+        expect(stderr).toBe("");
+        expect(exitCode).toBe(0);
+        expect(stdout).toBe('searched {"query":"ratification queue"}\n');
+        const rpc = mcp.requests
+          .map((r) => r.rpcMethod)
+          .filter((m): m is string => m !== undefined);
+        expect(rpc).toEqual(expectedRpc);
       },
     );
 
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("result before close");
-    expect(stderr).toBe("");
+    it("prints No results. when the tool returns no text", async () => {
+      const exitCode = await runAtlasCli(
+        ["search", "q", "--url", mcp.url, "--tool", "empty"],
+        io,
+      );
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    const [closeUrl, closeRequest] = fetchMock.mock.calls[3] as [
-      string,
-      RequestInit,
-    ];
-    expect(closeUrl).toBe("https://mcp.pathfinder.copilotkit.dev/mcp");
-    expect(closeRequest.method).toBe("DELETE");
-    expect(closeRequest.headers).toMatchObject({
-      "Mcp-Session-Id": "session-1",
-      Authorization: "Bearer secret-token",
+      expect(exitCode).toBe(0);
+      expect(stdout).toBe("No results.\n");
     });
-    expect(closeRequest.body).toBeUndefined();
+
+    it("treats a tool result with isError as a failure on stderr with exit 1", async () => {
+      const exitCode = await runAtlasCli(
+        ["search", "q", "--url", mcp.url, "--tool", "fails"],
+        io,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toBe("error: search backend unavailable\n");
+    });
+
+    it("fails with exit 1 when the tool does not exist", async () => {
+      const exitCode = await runAtlasCli(
+        ["search", "q", "--url", mcp.url, "--tool", "no-such-tool"],
+        io,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("no-such-tool");
+    });
+
+    it("submits feedback through the configured MCP feedback tool", async () => {
+      const exitCode = await runAtlasCli(
+        [
+          "feedback",
+          "provider boundary",
+          "--rating",
+          "not_helpful",
+          "--comment",
+          "Missing the retry semantics.",
+          "--url",
+          mcp.url,
+        ],
+        io,
+      );
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(stdout).toBe("Feedback recorded. Thank you.\n");
+      const call = mcp.requests.find((r) => r.rpcMethod === "tools/call");
+      expect(call?.toolName).toBe("submit-feedback");
+      expect(call?.toolArguments).toEqual({
+        tool_name: "atlas-search",
+        query: "provider boundary",
+        rating: "not_helpful",
+        comment: "Missing the retry semantics.",
+      });
+      for (const request of mcp.requests) {
+        expect(request.sourceHeader).toBe("user");
+      }
+    });
+
+    it("maps --for to tool_name and honors --tool for the feedback tool name", async () => {
+      const exitCode = await runAtlasCli(
+        [
+          "feedback",
+          "provider boundary",
+          "--rating",
+          "helpful",
+          "--comment",
+          "Good.",
+          "--for",
+          "atlas_search",
+          "--tool",
+          "collect-feedback",
+          "--url",
+          mcp.url,
+        ],
+        io,
+      );
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(stdout).toBe("Feedback collected.\n");
+      const call = mcp.requests.find((r) => r.rpcMethod === "tools/call");
+      expect(call?.toolName).toBe("collect-feedback");
+      expect(call?.toolArguments).toMatchObject({ tool_name: "atlas_search" });
+    });
+
+    it("treats a feedback tool result with isError as a failure on stderr with exit 1", async () => {
+      const exitCode = await runAtlasCli(
+        [
+          "feedback",
+          "provider boundary",
+          "--rating",
+          "helpful",
+          "--comment",
+          "Good.",
+          "--tool",
+          "fails",
+          "--url",
+          mcp.url,
+        ],
+        io,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toBe("error: search backend unavailable\n");
+      const call = mcp.requests.find((r) => r.rpcMethod === "tools/call");
+      expect(call?.toolName).toBe("fails");
+    });
+
+    if (era === "legacy") {
+      it("ends the legacy session after the call, with the same session id", async () => {
+        const exitCode = await runAtlasCli(
+          ["search", "q", "--url", mcp.url],
+          io,
+        );
+
+        expect(exitCode).toBe(0);
+        const call = mcp.requests.find((r) => r.rpcMethod === "tools/call");
+        const deletes = mcp.requests.filter((r) => r.httpMethod === "DELETE");
+        expect(deletes).toHaveLength(1);
+        expect(deletes[0].sessionId).toBeDefined();
+        expect(deletes[0].sessionId).toBe(call?.sessionId);
+        expect(deletes[0].sourceHeader).toBe("user");
+      });
+
+      it("ends the legacy session after a tool error too", async () => {
+        const exitCode = await runAtlasCli(
+          ["search", "q", "--url", mcp.url, "--tool", "fails"],
+          io,
+        );
+
+        expect(exitCode).toBe(1);
+        expect(
+          mcp.requests.filter((r) => r.httpMethod === "DELETE"),
+        ).toHaveLength(1);
+      });
+    } else {
+      it("opens no session and sends no DELETE", async () => {
+        const exitCode = await runAtlasCli(
+          ["search", "q", "--url", mcp.url],
+          io,
+        );
+
+        expect(exitCode).toBe(0);
+        expect(mcp.requests.every((r) => r.sessionId === undefined)).toBe(true);
+        expect(
+          mcp.requests.filter((r) => r.httpMethod === "DELETE"),
+        ).toHaveLength(0);
+      });
+    }
   });
 
-  it("terminates the MCP session after a tool call error", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
+  describe("against a raw legacy server", () => {
+    let raw: RawLegacyServer | undefined;
+
+    afterEach(async () => {
+      await raw?.close();
+      raw = undefined;
+    });
+
+    it("matches a tools/call answer whose id a proxy echoed as a string, with --json", async () => {
+      raw = await startRawLegacyServer({
+        onToolsCall: (_req, res, body) => {
+          res.json({
             jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
+            id: String(body.id),
+            result: { content: [{ type: "text", text: "proxied" }] },
+          });
+        },
+      });
+
+      const exitCode = await runAtlasCli(
+        ["search", "q", "--url", raw.url, "--json"],
+        io,
+      );
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const printed = JSON.parse(stdout) as {
+        result: { content: Array<{ text: string }> };
+      };
+      expect(printed.result.content[0].text).toBe("proxied");
+    });
+    const UNAUTHORIZED_BODY = JSON.stringify({
+      error: "invalid_token",
+      error_description: "bad token",
+    });
+    const answer401: RawHandler = (_req, res) => {
+      res.status(401).type("application/json").send(UNAUTHORIZED_BODY);
+    };
+
+    it.each([
+      ["every request", "with --token", ["--token", "bad"]],
+      ["every request", "without a token", []],
+      ["tools/call", "with --token", ["--token", "bad"]],
+    ])(
+      "reports HTTP 401 on %s %s with the status and body",
+      async (scope, _label, tokenArgs) => {
+        raw = await startRawLegacyServer(
+          scope === "every request"
+            ? { onEveryPost: answer401, onToolsCall: answer401 }
+            : { onToolsCall: answer401 },
+        );
+
+        const exitCode = await runAtlasCli(
+          ["search", "q", "--url", raw.url, ...tokenArgs],
+          io,
+        );
+
+        expect(exitCode).toBe(1);
+        expect(stdout).toBe("");
+        expect(stderr).toBe(`error: HTTP 401: ${UNAUTHORIZED_BODY}\n`);
+      },
+    );
+
+    it("reports a non-2xx tools/call answer with the status and body", async () => {
+      raw = await startRawLegacyServer({
+        onToolsCall: (_req, res) => {
+          res.status(500).type("text/plain").send("boom detail");
+        },
+      });
+
+      const exitCode = await runAtlasCli(["search", "q", "--url", raw.url], io);
+
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toBe("error: HTTP 500: boom detail\n");
+    });
+    it.each([
+      ["with no id", {}],
+      ["with id null", { id: null }],
+    ])(
+      "reports the server's message for a tools/call error frame %s",
+      async (_label, idField) => {
+        raw = await startRawLegacyServer({
+          onToolsCall: (_req, res) => {
+            res.json({
+              jsonrpc: "2.0",
+              ...idField,
+              error: { code: -32603, message: "upstream exploded" },
+            });
           },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          error: { message: "tool failed" },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
+        });
 
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
+        const exitCode = await runAtlasCli(
+          ["search", "q", "--url", raw.url],
+          io,
+        );
+
+        expect(exitCode).toBe(1);
+        expect(stdout).toBe("");
+        expect(stderr).toBe("error: upstream exploded\n");
       },
-      stderr: (text) => {
-        stderr += text;
-      },
+    );
+
+    it("gives up with exit 1 when tools/call gets no answer within 10 minutes", async () => {
+      // A 202 with no body: the server accepts the call and never answers.
+      let arrived!: () => void;
+      const toolsCallArrived = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      raw = await startRawLegacyServer({
+        onToolsCall: (_req, res) => {
+          res.status(202).end();
+          arrived();
+        },
+      });
+      // Real time, so the check below does not wait on the faked clock.
+      const realSetTimeout = globalThis.setTimeout;
+      const settledWithin = <T>(promise: Promise<T>, ms: number) =>
+        Promise.race([
+          promise.then(() => true),
+          new Promise<false>((resolve) =>
+            realSetTimeout(() => resolve(false), ms),
+          ),
+        ]);
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout"],
+        shouldAdvanceTime: true,
+      });
+
+      const run = runAtlasCli(["search", "q", "--url", raw.url], io);
+      await toolsCallArrived;
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      expect(await settledWithin(run, 200)).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(60_000 + 1_000);
+      expect(await settledWithin(run, 2_000)).toBe(true);
+      vi.useRealTimers();
+      const exitCode = await run;
+
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toBe("error: no response from server within 10 minutes\n");
     });
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("tool failed");
-
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    const [, closeRequest] = fetchMock.mock.calls[3] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
-    expect(closeRequest.headers).toMatchObject({
-      "Mcp-Session-Id": "session-1",
-    });
-  });
-
-  it("fails immediately when MCP initialize returns a JSON-RPC error", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            error: { message: "initialize rejected" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("initialize rejected");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
-    const [, closeRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
-  });
-
-  it("terminates the MCP session when initialize returns invalid JSON with a session header", async () => {
-    const headers = new Headers({
-      "content-type": "application/json",
-      "mcp-session-id": "session-1",
-    });
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("not json", { headers }))
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("Unparseable response");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
-    const [, closeRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
-    expect(closeRequest.headers).toMatchObject({
-      "Mcp-Session-Id": "session-1",
-    });
-  });
-
-  it("terminates the MCP session when initialize returns an HTTP error with a session header", async () => {
-    const headers = new Headers({
-      "mcp-session-id": "session-1",
-    });
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response("initialize failed", { status: 500, headers }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("HTTP 500: initialize failed");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
-    const [, closeRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
-    expect(closeRequest.headers).toMatchObject({
-      "Mcp-Session-Id": "session-1",
-    });
-  });
-
-  it("handles a tools/call result of null without reporting No response.", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: null,
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).not.toContain("No response.");
-    expect(stdout).not.toContain("no response from server");
-    expect(stdout).toContain("No results.");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("treats a tool result with isError as a failure on stderr with exit 1", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: {
-            isError: true,
-            content: [{ type: "text", text: "boom" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("boom");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-
-    const [, closeRequest] = fetchMock.mock.calls[3] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
-  });
-
-  it("renders gracefully when a tools/call result carries non-array content", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: { content: "oops" },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stderr).not.toContain("content.map is not a function");
-    expect(stdout).toContain("No results.");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("selects the tools/call response by id across a multi-frame SSE stream", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        sseResponse(
-          [
-            'data:{"jsonrpc":"2.0","method":"notifications/message","params":{"data":"unrelated"}}',
-            "",
-            'data:{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"the real answer"}]}}',
-            "",
-          ].join("\n"),
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("the real answer");
-    expect(stdout).not.toContain("No response.");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("selects the tools/call response when the server echoes a string id", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: "1",
-          result: {
-            content: [{ type: "text", text: "string id answer" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("string id answer");
-    expect(stdout).not.toContain("No response.");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("surfaces a JSON-RPC error frame carrying a null id instead of the generic no-response error", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: null,
-          error: { message: "rate limited, retry later" },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("rate limited, retry later");
-    expect(stderr).not.toContain("no response from server");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-
-    const [, closeRequest] = fetchMock.mock.calls[3] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
-  });
-
-  it("fails with exit 1 when no tools/call response frame carries id 1", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        sseResponse(
-          [
-            'data:{"jsonrpc":"2.0","method":"notifications/message","params":{"data":"only a notification, never answered id 1"}}',
-            "",
-          ].join("\n"),
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("no response from server for tools/call");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-
-    const [, closeRequest] = fetchMock.mock.calls[3] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
-  });
-
-  it("renders a sole tools/call result frame whose id was omitted", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          result: {
-            content: [{ type: "text", text: "answer with no id" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("answer with no id");
-    expect(stdout).not.toContain("no response from server");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("fails with no-response when the only frame bears a different explicit id", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 2,
-          result: {
-            content: [{ type: "text", text: "answer for a different request" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stdout).not.toContain("answer for a different request");
-    expect(stderr).toContain("no response from server for tools/call");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-
-    const [, closeRequest] = fetchMock.mock.calls[3] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
   });
 
   it("requires --for when building feedback arguments", () => {
@@ -741,82 +1001,6 @@ describe("atlas CLI", () => {
         comment: "Exactly what I needed.",
       }),
     ).toThrow("atlas: --for is required");
-  });
-
-  it("honors CLI options and prints raw JSON when requested", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          { jsonrpc: "2.0", id: 0, result: {} },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: {
-            content: [{ type: "text", text: "json result" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(
-      [
-        "search",
-        "ratification queue",
-        "--url",
-        "http://localhost:3001/mcp",
-        "--tool",
-        "atlas_search",
-        "--limit",
-        "4",
-        "--min-score",
-        "0.62",
-        "--json",
-      ],
-      {
-        stdout: (text) => {
-          stdout += text;
-        },
-        stderr: (text) => {
-          stderr += text;
-        },
-      },
-    );
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(JSON.parse(stdout)).toMatchObject({
-      jsonrpc: "2.0",
-      id: 1,
-      result: {
-        content: [{ type: "text", text: "json result" }],
-      },
-    });
-
-    const [, callRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
-    expect(JSON.parse(callRequest.body as string)).toEqual({
-      jsonrpc: "2.0",
-      method: "tools/call",
-      id: 1,
-      params: {
-        name: "atlas_search",
-        arguments: {
-          query: "ratification queue",
-          limit: 4,
-          min_score: 0.62,
-        },
-      },
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    const [, closeRequest] = fetchMock.mock.calls[3] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
   });
 
   it.each([
@@ -859,128 +1043,6 @@ describe("atlas CLI", () => {
     },
   );
 
-  it("parses SSE events without a space after data and with multiline data", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        sseResponse('data:{"jsonrpc":"2.0","id":0,"result":{}}\n\n', {
-          sessionId: "session-1",
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        sseResponse(
-          [
-            'data:{"jsonrpc":"2.0","id":1,"result":{"content":[',
-            'data:{"type":"text","text":"multiline SSE result"}',
-            "data:]}}",
-            "",
-          ].join("\n"),
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("multiline SSE result");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("skips empty SSE data frames without crashing", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        sseResponse('data:{"jsonrpc":"2.0","id":0,"result":{}}\n\n', {
-          sessionId: "session-1",
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        sseResponse(
-          [
-            ": keepalive comment",
-            "data:",
-            "",
-            'data:{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"survived the keepalive"}]}}',
-            "",
-          ].join("\n"),
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("survived the keepalive");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("defaults to the Atlas search tool configured in pathfinder.example.yaml", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: {
-            content: [{ type: "text", text: "default tool result" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(["search", "provider boundary"], {
-      stdout: (text) => {
-        stdout += text;
-      },
-      stderr: (text) => {
-        stderr += text;
-      },
-    });
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-
-    const [, callRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
-    expect(JSON.parse(callRequest.body as string)).toMatchObject({
-      method: "tools/call",
-      params: {
-        name: "atlas-search",
-      },
-    });
-  });
-
   it("returns an existing-style error for missing search query", async () => {
     const exitCode = await runAtlasCli(["search"], {
       stdout: (text) => {
@@ -994,145 +1056,6 @@ describe("atlas CLI", () => {
     expect(exitCode).toBe(1);
     expect(stdout).toBe("");
     expect(stderr).toContain("error: missing required argument 'query'");
-  });
-
-  it("submits feedback through the configured MCP feedback tool", async () => {
-    process.env.ATLAS_MCP_URL = "https://atlas.example.test/mcp";
-    process.env.ATLAS_TOKEN = "secret-token";
-
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: {
-            content: [{ type: "text", text: "Feedback recorded. Thank you." }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(
-      [
-        "feedback",
-        "provider boundary",
-        "--rating",
-        "helpful",
-        "--comment",
-        "Exactly what I needed.",
-      ],
-      {
-        stdout: (text) => {
-          stdout += text;
-        },
-        stderr: (text) => {
-          stderr += text;
-        },
-      },
-    );
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("Feedback recorded. Thank you.");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-
-    const [, callRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
-    expect(JSON.parse(callRequest.body as string)).toEqual({
-      jsonrpc: "2.0",
-      method: "tools/call",
-      id: 1,
-      params: {
-        name: "submit-feedback",
-        arguments: {
-          tool_name: "atlas-search",
-          query: "provider boundary",
-          rating: "helpful",
-          comment: "Exactly what I needed.",
-        },
-      },
-    });
-  });
-
-  it("maps --for to tool_name and honors --tool for the feedback tool name", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: {
-            content: [{ type: "text", text: "Feedback recorded. Thank you." }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(
-      [
-        "feedback",
-        "ratification queue",
-        "--rating",
-        "not_helpful",
-        "--comment",
-        "Wrong section.",
-        "--for",
-        "atlas-deep-search",
-        "--tool",
-        "collect-feedback",
-      ],
-      {
-        stdout: (text) => {
-          stdout += text;
-        },
-        stderr: (text) => {
-          stderr += text;
-        },
-      },
-    );
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
-
-    const [, callRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
-    expect(JSON.parse(callRequest.body as string)).toEqual({
-      jsonrpc: "2.0",
-      method: "tools/call",
-      id: 1,
-      params: {
-        name: "collect-feedback",
-        arguments: {
-          tool_name: "atlas-deep-search",
-          query: "ratification queue",
-          rating: "not_helpful",
-          comment: "Wrong section.",
-        },
-      },
-    });
   });
 
   it.each([["sometimes"], ["yes"], ["HELPFUL"], [""]])(
@@ -1194,58 +1117,6 @@ describe("atlas CLI", () => {
     expect(stdout).toBe("");
     expect(stderr).toContain("comment must not be empty");
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("surfaces a feedback tool-call error as exit 1", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            jsonrpc: "2.0",
-            id: 0,
-            result: { protocolVersion: "2025-03-26" },
-          },
-          { sessionId: "session-1" },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          error: { message: "feedback rejected" },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const exitCode = await runAtlasCli(
-      [
-        "feedback",
-        "provider boundary",
-        "--rating",
-        "helpful",
-        "--comment",
-        "Helpful answer.",
-      ],
-      {
-        stdout: (text) => {
-          stdout += text;
-        },
-        stderr: (text) => {
-          stderr += text;
-        },
-      },
-    );
-
-    expect(exitCode).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("feedback rejected");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-
-    const [, closeRequest] = fetchMock.mock.calls[3] as [string, RequestInit];
-    expect(closeRequest.method).toBe("DELETE");
   });
 
   it("requires the rating and comment options for feedback", async () => {
