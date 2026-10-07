@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   parseReportDays,
   reportPathArgFrom,
@@ -22,8 +26,13 @@ import {
   run,
   assertValidSummary,
   buildObservations,
+  buildSuccessDigest,
+  clientsHeadline,
+  fetchBundle,
+  parseSharedClientIds,
   sanitizeCell,
   makePostSlack,
+  makeFetchJson,
   type NotionClientLike,
   type RunDeps,
   type EmptyQuery,
@@ -1050,10 +1059,12 @@ describe("header metrics: unique clients and protocol mix", () => {
   });
   const now = new Date("2026-06-21T09:07:00Z");
 
-  it("renders Unique clients and Protocol mix right after Unique sessions", () => {
+  it("renders the clients headline, then Legacy sessions, then Protocol mix", () => {
     const md = renderMarkdown(mk(SUMMARY_FIXTURE), now, 7);
     expect(md).toContain(
-      "- Unique sessions: 142\n- Unique clients: 61\n" +
+      "- Total tool calls: 1234\n" +
+        "- 61 unique clients (87 unique IPs)\n" +
+        "- Legacy sessions: 142\n" +
         "- Protocol mix: legacy 75.0% / modern 25.0% (400 of 1234 calls classified); " +
         "transport: streamable_http 90.0% / sse 10.0% (400 of 1234 calls classified)\n",
     );
@@ -1081,7 +1092,7 @@ describe("header metrics: unique clients and protocol mix", () => {
     delete old.streamable_http_query_count_window;
     delete old.sse_query_count_window;
     const md = renderMarkdown(mk(old), now, 7);
-    expect(md).toContain("- Unique clients: n/a");
+    expect(md).toContain("- 87 unique IPs (unique clients not reported)\n");
     expect(md).toContain(
       "- Protocol mix: legacy n/a / modern n/a; transport: streamable_http n/a / sse n/a\n",
     );
@@ -1148,7 +1159,7 @@ describe("header metrics: unique clients and protocol mix", () => {
     expect(rec.slackCalls).toEqual([]);
     expect(rec.notionCalls).toHaveLength(1);
     const md = rec.notionCalls[0].markdown;
-    expect(md).toContain("- Unique clients: n/a");
+    expect(md).toContain("- 87 unique IPs (unique clients not reported)\n");
     expect(md).toContain(
       "- Protocol mix: legacy n/a / modern n/a; transport: streamable_http n/a / sse n/a\n",
     );
@@ -1287,5 +1298,556 @@ describe("header metrics: unique clients and protocol mix", () => {
       "- Protocol mix: legacy 0.0% / modern 100.0% (100 of 1234 calls classified); " +
         "transport: streamable_http 90.0% / sse 10.0% (400 of 1234 calls classified)\n",
     );
+  });
+});
+
+describe("headline switch: unique clients, legacy sessions, shared client ids", () => {
+  const mk = (summary: AnalyticsSummary): AnalyticsBundle => ({
+    summary,
+    queries: QUERIES_FIXTURE,
+    emptyQueries: EMPTY_QUERIES_FIXTURE,
+    toolBreakdown: TOOL_BREAKDOWN_FIXTURE,
+  });
+  const now = new Date("2026-06-21T09:07:00Z");
+
+  it("formats the headline as 'N unique clients (M unique IPs)'", () => {
+    expect(clientsHeadline(SUMMARY_FIXTURE)).toBe(
+      "61 unique clients (87 unique IPs)",
+    );
+    expect(
+      clientsHeadline({ ...SUMMARY_FIXTURE, unique_client_count_window: 0 }),
+    ).toBe("0 unique clients (87 unique IPs)");
+  });
+
+  it("uses the headline in the observations and the #engr digest, with no sessions wording", () => {
+    const obs = buildObservations(mk(SUMMARY_FIXTURE));
+    expect(obs).toContain("61 unique clients (87 unique IPs).");
+    expect(obs.join("\n")).not.toMatch(/sessions/);
+    expect(buildSuccessDigest(mk(SUMMARY_FIXTURE), null)).toContain(
+      " · 61 unique clients (87 unique IPs) · ",
+    );
+  });
+
+  it("no longer prints a 'Unique sessions' line", () => {
+    const md = renderMarkdown(mk(SUMMARY_FIXTURE), now, 7);
+    expect(md).not.toContain("Unique sessions");
+    expect(md).not.toContain("- Unique IPs:");
+    expect(md).not.toContain("- Unique clients:");
+  });
+
+  it("hides the Legacy sessions line when K = 0", () => {
+    const md = renderMarkdown(
+      mk({ ...SUMMARY_FIXTURE, unique_session_count_window: 0 }),
+      now,
+      7,
+    );
+    expect(md).not.toContain("Legacy sessions");
+    expect(md).toContain(
+      "- 61 unique clients (87 unique IPs)\n- Protocol mix: ",
+    );
+  });
+
+  it("prints the Legacy sessions line when K > 0", () => {
+    const md = renderMarkdown(
+      mk({ ...SUMMARY_FIXTURE, unique_session_count_window: 1 }),
+      now,
+      7,
+    );
+    expect(md).toContain("- Legacy sessions: 1\n");
+  });
+
+  it("parseSharedClientIds trims, drops empties and dedupes", () => {
+    expect(parseSharedClientIds(undefined)).toEqual([]);
+    expect(parseSharedClientIds("")).toEqual([]);
+    expect(parseSharedClientIds(" a , b,,a ,")).toEqual(["a", "b"]);
+  });
+
+  function bundleFetch(summary: object, paths: string[]): RunDeps["fetchJson"] {
+    return async <T>(path: string): Promise<T> => {
+      paths.push(path);
+      if (path.includes("/summary")) return summary as unknown as T;
+      if (path.includes("/tool-breakdown"))
+        return TOOL_BREAKDOWN_FIXTURE as unknown as T;
+      if (path.includes("/empty-queries"))
+        return EMPTY_QUERIES_FIXTURE as unknown as T;
+      if (path.includes("/queries")) return QUERIES_FIXTURE as unknown as T;
+      if (path.includes("/relay-exclusions")) return [] as unknown as T;
+      throw new Error(`unexpected path ${path}`);
+    };
+  }
+
+  it("sends no shared_client_ids param when the list is empty", async () => {
+    const paths: string[] = [];
+    await fetchBundle({ fetchJson: bundleFetch(SUMMARY_FIXTURE, paths) }, 7);
+    expect(paths[0]).toBe("/api/analytics/summary?days=7");
+  });
+
+  it("sends the list to /summary and accepts the server's confirmation", async () => {
+    const paths: string[] = [];
+    const bundle = await fetchBundle(
+      {
+        fetchJson: bundleFetch(
+          { ...SUMMARY_FIXTURE, shared_client_ids_applied: 2 },
+          paths,
+        ),
+      },
+      7,
+      ["id-a", "id-b"],
+    );
+    expect(paths[0]).toBe(
+      "/api/analytics/summary?days=7&shared_client_ids=id-a%2Cid-b",
+    );
+    expect(bundle.summary.unique_client_count_window).toBe(61);
+  });
+
+  it("fails loud when the server does not confirm the shared ids (older deployment)", async () => {
+    await expect(
+      fetchBundle({ fetchJson: bundleFetch(SUMMARY_FIXTURE, []) }, 7, ["id-a"]),
+    ).rejects.toThrow(
+      /did not apply shared_client_ids \(sent 1, server applied none\)/,
+    );
+  });
+
+  it("fails loud when the server applies a different number of shared ids", async () => {
+    await expect(
+      fetchBundle(
+        {
+          fetchJson: bundleFetch(
+            { ...SUMMARY_FIXTURE, shared_client_ids_applied: 1 },
+            [],
+          ),
+        },
+        7,
+        ["id-a", "id-b"],
+      ),
+    ).rejects.toThrow(
+      /did not apply shared_client_ids \(sent 2, server applied 1\)/,
+    );
+  });
+
+  it("the real entry point sends SHARED_CLIENT_IDS from the environment to /summary", async () => {
+    // Spawn the script as the workflow does, against a local analytics server
+    // that records each request and never confirms the ids. This covers the
+    // process.env wiring in buildRealDeps, which the injected-deps tests skip.
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      seen.push(req.url ?? "");
+      if ((req.url ?? "").startsWith("/api/analytics/summary")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(SUMMARY_FIXTURE));
+        return;
+      }
+      // Any later endpoint fails, so the script can never reach Notion.
+      res.writeHead(500);
+      res.end();
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const tsx = fileURLToPath(
+        new URL("../../node_modules/.bin/tsx", import.meta.url),
+      );
+      const script = fileURLToPath(
+        new URL("./weekly-search-report.ts", import.meta.url),
+      );
+      const child = spawn(tsx, [script], {
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PATHFINDER_ANALYTICS_TOKEN: "tok-entry",
+          ANALYTICS_BASE_URL: `http://127.0.0.1:${port}`,
+          SHARED_CLIENT_IDS: "id-a",
+          REPORT_DAYS: "7",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      const code = await new Promise<number | null>((done) =>
+        child.on("close", done),
+      );
+      expect(seen[0]).toBe(
+        "/api/analytics/summary?days=7&shared_client_ids=id-a",
+      );
+      expect(stderr).toMatch(
+        /did not apply shared_client_ids \(sent 1, server applied none\)/,
+      );
+      expect(code).toBe(1);
+    } finally {
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+  }, 30_000);
+
+  it("run() reads SHARED_CLIENT_IDS from env and fails loud without a confirmation", async () => {
+    const paths: string[] = [];
+    const rec = makeRecorder({
+      fetchJson: bundleFetch(SUMMARY_FIXTURE, paths),
+    });
+    rec.deps.env.SHARED_CLIENT_IDS = "id-a";
+    await runCatchingExit(rec.deps);
+    expect(paths[0]).toContain("&shared_client_ids=id-a");
+    expect(rec.exitCodes).toEqual([1]);
+    expect(rec.notionCalls).toHaveLength(0);
+    expect(rec.slackCalls[0]).toMatch(/shared_client_ids/);
+  });
+});
+
+describe("shared client ids never reach logs or alerts", () => {
+  const IDS = "test-id-alpha,test-id-beta";
+  const leaks = (text: string): string[] =>
+    ["test-id-alpha", "test-id-beta", encodeURIComponent(IDS)].filter((n) =>
+      text.includes(n),
+    );
+
+  async function listen500OnSummary(): Promise<{
+    server: Server;
+    baseUrl: string;
+    seen: string[];
+  }> {
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      seen.push(req.url ?? "");
+      const status = req.url?.startsWith("/api/analytics/summary") ? 500 : 200;
+      res.writeHead(status, { "content-type": "text/plain" });
+      res.end(status === 500 ? "boom" : "[]");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    return { server, baseUrl: `http://127.0.0.1:${port}`, seen };
+  }
+
+  it("run() with the real fetch gives a sealed error when /summary returns 500", async () => {
+    const { server, baseUrl, seen } = await listen500OnSummary();
+    try {
+      const errors: string[] = [];
+      const rec = makeRecorder({ fetchJson: makeFetchJson(baseUrl, "tok") });
+      rec.deps.env.SHARED_CLIENT_IDS = IDS;
+      rec.deps.error = (...args: unknown[]) => {
+        errors.push(args.map(String).join(" "));
+      };
+      await runCatchingExit(rec.deps);
+
+      // The request itself still carries the real list.
+      expect(seen[0]).toBe(
+        `/api/analytics/summary?days=7&shared_client_ids=${encodeURIComponent(IDS)}`,
+      );
+      // Still fails loud.
+      expect(rec.exitCodes).toEqual([1]);
+      expect(rec.notionCalls).toHaveLength(0);
+      expect(rec.slackCalls).toHaveLength(1);
+      // But the message is sealed: no id, raw or encoded, reaches stderr or Slack.
+      expect(errors).toEqual([
+        "[weekly-report] FAILED: Analytics fetch failed: 500 for /api/analytics/summary (details withheld: the request carries shared_client_ids)",
+      ]);
+      const text = [...errors, ...rec.slackCalls].join("\n");
+      expect(leaks(text)).toEqual([]);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  /**
+   * Run the real run() with the real makeFetchJson(base) and the real
+   * makePostSlack against a local webhook that records each posted text.
+   * Returns everything that left the process: stderr, stdout and Slack.
+   */
+  async function runAgainst(
+    base: string,
+    ids: string = IDS,
+  ): Promise<{
+    exitCodes: number[];
+    notionCalls: number;
+    errors: string[];
+    logs: string[];
+    slack: string[];
+    text: string;
+  }> {
+    const slack: string[] = [];
+    const hook = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString("utf-8")));
+      req.on("end", () => {
+        slack.push((JSON.parse(body) as { text: string }).text);
+        res.writeHead(200).end("ok");
+      });
+    });
+    await new Promise<void>((r) => hook.listen(0, "127.0.0.1", r));
+    const { port } = hook.address() as AddressInfo;
+    const errors: string[] = [];
+    const logs: string[] = [];
+    try {
+      const rec = makeRecorder({ fetchJson: makeFetchJson(base, "tok") });
+      rec.deps.env.SHARED_CLIENT_IDS = ids;
+      rec.deps.postSlack = makePostSlack(`http://127.0.0.1:${port}/hook`);
+      rec.deps.error = (...args: unknown[]) => {
+        errors.push(args.map(String).join(" "));
+      };
+      rec.deps.log = (...args: unknown[]) => {
+        logs.push(args.map(String).join(" "));
+      };
+      await runCatchingExit(rec.deps);
+      return {
+        exitCodes: rec.exitCodes,
+        notionCalls: rec.notionCalls.length,
+        errors,
+        logs,
+        slack,
+        text: [...errors, ...logs, ...slack].join("\n"),
+      };
+    } finally {
+      await new Promise<void>((r) => hook.close(() => r()));
+    }
+  }
+
+  // When fetch() itself throws (a base URL with no scheme, or an empty one),
+  // undici's message carries the whole URL, ids included.
+  for (const base of ["mcp.copilotkit.ai", ""]) {
+    it(`run() with the real fetch gives a sealed error when fetch() throws (base ${JSON.stringify(base)})`, async () => {
+      const out = await runAgainst(base);
+      // Still fails loud, with the real reason.
+      expect(out.exitCodes).toEqual([1]);
+      expect(out.notionCalls).toBe(0);
+      expect(out.slack).toHaveLength(1);
+      expect(out.errors).toEqual([
+        "[weekly-report] FAILED: Analytics fetch failed: TypeError for /api/analytics/summary (details withheld: the request carries shared_client_ids)",
+      ]);
+      // No id, raw or encoded, reaches stderr, stdout or Slack.
+      expect(leaks(out.text)).toEqual([]);
+    });
+  }
+
+  it("makeFetchJson seals a thrown fetch: fixed message, no cause chain", async () => {
+    const fetchJson = makeFetchJson("mcp.copilotkit.ai", "tok");
+    const path = `/api/analytics/summary?days=7&shared_client_ids=${encodeURIComponent(IDS)}`;
+    const err: unknown = await fetchJson(path).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    // Only the sealed error: undici's error (its message holds the URL) is not
+    // kept as a cause.
+    expect((err as Error).cause).toBeUndefined();
+    expect((err as Error).message).toBe(
+      "Analytics fetch failed: TypeError for /api/analytics/summary (details withheld: the request carries shared_client_ids)",
+    );
+  });
+
+  it("run() with the real fetch gives a sealed error when a 500 body echoes the URL", async () => {
+    const server = createServer((req, res) => {
+      const url = req.url ?? "";
+      const status = url.startsWith("/api/analytics/summary") ? 500 : 200;
+      res.writeHead(status, { "content-type": "text/plain" });
+      res.end(
+        status === 500
+          ? `bad request ${url} (decoded: ${decodeURIComponent(url)})`
+          : "[]",
+      );
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const out = await runAgainst(`http://127.0.0.1:${port}`);
+      expect(out.exitCodes).toEqual([1]);
+      expect(out.notionCalls).toBe(0);
+      expect(out.slack).toHaveLength(1);
+      expect(out.errors).toEqual([
+        "[weekly-report] FAILED: Analytics fetch failed: 500 for /api/analytics/summary (details withheld: the request carries shared_client_ids)",
+      ]);
+      expect(leaks(out.text)).toEqual([]);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  // Every error path of a /summary request that carries the ids must give one
+  // fixed message: the endpoint path, the status or the error class, and a
+  // "details withheld" note. Nothing else may reach stderr, stdout or Slack,
+  // whatever the server or the runtime puts in its text, and in any encoding.
+  const WITHHELD = "(details withheld: the request carries shared_client_ids)";
+  const sealed = (detail: string): string =>
+    `Analytics fetch failed: ${detail} for /api/analytics/summary ${WITHHELD}`;
+
+  interface SealedRow {
+    name: string;
+    /** Base URL; null means the local server below. */
+    base: string | null;
+    status?: number;
+    /** HTTP reason phrase; built from the id list when it is a function. */
+    reason?: (ids: string) => string;
+    /** Response body for /summary, built from the request URL and id list. */
+    body?: (url: string, ids: string) => string;
+    /** The status or error class that the sealed message must name. */
+    detail: string;
+  }
+
+  const SEALED_ROWS: SealedRow[] = [
+    {
+      name: "fetch throws (no scheme)",
+      base: "mcp.copilotkit.ai",
+      detail: "TypeError",
+    },
+    { name: "fetch throws (empty base)", base: "", detail: "TypeError" },
+    {
+      name: "400 body echoes the raw URL",
+      base: null,
+      status: 400,
+      body: (url) => `bad request ${url}`,
+      detail: "400",
+    },
+    {
+      name: "401 body echoes the decoded ids",
+      base: null,
+      status: 401,
+      body: (url) => `denied: ${decodeURIComponent(url)}`,
+      detail: "401",
+    },
+    {
+      name: "500 body echoes the '+' form",
+      base: null,
+      status: 500,
+      body: (_url, ids) =>
+        `bad ids ${new URLSearchParams({ shared_client_ids: ids }).toString()}`,
+      detail: "500",
+    },
+    {
+      name: "502 body echoes JSON-escaped and lowercase %xx forms",
+      base: null,
+      status: 502,
+      body: (_url, ids) =>
+        `<!channel> ${JSON.stringify(ids)} ${encodeURIComponent(ids).replace(
+          /%[0-9A-F]{2}/g,
+          (m) => m.toLowerCase(),
+        )} Internal error at api layer`,
+      detail: "502",
+    },
+    {
+      name: "500 reason phrase carries an id",
+      base: null,
+      status: 500,
+      reason: (ids) => `bad ${ids.split(",")[0]}`,
+      body: () => "",
+      detail: "500",
+    },
+    {
+      name: "200 non-JSON body echoes the ids",
+      base: null,
+      status: 200,
+      body: (_url, ids) => `x ${ids}`,
+      detail: "SyntaxError",
+    },
+    {
+      name: "200 empty body",
+      base: null,
+      status: 200,
+      body: () => "",
+      detail: "SyntaxError",
+    },
+  ];
+
+  const SEALED_ID_SETS = [
+    "test-id-alpha,test-id-beta",
+    "a,longer-id-zz",
+    'sek ret,q"uote',
+  ];
+
+  for (const row of SEALED_ROWS) {
+    for (const ids of SEALED_ID_SETS) {
+      it(`sealed error: ${row.name} (ids ${JSON.stringify(ids)})`, async () => {
+        let server: Server | undefined;
+        let base = row.base ?? "";
+        if (row.base === null) {
+          server = createServer((req, res) => {
+            const url = req.url ?? "";
+            if (!url.startsWith("/api/analytics/summary")) {
+              res.writeHead(200, { "content-type": "application/json" });
+              res.end("[]");
+              return;
+            }
+            const headers = { "content-type": "text/plain" };
+            const status = row.status ?? 500;
+            if (row.reason) res.writeHead(status, row.reason(ids), headers);
+            else res.writeHead(status, headers);
+            res.end(row.body ? row.body(url, ids) : "");
+          });
+          await new Promise<void>((r) => server?.listen(0, "127.0.0.1", r));
+          const { port } = server.address() as AddressInfo;
+          base = `http://127.0.0.1:${port}`;
+        }
+        try {
+          const out = await runAgainst(base, ids);
+          const message = sealed(row.detail);
+          expect({
+            exitCodes: out.exitCodes,
+            notionCalls: out.notionCalls,
+            stderr: out.errors,
+            stdout: out.logs,
+            slack: out.slack,
+          }).toEqual({
+            exitCodes: [1],
+            notionCalls: 0,
+            stderr: [`[weekly-report] FAILED: ${message}`],
+            stdout: [],
+            slack: [`Pathfinder weekly search report FAILED: ${message}`],
+          });
+        } finally {
+          if (server) {
+            const s = server;
+            await new Promise<void>((r) => s.close(() => r()));
+          }
+        }
+      });
+    }
+  }
+
+  // A 2xx summary whose shared_client_ids_applied is not a count (a server
+  // that echoes the list) must not put the ids in the failure message.
+  for (const [name, applied] of [
+    ["a string", "test-id-alpha,test-id-beta"],
+    ["an array", ["test-id-alpha", "test-id-beta"]],
+  ] as const) {
+    it(`a non-count shared_client_ids_applied (${name}) is not echoed`, async () => {
+      const server = createServer((req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify(
+            (req.url ?? "").startsWith("/api/analytics/summary")
+              ? { ...SUMMARY_FIXTURE, shared_client_ids_applied: applied }
+              : [],
+          ),
+        );
+      });
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      const { port } = server.address() as AddressInfo;
+      try {
+        const out = await runAgainst(`http://127.0.0.1:${port}`);
+        expect(out.exitCodes).toEqual([1]);
+        expect(out.notionCalls).toBe(0);
+        expect(out.errors).toEqual([
+          "[weekly-report] FAILED: summary did not apply shared_client_ids (sent 2, server applied invalid)",
+        ]);
+        expect(leaks(out.text)).toEqual([]);
+      } finally {
+        await new Promise<void>((r) => server.close(() => r()));
+      }
+    });
+  }
+
+  it("a request without the ids keeps the full error text", async () => {
+    const server = createServer((req, res) => {
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end("boom");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const out = await runAgainst(`http://127.0.0.1:${port}`, "");
+      expect(out.errors).toEqual([
+        "[weekly-report] FAILED: Analytics fetch failed: 500 Internal Server Error for /api/analytics/summary?days=7 — boom",
+      ]);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });
