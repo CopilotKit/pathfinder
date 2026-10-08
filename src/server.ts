@@ -1855,17 +1855,24 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
           0,
           USER_AGENT_MAX_LEN,
         );
-        if (
-          p2pTelemetry?.isEnabled() &&
-          clientSeenDeduper?.shouldEmit(ip, userAgent)
-        ) {
-          p2pTelemetry.emit(CLIENT_SEEN_EVENT, {
-            client_ip: ip,
-            user_agent: userAgent,
-            transport: "streamable_http",
-            protocol_era: "modern",
-            authenticated: !!(req as Request & { auth?: AuthContext }).auth,
-          });
+        const seenClaim = p2pTelemetry?.isEnabled()
+          ? clientSeenDeduper?.claim(ip, userAgent)
+          : undefined;
+        if (p2pTelemetry && seenClaim) {
+          p2pTelemetry.emit(
+            CLIENT_SEEN_EVENT,
+            {
+              client_ip: ip,
+              user_agent: userAgent,
+              transport: "streamable_http",
+              protocol_era: "modern",
+              authenticated: !!(req as Request & { auth?: AuthContext }).auth,
+            },
+            // claim() marked this client as seen before the send. On a failed
+            // send, hold it back only for the short failure backoff, so a
+            // later request retries it once the backoff has passed.
+            { onFailure: () => seenClaim.fail() },
+          );
         }
 
         logMcpCall(req.body, ip);
