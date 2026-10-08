@@ -373,6 +373,10 @@ describe("knowledge tool search mode (with query)", () => {
     // Higher similarity should come first (Q&A 1)
     const higherIdx = text.indexOf("Higher Sim");
     const lowerIdx = text.indexOf("Lower Sim");
+    // indexOf returns -1 for a missing title, which would make the order
+    // check pass vacuously. Both titles must be present first.
+    expect(higherIdx).toBeGreaterThanOrEqual(0);
+    expect(lowerIdx).toBeGreaterThanOrEqual(0);
     expect(higherIdx).toBeLessThan(lowerIdx);
   });
 
@@ -464,63 +468,91 @@ describe("knowledge tool error handling", () => {
     await server.close();
   });
 
-  it("returns error response on browse mode DB failure", async () => {
-    mockGetFaqChunks.mockRejectedValueOnce(new Error("connection refused"));
+  // Driver errors can name tables, SQL and connection targets. The client
+  // must get a generic message; the full detail goes to the server log only.
+  const GENERIC = "Error: FAQ query failed. Please try again later.";
+  const RAW_DB_ERROR =
+    'relation "chunks" does not exist: SELECT metadata FROM chunks WHERE source_name = ANY($1) (host=db.internal:5432 user=pathfinder)';
+  // A different text from RAW_DB_ERROR, so the log check proves that the
+  // getFaqChunksByIds call failed and not an earlier call.
+  const RAW_BY_IDS_ERROR =
+    'column "metadata" does not exist: SELECT id, metadata FROM chunks WHERE id = ANY($1) (host=db.internal:5432 user=pathfinder)';
 
-    const result = await client.callTool({
-      name: "get-faq",
-      arguments: {},
+  const failures: Array<{
+    name: string;
+    args: Record<string, unknown>;
+    detail: string;
+    fail: () => void;
+  }> = [
+    {
+      name: "browse mode DB failure",
+      args: {},
+      detail: RAW_DB_ERROR,
+      fail: () =>
+        mockGetFaqChunks.mockRejectedValueOnce(new Error(RAW_DB_ERROR)),
+    },
+    {
+      name: "embedding failure in search mode",
+      args: { query: "test" },
+      detail: "API key invalid",
+      fail: () => mockEmbed.mockRejectedValueOnce(new Error("API key invalid")),
+    },
+    {
+      name: "searchChunks failure in search mode",
+      args: { query: "test" },
+      detail: RAW_DB_ERROR,
+      fail: () => {
+        mockEmbed.mockResolvedValueOnce([0.1]);
+        mockSearchChunks.mockRejectedValueOnce(new Error(RAW_DB_ERROR));
+      },
+    },
+    {
+      name: "getFaqChunksByIds failure in search mode",
+      args: { query: "test" },
+      detail: RAW_BY_IDS_ERROR,
+      fail: () => {
+        mockEmbed.mockResolvedValueOnce([0.1]);
+        mockSearchChunks
+          .mockResolvedValueOnce([makeChunkResult({ id: 10 })])
+          .mockResolvedValueOnce([]);
+        mockGetFaqChunksByIds.mockRejectedValueOnce(
+          new Error(RAW_BY_IDS_ERROR),
+        );
+      },
+    },
+    {
+      name: "non-Error thrown value",
+      args: {},
+      detail: "string error",
+      fail: () => mockGetFaqChunks.mockRejectedValueOnce("string error"),
+    },
+  ];
+
+  for (const f of failures) {
+    it(`returns a generic error and logs the detail on ${f.name}`, async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        f.fail();
+        const result = await client.callTool({
+          name: "get-faq",
+          arguments: f.args,
+        });
+
+        expect(result.isError).toBe(true);
+        const text = (
+          result.content as Array<{ type: string; text: string }>
+        )[0].text;
+        expect(text).toBe(GENERIC);
+        expect(text).not.toContain(f.detail);
+
+        const logged = errSpy.mock.calls
+          .map((c) => c.map((a) => String(a)).join(" "))
+          .join("\n");
+        expect(logged).toContain("[get-faq] Knowledge query failed:");
+        expect(logged).toContain(f.detail);
+      } finally {
+        errSpy.mockRestore();
+      }
     });
-
-    expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]
-      .text;
-    expect(text).toContain("Error querying FAQ:");
-    expect(text).toContain("connection refused");
-  });
-
-  it("returns error response on embedding failure in search mode", async () => {
-    mockEmbed.mockRejectedValueOnce(new Error("API key invalid"));
-
-    const result = await client.callTool({
-      name: "get-faq",
-      arguments: { query: "test" },
-    });
-
-    expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]
-      .text;
-    expect(text).toContain("Error querying FAQ:");
-    expect(text).toContain("API key invalid");
-  });
-
-  it("returns error response on searchChunks failure in search mode", async () => {
-    mockEmbed.mockResolvedValueOnce([0.1]);
-    mockSearchChunks.mockRejectedValueOnce(new Error("query timeout"));
-
-    const result = await client.callTool({
-      name: "get-faq",
-      arguments: { query: "test" },
-    });
-
-    expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]
-      .text;
-    expect(text).toContain("Error querying FAQ:");
-    expect(text).toContain("query timeout");
-  });
-
-  it("handles non-Error thrown values", async () => {
-    mockGetFaqChunks.mockRejectedValueOnce("string error");
-
-    const result = await client.callTool({
-      name: "get-faq",
-      arguments: {},
-    });
-
-    expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]
-      .text;
-    expect(text).toContain("string error");
-  });
+  }
 });
