@@ -440,10 +440,14 @@ export function registerBashTool(
         if (sessionState) {
           const cdTarget = parseBareCD(command);
           if (cdTarget !== null) {
-            const resolved = sessionState.resolvePath(cdTarget);
-            // Verify the directory exists (shared files or this session's /tmp)
+            const resolved = sessionState.resolvePath(
+              unquoteCdTarget(cdTarget),
+            );
+            // Verify the directory exists (shared files or this session's
+            // /tmp). The path goes in as a literal, so `$(...)`, backticks
+            // and any quotes left in the target never run or expand.
             const check = await exec(
-              `test -d "${resolved}" && echo ok || echo fail`,
+              `test -d ${shellQuote(resolved)} && echo ok || echo fail`,
               { cwd: "/" },
             );
             if (check?.stdout.trim() !== "ok") {
