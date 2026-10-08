@@ -84,6 +84,10 @@ export const READ_ONLY_ERROR = "EROFS: read-only file system";
 const readOnlyError = (p: string): Error =>
   new Error(`${READ_ONLY_ERROR}, ${p} (only /tmp is writable)`);
 
+/** stderr line of a modern call that ran past the request deadline (exit 124). */
+export const DEADLINE_ERROR =
+  "deadline: the request deadline was reached; the output may be incomplete";
+
 /** The segments of `p`, read from "/" with `//`, `.` and `..` collapsed. */
 function segmentsOf(p: string): string[] {
   const segments: string[] = [];
@@ -238,7 +242,7 @@ export interface BashToolOptions {
   era?: "legacy" | "modern";
   /**
    * Aborts the command when it fires (just-bash stops at the next statement
-   * boundary; `sleep` wakes at once). The modern leg passes the request's
+   * start; `sleep` wakes at once). The modern leg passes the request's
    * deadline signal. Legacy callers omit it.
    */
   signal?: AbortSignal;
@@ -325,6 +329,10 @@ export function registerBashTool(
       if (writes.length === 0) throw error;
       result = { stdout: "", stderr: "", exitCode: 1 };
     }
+    // The deadline result depends only on whether the signal had fired when
+    // exec() returned. A command that finishes just as the deadline fires
+    // is reported as a deadline too; that race is accepted.
+    const deadlineReached = execOptions.signal?.aborted === true;
     if (refused) return null;
     // A refused redirect and `rm -f` print no error, so say it here.
     if (writes.length > 0 && !result.stderr.includes(READ_ONLY_ERROR)) {
@@ -332,6 +340,18 @@ export function registerBashTool(
         stdout: result.stdout,
         stderr: `${result.stderr}${readOnlyError(writes[0]).message}\n`,
         exitCode: result.exitCode || 1,
+      };
+    }
+    // Known limit: just-bash checks the signal only at the start of a
+    // statement, so the rest of an `&&`/`||` list that was running when the
+    // deadline fired still runs. The request slot is already freed. The
+    // output so far is kept; the deadline line and exit 124 replace the
+    // command's own status.
+    if (deadlineReached) {
+      result = {
+        stdout: result.stdout,
+        stderr: `${result.stderr}${DEADLINE_ERROR}\n`,
+        exitCode: 124,
       };
     }
     return result;
