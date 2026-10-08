@@ -2929,7 +2929,11 @@ app.get(
   "/.well-known/skills/default/skill.md",
   (_req: Request, res: Response) => {
     try {
-      res.type("text/markdown").send(generateSkillMd(getServerConfig()));
+      res.type("text/markdown").send(
+        generateSkillMd(getServerConfig(), {
+          modernProtocol: modernRoute !== undefined,
+        }),
+      );
     } catch (err) {
       console.error("[skill.md] Generation failed:", err);
       res.status(500).type("text/plain").send("Error generating skill.md");
