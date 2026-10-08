@@ -18,36 +18,42 @@ name: Weekly Search Report
 # engineering. The success ping is best-effort: an unset success webhook simply
 # skips the ping and never affects the exit code or any fail-loud path.
 #
-# Required repository secrets:
+# Required secrets (the run fails without them):
 #   PATHFINDER_ANALYTICS_TOKEN  Bearer token for GET /api/analytics/* on the
 #                               production MCP (https://mcp.copilotkit.ai). When
 #                               unset, the script FAILS LOUD (non-zero exit +
 #                               Slack alert) — the report cannot run without it.
 #   NOTION_TOKEN                Notion integration token used to publish the
 #                               report page. A publish failure is fail-loud.
-#   SLACK_WEBHOOK_OSS_ALERTS    Incoming-webhook URL (org-level secret shared by
-#                               every workflow). Mapped to the script's
-#                               SLACK_WEBHOOK env. Posted to only on FAILURE
-#                               (#oss-alerts). When unset, the alert no-ops but
-#                               the non-zero exit still stands.
-#   SLACK_WEBHOOK_ENGR          Incoming-webhook URL for #engr (B0T app). Mapped
-#                               to the script's SLACK_ENGR_WEBHOOK env. Posted to
-#                               only on SUCCESS (the weekly digest). When unset,
-#                               the success ping is simply skipped.
 #
-# Optional repository secret:
-#   SHARED_CLIENT_IDS           OAuth client ids, separated by commas or
-#                               newlines (one per line works), that many users
-#                               share (a hosted connector reusing one DCR
-#                               registration). The headline counts their rows
-#                               by IP + User-Agent instead (rows with no usable
-#                               IP still count by client id). Kept out of git on
-#                               purpose. When unset, every client id is one
-#                               client.
+# Optional secrets (the run still works without them):
+#   SLACK_WEBHOOK_OSS_ALERTS    Org-level secret: incoming-webhook URL for
+#                               #oss-alerts. Mapped to the script's
+#                               SLACK_WEBHOOK env. Posted to only on FAILURE.
+#                               When unset, the alert no-ops but the non-zero
+#                               exit still stands.
+#   SLACK_WEBHOOK_ENGR          Org-level secret: incoming-webhook URL for #engr
+#                               (B0T app). Mapped to the script's
+#                               SLACK_ENGR_WEBHOOK env. Posted to only on SUCCESS
+#                               (the weekly digest). When unset, the success
+#                               ping is simply skipped.
+#   SHARED_CLIENT_IDS           Repository secret: OAuth client ids, separated
+#                               by commas or newlines (one per line works), that
+#                               many users share (a hosted connector reusing one
+#                               DCR registration). The headline counts their
+#                               rows by IP + User-Agent instead (rows with no
+#                               usable IP still count by client id). Kept out of
+#                               git on purpose. When unset, every client id is
+#                               one client. When SET, the server must confirm
+#                               the list (shared_client_ids_applied in
+#                               /summary); if it does not (an older
+#                               deployment), the run FAILS LOUD.
 on:
   schedule:
     # Weekly, Sunday ~09:07 UTC — off the :00 mark to avoid the cron stampede.
-    # A Sunday run reports the prior Mon–Sun 7-day window.
+    # With REPORT_DAYS=7 a Sunday run reports 7 UTC calendar days, Monday through
+    # Sunday inclusive, but Sunday only up to the run time (~09:07 UTC), so most
+    # of Sunday's traffic is not in the report (see reportWindow in the script).
     - cron: "7 9 * * 0"
   workflow_dispatch:
 
@@ -97,12 +103,14 @@ jobs:
           # User-Agent (rows with no usable IP still count by client id). The
           # value lives only in the repository secret; set it with
           # `gh secret set SHARED_CLIENT_IDS --repo CopilotKit/pathfinder`.
-          # Unset → empty → no ids are shared.
+          # Unset → empty → no ids are shared. Set → the run fails if the
+          # server does not confirm the list.
           SHARED_CLIENT_IDS: ${{ secrets.SHARED_CLIENT_IDS }}
         run: npx tsx scripts/weekly-search-report/weekly-search-report.ts --report /tmp/weekly-report.md
 
-      # Keep the rendered report as a build artifact for inspection even when
-      # Notion publishing is not yet configured.
+      # Keep the rendered report as a build artifact for inspection. The script
+      # writes --report before it publishes, so the report survives a failed
+      # Notion publish (the run still fails). NOTION_TOKEN is required.
       - name: Upload weekly report artifact
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

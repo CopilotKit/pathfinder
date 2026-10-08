@@ -4,7 +4,9 @@ server:
   max_sessions: 1000
   session_ttl_minutes: 30
   session_unused_ttl_minutes: 15
-  # Anthropic crawler — bypasses the per-IP session limit and the modern per-IP rate limit (requires trust_proxy: true to match the forwarded IP)
+  # Anthropic crawler — bypasses the per-IP session limit and, when
+  # PATHFINDER_MODERN_PROTOCOL is on, the modern per-IP rate limit (requires
+  # trust_proxy: true to match the forwarded IP)
   allowlist: ["160.79.106.35"]
   # Safe to enable: Railway's edge discards any client-supplied X-Forwarded-For
   # and sets its own trusted value, so the leftmost XFF entry is the real peer.
@@ -191,7 +193,7 @@ tools:
 
   - name: search-code
     type: search
-    description: "Search the CopilotKit/CopilotKit source code (React UI, hooks, runtime, CSS, framework adapters) to understand how something is implemented or find code examples. Covers library/package source only — NOT example or showcase apps, NOT generated .d.ts type declarations, and NOT the AG-UI protocol SDK (use search-ag-ui-code for that). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    description: "Search the CopilotKit/CopilotKit source code (React UI, hooks, runtime, framework adapters) to understand how something is implemented or find code examples. Covers library/package source only — NOT example or showcase apps, NOT generated .d.ts type declarations, and NOT the AG-UI protocol SDK (use search-ag-ui-code for that). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: code
     default_limit: 10
     max_limit: 20
@@ -211,7 +213,7 @@ tools:
 
   - name: search-ag-ui-code
     type: search
-    description: "Search the AG-UI protocol SDK source code across languages — TypeScript SDK packages, the Python SDK and framework integration adapters (LangGraph, CrewAI, etc.), and the JVM/multi-language community SDK. Use this to understand AG-UI protocol types, events, encoders, and client/adapter implementations. This is AG-UI SDK code only — NOT CopilotKit React/CSS/hooks (use search-code) and NOT prose docs (use search-ag-ui-docs). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
+    description: "Search the AG-UI protocol SDK source code across languages — TypeScript SDK packages, the Python SDK and framework integration adapters (LangGraph, CrewAI, etc.), and the JVM/multi-language community SDK. Use this to understand AG-UI protocol types, events, encoders, and client/adapter implementations. This is AG-UI SDK code only — NOT CopilotKit React/hooks (use search-code) and NOT prose docs (use search-ag-ui-docs). This is a semantic search, so prefer performing multiple queries with different phrases instead of a single long query, until you find all the context you need."
     source: ag-ui-code
     default_limit: 10
     max_limit: 20
@@ -273,11 +275,17 @@ indexing:
 analytics:
   enabled: true
   # Machines that forward somebody else's text into the tools verbatim. Their
-  # traffic is real but it is NOT a user query, so it is excluded from Top
-  # Queries, the weekly search report, the gap analysis and the unique-IP /
-  # session counts. The dashboard's "Excluded Machine-Relay Traffic" panel
-  # enumerates what each rule removed; `?request_source=relay` on any
-  # analytics endpoint reads the excluded rows back.
+  # traffic is real but it is NOT a user query, so it is excluded from every
+  # default (real-user) analytics reader: the summary totals, empty and
+  # low-confidence rates, latency, per-day and per-source counts, unique-IP /
+  # session counts, Top Queries, empty queries, the tool counts and
+  # breakdown, and the Atlas user-query denominator. So it also drops out of
+  # the weekly search report and the gap analysis. Only the summary's
+  # all-time total and the dashboard's "Blocked Queries" panel keep it (that
+  # panel has no request-source filter). The dashboard's "Excluded
+  # Machine-Relay Traffic" panel enumerates what each rule removed;
+  # `?request_source=relay` on any analytics endpoint reads the excluded rows
+  # back.
   #
   # Measured 2026-09-12 over a 7-day window: this relay produced 46 of 1,318
   # rows from ONE IP (152.55.178.126, inside Railway's 152.55.176.0/20) with
@@ -287,9 +295,12 @@ analytics:
   # marketing copy carrying live backlinks — ranked in Top Queries and were
   # on course to be published verbatim into Notion.
   #
-  # DELETE THIS RULE once the relay sends `X-Pathfinder-Source: github-triage`
-  # on every request (2026-07-28 clients) or at session init (2025-era clients): that header tags its rows `relay` and the exclusion
-  # holds without any fingerprint. The rule is the bridge, not the fix.
+  # DELETE THIS RULE once the relay sends an X-Pathfinder-Source value that
+  # maps to `relay` (`relay`, `outpost` or `github-triage`; see
+  # REQUEST_SOURCE_ALIASES) on every request (2026-07-28 clients) or at
+  # session init (2025-era clients): that header tags its rows `relay` and
+  # the exclusion holds
+  # without any fingerprint. The rule is the bridge, not the fix.
   machine_relays:
     - name: github-issue-triage
       reason: >-
@@ -300,14 +311,15 @@ analytics:
 
     # Measured 2026-09-12 over the full 90-day retention (22,238 rows): User-Agent
     # `Python-urllib/3.9` accounts for 258 rows from ONE IP in ONE 55-second burst
-    # (2026-09-10 15:30 UTC) — the single largest session in retention by 3.3x
-    # (257 rows; the biggest legitimate session is 77 rows over 6 minutes). That
-    # IP is a CopilotKit engineer's workstation, and `Python-urllib/3.9` is what
-    # the macOS system `python3` (3.9.6) sends: an ad-hoc replay harness, run by
-    # hand, that fired a de-duplicated corpus of 257 queries at search-docs /
-    # search-code / search-ag-ui-*. 206 of those 258 distinct texts are VERBATIM
-    # copies of queries other clients had already logged — the harness forwards
-    # other people's text into the tools, which is exactly what this list is for.
+    # (2026-09-10 15:30 UTC). 257 of those rows are in one session, the single
+    # largest session in retention by 3.3x (the biggest legitimate session is 77
+    # rows over 6 minutes); the 258th row is outside it. That IP is a CopilotKit
+    # engineer's workstation, and `Python-urllib/3.9` is what the macOS system
+    # `python3` (3.9.6) sends: an ad-hoc replay harness, run by hand, that fired
+    # a de-duplicated corpus of queries at search-docs / search-code /
+    # search-ag-ui-*. 206 of its 258 query texts are VERBATIM copies of queries
+    # other clients had already logged — the harness forwards other people's
+    # text into the tools, which is exactly what this list is for.
     #
     # It is not abuse and it costs nothing to serve; what it does is impersonate
     # demand. In a 7-day window it was 252 of 1,258 Top Queries rows (20%), it
@@ -322,7 +334,8 @@ analytics:
     # personal-address leak in a public repo.
     #
     # DELETE THIS RULE once ad-hoc harnesses send `X-Pathfinder-Source: analysis`
-    # on every request (2026-07-28 clients) or at session init (2025-era clients) — that tag already excludes them, with no fingerprint.
+    # on every request (2026-07-28 clients) or at session init (2025-era
+    # clients) — that tag already excludes them, with no fingerprint.
     - name: adhoc-python-replay-harness
       reason: >-
         Ad-hoc Python replay harness (macOS system python3, stdlib urllib) —
@@ -340,6 +353,10 @@ webhook:
   path_triggers:
     docs:
       - "showcase/shell-docs/src/content/"
+    # An empty list matches EVERY path (touchesPaths in src/webhooks/github.ts),
+    # so every push to CopilotKit/CopilotKit's default branch reindexes `code`,
+    # and, because `code` has no prefix to narrow on, the whole repo is queued
+    # (docs included). It does not mean "never".
     code: []
     ag-ui-docs:
       - "docs/"

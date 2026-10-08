@@ -148,7 +148,7 @@ For session-based connections, the server sends one event named `pathfinder.sess
 Connections that use the 2026-07-28 (stateless) protocol have no session, so for them the server sends a separate event named `pathfinder.client.seen`. It is sent only when `PATHFINDER_MODERN_PROTOCOL` is enabled on the server (it is off by default), and, on a best-effort basis, once per IP address and User-Agent per 24 hours per server process (the server tracks up to 10,000 recently seen clients, so an evicted client can be sent again sooner). It contains:
 
 - the client's IP address
-- the User-Agent string
+- the User-Agent string, cut to its first 256 bytes (Node reads header values as latin1, one character per byte, so this is 256 characters for an ASCII User-Agent, and a cut can split a multi-byte UTF-8 character)
 - the MCP transport (`streamable_http`)
 - the protocol era (`modern`)
 - whether the client presented an OAuth bearer token
