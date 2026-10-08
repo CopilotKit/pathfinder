@@ -1171,8 +1171,16 @@ export function handleSessionInitAccept(opts: {
 }
 
 /**
- * Rollback helper for the `server.connect(transport)` /
- * `completeInitRequestSafely` path in the /mcp POST initialize handler.
+ * Rolls back a legacy session that the /mcp POST initialize handler committed
+ * (maps, ipLimiter slot) before `server.connect(transport)`. The handler calls
+ * it in two cases:
+ *
+ * - `server.connect` or `completeInitRequestSafely` throws. The caller then
+ *   rethrows, so the outer catch-all writes the 500 body (preserving the
+ *   pre-existing response behavior).
+ * - The transport rejects the initialize (406 bad Accept, 400 malformed
+ *   JSON-RPC message) before it assigns a session id. No error is thrown: the
+ *   transport already wrote the 4xx, and the caller returns.
  *
  * Design invariant: cleanup runs EXACTLY ONCE for this sid.
  *
@@ -1187,10 +1195,6 @@ export function handleSessionInitAccept(opts: {
  * rollback that bails before ipLimiter.remove leaks the counter against
  * this IP until TTL reap, which is the exact failure mode this helper
  * exists to prevent.
- *
- * Caller (the /mcp POST handler) wraps server.connect + handleRequest in a
- * try/catch, invokes this helper, then rethrows so the outer catch-all
- * writes the 500 body (preserving the pre-existing response behavior).
  *
  * Exported for tests.
  */
@@ -1245,7 +1249,7 @@ export function rollbackSessionAfterConnectFailure(opts: {
     limiter?.remove(sid);
   } catch (e) {
     console.error(
-      `[mcp] ipLimiter rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      `[mcp] ipLimiter cleanup failed during init rollback for ${sid.slice(0, 8)}:`,
       e,
     );
   }
@@ -1253,7 +1257,7 @@ export function rollbackSessionAfterConnectFailure(opts: {
     sessionState?.cleanup(sid);
   } catch (e) {
     console.error(
-      `[mcp] sessionStateManager rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      `[mcp] sessionStateManager cleanup failed during init rollback for ${sid.slice(0, 8)}:`,
       e,
     );
   }
@@ -1261,7 +1265,7 @@ export function rollbackSessionAfterConnectFailure(opts: {
     workspace?.cleanup(sid);
   } catch (e) {
     console.error(
-      `[mcp] workspaceManager rollback after connect-throw failed for ${sid.slice(0, 8)}:`,
+      `[mcp] workspaceManager cleanup failed during init rollback for ${sid.slice(0, 8)}:`,
       e,
     );
   }
@@ -1272,7 +1276,7 @@ export function rollbackSessionAfterConnectFailure(opts: {
     .then(() => transport.close())
     .catch((closeErr) => {
       console.error(
-        `[mcp] transport.close after server.connect/handleRequest throw failed for ${sid.slice(0, 8)}:`,
+        `[mcp] transport.close failed during init rollback for ${sid.slice(0, 8)}:`,
         closeErr,
       );
     })
@@ -2077,36 +2081,14 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         drainRejectedSidForInlineRollback(preSid);
         return;
       }
-      // Register maps now so handleSessionInitAccept's rollback has
-      // something to delete + sessionStateManager cleanup runs against a
-      // live entry.
+      // Register maps now so the rollbacks below have something to delete +
+      // sessionStateManager cleanup runs against a live entry.
       transports[preSid] = transport;
       sessionLastActivity[preSid] = Date.now();
-      const accepted = handleSessionInitAccept({
-        transport,
-        sid: preSid,
-        ip,
-        transports,
-        sessionLastActivity,
-        ipLimiter,
-        workspaceManager,
-        sessionStateManager,
-        res,
-        p2pTelemetry,
-        userAgent: req.headers["user-agent"] ?? "",
-        authenticated: !!(req as Request & { auth?: AuthContext }).auth,
-      });
-      if (!accepted) {
-        // Rollback already tore down the transport + wrote the 503 body (if
-        // headers weren't sent yet). Skip createMcpServer / server.connect /
-        // transport.handleRequest entirely — the transport is closed and
-        // creating an MCP server for it would immediately orphan. Drain the
-        // rejected-sid marker here for the same reason documented in the
-        // tryAdd-fail early return above: onclose never gets wired on this
-        // path, so the Set would otherwise leak forever.
-        drainRejectedSidForInlineRollback(preSid);
-        return;
-      }
+      // handleSessionInitAccept (the "New session" log and the
+      // pathfinder.session.created event) runs further down, only after the
+      // transport accepted the initialize. A rejected initialize must not
+      // announce a session that never existed.
       transport.onclose = () => {
         const sid = transport.sessionId;
         if (!sid) return;
@@ -2200,7 +2182,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         () => sessionUserAgent,
         () => analyticsCtx,
       );
-      // Z-1: server.connect(transport) can throw AFTER handleSessionInitAccept
+      // Z-1: server.connect(transport) can throw AFTER the pre-flight above
       // committed maps + ipLimiter counter + onclose wiring. Without an
       // explicit rollback, the session is stranded against
       // max_sessions_per_ip until TTL reap because nothing calls
@@ -2231,6 +2213,46 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         });
         throw connectErr;
       }
+      // The transport can reject the initialize itself (406 bad Accept, 400
+      // malformed JSON-RPC message) before it assigns a session id. The sid
+      // was already committed above (maps, ipLimiter slot), so without this
+      // rollback it would hold the per-IP slot until the idle reaper ran,
+      // and a client retrying in a loop would lock itself out with 429s.
+      if (!initOutcome.rejected && transport.sessionId === undefined) {
+        console.warn(
+          `[mcp] initialize rejected by transport (${res.statusCode}), rolled back session ${preSid.slice(0, 8)} [${ip}]`,
+        );
+        rollbackSessionAfterConnectFailure({
+          transport,
+          sid: preSid,
+          transports,
+          sessionLastActivity,
+          ipLimiter,
+          sessionStateManager,
+          workspaceManager,
+        });
+        return;
+      }
+      // The transport accepted the initialize: announce the session (the
+      // "New session" log and the pathfinder.session.created event). Running
+      // this after the rejection check above keeps a client that loops on a
+      // rejected initialize from sending an unbounded number of events for
+      // sessions that never existed. handleSessionInitAccept always returns
+      // true (lazy workspace allocation), so its result is not checked.
+      handleSessionInitAccept({
+        transport,
+        sid: preSid,
+        ip,
+        transports,
+        sessionLastActivity,
+        ipLimiter,
+        workspaceManager,
+        sessionStateManager,
+        res,
+        p2pTelemetry,
+        userAgent: req.headers["user-agent"] ?? "",
+        authenticated: !!(req as Request & { auth?: AuthContext }).auth,
+      });
       // Log the initialize only when connect and completeInitRequestSafely
       // did not throw (a throw leaves above), initOutcome.rejected is false,
       // and res.statusCode is below 400.
