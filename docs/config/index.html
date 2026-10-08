@@ -573,7 +573,7 @@
   <span class="key">max_sessions_per_ip:</span> <span class="value">20</span>           <span class="comment"># Max concurrent MCP sessions per IP (default: 20)</span>
   <span class="key">session_ttl_minutes:</span> <span class="value">30</span>           <span class="comment"># Idle timeout for active sessions (default: 30)</span>
   <span class="key">session_unused_ttl_minutes:</span> <span class="value">15</span>    <span class="comment"># Idle timeout for unused sessions (default: 15)</span>
-  <span class="key">allowlist:</span>                       <span class="comment"># IPs / CIDRs that bypass max_sessions_per_ip and the modern per-IP rate limit (default: [])</span>
+  <span class="key">allowlist:</span>                       <span class="comment"># IPs / CIDRs that bypass max_sessions_per_ip, the per-IP body-read cap and the modern per-IP rate limit (default: [])</span>
     <span class="comment"># NOTE: entries match the per-request client IP only. Behind a reverse proxy</span>
     <span class="comment"># (Railway, Fly, Nginx, etc.) the server only ever sees the proxy's TCP socket</span>
     <span class="comment"># peer as the client IP. That IP is not stable across deploys and should not be</span>
@@ -626,8 +626,9 @@
           </li>
           <li>
             <strong>allowlist</strong> — Array of IPv4/IPv6 addresses or CIDR
-            ranges that bypass <code>max_sessions_per_ip</code> and the modern
-            per-IP rate limit (<code>modern_rpm_per_ip</code> and
+            ranges that bypass <code>max_sessions_per_ip</code>, the per-IP
+            concurrent body-read cap (see below) and the modern per-IP rate
+            limit (<code>modern_rpm_per_ip</code> and
             <code>modern_burst_per_ip</code>), but not
             <code>modern_max_inflight</code>. Use for trusted crawlers (e.g.
             <code>160.79.106.35</code> — Anthropic Assistant) or internal
@@ -660,8 +661,13 @@
             limit gets HTTP <code>429</code> with a JSON-RPC error (code
             <code>-32005</code>, the request <code>id</code> echoed,
             <code>data.retryAfterSeconds</code>) and a
-            <code>Retry-After</code> header with the same number of seconds.
-            Optional, defaults to 120.
+            <code>Retry-After</code> header with the same number of seconds. A
+            request whose <code>MCP-Protocol-Version</code> header names the
+            2026-07-28 revision, and whose body is not JSON-parsed (a non-JSON
+            or missing <code>Content-Type</code>), is checked before its body is
+            read: from an IP with no requests left, it gets the same
+            <code>429</code> with a <code>null</code> <code>id</code>, and its
+            body is discarded unread. Optional, defaults to 120.
           </li>
           <li>
             <strong>modern_burst_per_ip</strong> — Burst size (token-bucket
@@ -682,14 +688,32 @@
             <code>Retry-After: 1</code>. Optional, defaults to 200.
           </li>
           <li>
+            <strong>Concurrent body-read cap</strong> (fixed at 4, not a YAML
+            key) — Applies only when <code>PATHFINDER_MODERN_PROTOCOL</code> is
+            on. To tell a 2026-07-28 request from a 2025-era one, the server
+            reads a <code>POST /mcp</code> body that is not JSON-parsed (a
+            non-JSON or missing <code>Content-Type</code>), up to 4 MiB. One
+            client IP may have at most 4 of these reads in progress at once, on
+            either era. One more gets HTTP <code>429</code> with a JSON-RPC
+            error (code <code>-32005</code>, a <code>null</code>
+            <code>id</code>, <code>data.retryAfterSeconds</code> of 1) and
+            <code>Retry-After: 1</code>, and its body is discarded unread. A
+            request with <code>Content-Type: application/json</code> never
+            counts. Entries in <code>allowlist</code> bypass this cap.
+          </li>
+          <li>
             <strong>modern_request_timeout_ms</strong> — Wall-clock deadline for
             one 2026-07-28 request, in milliseconds. When it passes, the request
             releases its <code>modern_max_inflight</code> slot, a warn line is
-            logged, and a running bash command is aborted. Open
-            <code>subscriptions/listen</code> streams are not subject to the
-            deadline. At most 2147483647; a larger value fails config load.
-            Optional, defaults to 60000 (the MCP SDK's default client request
-            timeout).
+            logged, and a running bash command is aborted. The bash command
+            stops at the start of its next statement (a <code>sleep</code> wakes
+            at once), so the rest of a running <code>&amp;&amp;</code> or
+            <code>||</code> list can still run. Its result keeps the output so
+            far, adds a <code>deadline:</code> line to stderr and exits
+            <code>124</code>. Open <code>subscriptions/listen</code> streams are
+            not subject to the deadline. At most 2147483647; a larger value
+            fails config load. Optional, defaults to 60000 (the MCP SDK's
+            default client request timeout).
           </li>
           <li>
             <strong>PATHFINDER_MODERN_PROTOCOL</strong> (environment variable,
@@ -1465,19 +1489,27 @@ https://docs.example.com/getting-started</div>
         <div class="gap-card">
           <h4>Dimension mismatch detection</h4>
           <p>
-            At startup, Pathfinder reads the vector size of one stored row in
-            the <code>chunks</code> table. If it differs from the configured
+            At startup, Pathfinder reads the declared vector size of the
+            <code>chunks.embedding</code> column from the database catalog, so
+            an empty table is checked too. If it differs from the configured
             <code>dimensions</code> (for example, after you change the embedding
             provider or model on an existing database), Pathfinder logs
             <code>DIMENSION MISMATCH</code> and
-            <strong>refuses to start</strong>. An empty table passes the check.
+            <strong>refuses to start</strong>. It also refuses to start when
+            <code>chunks.embedding</code> is not a <code>vector</code> column. A
+            <code>vector</code> column with no declared size falls back to the
+            size of the first row with a non-NULL embedding; if there is no such
+            row, it logs a
+            <code>[db] Dimension check NOT performed:</code> warning and startup
+            goes on. A missing <code>chunks</code> table passes the check
+            (startup creates it with the configured size).
           </p>
           <p>
-            Any other error during the check only logs a
-            <code>[db] Dimension check skipped:</code> warning, and startup goes
-            on past the check. This includes a missing table, but also a
-            connection, permission or query error. A skipped check does not
-            prove that the dimensions match, so read that warning when you
+            Any other error during the check (a connection, permission or query
+            error) also only logs a
+            <code>[db] Dimension check NOT performed:</code> warning, and
+            startup goes on past the check. A check that was not performed does
+            not prove that the dimensions match, so read that warning when you
             change the embedding config.
           </p>
           <p>

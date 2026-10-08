@@ -306,10 +306,11 @@ describe("docs consistency — modern leg", () => {
     });
   }
 
-  it("the allowlist docs name both per-IP limits and exclude modern_max_inflight", () => {
+  it("the allowlist docs name every per-IP limit and exclude modern_max_inflight", () => {
     const item = htmlItem("allowlist");
     expect(item).toMatch(/max_sessions_per_ip/);
-    expect(item).toMatch(/modern[\s\S]{0,20}per-IP rate limit/i);
+    expect(item).toMatch(/per-IP\s+concurrent body-read cap/);
+    expect(item).toMatch(/modern[\s\S]{0,20}per-IP rate\s+limit/i);
     expect(item).toMatch(/modern_rpm_per_ip/);
     expect(item).toMatch(/but not[\s\S]{0,40}modern_max_inflight/);
   });

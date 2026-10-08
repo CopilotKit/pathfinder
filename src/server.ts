@@ -705,7 +705,8 @@ export function retryAfterSecondsFromTtl(): number {
 /**
  * Short-lived set of session IDs that were torn down inline during /mcp init:
  * by handleSessionInitRaceFallback, or by rollbackSessionAfterConnectFailure
- * after a server.connect / completeInitRequestSafely throw. Both paths call
+ * after a server.connect / completeInitRequestSafely throw or after the
+ * transport rejects the initialize. Both paths call
  * transport.close(), and the SDK's close() runs transport.onclose
  * synchronously, before close() resolves. When the route's onclose sees the
  * marker, it skips its cleanup chain (sessionStateManager.cleanup,
@@ -768,8 +769,7 @@ export function __resetRejectedSidsForTesting(): void {
  * handleSessionInitRaceFallback, which still calls `rejectedSids.add(sid)` so
  * that if onclose WERE wired, it would suppress double-cleanup. But when no
  * onclose handler is attached, the marker would otherwise accumulate forever
- * under rate-limit hammering. (The `!accepted` early return also drains, but
- * handleSessionInitAccept always returns true, so that branch never runs.)
+ * under rate-limit hammering.
  *
  * Calling this immediately before the early-return guarantees the Set stays
  * bounded without racing the SDK's async onclose. Exported so tests can
@@ -1104,9 +1104,11 @@ export function write429RateLimited(
 
 /**
  * Post-accept handler for a /mcp initialize. The POST /mcp initialize branch
- * calls it synchronously, after ipLimiter.tryAdd succeeds and the maps are
- * registered, and before createMcpServer, server.connect and handleRequest.
- * The `onsessioninitialized` callback does not call it. Kept as a separate
+ * calls it only after server.connect and the initialize request completed
+ * and the transport assigned a session id. A connect throw or a
+ * transport-rejected initialize (406, 400) rolls back and returns first, so
+ * it never reaches this call. The `onsessioninitialized` callback does not
+ * call it. Kept as a separate
  * function so the "new session accepted" side effects (the connect log line +
  * the pathfinder.session.created telemetry emit) can be unit-tested in
  * isolation without driving a full SDK lifecycle.
@@ -1159,11 +1161,10 @@ export function handleSessionInitAccept(opts: {
    * pathfinder.session.created event. Both optional to preserve existing
    * test call sites that don't care; production caller passes them when
    * the hosted instance has telemetry configured. Emit fires for every
-   * session this handler accepts (it has no rejection path). Unlike the SSE
+   * session this handler accepts (it has no rejection path). Like the SSE
    * handler, which emits only after `await server.connect` succeeds, this
-   * runs BEFORE createMcpServer and server.connect, so a session that is
-   * later rolled back after a connect failure (or that fails in
-   * createMcpServer) has already been counted.
+   * runs only after the transport accepted the initialize, so a rejected or
+   * rolled-back initialize is not counted.
    */
   p2pTelemetry?: {
     isEnabled: () => boolean;
@@ -1186,9 +1187,9 @@ export function handleSessionInitAccept(opts: {
     `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(tMap).length} active) [${ip}]`,
   );
 
-  // Telemetry — emitted on every accepted session, before server.connect
-  // (see the p2pTelemetry option above; the SSE handler emits after
-  // connect). The client's own no-op handles disabled/unconfigured cases;
+  // Telemetry — emitted on every accepted session, after the transport
+  // accepted the initialize (see the p2pTelemetry option above). The
+  // client's own no-op handles disabled/unconfigured cases;
   // isEnabled() avoids constructing the property bag on every connect when
   // telemetry is off.
   if (p2pTelemetry?.isEnabled()) {

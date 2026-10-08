@@ -5,8 +5,9 @@ server:
   session_ttl_minutes: 30
   session_unused_ttl_minutes: 15
   # Anthropic crawler — bypasses the per-IP session limit and, when
-  # PATHFINDER_MODERN_PROTOCOL is on, the modern per-IP rate limit (requires
-  # trust_proxy: true to match the forwarded IP)
+  # PATHFINDER_MODERN_PROTOCOL is on, the modern per-IP rate limit and the
+  # per-IP concurrent body-read cap (requires trust_proxy: true to match the
+  # forwarded IP)
   allowlist: ["160.79.106.35"]
   # Safe to enable: Railway's edge discards any client-supplied X-Forwarded-For
   # and sets its own trusted value, so the leftmost XFF entry is the real peer.
