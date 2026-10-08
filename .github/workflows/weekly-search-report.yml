@@ -36,7 +36,8 @@ name: Weekly Search Report
 #                               the success ping is simply skipped.
 #
 # Optional repository secret:
-#   SHARED_CLIENT_IDS           Comma-separated OAuth client ids that many users
+#   SHARED_CLIENT_IDS           OAuth client ids, separated by commas or
+#                               newlines (one per line works), that many users
 #                               share (a hosted connector reusing one DCR
 #                               registration). The headline counts their rows
 #                               by IP + User-Agent instead (rows with no usable
@@ -91,10 +92,10 @@ jobs:
           ANALYTICS_BASE_URL: "https://mcp.copilotkit.ai"
           # 7-day lookback window.
           REPORT_DAYS: "7"
-          # OAuth client ids that many users share (comma-separated). Rows with
-          # these ids are counted as clients by IP + User-Agent (rows with no
-          # usable IP still count by client id). The value lives only in the
-          # repository secret; set it with
+          # OAuth client ids that many users share (separated by commas or
+          # newlines). Rows with these ids are counted as clients by IP +
+          # User-Agent (rows with no usable IP still count by client id). The
+          # value lives only in the repository secret; set it with
           # `gh secret set SHARED_CLIENT_IDS --repo CopilotKit/pathfinder`.
           # Unset → empty → no ids are shared.
           SHARED_CLIENT_IDS: ${{ secrets.SHARED_CLIENT_IDS }}

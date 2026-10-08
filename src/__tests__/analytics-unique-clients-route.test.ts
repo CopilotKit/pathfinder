@@ -117,4 +117,43 @@ describe("GET /api/analytics/summary shared_client_ids (real SQL)", () => {
     expect(body.shared_client_ids_applied).toBe(1);
     expect(body.unique_client_count_window).toBe(1);
   });
+
+  it("applies a newline-separated list the same as a comma-separated one", async () => {
+    await db.exec("DELETE FROM query_log");
+    for (const id of ["nl-a", "nl-b"]) {
+      await db.query(
+        `INSERT INTO query_log
+          (tool_name, query_text, result_count, latency_ms, request_source,
+           client_ip, user_agent, auth_client_id, transport, protocol_era)
+         VALUES ('search-docs','q',1,25,'user','203.0.113.7','ua1',$1,
+                 'streamable_http','modern')`,
+        [id],
+      );
+    }
+    const results = [];
+    for (const raw of [
+      "nl-a,nl-b",
+      "nl-a\nnl-b\n",
+      "nl-a\r\nnl-b",
+      "nl-a,\nnl-b",
+    ]) {
+      const res = await httpGet(
+        server,
+        `/api/analytics/summary?days=7&shared_client_ids=${encodeURIComponent(raw)}`,
+      );
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      results.push([
+        body.shared_client_ids_applied,
+        body.unique_client_count_window,
+      ]);
+    }
+    // Both ids share one IP + User-Agent, so listing both gives one client.
+    expect(results).toEqual([
+      [2, 1],
+      [2, 1],
+      [2, 1],
+      [2, 1],
+    ]);
+  });
 });

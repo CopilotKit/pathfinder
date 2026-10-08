@@ -43,7 +43,8 @@
  *                               affects the exit code or any fail-loud path).
  *   ANALYTICS_BASE_URL          Override the analytics host (default prod).
  *   REPORT_DAYS                 Lookback window in days (default 7).
- *   SHARED_CLIENT_IDS           Comma-separated OAuth client ids that many users
+ *   SHARED_CLIENT_IDS           OAuth client ids, separated by commas or
+ *                               newlines (one per line works), that many users
  *                               share (for example, a hosted connector that
  *                               reuses one DCR registration). The script sends
  *                               them to /summary as ?shared_client_ids=, and the
@@ -874,8 +875,12 @@ interface NotionTableBlock extends NotionBlock {
   };
 }
 
-/** Max DATA rows (excluding header) emitted per Notion table. */
-export const NOTION_MAX_TABLE_ROWS = 100;
+/**
+ * Max DATA rows (excluding header) emitted per Notion table. The header row is
+ * also a child of the table block, and Notion caps one request at 100
+ * children, so header + data rows must stay at or under that cap.
+ */
+export const NOTION_MAX_TABLE_ROWS = NOTION_MAX_BLOCKS_PER_REQUEST - 1;
 
 function lineToRichText(line: string): NotionRichText[] {
   if (line.length <= NOTION_RICH_TEXT_LIMIT) {
@@ -1063,15 +1068,16 @@ export interface RunEnv {
 }
 
 /**
- * Parse SHARED_CLIENT_IDS: comma-separated, trimmed, empty entries dropped,
- * duplicates removed (the server dedupes the same way, so the count it
- * echoes back matches this list's length).
+ * Parse SHARED_CLIENT_IDS: ids separated by commas or newlines (LF or CRLF, so
+ * a one-id-per-line secret works), trimmed, empty entries dropped, duplicates
+ * removed. The server parses the same way, so the count it echoes back
+ * matches this list's length.
  */
 export function parseSharedClientIds(raw: string | undefined): string[] {
   return [
     ...new Set(
       (raw ?? "")
-        .split(",")
+        .split(/[,\r\n]/)
         .map((id) => id.trim())
         .filter((id) => id.length > 0),
     ),

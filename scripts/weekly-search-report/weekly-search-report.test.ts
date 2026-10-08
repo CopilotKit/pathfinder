@@ -805,6 +805,10 @@ function blockText(block: any): string {
   return rich.map((r: any) => r.text.content).join("");
 }
 
+function firstCellText(row: any): string {
+  return row.table_row.cells[0].map((r: any) => r.text.content).join("");
+}
+
 describe("markdownToNotionBlocks", () => {
   it("maps headings and bullets to native block types and drops the leading title H1", () => {
     const md = [
@@ -884,18 +888,104 @@ describe("markdownToNotionBlocks", () => {
     expect(content).toBe("a | b");
   });
 
-  it("caps a table at 100 data rows and appends a truncation note", () => {
+  it("caps a table at 99 data rows (100 children with header) and appends a truncation note", () => {
     const lines = ["| Day | Count |", "| --- | --- |"];
     for (let i = 0; i < 150; i++) lines.push(`| d${i} | ${i} |`);
     const blocks = markdownToNotionBlocks(lines.join("\n"));
     const table = blocks.find((b) => b.type === "table") as any;
-    // header + 100 data rows
-    expect(table.table.children.length).toBe(101);
+    // header + 99 data rows = Notion's 100-children cap
+    expect(table.table.children.length).toBe(100);
     const note = blocks.find(
       (b) => b.type === "paragraph" && blockText(b).includes("truncated"),
     );
     expect(note).toBeDefined();
-    expect(blockText(note!)).toContain("150");
+    expect(blockText(note!)).toBe("(table truncated to first 99 rows of 150)");
+  });
+
+  function tableOf(dataRows: number): string {
+    const lines = ["| Day | Count |", "| --- | --- |"];
+    for (let i = 0; i < dataRows; i++) lines.push(`| d${i} | ${i} |`);
+    return lines.join("\n");
+  }
+
+  it("keeps a table of exactly 99 data rows whole, with no truncation note", () => {
+    const blocks = markdownToNotionBlocks(tableOf(99));
+    const tables = blocks.filter((b) => b.type === "table") as any[];
+    expect(tables).toHaveLength(1);
+    expect(tables[0].table.children.length).toBe(100);
+    expect(firstCellText(tables[0].table.children[99])).toBe("d98");
+    expect(blocks.some((b) => blockText(b).includes("truncated"))).toBe(false);
+  });
+
+  it("truncates a table of exactly 100 data rows to 99 and notes it", () => {
+    const blocks = markdownToNotionBlocks(tableOf(100));
+    const tables = blocks.filter((b) => b.type === "table") as any[];
+    expect(tables).toHaveLength(1);
+    expect(tables[0].table.children.length).toBe(100);
+    const notes = blocks.filter((b) => blockText(b).includes("truncated"));
+    expect(notes.map(blockText)).toEqual([
+      "(table truncated to first 99 rows of 100)",
+    ]);
+  });
+});
+
+describe("publishNotionWithClient: Notion 100-children cap", () => {
+  // Notion rejects any single request whose children array (at any nesting
+  // level, including a table block's table_row children) exceeds 100 entries.
+  function maxChildren(node: unknown): number {
+    if (Array.isArray(node)) {
+      return node.reduce((m: number, n) => Math.max(m, maxChildren(n)), 0);
+    }
+    if (node === null || typeof node !== "object") return 0;
+    let max = 0;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "children" && Array.isArray(value)) {
+        max = Math.max(max, value.length);
+      }
+      max = Math.max(max, maxChildren(value));
+    }
+    return max;
+  }
+
+  it("never sends a request with more than 100 children for a max-size table", async () => {
+    const lines = ["# Title", "| Day | Count |", "| --- | --- |"];
+    for (let i = 0; i < 150; i++) lines.push(`| d${i} | ${i} |`);
+    const requests: unknown[] = [];
+    const client: NotionClientLike = {
+      pages: {
+        create: async (args) => {
+          requests.push(args);
+          return { id: "page-cap", url: "https://notion.example/page-cap" };
+        },
+        update: async () => ({}),
+      },
+      blocks: {
+        children: {
+          append: async (args) => {
+            requests.push(args);
+            return {};
+          },
+        },
+      },
+    };
+    await publishNotionWithClient(client, "parent", "Title", lines.join("\n"));
+    expect(requests.length).toBeGreaterThan(0);
+    for (const req of requests) {
+      expect(maxChildren(req)).toBeLessThanOrEqual(
+        NOTION_MAX_BLOCKS_PER_REQUEST,
+      );
+    }
+    // The table must actually be sent, full to the cap: header + 99 rows.
+    const sent = requests.flatMap(
+      (req) => (req as { children?: any[] }).children ?? [],
+    );
+    const tables = sent.filter((b) => b.type === "table");
+    expect(tables).toHaveLength(1);
+    expect(tables[0].table.children.length).toBe(100);
+    expect(firstCellText(tables[0].table.children[0])).toBe("Day");
+    expect(
+      sent.filter((b) => blockText(b).includes("truncated")).map(blockText),
+    ).toEqual(["(table truncated to first 99 rows of 150)"]);
   });
 });
 
@@ -1362,6 +1452,16 @@ describe("headline switch: unique clients, legacy sessions, shared client ids", 
     expect(parseSharedClientIds(" a , b,,a ,")).toEqual(["a", "b"]);
   });
 
+  it("parseSharedClientIds accepts commas, newlines and CRLF alike", () => {
+    const want = ["id-a", "id-b", "id-c"];
+    expect(parseSharedClientIds("id-a,id-b,id-c")).toEqual(want);
+    expect(parseSharedClientIds("id-a\nid-b\nid-c\n")).toEqual(want);
+    expect(parseSharedClientIds("id-a\r\nid-b\r\n\r\nid-c\r\n")).toEqual(want);
+    expect(parseSharedClientIds(" id-a ,\n id-b\r\n,id-c,\nid-a\n")).toEqual(
+      want,
+    );
+  });
+
   function bundleFetch(summary: object, paths: string[]): RunDeps["fetchJson"] {
     return async <T>(path: string): Promise<T> => {
       paths.push(path);
@@ -1479,6 +1579,29 @@ describe("headline switch: unique clients, legacy sessions, shared client ids", 
       await new Promise<void>((done) => server.close(() => done()));
     }
   }, 30_000);
+
+  it.each([
+    ["one id per line (LF)", "id-a\nid-b\n"],
+    ["one id per line (CRLF)", "id-a\r\nid-b\r\n"],
+  ])(
+    "run() sends a %s secret as two ids and succeeds when the server applies 2",
+    async (_label, raw) => {
+      const paths: string[] = [];
+      const rec = makeRecorder({
+        fetchJson: bundleFetch(
+          { ...SUMMARY_FIXTURE, shared_client_ids_applied: 2 },
+          paths,
+        ),
+      });
+      rec.deps.env.SHARED_CLIENT_IDS = raw;
+      await runCatchingExit(rec.deps);
+      expect(paths[0]).toBe(
+        "/api/analytics/summary?days=7&shared_client_ids=id-a%2Cid-b",
+      );
+      expect(rec.exitCodes).toEqual([]);
+      expect(rec.notionCalls).toHaveLength(1);
+    },
+  );
 
   it("run() reads SHARED_CLIENT_IDS from env and fails loud without a confirmation", async () => {
     const paths: string[] = [];

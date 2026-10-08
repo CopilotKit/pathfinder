@@ -1022,6 +1022,26 @@ describe("Analytics server routes (HTTP-level)", () => {
       });
     });
 
+    it.each([
+      ["newline-separated", "a\nb\n"],
+      ["CRLF-separated", "a\r\nb\r\n"],
+      ["mixed commas and newlines", " a ,\nb\r\n,a"],
+    ])("parses a %s list like a comma-separated one", async (_label, raw) => {
+      cfg();
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?days=7&shared_client_ids=" +
+          encodeURIComponent(raw),
+        { Authorization: "Bearer tok" },
+      );
+      expect(res.status).toBe(200);
+      expect(mockGetAnalyticsSummary.mock.calls[0][2]).toEqual({
+        sharedClientIds: ["a", "b"],
+      });
+    });
+
     it("forwards an empty list when the param is absent", async () => {
       cfg();
       await startApp();

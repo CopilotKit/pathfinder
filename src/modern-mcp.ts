@@ -81,6 +81,19 @@ function toolNameOf(body: unknown): string {
 const FIRST_MODERN_PROTOCOL_VERSION = "2026-07-28";
 
 /**
+ * True when the request's MCP-Protocol-Version header names the 2026-07-28
+ * revision or later: the same test as the SDK's isModernProtocolVersion
+ * (date strings compare). It reads only headers, so the /mcp route can ask it
+ * before the body is read.
+ */
+export function claimsModernProtocolByHeader(req: Request): boolean {
+  const header = req.headers["mcp-protocol-version"];
+  return (
+    typeof header === "string" && header.trim() >= FIRST_MODERN_PROTOCOL_VERSION
+  );
+}
+
+/**
  * True when the SDK sends `body` to the modern leg only to reject it as not
  * one JSON-RPC message ({}, [], a scalar, an empty body that express.json
  * turned into {}), and nothing in the request claims the 2026-07-28
@@ -94,11 +107,7 @@ function isUnclaimedShapeRejection(req: Request, body: unknown): boolean {
     return false;
   }
   if (outcome.cell === "batch-with-modern-element") return false;
-  // Same test as the SDK's isModernProtocolVersion (date strings compare).
-  const header = req.headers["mcp-protocol-version"];
-  return (
-    typeof header !== "string" || header.trim() < FIRST_MODERN_PROTOCOL_VERSION
-  );
+  return !claimsModernProtocolByHeader(req);
 }
 
 /** SDK error messages for a request the client got wrong (answered 4xx). */

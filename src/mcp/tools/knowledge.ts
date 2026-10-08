@@ -350,11 +350,16 @@ export function registerKnowledgeTool(
           };
         }
       } catch (error) {
+        // Full detail stays server-side; driver errors can name tables,
+        // SQL and connection targets, so the client gets a generic message
+        // (same contract as the search tool).
         console.error(`[${toolConfig.name}] Knowledge query failed:`, error);
-        const detail = error instanceof Error ? error.message : String(error);
         return {
           content: [
-            { type: "text" as const, text: `Error querying FAQ: ${detail}` },
+            {
+              type: "text" as const,
+              text: "Error: FAQ query failed. Please try again later.",
+            },
           ],
           isError: true,
         };
