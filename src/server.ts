@@ -3465,10 +3465,12 @@ type SharedClientIdsParseResult =
   | { ok: false; status: number; body: Record<string, unknown> };
 
 /**
- * Parse `?shared_client_ids=a,b` for the summary endpoint: a comma-separated
- * list of OAuth client ids that many users share. Entries are trimmed, empty
- * entries are dropped and duplicates are removed. Absent gives `[]`. An array
- * value, more than {@link SHARED_CLIENT_IDS_MAX} ids, or an id longer than
+ * Parse `?shared_client_ids=a,b` for the summary endpoint: a list of OAuth
+ * client ids that many users share, separated by commas or newlines (LF or
+ * CRLF), the same way the weekly report script parses its SHARED_CLIENT_IDS
+ * secret. Entries are trimmed, empty entries are dropped and duplicates are
+ * removed. Absent gives `[]`. An array value, more than
+ * {@link SHARED_CLIENT_IDS_MAX} ids, or an id longer than
  * {@link AUTH_CLIENT_ID_MAX_LEN} gives a 400.
  */
 export function parseSharedClientIds(req: Request): SharedClientIdsParseResult {
@@ -3485,7 +3487,7 @@ export function parseSharedClientIds(req: Request): SharedClientIdsParseResult {
   const ids = [
     ...new Set(
       raw
-        .split(",")
+        .split(/[,\r\n]/)
         .map((id) => id.trim())
         .filter((id) => id.length > 0),
     ),

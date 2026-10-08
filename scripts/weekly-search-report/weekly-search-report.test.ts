@@ -1452,6 +1452,16 @@ describe("headline switch: unique clients, legacy sessions, shared client ids", 
     expect(parseSharedClientIds(" a , b,,a ,")).toEqual(["a", "b"]);
   });
 
+  it("parseSharedClientIds accepts commas, newlines and CRLF alike", () => {
+    const want = ["id-a", "id-b", "id-c"];
+    expect(parseSharedClientIds("id-a,id-b,id-c")).toEqual(want);
+    expect(parseSharedClientIds("id-a\nid-b\nid-c\n")).toEqual(want);
+    expect(parseSharedClientIds("id-a\r\nid-b\r\n\r\nid-c\r\n")).toEqual(want);
+    expect(parseSharedClientIds(" id-a ,\n id-b\r\n,id-c,\nid-a\n")).toEqual(
+      want,
+    );
+  });
+
   function bundleFetch(summary: object, paths: string[]): RunDeps["fetchJson"] {
     return async <T>(path: string): Promise<T> => {
       paths.push(path);
@@ -1569,6 +1579,29 @@ describe("headline switch: unique clients, legacy sessions, shared client ids", 
       await new Promise<void>((done) => server.close(() => done()));
     }
   }, 30_000);
+
+  it.each([
+    ["one id per line (LF)", "id-a\nid-b\n"],
+    ["one id per line (CRLF)", "id-a\r\nid-b\r\n"],
+  ])(
+    "run() sends a %s secret as two ids and succeeds when the server applies 2",
+    async (_label, raw) => {
+      const paths: string[] = [];
+      const rec = makeRecorder({
+        fetchJson: bundleFetch(
+          { ...SUMMARY_FIXTURE, shared_client_ids_applied: 2 },
+          paths,
+        ),
+      });
+      rec.deps.env.SHARED_CLIENT_IDS = raw;
+      await runCatchingExit(rec.deps);
+      expect(paths[0]).toBe(
+        "/api/analytics/summary?days=7&shared_client_ids=id-a%2Cid-b",
+      );
+      expect(rec.exitCodes).toEqual([]);
+      expect(rec.notionCalls).toHaveLength(1);
+    },
+  );
 
   it("run() reads SHARED_CLIENT_IDS from env and fails loud without a confirmation", async () => {
     const paths: string[] = [];
