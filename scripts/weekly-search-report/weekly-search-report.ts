@@ -874,8 +874,12 @@ interface NotionTableBlock extends NotionBlock {
   };
 }
 
-/** Max DATA rows (excluding header) emitted per Notion table. */
-export const NOTION_MAX_TABLE_ROWS = 100;
+/**
+ * Max DATA rows (excluding header) emitted per Notion table. The header row is
+ * also a child of the table block, and Notion caps one request at 100
+ * children, so header + data rows must stay at or under that cap.
+ */
+export const NOTION_MAX_TABLE_ROWS = NOTION_MAX_BLOCKS_PER_REQUEST - 1;
 
 function lineToRichText(line: string): NotionRichText[] {
   if (line.length <= NOTION_RICH_TEXT_LIMIT) {
