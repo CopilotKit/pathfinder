@@ -18,6 +18,10 @@ server:
   # session_unused_ttl_minutes: 15    # Idle session timeout for unused sessions (default: 15)
   #                                   # "Unused" = connected but never invoked a tool.
   #                                   # Set to match Railway's 15-min SSE hard limit.
+  # The four modern_* keys below apply only when the PATHFINDER_MODERN_PROTOCOL
+  # environment variable is "1" or "true" (case-insensitive, read at startup). It is
+  # off by default. With it off these keys have no effect, but they are still
+  # validated at startup, so an invalid value still stops the server.
   # modern_rpm_per_ip: 120            # 2026-07-28 (stateless) clients: sustained requests per minute per IP (default: 120)
   #                                   # Token-bucket refill rate. IPs in allowlist bypass it.
   #                                   # Over the limit: HTTP 429 with a JSON-RPC error (code -32005, the request id
@@ -29,9 +33,10 @@ server:
   #                                   # The allowlist does NOT bypass this ceiling. Open subscriptions/listen
   #                                   # streams do not count against it.
   #                                   # Over the ceiling: HTTP 503 with a JSON-RPC error (code -32006, the request id
-  #                                   # echoed) and Retry-After: 1.
+  #                                   # echoed, data.retryAfterSeconds of 1) and Retry-After: 1.
   # modern_request_timeout_ms: 60000  # 2026-07-28 (stateless) clients: deadline per request, in ms (default: 60000)
   #                                   # When it passes, the request's in-flight slot is released and bash commands are aborted.
+  #                                   # Open subscriptions/listen streams are not subject to it. At most 2147483647.
   # allowlist:                        # IPs / CIDRs that bypass max_sessions_per_ip and the modern_* per-IP limits. Empty by default.
   #   - "160.79.106.35"               # Example: Anthropic Assistant crawler
   #   - "10.0.0.0/8"                  # Example: internal health-probe CIDR
@@ -189,9 +194,15 @@ indexing:
 #   retention_days: 90
 #   # Machines that forward somebody else's text into the tools verbatim (an
 #   # issue-triage bot, a mirroring service). Real traffic, but not user
-#   # queries — matching rows are excluded from Top Queries, the weekly search
-#   # report, the gap analysis and the unique-IP/session counts, and are
-#   # enumerated in the dashboard's "Excluded Machine-Relay Traffic" panel.
+#   # queries — matching rows are excluded from every default (real-user)
+#   # analytics reader: the summary totals, empty and low-confidence rates,
+#   # latency, per-day and per-source counts, unique-IP/session counts, Top
+#   # Queries, empty queries, the tool counts and breakdown, and the Atlas
+#   # user-query denominator. So they also drop out of the weekly search
+#   # report and the gap analysis. Only the summary's all-time total and the
+#   # dashboard's "Blocked Queries" panel keep them (that panel has no
+#   # request-source filter). They are enumerated in the dashboard's
+#   # "Excluded Machine-Relay Traffic" panel.
 #   # A rule matches when EVERY predicate it declares matches.
 #   #
 #   # Prefer having the relay send `X-Pathfinder-Source: relay` on every

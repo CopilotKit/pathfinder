@@ -131,7 +131,7 @@ describe("bash tool, modern era (stateless cwd)", () => {
   });
 });
 
-describe("bash tool, legacy era (unchanged)", () => {
+describe("bash tool, legacy era (persistent cd, config description)", () => {
   for (const era of [undefined, "legacy"] as const) {
     describe(`era=${String(era)}`, () => {
       let client: Client;
@@ -238,9 +238,9 @@ describe("bash tool, deadline signal", () => {
     vi.restoreAllMocks();
   });
 
-  // With a workspace, the modern leg runs the command in a Bash over the
-  // /workspace-refusing filesystem wrapper. The signal must reach that Bash
-  // too, or the deadline cannot stop a command there.
+  // Every command runs in a per-call Bash over the scratchOnlyFs wrapper; on
+  // the modern leg with a workspace, that wrapper also refuses /workspace
+  // paths. The signal must stop the command in both variants.
   for (const withWorkspace of [false, true]) {
     const label = `workspace ${withWorkspace ? "on" : "off"}`;
 

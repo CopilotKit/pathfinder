@@ -3,6 +3,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { ServerConfigSchema } from "../types.js";
+import {
+  JSONRPC_CAPACITY_CODE,
+  JSONRPC_RATE_LIMIT_CODE,
+} from "../rate-limit-response.js";
+import { droppedKeys } from "./helpers/dropped-keys.js";
 
 const base = {
   server: { name: "test", version: "1.0.0" },
@@ -25,6 +30,19 @@ const base = {
   ],
 };
 
+/**
+ * Parse `base` with `server` overrides. Returns the paths of the issues, or
+ * [] when the config parses. A rejection test asserts the exact path, so it
+ * cannot pass because some other part of the config became invalid.
+ */
+const rejectedPaths = (server: Record<string, unknown>): string[] => {
+  const r = ServerConfigSchema.safeParse({
+    ...base,
+    server: { ...base.server, ...server },
+  });
+  return r.success ? [] : r.error.issues.map((i) => i.path.join("."));
+};
+
 describe("ServerConfigSchema — max_sessions field", () => {
   it("accepts a positive integer", () => {
     const result = ServerConfigSchema.parse({
@@ -35,21 +53,13 @@ describe("ServerConfigSchema — max_sessions field", () => {
   });
 
   it("rejects zero", () => {
-    expect(() =>
-      ServerConfigSchema.parse({
-        ...base,
-        server: { ...base.server, max_sessions: 0 },
-      }),
-    ).toThrow();
+    expect(rejectedPaths({ max_sessions: 0 })).toEqual(["server.max_sessions"]);
   });
 
   it("rejects non-integer", () => {
-    expect(() =>
-      ServerConfigSchema.parse({
-        ...base,
-        server: { ...base.server, max_sessions: 1.5 },
-      }),
-    ).toThrow();
+    expect(rejectedPaths({ max_sessions: 1.5 })).toEqual([
+      "server.max_sessions",
+    ]);
   });
 
   it("is optional (defaults to undefined)", () => {
@@ -68,17 +78,27 @@ describe("ServerConfigSchema — session_unused_ttl_minutes field", () => {
   });
 
   it("rejects negative values", () => {
-    expect(() =>
-      ServerConfigSchema.parse({
-        ...base,
-        server: { ...base.server, session_unused_ttl_minutes: -1 },
-      }),
-    ).toThrow();
+    expect(rejectedPaths({ session_unused_ttl_minutes: -1 })).toEqual([
+      "server.session_unused_ttl_minutes",
+    ]);
   });
 
   it("is optional (defaults to undefined)", () => {
     const result = ServerConfigSchema.parse(base);
     expect(result.server.session_unused_ttl_minutes).toBeUndefined();
+  });
+});
+
+describe("ServerConfigSchema — trust_proxy field", () => {
+  it("accepts false, 0, a hop count and a CIDR list", () => {
+    for (const v of [false, 0, 1, ["10.0.0.0/8"]]) {
+      expect(rejectedPaths({ trust_proxy: v }), JSON.stringify(v)).toEqual([]);
+    }
+  });
+
+  // docs/config/index.html says an empty list fails config load.
+  it("rejects an empty list", () => {
+    expect(rejectedPaths({ trust_proxy: [] })).toEqual(["server.trust_proxy"]);
   });
 });
 
@@ -100,12 +120,7 @@ describe("ServerConfigSchema — modern limit keys", () => {
 
       for (const bad of [0, -1, 1.5]) {
         it(`rejects ${bad}`, () => {
-          expect(() =>
-            ServerConfigSchema.parse({
-              ...base,
-              server: { ...base.server, [key]: bad },
-            }),
-          ).toThrow();
+          expect(rejectedPaths({ [key]: bad })).toEqual([`server.${key}`]);
         });
       }
 
@@ -127,17 +142,30 @@ describe("ServerConfigSchema — modern limit keys", () => {
     expect(parse(2 ** 31 - 1).server.modern_request_timeout_ms).toBe(
       2 ** 31 - 1,
     );
-    expect(() => parse(2 ** 31)).toThrow();
-    expect(() => parse(3_000_000_000)).toThrow();
+    for (const v of [2 ** 31, 3_000_000_000]) {
+      expect(
+        rejectedPaths({ modern_request_timeout_ms: v }),
+        String(v),
+      ).toEqual(["server.modern_request_timeout_ms"]);
+    }
   });
 
-  it("the deploy YAMLs still parse", () => {
+  // A plain parse strips unknown keys, so a misspelled key in a deploy YAML
+  // would pass and then be ignored at runtime. Fail on any dropped key too.
+  it("the deploy YAMLs parse, with no key the schema does not know", () => {
     const dir = join(__dirname, "..", "..", "deploy");
     const files = readdirSync(dir).filter((f) => f.endsWith(".yaml"));
     expect(files.length).toBe(3);
     for (const f of files) {
-      const raw = parseYaml(readFileSync(join(dir, f), "utf8"));
-      expect(() => ServerConfigSchema.parse(raw), f).not.toThrow();
+      const raw: unknown = parseYaml(readFileSync(join(dir, f), "utf8"));
+      const result = ServerConfigSchema.safeParse(raw);
+      expect(
+        result.success
+          ? []
+          : result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
+        f,
+      ).toEqual([]);
+      expect(droppedKeys(raw, result.data), f).toEqual([]);
     }
   });
 });
@@ -165,6 +193,30 @@ describe("docs consistency — modern leg", () => {
     modern_max_inflight: 200,
     modern_request_timeout_ms: 60000,
   };
+
+  // The session defaults, applied the same way (`serverCfg.server.<key> ??
+  // <n>` in startServer()). They are inline literals in server.ts, not named
+  // constants, so the test reads them from the source like CODE_DEFAULTS.
+  const SESSION_DEFAULTS: Record<string, number> = {
+    max_sessions: 1000,
+    max_sessions_per_ip: 20,
+    session_ttl_minutes: 30,
+    session_unused_ttl_minutes: 15,
+  };
+
+  // `serverCfg.server.<key> ?? <n>` in src/server.ts. The key must be
+  // followed by `??`, so max_sessions does not match max_sessions_per_ip.
+  const serverDefault = (key: string) =>
+    serverSrc.match(new RegExp(`server\\.${key}\\s*\\?\\?\\s*(\\d+)`))?.[1];
+
+  // The sample line for `key` in a docs/config/index.html code block: its
+  // value, and the "(default: N)" comment on the same line.
+  const htmlSampleLine = (key: string) =>
+    configHtml.match(
+      new RegExp(
+        `<span class="key">${key}:</span>\\s*<span class="value">(\\d+)</span>[^\\n]*?\\(default:\\s*(\\d+)\\)`,
+      ),
+    );
 
   // Every modern_* key declared in the server schema in src/types.ts (the
   // zod chain may start on the next line).
@@ -200,12 +252,34 @@ describe("docs consistency — modern leg", () => {
   it("the schema keys and server.ts defaults match CODE_DEFAULTS", () => {
     expect(schemaKeys.sort()).toEqual(Object.keys(CODE_DEFAULTS).sort());
     for (const [key, def] of Object.entries(CODE_DEFAULTS)) {
-      const m = serverSrc.match(
-        new RegExp(`server\\.${key}\\s*\\?\\?\\s*(\\d+)`),
+      expect(serverDefault(key), `server.ts default for ${key}`).toBe(
+        String(def),
       );
-      expect(m?.[1], `server.ts default for ${key}`).toBe(String(def));
     }
   });
+
+  for (const [key, def] of Object.entries(SESSION_DEFAULTS)) {
+    it(`${key}: server.ts, docs/config/index.html and pathfinder.example.yaml agree on default ${def}`, () => {
+      expect(serverDefault(key), `server.ts default for ${key}`).toBe(
+        String(def),
+      );
+      const sample = htmlSampleLine(key);
+      expect(sample?.[1], `sample value for ${key}`).toBe(String(def));
+      expect(sample?.[2], `sample default for ${key}`).toBe(String(def));
+      const item = htmlItem(key);
+      expect(item, `<li> for ${key}`).not.toBe("");
+      expect(
+        item.match(/(?:defaults\s+to|Set\s+to)\s+(\d+)/)?.[1],
+        `<li> default for ${key}`,
+      ).toBe(String(def));
+      const entry = yamlEntry(key);
+      expect(entry, `example entry for ${key}`).not.toBe("");
+      expect(entry.match(new RegExp(`${key}:\\s*(\\d+)`))?.[1]).toBe(
+        String(def),
+      );
+      expect(entry.match(/\(default:\s*(\d+)\)/)?.[1]).toBe(String(def));
+    });
+  }
 
   for (const [key, def] of Object.entries(CODE_DEFAULTS)) {
     it(`${key}: docs/config/index.html documents default ${def}`, () => {
@@ -213,11 +287,7 @@ describe("docs consistency — modern leg", () => {
       expect(item, `<li> for ${key}`).not.toBe("");
       expect(item.match(/defaults\s+to\s+(\d+)/)?.[1]).toBe(String(def));
       // The sample YAML block: value and its "(default: N)" comment.
-      const sample = configHtml.match(
-        new RegExp(
-          `<span class="key">${key}:</span>\\s*<span class="value">(\\d+)</span>[\\s\\S]*?\\(default:\\s*(\\d+)\\)`,
-        ),
-      );
+      const sample = htmlSampleLine(key);
       expect(sample?.[1], `sample value for ${key}`).toBe(String(def));
       expect(sample?.[2], `sample default for ${key}`).toBe(String(def));
     });
@@ -236,19 +306,33 @@ describe("docs consistency — modern leg", () => {
     });
   }
 
-  it("the allowlist docs name both per-IP limits and exclude modern_max_inflight", () => {
+  it("the allowlist docs name every per-IP limit and exclude modern_max_inflight", () => {
     const item = htmlItem("allowlist");
     expect(item).toMatch(/max_sessions_per_ip/);
-    expect(item).toMatch(/modern[\s\S]{0,20}per-IP rate limit/i);
+    expect(item).toMatch(/per-IP\s+concurrent body-read cap/);
+    expect(item).toMatch(/modern[\s\S]{0,20}per-IP rate\s+limit/i);
     expect(item).toMatch(/modern_rpm_per_ip/);
     expect(item).toMatch(/but not[\s\S]{0,40}modern_max_inflight/);
   });
 
   it("the modern limit docs name the JSON-RPC error codes, and the legacy 429 body is not attributed to them", () => {
-    // Modern 429: JSON-RPC error -32005. Modern 503: JSON-RPC error -32006.
-    // Both carry Retry-After. The legacy body (error, reason, limit,
-    // currentCount ...) belongs to max_sessions_per_ip only.
-    expect(serverSrc).toMatch(/JSONRPC_RATE_LIMIT_CODE/);
+    // Modern 429: JSON-RPC error JSONRPC_RATE_LIMIT_CODE (-32005). Modern 503:
+    // JSONRPC_CAPACITY_CODE (-32006), with a fixed 1-second retry. Both carry
+    // Retry-After. The legacy body (error, reason, limit, currentCount ...)
+    // belongs to max_sessions_per_ip only. The docs must name the codes'
+    // real values, read from src/rate-limit-response.ts.
+    const rateLimitCode = String(JSONRPC_RATE_LIMIT_CODE);
+    const capacityCode = String(JSONRPC_CAPACITY_CODE);
+    // `n` as a whole number: not part of a longer number.
+    const exactNumber = (n: string) => new RegExp(`(?<![\\d-])${n}(?!\\d)`);
+    expect(serverSrc).toMatch(
+      /\.status\(429\)[\s\S]{0,200}code:\s*JSONRPC_RATE_LIMIT_CODE\b/,
+    );
+    const capacityReply = serverSrc.match(
+      /\.status\(503\)\s*\.set\("Retry-After",\s*"(\d+)"\)[\s\S]{0,200}code:\s*JSONRPC_CAPACITY_CODE\b[\s\S]{0,120}retryAfterSeconds:\s*(\d+)/,
+    );
+    expect(capacityReply?.[1], "modern 503 Retry-After").toBe("1");
+    expect(capacityReply?.[2], "modern 503 data.retryAfterSeconds").toBe("1");
     // Line wraps and the yaml "#" prefix must not split a phrase.
     const oneLine = (t: string) => t.replace(/\s*\n\s*#?\s*/g, " ");
     for (const key of ["modern_rpm_per_ip", "modern_burst_per_ip"]) {
@@ -257,21 +341,35 @@ describe("docs consistency — modern leg", () => {
         ["pathfinder.example.yaml", yamlEntry(key)],
       ]) {
         const flatText = oneLine(text);
-        expect(flatText, `${where} ${key}`).toMatch(/-32005/);
+        expect(flatText, `${where} ${key}`).toMatch(exactNumber(rateLimitCode));
         expect(flatText, `${where} ${key}`).toMatch(/JSON-RPC error/);
         expect(flatText, `${where} ${key}`).toMatch(/Retry-After/);
       }
+    }
+    // The body field that carries the wait, as the docs name it.
+    for (const [where, text] of [
+      ["docs/config/index.html", htmlItem("modern_rpm_per_ip")],
+      ["pathfinder.example.yaml", yamlEntry("modern_rpm_per_ip")],
+    ]) {
+      expect(oneLine(text), `${where} modern_rpm_per_ip`).toMatch(
+        /data\.retryAfterSeconds/,
+      );
     }
     for (const [where, text] of [
       ["docs/config/index.html", htmlItem("modern_max_inflight")],
       ["pathfinder.example.yaml", yamlEntry("modern_max_inflight")],
     ]) {
       const flatText = oneLine(text);
-      expect(flatText, `${where} modern_max_inflight`).toMatch(/-32006/);
+      expect(flatText, `${where} modern_max_inflight`).toMatch(
+        exactNumber(capacityCode),
+      );
       expect(flatText, `${where} modern_max_inflight`).toMatch(
         /JSON-RPC error/,
       );
       expect(flatText, `${where} modern_max_inflight`).toMatch(/Retry-After/);
+      expect(flatText, `${where} modern_max_inflight`).toMatch(
+        /data\.retryAfterSeconds(?:<\/code>)? of 1/,
+      );
     }
     // The allowlist bullet: the sentence with the legacy body names
     // max_sessions_per_ip and does not name a modern_ key.
@@ -305,17 +403,28 @@ describe("docs consistency — modern leg", () => {
     }
   });
 
-  it("every count of modern_* keys in docs/config/index.html matches the schema", () => {
+  it("every count of modern_* keys in the docs matches the schema", () => {
     // Compares any stated count to the schema, so it also catches the next
     // stale number when a key is added, not only one known stale phrase.
+    // Each file must state the count at least once, so a reworded phrase
+    // fails here instead of leaving nothing to check.
     const words = ["zero", "one", "two", "three", "four", "five", "six"];
-    const counts = [
-      ...configHtml.matchAll(/\b(\w+)\s+<code>modern_\*<\/code>\s+keys/gi),
-    ].map((m) => {
-      const w = m[1].toLowerCase();
-      return /^\d+$/.test(w) ? Number(w) : words.indexOf(w);
-    });
-    for (const n of counts) expect(n).toBe(schemaKeys.length);
+    const toNumber = (w: string) =>
+      /^\d+$/.test(w) ? Number(w) : words.indexOf(w.toLowerCase());
+    for (const [where, text, re] of [
+      [
+        "docs/config/index.html",
+        configHtml,
+        /\b(\w+)\s+<code>modern_\*<\/code>\s+keys/gi,
+      ],
+      ["pathfinder.example.yaml", exampleYaml, /\b(\w+)\s+modern_\*\s+keys/gi],
+    ] as const) {
+      const phrases = [...text.matchAll(re)];
+      expect(phrases.length, `count phrases in ${where}`).toBeGreaterThan(0);
+      for (const m of phrases) {
+        expect(toNumber(m[1]), `${where}: "${m[0]}"`).toBe(schemaKeys.length);
+      }
+    }
   });
 
   it("README Telemetry names both events the code sends", async () => {

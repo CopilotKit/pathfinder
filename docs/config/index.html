@@ -384,6 +384,26 @@
         color: var(--accent);
       }
 
+      /* Warning callout */
+      .gap-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--warning);
+        border-radius: 0 10px 10px 0;
+        padding: 16px 20px;
+        margin-bottom: 12px;
+      }
+      .gap-card h4 {
+        font-size: 14px;
+        margin-bottom: 4px;
+        color: var(--warning);
+      }
+      .gap-card p {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 0;
+      }
+
       /* Inline code */
       .docs-content code {
         background: var(--bg-card);
@@ -439,7 +459,7 @@
         .nav-links {
           gap: 1rem;
         }
-        .article h2 {
+        .docs-content h2 {
           font-size: 22px;
         }
         .code-block {
@@ -545,84 +565,28 @@
 
         <p>Top-level server identity and session management.</p>
 
-        <div class="code-block">
-          <span class="key">server:</span> <span class="key">name:</span>
-          <span class="value">my-project-docs</span>
-          <span class="comment"># Server name, exposed in MCP metadata</span>
-          <span class="key">version:</span> <span class="value">1.0.0</span>
-          <span class="comment"># Server version string</span>
-          <span class="key">max_sessions:</span> <span class="value">1000</span>
-          <span class="comment"
-            ># Global max concurrent sessions (default: 1000)</span
-          >
-          <span class="key">max_sessions_per_ip:</span>
-          <span class="value">20</span>
-          <span class="comment"
-            ># Max concurrent MCP sessions per IP (default: 20)</span
-          >
-          <span class="key">session_ttl_minutes:</span>
-          <span class="value">30</span>
-          <span class="comment"
-            ># Idle timeout for active sessions (default: 30)</span
-          >
-          <span class="key">session_unused_ttl_minutes:</span>
-          <span class="value">15</span>
-          <span class="comment"
-            ># Idle timeout for unused sessions (default: 15)</span
-          >
-          <span class="key">allowlist:</span>
-          <span class="comment"
-            ># IPs / CIDRs that bypass max_sessions_per_ip and the modern per-IP
-            rate limit (default: [])</span
-          >
-          <span class="comment"
-            ># NOTE: entries match the per-request client IP only. Behind a
-            reverse proxy</span
-          >
-          <span class="comment"
-            ># (Railway, Fly, Nginx, etc.) the server only ever sees the proxy's
-            TCP socket</span
-          >
-          <span class="comment"
-            ># peer as the client IP. That IP is not stable across deploys and
-            should not be</span
-          >
-          <span class="comment"
-            ># allowlisted — set trust_proxy: true to trust X-Forwarded-For
-            instead.</span
-          >
-          <span class="comment"
-            ># Directly-exposed servers use the socket peer.</span
-          >
-          - <span class="value">"160.79.106.35"</span>
-          <span class="comment"># Example: Anthropic Assistant crawler</span> -
-          <span class="value">"10.0.0.0/8"</span>
-          <span class="comment"># Example: internal health-probe CIDR</span>
-          <span class="key">trust_proxy:</span> <span class="value">false</span>
-          <span class="comment"
-            ># Honor X-Forwarded-For (default: false — see warning below)</span
-          >
-          <span class="key">modern_rpm_per_ip:</span>
-          <span class="value">120</span>
-          <span class="comment"
-            ># 2026-07-28 requests per minute per IP (default: 120)</span
-          >
-          <span class="key">modern_burst_per_ip:</span>
-          <span class="value">60</span>
-          <span class="comment"
-            ># 2026-07-28 burst size per IP (default: 60)</span
-          >
-          <span class="key">modern_max_inflight:</span>
-          <span class="value">200</span>
-          <span class="comment"
-            ># Max 2026-07-28 requests in flight at once (default: 200)</span
-          >
-          <span class="key">modern_request_timeout_ms:</span>
-          <span class="value">60000</span>
-          <span class="comment"
-            ># Deadline per 2026-07-28 request, in ms (default: 60000)</span
-          >
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">my-project-docs</span>             <span class="comment"># Server name, exposed in MCP metadata</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>                    <span class="comment"># Server version string</span>
+  <span class="key">max_sessions:</span> <span class="value">1000</span>                <span class="comment"># Global max concurrent sessions (default: 1000)</span>
+  <span class="key">max_sessions_per_ip:</span> <span class="value">20</span>           <span class="comment"># Max concurrent MCP sessions per IP (default: 20)</span>
+  <span class="key">session_ttl_minutes:</span> <span class="value">30</span>           <span class="comment"># Idle timeout for active sessions (default: 30)</span>
+  <span class="key">session_unused_ttl_minutes:</span> <span class="value">15</span>    <span class="comment"># Idle timeout for unused sessions (default: 15)</span>
+  <span class="key">allowlist:</span>                       <span class="comment"># IPs / CIDRs that bypass max_sessions_per_ip, the per-IP body-read cap and the modern per-IP rate limit (default: [])</span>
+    <span class="comment"># NOTE: entries match the per-request client IP only. Behind a reverse proxy</span>
+    <span class="comment"># (Railway, Fly, Nginx, etc.) the server only ever sees the proxy's TCP socket</span>
+    <span class="comment"># peer as the client IP. That IP is not stable across deploys and should not be</span>
+    <span class="comment"># allowlisted — set trust_proxy (preferably a hop count or a CIDR list) to</span>
+    <span class="comment"># trust X-Forwarded-For instead.</span>
+    <span class="comment"># Directly-exposed servers use the socket peer.</span>
+    - <span class="value">"160.79.106.35"</span>              <span class="comment"># Example: Anthropic Assistant crawler</span>
+    - <span class="value">"10.0.0.0/8"</span>                 <span class="comment"># Example: internal health-probe CIDR</span>
+  <span class="key">trust_proxy:</span> <span class="value">false</span>                  <span class="comment"># true | false | hop count | list of proxy CIDRs (default: false — see warning below)</span>
+  <span class="key">modern_rpm_per_ip:</span> <span class="value">120</span>            <span class="comment"># 2026-07-28 requests per minute per IP (default: 120)</span>
+  <span class="key">modern_burst_per_ip:</span> <span class="value">60</span>           <span class="comment"># 2026-07-28 burst size per IP (default: 60)</span>
+  <span class="key">modern_max_inflight:</span> <span class="value">200</span>          <span class="comment"># Max 2026-07-28 requests in flight at once (default: 200)</span>
+  <span class="key">modern_request_timeout_ms:</span> <span class="value">60000</span>  <span class="comment"># Deadline per 2026-07-28 request, in ms (default: 60000)</span></div>
 
         <ul>
           <li>
@@ -635,10 +599,12 @@
             sessions across all IPs. When exceeded, new connections receive a
             <code>503</code> with a descriptive JSON body (<code
               >error: "capacity_exceeded"</code
-            >, <code>totalSessions</code>, <code>maxSessions</code>,
+            >, <code>reason: "server-capacity"</code>,
+            <code>totalSessions</code>, <code>maxSessions</code>,
             <code>retryAfterSeconds</code>, <code>contact</code>) and a
-            <code>Retry-After</code> header. A warning is logged when sessions
-            exceed 80% of this cap. Optional, defaults to 1000.
+            <code>Retry-After</code> header. The session reaper logs a warning
+            while sessions are at or above 80% of this cap. Optional, defaults
+            to 1000.
           </li>
           <li>
             <strong>max_sessions_per_ip</strong> — Per-IP rate limiting.
@@ -660,25 +626,31 @@
           </li>
           <li>
             <strong>allowlist</strong> — Array of IPv4/IPv6 addresses or CIDR
-            ranges that bypass <code>max_sessions_per_ip</code> and the modern
-            per-IP rate limit (<code>modern_rpm_per_ip</code> and
+            ranges that bypass <code>max_sessions_per_ip</code>, the per-IP
+            concurrent body-read cap (see below) and the modern per-IP rate
+            limit (<code>modern_rpm_per_ip</code> and
             <code>modern_burst_per_ip</code>), but not
             <code>modern_max_inflight</code>. Use for trusted crawlers (e.g.
             <code>160.79.106.35</code> — Anthropic Assistant) or internal
             health-probe ranges. Optional, defaults to empty. Entries are
             matched against the per-request client IP —
             <strong
-              >behind a reverse proxy this requires
-              <code>trust_proxy: true</code></strong
-            >; with the default <code>trust_proxy: false</code> the server only
-            sees the proxy's TCP socket address and no upstream client IP will
-            ever match. Directly-exposed servers use the socket peer and need no
-            extra config. Clients that hit the
-            <code>max_sessions_per_ip</code> limit receive a
-            <code>429</code> with a descriptive JSON body (<code>error</code>,
-            <code>reason</code>, <code>limit</code>, <code>currentCount</code>,
-            <code>retryAfterSeconds</code>, <code>contact</code>) and a
-            <code>Retry-After</code> header.
+              >behind a reverse proxy this requires a
+              <code>trust_proxy</code> value other than <code>false</code> or
+              <code>0</code></strong
+            >, preferably a hop count or a CIDR list (see
+            <code>trust_proxy</code> below); with the default
+            <code>trust_proxy: false</code> the server only sees the proxy's TCP
+            socket address and no upstream client IP will ever match.
+            Directly-exposed servers use the socket peer and need no extra
+            config. Clients that hit the <code>max_sessions_per_ip</code> limit
+            receive a <code>429</code> with a <code>Retry-After</code> header
+            and the fields <code>error</code>, <code>reason</code>,
+            <code>limit</code>, <code>currentCount</code>,
+            <code>retryAfterSeconds</code> and <code>contact</code>: on
+            <code>GET /sse</code> they are the top-level fields of the JSON
+            body, and on <code>/mcp</code> the body is a JSON-RPC error (code
+            <code>-32005</code>) that carries them in <code>error.data</code>.
           </li>
           <li>
             <strong>modern_rpm_per_ip</strong> — Steady request rate, in
@@ -689,8 +661,13 @@
             limit gets HTTP <code>429</code> with a JSON-RPC error (code
             <code>-32005</code>, the request <code>id</code> echoed,
             <code>data.retryAfterSeconds</code>) and a
-            <code>Retry-After</code> header with the same number of seconds.
-            Optional, defaults to 120.
+            <code>Retry-After</code> header with the same number of seconds. A
+            request whose <code>MCP-Protocol-Version</code> header names the
+            2026-07-28 revision, and whose body is not JSON-parsed (a non-JSON
+            or missing <code>Content-Type</code>), is checked before its body is
+            read: from an IP with no requests left, it gets the same
+            <code>429</code> with a <code>null</code> <code>id</code>, and its
+            body is discarded unread. Optional, defaults to 120.
           </li>
           <li>
             <strong>modern_burst_per_ip</strong> — Burst size (token-bucket
@@ -706,18 +683,37 @@
             allowlist does not bypass this ceiling. Open
             <code>subscriptions/listen</code> streams do not count against it. A
             request over the ceiling gets HTTP <code>503</code> with a JSON-RPC
-            error (code <code>-32006</code>, the request <code>id</code> echoed)
-            and <code>Retry-After: 1</code>. Optional, defaults to 200.
+            error (code <code>-32006</code>, the request <code>id</code> echoed,
+            <code>data.retryAfterSeconds</code> of 1) and
+            <code>Retry-After: 1</code>. Optional, defaults to 200.
+          </li>
+          <li>
+            <strong>Concurrent body-read cap</strong> (fixed at 4, not a YAML
+            key) — Applies only when <code>PATHFINDER_MODERN_PROTOCOL</code> is
+            on. To tell a 2026-07-28 request from a 2025-era one, the server
+            reads a <code>POST /mcp</code> body that is not JSON-parsed (a
+            non-JSON or missing <code>Content-Type</code>), up to 4 MiB. One
+            client IP may have at most 4 of these reads in progress at once, on
+            either era. One more gets HTTP <code>429</code> with a JSON-RPC
+            error (code <code>-32005</code>, a <code>null</code>
+            <code>id</code>, <code>data.retryAfterSeconds</code> of 1) and
+            <code>Retry-After: 1</code>, and its body is discarded unread. A
+            request with <code>Content-Type: application/json</code> never
+            counts. Entries in <code>allowlist</code> bypass this cap.
           </li>
           <li>
             <strong>modern_request_timeout_ms</strong> — Wall-clock deadline for
             one 2026-07-28 request, in milliseconds. When it passes, the request
             releases its <code>modern_max_inflight</code> slot, a warn line is
-            logged, and a running bash command is aborted. Open
-            <code>subscriptions/listen</code> streams are not subject to the
-            deadline. At most 2147483647; a larger value fails config load.
-            Optional, defaults to 60000 (the MCP SDK's default client request
-            timeout).
+            logged, and a running bash command is aborted. The bash command
+            stops at the start of its next statement (a <code>sleep</code> wakes
+            at once), so the rest of a running <code>&amp;&amp;</code> or
+            <code>||</code> list can still run. Its result keeps the output so
+            far, adds a <code>deadline:</code> line to stderr and exits
+            <code>124</code>. Open <code>subscriptions/listen</code> streams are
+            not subject to the deadline. At most 2147483647; a larger value
+            fails config load. Optional, defaults to 60000 (the MCP SDK's
+            default client request timeout).
           </li>
           <li>
             <strong>PATHFINDER_MODERN_PROTOCOL</strong> (environment variable,
@@ -730,20 +726,30 @@
           <li>
             <strong>trust_proxy</strong> — Whether to honor the
             <code>X-Forwarded-For</code> header for client-IP resolution (used
-            by rate limiting, allowlist checks, tracing, and analytics). When
-            <code>true</code>, the server populates <code>req.ip</code> from the
-            leftmost entry of <code>X-Forwarded-For</code>. This is REQUIRED
-            when the server runs behind a reverse proxy (Railway, Fly, Nginx,
-            etc.) that sets <code>X-Forwarded-For</code>. Optional, defaults to
-            <code>false</code>. <strong>⚠️ Security:</strong> only enable this
-            when the proxy discards any client-supplied
-            <code>X-Forwarded-For</code> AND sets its own trusted value. If the
-            proxy passes through client-supplied <code>X-Forwarded-For</code>,
-            attackers can send <code>X-Forwarded-For: 160.79.106.35</code> to be
-            seen as an allowlisted IP and bypass the session limiter and the
-            modern per-IP rate limiter entirely. When
-            <code>false</code> (default), <code>X-Forwarded-For</code> is
-            ignored and the server uses the TCP socket's peer address.
+            by rate limiting, allowlist checks, tracing, and analytics). The
+            value is passed to Express's <code>trust proxy</code> setting and
+            takes one of three forms: <code>true</code> trusts every hop, so
+            <code>req.ip</code> is the leftmost entry of
+            <code>X-Forwarded-For</code>; a hop count (for example
+            <code>1</code>) trusts that many proxies nearest the server; a list
+            of proxy IPs or CIDRs (for example <code>["10.0.0.0/8"]</code>)
+            trusts only hops inside those ranges. <code>false</code> and
+            <code>0</code> ignore the header. An empty list is not accepted: it
+            fails config load. Honoring the header is REQUIRED when the server
+            runs behind a reverse proxy (Railway, Fly, Nginx, etc.) that sets
+            <code>X-Forwarded-For</code>. When you know the ingress topology,
+            prefer the hop count or the CIDR list to <code>true</code>: they
+            stop a client-supplied entry from being taken as the client IP.
+            Optional, defaults to <code>false</code>.
+            <strong>⚠️ Security:</strong> only use <code>true</code> when the
+            proxy discards any client-supplied <code>X-Forwarded-For</code> AND
+            sets its own trusted value. If the proxy passes through
+            client-supplied <code>X-Forwarded-For</code>, attackers can send
+            <code>X-Forwarded-For: 160.79.106.35</code> to be seen as an
+            allowlisted IP and bypass the session limiter and the modern per-IP
+            rate limiter entirely. When <code>false</code> (default),
+            <code>X-Forwarded-For</code> is ignored and the server uses the TCP
+            socket's peer address.
           </li>
         </ul>
 
@@ -754,89 +760,39 @@
           filesystem that agents can explore.
         </p>
 
-        <div class="code-block">
-          <span class="key">sources:</span> - <span class="key">name:</span>
-          <span class="value">docs</span>
-          <span class="comment"># Unique name, referenced by tools</span>
-          <span class="key">type:</span> <span class="value">markdown</span>
-          <span class="comment"
-            ># markdown | code | raw-text | html | document | slack | discord |
-            notion</span
-          >
-          <span class="key">repo:</span>
-          <span class="value">https://github.com/org/repo.git</span>
-          <span class="comment"># Git repo URL (optional for local paths)</span>
-          <span class="key">branch:</span> <span class="value">main</span>
-          <span class="comment"
-            ># Git branch to track (default: default branch)</span
-          >
-          <span class="key">path:</span> <span class="value">docs/</span>
-          <span class="comment"># Directory within the repo to index</span>
-          <span class="key">version:</span> <span class="value">v2</span>
-          <span class="comment"
-            ># Version tag for multi-version docs (optional)</span
-          >
-          <span class="key">file_patterns:</span>
-          <span class="comment"># Glob patterns for files to include</span> -
-          <span class="value">"**/*.mdx"</span> -
-          <span class="value">"**/*.md"</span>
-          <span class="key">exclude_patterns:</span>
-          <span class="comment"># Glob patterns to exclude (optional)</span> -
-          <span class="value">"**/node_modules/**"</span> -
-          <span class="value">"**/_internal/**"</span>
-          <span class="key">skip_dirs:</span>
-          <span class="comment"
-            ># Directory names to skip entirely (optional)</span
-          >
-          - <span class="value">.git</span> -
-          <span class="value">node_modules</span>
-          <span class="key">max_file_size:</span>
-          <span class="value">100000</span>
-          <span class="comment"
-            ># Max file size in bytes to index (optional)</span
-          >
-          <span class="key">unindexed_tolerance:</span>
-          <span class="value">0.05</span>
-          <span class="comment"
-            ># Share of walked files that may be missing from the index before
-            the post-reindex audit reports a shortfall (optional)</span
-          >
-          <span class="key">unclaimed_exempt_paths:</span>
-          <span class="comment"
-            ># Repo-relative directories confirmed to be correctly unindexed
-            (optional)</span
-          >
-          - <span class="value">"docs/snippets"</span>
-          <span class="key">category:</span> <span class="value">faq</span>
-          <span class="comment"
-            ># Optional. Marks content as FAQ for /faq.txt and knowledge
-            tools</span
-          >
-          <span class="key">base_url:</span>
-          <span class="value">https://docs.example.com</span>
-          <span class="comment"
-            ># Base URL for generating doc links (optional)</span
-          >
-          <span class="key">url_derivation:</span>
-          <span class="comment"
-            ># How to derive URLs from file paths (optional)</span
-          >
-          <span class="key">strip_prefix:</span>
-          <span class="value">docs/</span>
-          <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
-          <span class="key">strip_route_groups:</span>
-          <span class="value">true</span> <span class="key">strip_index:</span>
-          <span class="value">true</span> <span class="key">chunk:</span>
-          <span class="comment"># How to split content for embeddings</span>
-          <span class="key">target_tokens:</span> <span class="value">600</span>
-          <span class="comment"># For markdown/raw-text sources</span>
-          <span class="key">overlap_tokens:</span> <span class="value">50</span>
-          <span class="comment"># Token overlap between chunks</span>
-          <span class="key">target_lines:</span> <span class="value">100</span>
-          <span class="comment"># For code sources</span>
-          <span class="key">overlap_lines:</span> <span class="value">10</span>
-          <span class="comment"># Line overlap between chunks</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs</span>                               <span class="comment"># Unique name, referenced by tools</span>
+    <span class="key">type:</span> <span class="value">markdown</span>                           <span class="comment"># markdown | code | raw-text | html | document | slack | discord | notion | atlas</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>    <span class="comment"># Git repo URL (optional for local paths)</span>
+    <span class="key">branch:</span> <span class="value">main</span>                             <span class="comment"># Git branch to track (default: default branch)</span>
+    <span class="key">path:</span> <span class="value">docs/</span>                              <span class="comment"># Directory within the repo to index</span>
+    <span class="key">version:</span> <span class="value">v2</span>                              <span class="comment"># Version tag for multi-version docs (optional)</span>
+    <span class="key">file_patterns:</span>                           <span class="comment"># Glob patterns for files to include</span>
+      - <span class="value">"**/*.mdx"</span>
+      - <span class="value">"**/*.md"</span>
+    <span class="key">exclude_patterns:</span>                        <span class="comment"># Glob patterns to exclude (optional)</span>
+      - <span class="value">"**/node_modules/**"</span>
+      - <span class="value">"**/_internal/**"</span>
+    <span class="key">skip_dirs:</span>                               <span class="comment"># Directory names to skip entirely (optional)</span>
+      - <span class="value">.git</span>
+      - <span class="value">node_modules</span>
+    <span class="key">max_file_size:</span> <span class="value">100000</span>                    <span class="comment"># Max file size in bytes to index (optional)</span>
+    <span class="key">unindexed_tolerance:</span> <span class="value">0.05</span>                <span class="comment"># Share of walked files that may be missing from the index before the post-reindex audit reports a shortfall (optional)</span>
+    <span class="key">unclaimed_exempt_paths:</span>                  <span class="comment"># Repo-relative directories confirmed to be correctly unindexed (optional)</span>
+      - <span class="value">"docs/snippets"</span>
+    <span class="key">category:</span> <span class="value">faq</span>                            <span class="comment"># Optional. Marks content as FAQ for /faq.txt and knowledge tools</span>
+    <span class="key">base_url:</span> <span class="value">https://docs.example.com</span>       <span class="comment"># Base URL for generating doc links (optional)</span>
+    <span class="key">url_derivation:</span>                          <span class="comment"># How to derive URLs from file paths (optional)</span>
+      <span class="key">strip_prefix:</span> <span class="value">docs/</span>
+      <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
+      <span class="key">strip_route_groups:</span> <span class="value">true</span>
+      <span class="key">strip_index:</span> <span class="value">true</span>
+    <span class="key">chunk:</span>                                   <span class="comment"># How to split content for embeddings</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>                     <span class="comment"># For markdown/raw-text sources</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span>                     <span class="comment"># Token overlap between chunks</span>
+      <span class="key">target_lines:</span> <span class="value">100</span>                      <span class="comment"># For code sources</span>
+      <span class="key">overlap_lines:</span> <span class="value">10</span>                      <span class="comment"># Line overlap between chunks</span></div>
 
         <ul>
           <li>
@@ -1003,34 +959,18 @@
           All pairs are stored; confidence filtering happens at query time.
         </p>
 
-        <div class="code-block">
-          <span class="key">sources:</span> - <span class="key">name:</span>
-          <span class="value">community-support</span>
-          <span class="key">type:</span> <span class="value">slack</span>
-          <span class="key">category:</span> <span class="value">faq</span>
-          <span class="key">channels:</span>
-          - <span class="value">C06ABC123</span>
-          <span class="comment"># Channel IDs to index</span> -
-          <span class="value">C06DEF456</span>
-          <span class="key">confidence_threshold:</span>
-          <span class="value">0.7</span>
-          <span class="comment"># Min confidence for query results (0-1)</span>
-          <span class="key">trigger_emoji:</span>
-          <span class="value">white_check_mark</span>
-          <span class="comment"
-            ># Emoji reaction triggers immediate reindex of thread</span
-          >
-          <span class="key">min_thread_replies:</span>
-          <span class="value">2</span>
-          <span class="comment"
-            ># Minimum replies for a thread to be indexed</span
-          >
-          <span class="key">distiller_model:</span>
-          <span class="value">gpt-4o-mini</span>
-          <span class="comment"
-            ># LLM model for distillation (default: gpt-4o-mini)</span
-          >
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">community-support</span>
+    <span class="key">type:</span> <span class="value">slack</span>
+    <span class="key">category:</span> <span class="value">faq</span>
+    <span class="key">channels:</span>
+      - <span class="value">C06ABC123</span>                        <span class="comment"># Channel IDs to index</span>
+      - <span class="value">C06DEF456</span>
+    <span class="key">confidence_threshold:</span> <span class="value">0.7</span>            <span class="comment"># Min confidence for pairs listed in /faq.txt (0-1, default: 0.7)</span>
+    <span class="key">trigger_emoji:</span> <span class="value">white_check_mark</span>      <span class="comment"># Emoji reaction triggers immediate reindex of thread (default: pathfinder)</span>
+    <span class="key">min_thread_replies:</span> <span class="value">2</span>                <span class="comment"># Minimum replies for a thread to be indexed (default: 2)</span>
+    <span class="key">distiller_model:</span> <span class="value">gpt-4o-mini</span>         <span class="comment"># LLM model for distillation (default: gpt-4o-mini)</span></div>
 
         <ul>
           <li>
@@ -1039,17 +979,20 @@
           </li>
           <li>
             <strong>confidence_threshold</strong> — Minimum confidence score
-            (0-1) for Q&amp;A pairs to appear in query results. Pairs below this
-            threshold are still stored but filtered out at query time.
+            (0-1) for Q&amp;A pairs to appear in <code>/faq.txt</code>. Pairs
+            below this threshold are still stored. The
+            <code>knowledge</code> tool does not read this value; it uses its
+            own <code>min_confidence</code>. Optional, defaults to 0.7.
           </li>
           <li>
             <strong>trigger_emoji</strong> — When a user reacts with this emoji
             on a thread, it triggers immediate reindexing of that thread. Useful
-            for curating high-quality answers.
+            for curating high-quality answers. Give the emoji name without
+            colons. Optional, defaults to <code>pathfinder</code>.
           </li>
           <li>
             <strong>min_thread_replies</strong> — Threads with fewer replies are
-            skipped during indexing.
+            skipped during indexing. Optional, defaults to 2.
           </li>
           <li>
             <strong>distiller_model</strong> — The OpenAI model used to distill
@@ -1060,7 +1003,8 @@
         <p>
           Required environment variables: <code>SLACK_BOT_TOKEN</code>,
           <code>SLACK_SIGNING_SECRET</code> (for emoji-triggered webhook
-          verification).
+          verification), and <code>OPENAI_API_KEY</code> (for thread
+          distillation, whatever the embedding provider).
         </p>
 
         <h3 id="source-discord">Source type: discord</h3>
@@ -1070,30 +1014,19 @@
           with different extraction strategies.
         </p>
 
-        <div class="code-block">
-          <span class="key">sources:</span> - <span class="key">name:</span>
-          <span class="value">discord-support</span>
-          <span class="key">type:</span> <span class="value">discord</span>
-          <span class="key">category:</span> <span class="value">faq</span>
-          <span class="key">guild_id:</span>
-          <span class="value">"1234567890"</span>
-          <span class="comment"># Discord server (guild) ID</span>
-          <span class="key">channels:</span>
-          - <span class="key">id:</span> <span class="value">"1111111111"</span>
-          <span class="comment"># Text channel — LLM distillation</span>
-          <span class="key">type:</span> <span class="value">text</span> -
-          <span class="key">id:</span> <span class="value">"2222222222"</span>
-          <span class="comment"
-            ># Forum channel — direct Q&amp;A extraction</span
-          >
-          <span class="key">type:</span> <span class="value">forum</span>
-          <span class="key">confidence_threshold:</span>
-          <span class="value">0.7</span>
-          <span class="comment"># Min confidence for query results (0-1)</span>
-          <span class="key">min_thread_replies:</span>
-          <span class="value">2</span>
-          <span class="comment"># Minimum replies for text threads</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">discord-support</span>
+    <span class="key">type:</span> <span class="value">discord</span>
+    <span class="key">category:</span> <span class="value">faq</span>
+    <span class="key">guild_id:</span> <span class="value">"1234567890"</span>               <span class="comment"># Discord server (guild) ID</span>
+    <span class="key">channels:</span>
+      - <span class="key">id:</span> <span class="value">"1111111111"</span>                 <span class="comment"># Text channel — LLM distillation</span>
+        <span class="key">type:</span> <span class="value">text</span>
+      - <span class="key">id:</span> <span class="value">"2222222222"</span>                 <span class="comment"># Forum channel — direct Q&amp;A extraction</span>
+        <span class="key">type:</span> <span class="value">forum</span>
+    <span class="key">confidence_threshold:</span> <span class="value">0.7</span>            <span class="comment"># Min confidence for pairs listed in /faq.txt (0-1, default: 0.7)</span>
+    <span class="key">min_thread_replies:</span> <span class="value">2</span>                <span class="comment"># Minimum replies for text threads and forum posts</span></div>
 
         <ul>
           <li><strong>guild_id</strong> — The Discord server ID.</li>
@@ -1112,12 +1045,15 @@
             Confidence is always 1.0 since the structure is explicit.
           </li>
           <li>
-            <strong>confidence_threshold</strong> — Minimum confidence for query
-            results. Forum posts always pass (confidence 1.0).
+            <strong>confidence_threshold</strong> — Minimum confidence for pairs
+            listed in <code>/faq.txt</code>. Forum posts always pass (confidence
+            1.0). The <code>knowledge</code> tool does not read this value.
+            Optional, defaults to 0.7.
           </li>
           <li>
-            <strong>min_thread_replies</strong> — Applies to text channel
-            threads only.
+            <strong>min_thread_replies</strong> — Threads and forum posts with
+            fewer messages are skipped. Applies to both text-channel threads and
+            forum posts. Optional, defaults to 2.
           </li>
           <li>
             <strong>distiller_model</strong> — OpenAI model for thread
@@ -1133,8 +1069,11 @@
 
         <p>
           Required environment variables: <code>DISCORD_BOT_TOKEN</code>,
-          <code>DISCORD_PUBLIC_KEY</code> (for webhook Ed25519 verification).
-          The bot needs the <code>MESSAGE_CONTENT</code> privileged intent and
+          <code>DISCORD_PUBLIC_KEY</code> (for webhook Ed25519 verification),
+          and <code>OPENAI_API_KEY</code> when any channel has
+          <code>type: text</code> (for thread distillation, whatever the
+          embedding provider). The bot needs the
+          <code>MESSAGE_CONTENT</code> privileged intent and
           <code>Read Message History</code> +
           <code>View Channels</code> permissions.
         </p>
@@ -1147,32 +1086,19 @@
           entry properties are serialized as YAML frontmatter.
         </p>
 
-        <div class="code-block">
-          <span class="key">sources:</span> - <span class="key">name:</span>
-          <span class="value">notion-wiki</span> <span class="key">type:</span>
-          <span class="value">notion</span>
-          <span class="key">root_pages:</span>
-          - <span class="value">"abc123def456..."</span>
-          <span class="comment"
-            ># Notion page IDs to index (including children)</span
-          >
-          <span class="key">databases:</span>
-          - <span class="value">"789xyz..."</span>
-          <span class="comment"># Database IDs — all entries indexed</span>
-          <span class="key">max_depth:</span> <span class="value">5</span>
-          <span class="comment"
-            ># How deep to recurse into child pages (1-20, default: 5)</span
-          >
-          <span class="key">include_properties:</span>
-          <span class="value">true</span>
-          <span class="comment"
-            ># Serialize database properties as YAML frontmatter (default:
-            true)</span
-          >
-          <span class="key">chunk:</span>
-          <span class="key">target_tokens:</span> <span class="value">600</span>
-          <span class="key">overlap_tokens:</span> <span class="value">50</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">notion-wiki</span>
+    <span class="key">type:</span> <span class="value">notion</span>
+    <span class="key">root_pages:</span>
+      - <span class="value">"abc123def456..."</span>         <span class="comment"># Notion page IDs to index (including children)</span>
+    <span class="key">databases:</span>
+      - <span class="value">"789xyz..."</span>               <span class="comment"># Database IDs — all entries indexed</span>
+    <span class="key">max_depth:</span> <span class="value">5</span>                  <span class="comment"># How deep to recurse into child pages (1-20, default: 5)</span>
+    <span class="key">include_properties:</span> <span class="value">true</span>      <span class="comment"># Serialize database properties as YAML frontmatter (default: true)</span>
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span></div>
 
         <ul>
           <li>
@@ -1219,28 +1145,26 @@
           chunks like markdown sources.
         </p>
 
-        <div class="code-block">
-          <span class="key">sources:</span> - <span class="key">name:</span>
-          <span class="value">manuals</span> <span class="key">type:</span>
-          <span class="value">document</span> <span class="key">path:</span>
-          <span class="value">./documents</span>
-          <span class="key">file_patterns:</span>
-          - <span class="value">"**/*.pdf"</span> -
-          <span class="value">"**/*.docx"</span>
-          <span class="key">max_file_size:</span>
-          <span class="value">10485760</span>
-          <span class="comment"># 10MB default limit</span>
-          <span class="key">chunk:</span>
-          <span class="key">target_tokens:</span> <span class="value">600</span>
-          <span class="key">overlap_tokens:</span> <span class="value">50</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">manuals</span>
+    <span class="key">type:</span> <span class="value">document</span>
+    <span class="key">path:</span> <span class="value">./documents</span>
+    <span class="key">file_patterns:</span>
+      - <span class="value">"**/*.pdf"</span>
+      - <span class="value">"**/*.docx"</span>
+    <span class="key">max_file_size:</span> <span class="value">10485760</span>              <span class="comment"># 10MB default limit</span>
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span></div>
 
         <ul>
           <li>
             <strong>PDF support</strong> — Requires <code>pdf-parse</code> peer
-            dependency. Text is extracted page-by-page. Scanned PDFs (image-only
-            pages with no extractable text) are detected and skipped with a
-            warning.
+            dependency. Text is extracted with <code>pdf-parse</code>. A PDF
+            that yields almost no text (fewer than 50 characters, likely a
+            scanned document without a text layer) logs a warning and is still
+            indexed with whatever text it produced.
           </li>
           <li>
             <strong>DOCX support</strong> — Requires <code>mammoth</code> peer
@@ -1253,6 +1177,20 @@
           </li>
         </ul>
 
+        <h3 id="source-atlas">Source type: atlas</h3>
+
+        <p>
+          Indexes the Atlas content that is already stored in Pathfinder's
+          database (the <code>atlas_seed_entries</code> and
+          <code>atlas_cache_pages</code> tables), not files. An atlas source
+          takes no <code>path</code> or <code>file_patterns</code>. Its optional
+          <code>repositories</code> list limits indexing to the listed
+          repositories. Each entry has a <code>repo_url</code> and optional
+          <code>refs</code> and <code>subsystems</code> lists. The optional
+          <code>seed_path</code> and <code>cache_namespace</code> keys are
+          strings.
+        </p>
+
         <h3>url_derivation example</h3>
 
         <p>
@@ -1261,39 +1199,34 @@
           following config:
         </p>
 
-        <div class="code-block">
-          <span class="key">base_url:</span>
-          <span class="value">https://docs.example.com/</span>
-          <span class="key">url_derivation:</span>
-          <span class="key">strip_prefix:</span>
-          <span class="value">docs/</span>
-          <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
-          <span class="key">strip_route_groups:</span>
-          <span class="value">true</span> <span class="key">strip_index:</span>
-          <span class="value">true</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">base_url:</span> <span class="value">https://docs.example.com/</span>
+<span class="key">url_derivation:</span>
+  <span class="key">strip_prefix:</span> <span class="value">docs/</span>
+  <span class="key">strip_suffix:</span> <span class="value">.mdx</span>
+  <span class="key">strip_route_groups:</span> <span class="value">true</span>
+  <span class="key">strip_index:</span> <span class="value">true</span></div>
 
         <p>The derivation steps produce:</p>
 
-        <div class="code-block">
-          <span class="comment"># Original file path</span>
-          docs/(guides)/getting-started/index.mdx
+        <!-- prettier-ignore -->
+        <div class="code-block" data-sample="not-yaml"><span class="comment"># Original file path</span>
+docs/(guides)/getting-started/index.mdx
 
-          <span class="comment"># After strip_prefix: "docs/"</span>
-          (guides)/getting-started/index.mdx
+<span class="comment"># After strip_prefix: "docs/"</span>
+(guides)/getting-started/index.mdx
 
-          <span class="comment"># After strip_suffix: ".mdx"</span>
-          (guides)/getting-started/index
+<span class="comment"># After strip_suffix: ".mdx"</span>
+(guides)/getting-started/index
 
-          <span class="comment"># After strip_route_groups: true</span>
-          getting-started/index
+<span class="comment"># After strip_route_groups: true</span>
+getting-started/index
 
-          <span class="comment"># After strip_index: true</span>
-          getting-started
+<span class="comment"># After strip_index: true</span>
+getting-started
 
-          <span class="comment"># Final URL = base_url + slug</span>
-          https://docs.example.com/getting-started
-        </div>
+<span class="comment"># Final URL = base_url + slug</span>
+https://docs.example.com/getting-started</div>
 
         <h2 id="tools">tools</h2>
 
@@ -1309,31 +1242,17 @@
           embedding config.
         </p>
 
-        <div class="code-block">
-          <span class="key">tools:</span> - <span class="key">name:</span>
-          <span class="value">search-docs</span>
-          <span class="comment"># Tool name exposed to agents</span>
-          <span class="key">type:</span> <span class="value">search</span>
-          <span class="key">description:</span>
-          <span class="value">Search the docs</span>
-          <span class="comment"># Description shown to agents</span>
-          <span class="key">source:</span> <span class="value">docs</span>
-          <span class="comment"># Which source to search</span>
-          <span class="key">default_limit:</span> <span class="value">5</span>
-          <span class="comment"># Default number of results</span>
-          <span class="key">max_limit:</span> <span class="value">20</span>
-          <span class="comment"># Maximum results an agent can request</span>
-          <span class="key">result_format:</span>
-          <span class="value">docs</span>
-          <span class="comment"># docs | code | raw</span>
-          <span class="key">min_score:</span> <span class="value">0.3</span>
-          <span class="comment"
-            ># Minimum cosine similarity threshold (0-1, optional)</span
-          >
-          <span class="key">search_mode:</span>
-          <span class="value">vector</span>
-          <span class="comment"># vector (default) | keyword | hybrid</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-docs</span>                 <span class="comment"># Tool name exposed to agents</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search the docs</span>      <span class="comment"># Description shown to agents</span>
+    <span class="key">source:</span> <span class="value">docs</span>                      <span class="comment"># Which source to search</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>                  <span class="comment"># Default number of results (required)</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>                     <span class="comment"># Maximum results an agent can request (required)</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>               <span class="comment"># docs | code | raw (required)</span>
+    <span class="key">min_score:</span> <span class="value">0.3</span>                    <span class="comment"># Minimum cosine similarity threshold (0-1, optional)</span>
+    <span class="key">search_mode:</span> <span class="value">vector</span>               <span class="comment"># vector (default) | keyword | hybrid</span></div>
 
         <h3 id="search-modes">Search Modes</h3>
 
@@ -1366,46 +1285,42 @@
           database.
         </p>
 
-        <div class="code-block">
-          <span class="key">tools:</span> - <span class="key">name:</span>
-          <span class="value">explore-docs</span>
-          <span class="comment"># Tool name exposed to agents</span>
-          <span class="key">type:</span> <span class="value">bash</span>
-          <span class="key">description:</span>
-          <span class="value">Explore the docs</span>
-          <span class="comment"># Description shown to agents</span>
-          <span class="key">sources:</span> [<span class="value">docs</span>]
-          <span class="comment"># Sources to mount (can be multiple)</span>
-          <span class="key">bash:</span>
-          <span class="key">session_state:</span>
-          <span class="value">true</span>
-          <span class="comment"># Persist CWD across commands</span>
-          <span class="key">grep_strategy:</span>
-          <span class="value">hybrid</span>
-          <span class="comment"># memory | vector | hybrid</span>
-          <span class="key">virtual_files:</span>
-          <span class="value">true</span>
-          <span class="comment"
-            ># Expose qmd and related as virtual commands</span
-          >
-          <span class="key">workspace:</span> <span class="value">true</span>
-          <span class="comment"># Enable writable /workspace directory</span>
-          <span class="key">max_file_size:</span>
-          <span class="value">100000</span>
-          <span class="comment"># Max file size for cat output (bytes)</span>
-          <span class="key">cache:</span>
-          <span class="key">max_entries:</span> <span class="value">100</span>
-          <span class="comment"># Max cached command results</span>
-          <span class="key">ttl_seconds:</span> <span class="value">300</span>
-          <span class="comment"># Cache TTL in seconds</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">explore-docs</span>                 <span class="comment"># Tool name exposed to agents</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore the docs</span>      <span class="comment"># Description shown to agents</span>
+    <span class="key">sources:</span> [<span class="value">docs</span>]                    <span class="comment"># Sources to mount (can be multiple)</span>
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span>              <span class="comment"># Persist CWD across commands</span>
+      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>            <span class="comment"># memory | vector | hybrid (vector and hybrid add qmd and related)</span>
+      <span class="key">virtual_files:</span> <span class="value">true</span>              <span class="comment"># Add generated /INDEX.md and /SEARCH_TIPS.md files</span>
+      <span class="key">workspace:</span> <span class="value">true</span>                  <span class="comment"># Enable writable /workspace directory</span>
+      <span class="key">max_file_size:</span> <span class="value">100000</span>            <span class="comment"># Accepted but unused (no effect); see the source's max_file_size</span>
+      <span class="key">cache:</span>                          <span class="comment"># Accepted but unused (no effect)</span>
+        <span class="key">max_entries:</span> <span class="value">100</span>
+        <span class="key">ttl_seconds:</span> <span class="value">300</span></div>
 
         <ul>
           <li>
-            <strong>grep_strategy</strong> — <code>memory</code> passes grep
-            through to bash unchanged. <code>vector</code> intercepts grep and
-            runs semantic search. <code>hybrid</code> runs bash grep first,
-            falls back to semantic if no results.
+            <strong>grep_strategy</strong> — <code>grep</code> always runs as
+            plain grep; this key does not change it. <code>memory</code> adds no
+            semantic commands. <code>vector</code> and <code>hybrid</code>
+            behave the same today: both add the
+            <code>qmd "&lt;query&gt;"</code> semantic-search command and the
+            <code>related &lt;path&gt;</code> command, and both require an
+            <code>embedding</code> block.
+          </li>
+          <li>
+            <strong>virtual_files</strong> — When true, adds the generated
+            <code>/INDEX.md</code> and <code>/SEARCH_TIPS.md</code> files to the
+            filesystem.
+          </li>
+          <li>
+            <strong>max_file_size</strong> and <strong>cache</strong> — Accepted
+            by the config schema but not used; they have no effect. To limit
+            file size in the bash filesystem, set <code>max_file_size</code> on
+            the source.
           </li>
           <li>
             <strong>workspace</strong> — When true, agents on 2025-era (session)
@@ -1414,11 +1329,15 @@
             <a href="/deploy">Deploy Guide</a>). Apart from that, the bash
             filesystem is read-only for every client. Only <code>/tmp</code> is
             writable, and it is private: it lasts for the session on 2025-era
-            connections and for one call on 2026-07-28 connections.
+            connections and for one call on 2026-07-28 connections. Writes to
+            <code>/dev/null</code> and <code>/dev/zero</code> also succeed; the
+            data is discarded.
           </li>
           <li>
             <strong>session_state</strong> — When true, <code>cd</code> persists
-            across tool calls within a session.
+            across tool calls within a session. This applies only to 2025-era
+            (session) connections. On 2026-07-28 connections it has no effect:
+            <code>cd</code> does not carry over to the next call.
           </li>
         </ul>
 
@@ -1435,28 +1354,21 @@
           it.
         </p>
 
-        <div class="code-block">
-          <span class="key">tools:</span> - <span class="key">name:</span>
-          <span class="value">submit-feedback</span>
-          <span class="key">type:</span> <span class="value">collect</span>
-          <span class="key">description:</span>
-          <span class="value">Report search quality or broken links</span>
-          <span class="key">response:</span>
-          <span class="value">Thanks for the feedback!</span>
-          <span class="key">schema:</span>
-          <span class="key">rating:</span>
-          <span class="key">type:</span> <span class="value">enum</span>
-          <span class="key">description:</span>
-          <span class="value">How helpful was the result?</span>
-          <span class="key">required:</span> <span class="value">true</span>
-          <span class="key">values:</span> [<span class="value">helpful</span>,
-          <span class="value">somewhat</span>,
-          <span class="value">not_helpful</span>]
-          <span class="key">comment:</span>
-          <span class="key">type:</span> <span class="value">string</span>
-          <span class="key">description:</span>
-          <span class="value">Optional details</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">submit-feedback</span>
+    <span class="key">type:</span> <span class="value">collect</span>
+    <span class="key">description:</span> <span class="value">Report search quality or broken links</span>
+    <span class="key">response:</span> <span class="value">Thanks for the feedback!</span>
+    <span class="key">schema:</span>
+      <span class="key">rating:</span>
+        <span class="key">type:</span> <span class="value">enum</span>
+        <span class="key">description:</span> <span class="value">How helpful was the result?</span>
+        <span class="key">required:</span> <span class="value">true</span>
+        <span class="key">values:</span> [<span class="value">helpful</span>, <span class="value">somewhat</span>, <span class="value">not_helpful</span>]
+      <span class="key">comment:</span>
+        <span class="key">type:</span> <span class="value">string</span>
+        <span class="key">description:</span> <span class="value">Optional details</span></div>
 
         <h3 id="tool-knowledge">knowledge</h3>
 
@@ -1466,26 +1378,15 @@
           query, returns recent pairs) and search (semantic query over pairs).
         </p>
 
-        <div class="code-block">
-          <span class="key">tools:</span> - <span class="key">name:</span>
-          <span class="value">knowledge-base</span>
-          <span class="key">type:</span> <span class="value">knowledge</span>
-          <span class="key">description:</span>
-          <span class="value">Search community Q&amp;A knowledge base</span>
-          <span class="key">sources:</span> [<span class="value"
-            >community-support</span
-          >, <span class="value">discord-support</span>]
-          <span class="comment"># Sources with category: faq</span>
-          <span class="key">min_confidence:</span>
-          <span class="value">0.7</span>
-          <span class="comment"
-            ># Override source-level confidence threshold</span
-          >
-          <span class="key">default_limit:</span> <span class="value">10</span>
-          <span class="comment"># Default number of results</span>
-          <span class="key">max_limit:</span> <span class="value">50</span>
-          <span class="comment"># Maximum results an agent can request</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">knowledge-base</span>
+    <span class="key">type:</span> <span class="value">knowledge</span>
+    <span class="key">description:</span> <span class="value">Search community Q&amp;A knowledge base</span>
+    <span class="key">sources:</span> [<span class="value">community-support</span>, <span class="value">discord-support</span>]   <span class="comment"># Sources with category: faq</span>
+    <span class="key">min_confidence:</span> <span class="value">0.7</span>                             <span class="comment"># Min confidence for results (default: 0.7)</span>
+    <span class="key">default_limit:</span> <span class="value">10</span>                               <span class="comment"># Default number of results (default: 20)</span>
+    <span class="key">max_limit:</span> <span class="value">50</span>                                   <span class="comment"># Maximum results an agent can request (default: 100)</span></div>
 
         <ul>
           <li>
@@ -1493,17 +1394,20 @@
             should have <code>category: faq</code> set.
           </li>
           <li>
-            <strong>min_confidence</strong> — Override the per-source confidence
-            threshold for this tool. Q&amp;A pairs below this score are filtered
-            from results.
+            <strong>min_confidence</strong> — Minimum confidence for this tool's
+            results. Q&amp;A pairs below this score are filtered out. The
+            source-level <code>confidence_threshold</code> does not apply here.
+            An agent can pass its own <code>min_confidence</code> per call.
+            Optional, defaults to 0.7.
           </li>
           <li>
             <strong>default_limit</strong> — Number of results returned when the
-            agent doesn't specify a limit.
+            agent doesn't specify a limit. Optional, defaults to 20.
           </li>
           <li>
             <strong>max_limit</strong> — Upper bound on results the agent can
-            request.
+            request. Optional, defaults to 100. <code>default_limit</code> must
+            not exceed it.
           </li>
         </ul>
 
@@ -1516,40 +1420,38 @@
         <h2 id="embedding">embedding</h2>
 
         <p>
-          Required when using search tools. Configures how content is embedded
-          for vector search.
+          Required when using <code>search</code> or
+          <code>knowledge</code> tools, or a bash tool with
+          <code>grep_strategy: vector</code> or <code>hybrid</code>. Configures
+          how content is embedded for vector search.
         </p>
 
-        <div class="code-block">
-          <span class="key">embedding:</span> <span class="key">provider:</span>
-          <span class="value">openai</span>
-          <span class="comment"># openai | ollama | local</span>
-          <span class="key">model:</span>
-          <span class="value">text-embedding-3-small</span>
-          <span class="comment"># Model name (provider-specific)</span>
-          <span class="key">dimensions:</span> <span class="value">1536</span>
-          <span class="comment"># Vector dimensions (must match model)</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>                    <span class="comment"># openai | ollama | local</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>       <span class="comment"># Model name (provider-specific)</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>                    <span class="comment"># Vector dimensions (must match model)</span></div>
 
         <h3>Provider options</h3>
 
         <p>
-          Three embedding providers are supported.
-          <code>OPENAI_API_KEY</code> is only required when using the
-          <code>openai</code> provider.
+          Three embedding providers are supported. There is no default:
+          <code>provider</code> must always be set.
+          <code>OPENAI_API_KEY</code> is required for the
+          <code>openai</code> provider, and also for Slack sources and Discord
+          text channels (thread distillation), whatever the provider.
         </p>
 
         <p>
-          <strong>OpenAI</strong> (default) — uses the OpenAI embeddings API.
-          Requires <code>OPENAI_API_KEY</code>.
+          <strong>OpenAI</strong> — uses the OpenAI embeddings API. Requires
+          <code>OPENAI_API_KEY</code>.
         </p>
 
-        <div class="code-block">
-          <span class="key">embedding:</span> <span class="key">provider:</span>
-          <span class="value">openai</span> <span class="key">model:</span>
-          <span class="value">text-embedding-3-small</span>
-          <span class="key">dimensions:</span> <span class="value">1536</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span></div>
 
         <p>
           <strong>Ollama</strong> — calls a local Ollama instance over HTTP. No
@@ -1558,15 +1460,12 @@
           (<code>ollama pull nomic-embed-text</code>).
         </p>
 
-        <div class="code-block">
-          <span class="key">embedding:</span> <span class="key">provider:</span>
-          <span class="value">ollama</span> <span class="key">model:</span>
-          <span class="value">nomic-embed-text</span>
-          <span class="key">dimensions:</span> <span class="value">768</span>
-          <span class="key">base_url:</span>
-          <span class="value">http://localhost:11434</span>
-          <span class="comment"># Optional, this is the default</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">ollama</span>
+  <span class="key">model:</span> <span class="value">nomic-embed-text</span>
+  <span class="key">dimensions:</span> <span class="value">768</span>
+  <span class="key">base_url:</span> <span class="value">http://localhost:11434</span>   <span class="comment"># Optional, this is the default</span></div>
 
         <p>
           <strong>Local</strong> — runs
@@ -1581,56 +1480,74 @@
           is set without the dependency present.
         </p>
 
-        <div class="code-block">
-          <span class="key">embedding:</span> <span class="key">provider:</span>
-          <span class="value">local</span> <span class="key">model:</span>
-          <span class="value">Xenova/all-MiniLM-L6-v2</span>
-          <span class="key">dimensions:</span> <span class="value">384</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">local</span>
+  <span class="key">model:</span> <span class="value">Xenova/all-MiniLM-L6-v2</span>
+  <span class="key">dimensions:</span> <span class="value">384</span></div>
 
         <div class="gap-card">
           <h4>Dimension mismatch detection</h4>
           <p>
-            If you change embedding providers or models on an existing database,
-            Pathfinder warns at startup when the configured dimensions don't
-            match the existing vector index. You'll need to reindex to use the
-            new dimensions.
+            At startup, Pathfinder reads the declared vector size of the
+            <code>chunks.embedding</code> column from the database catalog, so
+            an empty table is checked too. If it differs from the configured
+            <code>dimensions</code> (for example, after you change the embedding
+            provider or model on an existing database), Pathfinder logs
+            <code>DIMENSION MISMATCH</code> and
+            <strong>refuses to start</strong>. It also refuses to start when
+            <code>chunks.embedding</code> is not a <code>vector</code> column. A
+            <code>vector</code> column with no declared size falls back to the
+            size of the first row with a non-NULL embedding; if there is no such
+            row, it logs a
+            <code>[db] Dimension check NOT performed:</code> warning and startup
+            goes on. A missing <code>chunks</code> table passes the check
+            (startup creates it with the configured size).
+          </p>
+          <p>
+            Any other error during the check (a connection, permission or query
+            error) also only logs a
+            <code>[db] Dimension check NOT performed:</code> warning, and
+            startup goes on past the check. A check that was not performed does
+            not prove that the dimensions match, so read that warning when you
+            change the embedding config.
+          </p>
+          <p>
+            To rebuild with the new dimensions, drop the
+            <code>chunks</code> and <code>index_state</code> tables (for example
+            <code>DROP TABLE chunks, index_state;</code>), then restart
+            <code>pathfinder serve</code>. Startup creates both tables again,
+            with the new vector size. Because no source then has an index state,
+            Pathfinder re-indexes every source that a <code>search</code> or
+            <code>knowledge</code> tool uses. There is no CLI reindex command.
           </p>
         </div>
 
         <h2 id="indexing">indexing</h2>
 
         <p>
-          Required when using search tools. Controls automatic reindexing
-          behavior.
+          Optional. Controls automatic reindexing behavior. Every key has a
+          default, so you can leave out the block. With the defaults,
+          <code>auto_reindex</code> is <code>false</code>: there is no scheduled
+          reindexing, only manual indexing.
         </p>
 
-        <div class="code-block">
-          <span class="key">indexing:</span>
-          <span class="key">auto_reindex:</span> <span class="value">true</span>
-          <span class="comment"># Enable daily automatic reindexing</span>
-          <span class="key">reindex_hour_utc:</span>
-          <span class="value">3</span>
-          <span class="comment"># Hour (0-23 UTC) to run daily reindex</span>
-          <span class="key">stale_threshold_hours:</span>
-          <span class="value">24</span>
-          <span class="comment"># Re-embed chunks older than this</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>                  <span class="comment"># Enable daily automatic reindexing (default: false)</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>                 <span class="comment"># Hour (0-23 UTC) to run daily reindex (default: 3)</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span>           <span class="comment"># Re-embed chunks older than this (default: 24)</span></div>
 
         <h2 id="webhook">webhook</h2>
 
         <p>Optional. Triggers targeted reindexing when you push to GitHub.</p>
 
-        <div class="code-block">
-          <span class="key">webhook:</span>
-          <span class="key">repo_sources:</span>
-          <span class="comment"># Map GitHub repo to source names</span>
-          <span class="value">"your-org/your-repo"</span>: [<span class="value"
-            >docs</span
-          >] <span class="key">path_triggers:</span>
-          <span class="comment"># Only reindex when these paths change</span>
-          <span class="key">docs:</span> [<span class="value">"docs/"</span>]
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">webhook:</span>
+  <span class="key">repo_sources:</span>                         <span class="comment"># Map GitHub repo to source names</span>
+    <span class="value">"your-org/your-repo"</span>: [<span class="value">docs</span>]
+  <span class="key">path_triggers:</span>                        <span class="comment"># Only reindex when these paths change</span>
+    <span class="key">docs:</span> [<span class="value">"docs/"</span>]</div>
 
         <p>
           Point a GitHub webhook at
@@ -1646,27 +1563,20 @@
           at <code>/analytics</code>.
         </p>
 
-        <div class="code-block">
-          <span class="key">analytics:</span> <span class="key">enabled:</span>
-          <span class="value">false</span>
-          <span class="comment"># Enable analytics (default: false)</span>
-          <span class="key">log_queries:</span> <span class="value">true</span>
-          <span class="comment"># Log all search queries (default: true)</span>
-          <span class="comment"
-            ># Bearer token for /api/analytics endpoints.</span
-          >
-          <span class="comment"
-            ># Preferred: omit `token:` and set the ANALYTICS_TOKEN env var
-            instead.</span
-          >
-          <span class="comment"
-            ># Inline literal also works (no ${VAR} interpolation — YAML is
-            loaded as-is):</span
-          >
-          <span class="comment"># token: "your-secret-here"</span>
-          <span class="key">retention_days:</span> <span class="value">90</span>
-          <span class="comment"># Days to retain data (default: 90)</span>
-        </div>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">analytics:</span>
+  <span class="key">enabled:</span> <span class="value">false</span>               <span class="comment"># Enable analytics (default: false)</span>
+  <span class="key">log_queries:</span> <span class="value">true</span>            <span class="comment"># Store query text (default: true); false redacts it, rows are still written</span>
+  <span class="comment"># Bearer token for /api/analytics endpoints.</span>
+  <span class="comment"># Preferred: omit `token:` and set the ANALYTICS_TOKEN env var instead.</span>
+  <span class="comment"># Inline literal also works (no ${VAR} interpolation — YAML is loaded as-is):</span>
+  <span class="comment">#   token: "your-secret-here"</span>
+  <span class="key">retention_days:</span> <span class="value">90</span>           <span class="comment"># Days to retain data (default: 90)</span>
+  <span class="key">machine_relays:</span>                 <span class="comment"># Relays to exclude from user analytics (optional, default: none)</span>
+    - <span class="key">name:</span> <span class="value">issue-triage</span>          <span class="comment"># Shown in the dashboard's excluded panel</span>
+      <span class="key">reason:</span> <span class="value">Posts every new issue body into search</span>   <span class="comment"># Optional</span>
+      <span class="key">user_agent:</span> <span class="value">node</span>            <span class="comment"># Exact User-Agent, case-insensitive</span>
+      <span class="key">client_ip_cidr:</span> <span class="value">152.55.176.0/20</span>   <span class="comment"># IPv4 CIDR; each rule needs user_agent or client_ip_cidr</span></div>
 
         <ul>
           <li>
@@ -1675,8 +1585,10 @@
             <code>/analytics</code>. Default <code>false</code>.
           </li>
           <li>
-            <strong>log_queries</strong> — When <code>true</code>, all search
-            queries are logged with latency and result counts. Default
+            <strong>log_queries</strong> — Whether the query text is stored.
+            Every tool call is logged either way, with latency, result count,
+            client IP and User-Agent. When <code>false</code>, only the query
+            text is replaced with <code>&lt;redacted&gt;</code>. Default
             <code>true</code> (when analytics is enabled).
           </li>
           <li>
@@ -1684,9 +1596,13 @@
             <code>/api/analytics/*</code> endpoints. Prefer the
             <code>ANALYTICS_TOKEN</code> environment variable; set
             <code>analytics.token</code> only if you need the value inline (YAML
-            is loaded as-is — no <code>${VAR}</code> interpolation). One of
-            <code>analytics.token</code> or the <code>ANALYTICS_TOKEN</code> env
-            var is required when analytics is enabled.
+            is loaded as-is — no <code>${VAR}</code> interpolation). When
+            analytics is enabled and <code>NODE_ENV</code> is
+            <code>production</code>, one of <code>analytics.token</code> or the
+            <code>ANALYTICS_TOKEN</code> env var is required. In any other
+            environment, a missing token is auto-generated at startup, and the
+            log shows only a short fingerprint of it, not the token. Set
+            <code>ANALYTICS_TOKEN</code> to get a token you can use.
           </li>
           <li>
             <strong>retention_days</strong> — How long to keep analytics data
@@ -1702,13 +1618,20 @@
             <code>reason</code>, and the predicates
             <code>user_agent</code> (exact, case-insensitive) and
             <code>client_ip_cidr</code> (IPv4 CIDR); a rule matches when every
-            predicate it declares matches. Nothing is hidden: the dashboard
+            predicate it declares matches. Each rule must declare at least one
+            of <code>user_agent</code> or <code>client_ip_cidr</code>; a rule
+            with neither fails config load. Nothing is hidden: the dashboard
             lists every rule and what it removed, and
             <code>?request_source=relay</code> on any analytics endpoint reads
             the excluded rows back. Prefer having the relay send
-            <code>X-Pathfinder-Source</code> instead — send it on every request
-            (2026-07-28 clients); at session init (2025-era clients). A
-            self-declaring relay needs no rule here.
+            <code>X-Pathfinder-Source</code> instead, with the value
+            <code>relay</code> or one of its aliases <code>outpost</code> and
+            <code>github-triage</code> (case-insensitive). Any other value that
+            the server does not recognize, such as the relay's own name, is
+            counted as real-user traffic. A 2026-07-28 client sends it on every
+            request; a 2025-era client sends it on the request that opens the
+            session (the <code>/mcp</code> initialize, or
+            <code>GET /sse</code>). A self-declaring relay needs no rule here.
           </li>
         </ul>
 
@@ -1718,7 +1641,11 @@
           <code>/api/analytics/summary</code>,
           <code>/api/analytics/queries</code>,
           <code>/api/analytics/empty-queries</code>,
-          <code>/api/analytics/relay-exclusions</code>.
+          <code>/api/analytics/blocked-queries</code>,
+          <code>/api/analytics/relay-exclusions</code>,
+          <code>/api/analytics/tool-counts</code>,
+          <code>/api/analytics/tool-breakdown</code>,
+          <code>/api/analytics/auth-mode</code>.
         </p>
 
         <h2 id="authentication">Authentication</h2>
@@ -1787,8 +1714,9 @@
         <p>
           The page is locked down with
           <code
-            >Content-Security-Policy: default-src 'none'; frame-ancestors
-            'none'</code
+            >Content-Security-Policy: default-src 'none'; style-src
+            'unsafe-inline'; form-action 'self'; frame-ancestors 'none';
+            base-uri 'none'</code
           >, <code>X-Frame-Options: DENY</code>, and
           <code>Referrer-Policy: no-referrer</code>. No JavaScript, no external
           resources.
@@ -1851,29 +1779,24 @@
           shell commands.
         </p>
 
-        <div class="code-block">
-          <span class="key">server:</span> <span class="key">name:</span>
-          <span class="value">my-docs</span> <span class="key">version:</span>
-          <span class="value">1.0.0</span>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">my-docs</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>
 
-          <span class="key">sources:</span>
-          - <span class="key">name:</span> <span class="value">docs</span>
-          <span class="key">type:</span> <span class="value">markdown</span>
-          <span class="key">path:</span> <span class="value">./docs</span>
-          <span class="key">file_patterns:</span> [<span class="value"
-            >"**/*.md"</span
-          >, <span class="value">"**/*.mdx"</span>]
+<span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">path:</span> <span class="value">./docs</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.md"</span>, <span class="value">"**/*.mdx"</span>]
 
-          <span class="key">tools:</span>
-          - <span class="key">name:</span>
-          <span class="value">explore-docs</span> <span class="key">type:</span>
-          <span class="value">bash</span> <span class="key">description:</span>
-          <span class="value">Explore project documentation</span>
-          <span class="key">sources:</span> [<span class="value">docs</span>]
-          <span class="key">bash:</span>
-          <span class="key">session_state:</span>
-          <span class="value">true</span>
-        </div>
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">explore-docs</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore project documentation</span>
+    <span class="key">sources:</span> [<span class="value">docs</span>]
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span></div>
 
         <h3>Full stack with semantic search</h3>
 
@@ -1882,61 +1805,48 @@
           key.
         </p>
 
-        <div class="code-block">
-          <span class="key">server:</span> <span class="key">name:</span>
-          <span class="value">my-docs</span> <span class="key">version:</span>
-          <span class="value">1.0.0</span>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">my-docs</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>
 
-          <span class="key">sources:</span>
-          - <span class="key">name:</span> <span class="value">docs</span>
-          <span class="key">type:</span> <span class="value">markdown</span>
-          <span class="key">repo:</span>
-          <span class="value">https://github.com/org/repo.git</span>
-          <span class="key">path:</span> <span class="value">docs/</span>
-          <span class="key">file_patterns:</span> [<span class="value"
-            >"**/*.mdx"</span
-          >, <span class="value">"**/*.md"</span>]
-          <span class="key">chunk:</span>
-          <span class="key">target_tokens:</span> <span class="value">600</span>
-          <span class="key">overlap_tokens:</span> <span class="value">50</span>
+<span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>, <span class="value">"**/*.md"</span>]
+    <span class="key">chunk:</span>
+      <span class="key">target_tokens:</span> <span class="value">600</span>
+      <span class="key">overlap_tokens:</span> <span class="value">50</span>
 
-          <span class="key">tools:</span>
-          - <span class="key">name:</span>
-          <span class="value">search-docs</span> <span class="key">type:</span>
-          <span class="value">search</span>
-          <span class="key">description:</span>
-          <span class="value">Semantic search over documentation</span>
-          <span class="key">source:</span> <span class="value">docs</span>
-          <span class="key">default_limit:</span> <span class="value">5</span>
-          <span class="key">max_limit:</span> <span class="value">20</span>
-          <span class="key">result_format:</span>
-          <span class="value">docs</span>
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-docs</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Semantic search over documentation</span>
+    <span class="key">source:</span> <span class="value">docs</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
 
-          - <span class="key">name:</span>
-          <span class="value">explore-docs</span> <span class="key">type:</span>
-          <span class="value">bash</span> <span class="key">description:</span>
-          <span class="value">Explore documentation with shell commands</span>
-          <span class="key">sources:</span> [<span class="value">docs</span>]
-          <span class="key">bash:</span>
-          <span class="key">session_state:</span>
-          <span class="value">true</span>
-          <span class="key">grep_strategy:</span>
-          <span class="value">hybrid</span> <span class="key">workspace:</span>
-          <span class="value">true</span>
+  - <span class="key">name:</span> <span class="value">explore-docs</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore documentation with shell commands</span>
+    <span class="key">sources:</span> [<span class="value">docs</span>]
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span>
+      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>
+      <span class="key">workspace:</span> <span class="value">true</span>
 
-          <span class="key">embedding:</span>
-          <span class="key">provider:</span> <span class="value">openai</span>
-          <span class="key">model:</span>
-          <span class="value">text-embedding-3-small</span>
-          <span class="key">dimensions:</span> <span class="value">1536</span>
+<span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>
 
-          <span class="key">indexing:</span>
-          <span class="key">auto_reindex:</span> <span class="value">true</span>
-          <span class="key">reindex_hour_utc:</span>
-          <span class="value">3</span>
-          <span class="key">stale_threshold_hours:</span>
-          <span class="value">24</span>
-        </div>
+<span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
 
         <h3>Multi-repo</h3>
 
@@ -1945,172 +1855,134 @@
           instance.
         </p>
 
-        <div class="code-block">
-          <span class="key">server:</span> <span class="key">name:</span>
-          <span class="value">platform-docs</span>
-          <span class="key">version:</span> <span class="value">1.0.0</span>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">platform-docs</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>
 
-          <span class="key">sources:</span>
-          - <span class="key">name:</span> <span class="value">api-docs</span>
-          <span class="key">type:</span> <span class="value">markdown</span>
-          <span class="key">repo:</span>
-          <span class="value">https://github.com/org/api.git</span>
-          <span class="key">path:</span> <span class="value">docs/</span>
-          <span class="key">file_patterns:</span> [<span class="value"
-            >"**/*.md"</span
-          >] <span class="key">chunk:</span> {
-          <span class="key">target_tokens:</span>
-          <span class="value">600</span>,
-          <span class="key">overlap_tokens:</span>
-          <span class="value">50</span> } - <span class="key">name:</span>
-          <span class="value">sdk-docs</span> <span class="key">type:</span>
-          <span class="value">markdown</span> <span class="key">repo:</span>
-          <span class="value">https://github.com/org/sdk.git</span>
-          <span class="key">path:</span> <span class="value">docs/</span>
-          <span class="key">file_patterns:</span> [<span class="value"
-            >"**/*.mdx"</span
-          >] <span class="key">chunk:</span> {
-          <span class="key">target_tokens:</span>
-          <span class="value">600</span>,
-          <span class="key">overlap_tokens:</span>
-          <span class="value">50</span> } - <span class="key">name:</span>
-          <span class="value">sdk-source</span> <span class="key">type:</span>
-          <span class="value">code</span> <span class="key">repo:</span>
-          <span class="value">https://github.com/org/sdk.git</span>
-          <span class="key">path:</span> <span class="value">src/</span>
-          <span class="key">file_patterns:</span> [<span class="value"
-            >"**/*.ts"</span
-          >] <span class="key">chunk:</span> {
-          <span class="key">target_lines:</span> <span class="value">100</span>,
-          <span class="key">overlap_lines:</span>
-          <span class="value">10</span> }
+<span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">api-docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/api.git</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.md"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
 
-          <span class="key">tools:</span>
-          - <span class="key">name:</span> <span class="value">search-api</span>
-          <span class="key">type:</span> <span class="value">search</span>
-          <span class="key">description:</span>
-          <span class="value">Search API documentation</span>
-          <span class="key">source:</span> <span class="value">api-docs</span>
-          <span class="key">default_limit:</span> <span class="value">5</span>
-          <span class="key">max_limit:</span> <span class="value">20</span>
-          <span class="key">result_format:</span>
-          <span class="value">docs</span>
+  - <span class="key">name:</span> <span class="value">sdk-docs</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/sdk.git</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
 
-          - <span class="key">name:</span> <span class="value">search-sdk</span>
-          <span class="key">type:</span> <span class="value">search</span>
-          <span class="key">description:</span>
-          <span class="value">Search SDK documentation and source</span>
-          <span class="key">source:</span> <span class="value">sdk-docs</span>
-          <span class="key">default_limit:</span> <span class="value">5</span>
-          <span class="key">max_limit:</span> <span class="value">20</span>
-          <span class="key">result_format:</span>
-          <span class="value">docs</span>
+  - <span class="key">name:</span> <span class="value">sdk-source</span>
+    <span class="key">type:</span> <span class="value">code</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/sdk.git</span>
+    <span class="key">path:</span> <span class="value">src/</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.ts"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_lines:</span> <span class="value">100</span>, <span class="key">overlap_lines:</span> <span class="value">10</span> }
 
-          - <span class="key">name:</span>
-          <span class="value">explore-all</span> <span class="key">type:</span>
-          <span class="value">bash</span> <span class="key">description:</span>
-          <span class="value">Explore all documentation and source</span>
-          <span class="key">sources:</span> [<span class="value">api-docs</span
-          >, <span class="value">sdk-docs</span>,
-          <span class="value">sdk-source</span>]
-          <span class="key">bash:</span>
-          <span class="key">session_state:</span>
-          <span class="value">true</span>
-          <span class="key">grep_strategy:</span>
-          <span class="value">hybrid</span>
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-api</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search API documentation</span>
+    <span class="key">source:</span> <span class="value">api-docs</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
 
-          <span class="key">embedding:</span>
-          <span class="key">provider:</span> <span class="value">openai</span>
-          <span class="key">model:</span>
-          <span class="value">text-embedding-3-small</span>
-          <span class="key">dimensions:</span> <span class="value">1536</span>
+  - <span class="key">name:</span> <span class="value">search-sdk</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search SDK documentation</span>
+    <span class="key">source:</span> <span class="value">sdk-docs</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
 
-          <span class="key">indexing:</span>
-          <span class="key">auto_reindex:</span> <span class="value">true</span>
-          <span class="key">reindex_hour_utc:</span>
-          <span class="value">3</span>
-          <span class="key">stale_threshold_hours:</span>
-          <span class="value">24</span>
-        </div>
+  - <span class="key">name:</span> <span class="value">explore-all</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore all documentation and source</span>
+    <span class="key">sources:</span> [<span class="value">api-docs</span>, <span class="value">sdk-docs</span>, <span class="value">sdk-source</span>]
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span>
+      <span class="key">grep_strategy:</span> <span class="value">hybrid</span>
+
+<span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>
+
+<span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
 
         <h3>Multi-version</h3>
 
         <p>
-          Serve multiple versions of the same docs. Agents can filter search
-          results by version.
+          Serve multiple versions of the same docs. Each source carries a
+          <code>version</code> tag. A search tool reads one source, so each
+          version gets its own search tool. The bash tool mounts both versions
+          side by side.
         </p>
 
-        <div class="code-block">
-          <span class="key">server:</span> <span class="key">name:</span>
-          <span class="value">versioned-docs</span>
-          <span class="key">version:</span> <span class="value">1.0.0</span>
+        <!-- prettier-ignore -->
+        <div class="code-block"><span class="key">server:</span>
+  <span class="key">name:</span> <span class="value">versioned-docs</span>
+  <span class="key">version:</span> <span class="value">1.0.0</span>
 
-          <span class="key">sources:</span>
-          - <span class="key">name:</span> <span class="value">docs-v1</span>
-          <span class="key">type:</span> <span class="value">markdown</span>
-          <span class="key">repo:</span>
-          <span class="value">https://github.com/org/repo.git</span>
-          <span class="key">branch:</span> <span class="value">v1</span>
-          <span class="key">path:</span> <span class="value">docs/</span>
-          <span class="key">version:</span> <span class="value">v1</span>
-          <span class="key">file_patterns:</span> [<span class="value"
-            >"**/*.mdx"</span
-          >] <span class="key">chunk:</span> {
-          <span class="key">target_tokens:</span>
-          <span class="value">600</span>,
-          <span class="key">overlap_tokens:</span>
-          <span class="value">50</span> } - <span class="key">name:</span>
-          <span class="value">docs-v2</span> <span class="key">type:</span>
-          <span class="value">markdown</span> <span class="key">repo:</span>
-          <span class="value">https://github.com/org/repo.git</span>
-          <span class="key">branch:</span> <span class="value">v2</span>
-          <span class="key">path:</span> <span class="value">docs/</span>
-          <span class="key">version:</span> <span class="value">v2</span>
-          <span class="key">file_patterns:</span> [<span class="value"
-            >"**/*.mdx"</span
-          >] <span class="key">chunk:</span> {
-          <span class="key">target_tokens:</span>
-          <span class="value">600</span>,
-          <span class="key">overlap_tokens:</span>
-          <span class="value">50</span> }
+<span class="key">sources:</span>
+  - <span class="key">name:</span> <span class="value">docs-v1</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
+    <span class="key">branch:</span> <span class="value">v1</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">version:</span> <span class="value">v1</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
 
-          <span class="key">tools:</span>
-          - <span class="key">name:</span>
-          <span class="value">search-docs</span> <span class="key">type:</span>
-          <span class="value">search</span>
-          <span class="key">description:</span>
-          <span class="value"
-            >Search docs (specify version parameter to filter)</span
-          >
-          <span class="key">source:</span> <span class="value">docs-v2</span>
-          <span class="key">default_limit:</span> <span class="value">5</span>
-          <span class="key">max_limit:</span> <span class="value">20</span>
-          <span class="key">result_format:</span>
-          <span class="value">docs</span>
+  - <span class="key">name:</span> <span class="value">docs-v2</span>
+    <span class="key">type:</span> <span class="value">markdown</span>
+    <span class="key">repo:</span> <span class="value">https://github.com/org/repo.git</span>
+    <span class="key">branch:</span> <span class="value">v2</span>
+    <span class="key">path:</span> <span class="value">docs/</span>
+    <span class="key">version:</span> <span class="value">v2</span>
+    <span class="key">file_patterns:</span> [<span class="value">"**/*.mdx"</span>]
+    <span class="key">chunk:</span> { <span class="key">target_tokens:</span> <span class="value">600</span>, <span class="key">overlap_tokens:</span> <span class="value">50</span> }
 
-          - <span class="key">name:</span>
-          <span class="value">explore-docs</span> <span class="key">type:</span>
-          <span class="value">bash</span> <span class="key">description:</span>
-          <span class="value">Explore documentation filesystem</span>
-          <span class="key">sources:</span> [<span class="value">docs-v1</span>,
-          <span class="value">docs-v2</span>]
-          <span class="key">bash:</span>
-          <span class="key">session_state:</span>
-          <span class="value">true</span>
+<span class="key">tools:</span>
+  - <span class="key">name:</span> <span class="value">search-docs</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search the v2 docs</span>
+    <span class="key">source:</span> <span class="value">docs-v2</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
 
-          <span class="key">embedding:</span>
-          <span class="key">provider:</span> <span class="value">openai</span>
-          <span class="key">model:</span>
-          <span class="value">text-embedding-3-small</span>
-          <span class="key">dimensions:</span> <span class="value">1536</span>
+  - <span class="key">name:</span> <span class="value">search-docs-v1</span>
+    <span class="key">type:</span> <span class="value">search</span>
+    <span class="key">description:</span> <span class="value">Search the v1 docs</span>
+    <span class="key">source:</span> <span class="value">docs-v1</span>
+    <span class="key">default_limit:</span> <span class="value">5</span>
+    <span class="key">max_limit:</span> <span class="value">20</span>
+    <span class="key">result_format:</span> <span class="value">docs</span>
 
-          <span class="key">indexing:</span>
-          <span class="key">auto_reindex:</span> <span class="value">true</span>
-          <span class="key">reindex_hour_utc:</span>
-          <span class="value">3</span>
-          <span class="key">stale_threshold_hours:</span>
-          <span class="value">24</span>
-        </div>
+  - <span class="key">name:</span> <span class="value">explore-docs</span>
+    <span class="key">type:</span> <span class="value">bash</span>
+    <span class="key">description:</span> <span class="value">Explore documentation filesystem</span>
+    <span class="key">sources:</span> [<span class="value">docs-v1</span>, <span class="value">docs-v2</span>]
+    <span class="key">bash:</span>
+      <span class="key">session_state:</span> <span class="value">true</span>
+
+<span class="key">embedding:</span>
+  <span class="key">provider:</span> <span class="value">openai</span>
+  <span class="key">model:</span> <span class="value">text-embedding-3-small</span>
+  <span class="key">dimensions:</span> <span class="value">1536</span>
+
+<span class="key">indexing:</span>
+  <span class="key">auto_reindex:</span> <span class="value">true</span>
+  <span class="key">reindex_hour_utc:</span> <span class="value">3</span>
+  <span class="key">stale_threshold_hours:</span> <span class="value">24</span></div>
       </main>
       <aside class="page-toc" id="page-toc"></aside>
     </div>

@@ -1,14 +1,21 @@
 /**
- * Route-level coverage for the admission limits on modern (2026-07-28) /mcp
- * requests: the per-IP token bucket answers 429 and the in-flight ceiling
- * answers 503. The limits are set through the three `server.modern_*` config
- * keys to values far from the defaults (120 rpm, burst 60, 200 in flight), so
- * a passing test proves the keys are wired and not only the defaults.
+ * Route-level coverage for the limits on modern (2026-07-28) /mcp requests.
+ * Two are admission limits: the per-IP token bucket answers 429 and the
+ * in-flight ceiling answers 503. The third is not an admission limit but a
+ * per-request deadline: once it passes, the in-flight slot of a call that
+ * never settles is released and a warn line is logged, and an open
+ * subscriptions/listen stream is exempt from it. The four `server.modern_*`
+ * config keys (rpm, burst, in-flight ceiling, request timeout) are set to
+ * values far from the defaults (120 rpm, burst 60, 200 in flight, 60000 ms
+ * deadline), so a passing test proves the keys are wired and not only the
+ * defaults.
  *
  * Boots the real app in-process. The test doubles are the collect tool's
  * insertCollectedData, which a test can hold open to keep a request in flight,
- * and a wrapper on the modern route's classifier, which can wait for the
- * client to close before it returns (see CLOSE_BEFORE_ADMIT).
+ * and two wrappers on the modern route: isModern, which can wait for the
+ * client to close before it returns (see CLOSE_BEFORE_ADMIT), and handle(),
+ * which can throw after admission (see THROW_IN_HANDLE). config.js is mocked
+ * with the limits below.
  */
 import {
   describe,
@@ -40,13 +47,19 @@ const TIMER_CLOCK_SLACK_MS = 5;
 /** In `server.allowlist`; no other test uses this address. */
 const ALLOWLISTED_IP = "203.0.113.7";
 
-/** Resolves when a held insertCollectedData call starts; set per test. */
+/**
+ * Hooks for a held insertCollectedData call; set per test. The call runs
+ * `entered` when it starts, then waits on `gate`.
+ */
 const hold: {
   entered: (() => void) | undefined;
   gate: Promise<void> | undefined;
 } = { entered: undefined, gate: undefined };
 
-/** Resolves when a never-settling insertCollectedData call starts; set per test. */
+/**
+ * Hook for a never-settling insertCollectedData call; set per test. The call
+ * runs `entered` when it starts.
+ */
 const hang: { entered: (() => void) | undefined } = { entered: undefined };
 
 vi.mock("../db/queries.js", async (importOriginal) => ({
@@ -82,7 +95,7 @@ const CLOSE_BEFORE_ADMIT = "x-test-close-before-admit";
  */
 const THROW_IN_HANDLE = "x-test-throw-in-handle";
 
-/** Resolves when the wrapped isModern starts waiting for the close; set per test. */
+/** Hook the wrapped isModern runs when it starts waiting for the close; set per test. */
 const closeWait: { waiting: (() => void) | undefined } = {
   waiting: undefined,
 };
@@ -724,7 +737,7 @@ describe("/mcp routes: modern admission limits", () => {
       // Positive control: the call was admitted and reached the tool.
       expect(await raceTimeout(entered, 2000)).toBe("entered");
       await aborted;
-      // Before the deadline the never-settling call holds the slot (A2: an
+      // Before the deadline the never-settling call holds the slot (a client
       // abort does not free it).
       expect((await modernList(freshIp())).status).toBe(503);
 

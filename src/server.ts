@@ -703,25 +703,42 @@ export function retryAfterSecondsFromTtl(): number {
 }
 
 /**
- * Short-lived set of session IDs that were rejected mid-init (race fallback
- * from handleSessionInitRaceFallback, or ensureSession-throw rollback from
- * handleSessionInitAccept). Both rejection paths already ran the full cleanup
- * chain inline AND called transport.close(). The SDK then fires
- * transport.onclose asynchronously for the now-dead transport — without this
- * marker, onclose would re-run sessionStateManager.cleanup/ipLimiter.remove/
- * workspaceManager.cleanup for a sid that never became a real session AND
- * emit a misleading "Session X closed (N active)" log.
+ * Short-lived set of session IDs that were torn down inline during /mcp init:
+ * by handleSessionInitRaceFallback, or by rollbackSessionAfterConnectFailure
+ * after a server.connect / completeInitRequestSafely throw or after the
+ * transport rejects the initialize. Both paths call
+ * transport.close(), and the SDK's close() runs transport.onclose
+ * synchronously, before close() resolves. When the route's onclose sees the
+ * marker, it skips its cleanup chain (sessionStateManager.cleanup,
+ * ipLimiter.remove, workspaceManager.cleanup) and the "Session X closed
+ * (N active)" log.
  *
- * We add on rejection, consult in onclose to branch, and drain in onclose so
- * the Set never grows unbounded. A sid never re-appears here because
- * onsessioninitialized fires exactly once per transport.
+ * The two helpers do not clean up the same amount inline:
+ * - rollbackSessionAfterConnectFailure runs the full chain itself, so
+ *   skipping the onclose chain prevents a double cleanup.
+ * - handleSessionInitRaceFallback deletes only the transports and
+ *   sessionLastActivity entries. On the tryAdd-fail caller that is enough,
+ *   because tryAdd did not count the sid. On the onsessioninitialized caller
+ *   (defensive, not reached today) tryAdd HAS counted the sid, and the marker
+ *   suppresses the only code that would release it. That path would leak one
+ *   ipLimiter slot per hit (plus the session-state and workspace entries,
+ *   if any): the reaper cannot find the sid, because its map entries are
+ *   gone, so it stays until the process restarts. This is a latent leak, not
+ *   fixed here.
+ *
+ * Both of those helpers add the sid. The route's onclose consults the marker
+ * to branch and drains it. drainRejectedSidForInlineRollback drains it on the
+ * route's early returns that leave before onclose is wired, and the
+ * rollback's close().finally drains it too. That keeps the Set bounded. Each
+ * /mcp initialize uses a fresh randomUUID sid, so a drained sid is not added
+ * again.
  */
 const rejectedSids = new Set<string>();
 
 /**
  * Test-only: mark a sid as rejected (so onclose suppresses its cleanup
- * chain). Production code calls this internally from the race-fallback /
- * accept-rollback paths; exported so tests can verify both the marker
+ * chain). Production code adds sids internally from the race-fallback and
+ * connect-failure rollback paths; exported so tests can verify both the marker
  * machinery and the suppression behavior independently.
  */
 export function markSessionRejectedForTesting(sid: string): void {
@@ -748,12 +765,11 @@ export function __resetRejectedSidsForTesting(): void {
 /**
  * Drain the rejected-sid marker for paths that tore the session down inline
  * and early-return from the /mcp init handler WITHOUT ever wiring
- * `transport.onclose`. Those paths (sync-race tryAdd-fail +
- * handleSessionInitAccept ensureSession-throw rollback) still call
- * `rejectedSids.add(sid)` inside the helper so that if onclose WERE wired, it
- * would suppress double-cleanup. But when no onclose handler is attached, the
- * marker would otherwise accumulate forever under rate-limit hammering /
- * workspace-init failures.
+ * `transport.onclose`. The tryAdd-fail path calls
+ * handleSessionInitRaceFallback, which still calls `rejectedSids.add(sid)` so
+ * that if onclose WERE wired, it would suppress double-cleanup. But when no
+ * onclose handler is attached, the marker would otherwise accumulate forever
+ * under rate-limit hammering.
  *
  * Calling this immediately before the early-return guarantees the Set stays
  * bounded without racing the SDK's async onclose. Exported so tests can
@@ -1011,11 +1027,11 @@ export function handleSessionInitRaceFallback(opts: {
   // Clamp to the same ceiling the JSON body uses so the log hint matches
   // what clients would have received on the happy (pre-check) path.
   const retryAfterSeconds = clampRetryAfterSeconds(opts.retryAfterSeconds);
-  // Loud log — we write no rate-limit response on this path, so this log is
-  // the only rate-limit signal. Shape mirrors
-  // the pre-check log so both surfaces are greppable together, and carries
-  // the retry-after hint so ops can correlate rejected initializes with the
-  // backoff window.
+  // Loud log. This helper writes no response: the pre-connect tryAdd-fail
+  // caller writes the 429 itself, and the onsessioninitialized caller (not
+  // reached today) writes none. Shape mirrors the pre-check log so both
+  // surfaces are greppable together, and carries the retry-after hint so ops
+  // can correlate rejected initializes with the backoff window.
   console.warn(
     `[mcp] IP rate limit exceeded for ${ip} (${currentCount}/${limit}), closing session ${sid.slice(0, 8)} (race fallback, retry-after: ${retryAfterSeconds}s)`,
   );
@@ -1034,10 +1050,13 @@ export function handleSessionInitRaceFallback(opts: {
   // /mcp route).
   delete tMap[sid];
   delete lastActivityMap[sid];
-  // Mark sid as rejected so the SDK-scheduled transport.onclose (fires once
-  // transport.close() resolves) suppresses its cleanup chain + misleading
-  // "Session closed (N active)" log — the session was never opened, so the
-  // counters should reflect the pre-increment rollback and nothing more.
+  // Mark sid as rejected so transport.onclose (which the SDK runs
+  // synchronously inside close(), scheduled on a microtask above) skips its
+  // cleanup chain and the misleading "Session closed (N active)" log. This
+  // helper releases nothing else: the ipLimiter slot, session state and
+  // workspace are NOT freed here. That is correct for the tryAdd-fail caller
+  // (tryAdd did not count the sid) but leaks the slot on the
+  // onsessioninitialized caller. See rejectedSids.
   rejectedSids.add(sid);
 }
 
@@ -1084,10 +1103,15 @@ export function write429RateLimited(
 }
 
 /**
- * Post-accept handler for the /mcp `onsessioninitialized` callback. Extracted
- * from the callback so the "new session accepted" side effects (the connect
- * log line + the pathfinder.session.created telemetry emit) can be unit-tested
- * in isolation without driving a full SDK lifecycle.
+ * Post-accept handler for a /mcp initialize. The POST /mcp initialize branch
+ * calls it only after server.connect and the initialize request completed
+ * and the transport assigned a session id. A connect throw or a
+ * transport-rejected initialize (406, 400) rolls back and returns first, so
+ * it never reaches this call. The `onsessioninitialized` callback does not
+ * call it. Kept as a separate
+ * function so the "new session accepted" side effects (the connect log line +
+ * the pathfinder.session.created telemetry emit) can be unit-tested in
+ * isolation without driving a full SDK lifecycle.
  *
  * Workspaces are allocated LAZILY — this handler does NOT call
  * `workspaceManager.ensureSession`; bash tool handlers allocate per-operation
@@ -1097,8 +1121,8 @@ export function write429RateLimited(
  * teardown for a stranded session lives on the caller's `transport.onclose`
  * wiring and {@link rollbackSessionAfterConnectFailure}, not here.
  *
- * Exported for tests; production callers wire this up via the POST /mcp
- * onsessioninitialized callback.
+ * Exported for tests; the only production caller is the POST /mcp initialize
+ * branch.
  */
 export function handleSessionInitAccept(opts: {
   transport: { close: () => Promise<void> | void; sessionId?: string };
@@ -1136,9 +1160,11 @@ export function handleSessionInitAccept(opts: {
    * P2P telemetry client + per-request fields needed for the
    * pathfinder.session.created event. Both optional to preserve existing
    * test call sites that don't care; production caller passes them when
-   * the hosted instance has telemetry configured. Emit fires only on the
-   * success path — rollbacks return without telemetering, matching the
-   * SSE handler's "after-accept" gate.
+   * the hosted instance has telemetry configured. Emit fires for every
+   * session this handler accepts (it has no rejection path). Like the SSE
+   * handler, which emits only after `await server.connect` succeeds, this
+   * runs only after the transport accepted the initialize, so a rejected or
+   * rolled-back initialize is not counted.
    */
   p2pTelemetry?: {
     isEnabled: () => boolean;
@@ -1161,10 +1187,11 @@ export function handleSessionInitAccept(opts: {
     `[mcp] New session ${sid.slice(0, 8)} (${Object.keys(tMap).length} active) [${ip}]`,
   );
 
-  // Telemetry — emitted on every accepted session. Mirrors the SSE
-  // handler's after-accept gate. The client's own no-op handles
-  // disabled/unconfigured cases; isEnabled() avoids constructing the
-  // property bag on every connect when telemetry is off.
+  // Telemetry — emitted on every accepted session, after the transport
+  // accepted the initialize (see the p2pTelemetry option above). The
+  // client's own no-op handles disabled/unconfigured cases;
+  // isEnabled() avoids constructing the property bag on every connect when
+  // telemetry is off.
   if (p2pTelemetry?.isEnabled()) {
     p2pTelemetry.emit("pathfinder.session.created", {
       client_ip: ip,
@@ -1197,12 +1224,11 @@ export function handleSessionInitAccept(opts: {
  * prior (route) handler sees the marker and skips its cleanup. The marker is
  * drained in the close() `.finally`, after onclose has had its chance to run.
  *
- * Per-step try/catch on each cleanup mirrors the onclose + reaper +
- * handleSessionInitAccept rollback pattern: a throw from one step must not
- * skip the others. ipLimiter.remove in particular is load-bearing — a
- * rollback that bails before ipLimiter.remove leaks the counter against
- * this IP until TTL reap, which is the exact failure mode this helper
- * exists to prevent.
+ * Per-step try/catch on each cleanup mirrors the onclose + reaper pattern: a
+ * throw from one step must not skip the others. ipLimiter.remove in
+ * particular is load-bearing — a rollback that bails before ipLimiter.remove
+ * leaks the counter against this IP until TTL reap, which is the exact
+ * failure mode this helper exists to prevent.
  *
  * Exported for tests.
  */
@@ -1279,7 +1305,7 @@ export function rollbackSessionAfterConnectFailure(opts: {
   }
 
   // Fire-and-forget close so async rejections land in console.error rather
-  // than unhandledRejection. Matches handleSessionInitAccept's pattern.
+  // than unhandledRejection. Matches handleSessionInitRaceFallback's pattern.
   Promise.resolve()
     .then(() => transport.close())
     .catch((closeErr) => {
@@ -1437,15 +1463,15 @@ export async function closeAllSessions(opts: {
 let sessionReaperInterval: ReturnType<typeof setInterval> | undefined;
 
 // Resolved during startServer() from server.trust_proxy in the loaded config.
-// Read by every IP-extraction site (trace middleware, /mcp, SSE handlers)
-// via `clientIp(req, trustProxy)`. Defaults to false: if startServer() hasn't
-// run yet, or the config omits the flag, we IGNORE X-Forwarded-For and fall
-// back to the socket address — matching the hardened, spoof-resistant
-// default documented in types.ts.
+// Read by every IP-extraction site (trace middleware, /mcp, SSE handlers),
+// mostly via `clientIp(req, isTrustingProxy())`. Defaults to false: if
+// startServer() hasn't run yet, or the config omits the flag, we IGNORE
+// X-Forwarded-For and fall back to the socket address — matching the
+// hardened, spoof-resistant default documented in types.ts.
 // R4-14: widened to match the types.ts schema. Express's `app.set("trust
 // proxy", …)` accepts boolean | number | string[] (list of CIDRs) so the
-// config surface exposes all three. `clientIp` still takes a boolean — we
-// derive it via `isTrustingProxy(trustProxy)` below.
+// config surface exposes all three. `clientIp` accepts the same union; most
+// call sites pass it the boolean from `isTrustingProxy()` below.
 let trustProxy: boolean | number | string[] = false;
 
 /**
@@ -1943,9 +1969,13 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       // The slot is held until handle() settles, not until the response
       // closes. On a client abort the response closes while the tool still
       // runs; handle() waits for the tool (ModernServerContext.trackWork),
-      // but no longer than server.modern_request_timeout_ms, so a tool that
-      // never settles cannot hold the slot forever. Freeing the slot on close would let abort-and-repeat run any number
-      // of handlers at once. The finally below also frees the slot for a
+      // but no longer than server.modern_request_timeout_ms. At that deadline
+      // handle() aborts the request signal and returns, and the slot is
+      // freed even if the tool has not stopped: a tool that ignores the
+      // signal keeps running with no slot. So the ceiling bounds requests
+      // inside handle(), not tool work that outlives its deadline. Freeing
+      // the slot on close would let abort-and-repeat run any number of
+      // handlers at once. The finally below also frees the slot for a
       // response that closed before admission, and when a step throws.
       let releaseSlot: (() => void) | undefined;
       if (modernCeiling && !isListen) {
@@ -2101,40 +2131,30 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         return;
       }
 
-      // Pre-generate the session ID so we can run the ipLimiter.tryAdd +
-      // workspaceManager.ensureSession work SYNCHRONOUSLY BEFORE
-      // createMcpServer / server.connect / transport.handleRequest. The
-      // previous design ran that work inside the SDK's
-      // `onsessioninitialized` callback — which fires DURING handleRequest
-      // — so an ensureSession throw rolled back inline but the outer
-      // handler had no way to know, kept driving the now-torn-down
-      // transport, and (a) spun up an MCP server instance that immediately
-      // orphaned (finding H4) and (b) let the SDK attempt to write an init
-      // response on a closed transport. With the sid pre-generated here,
-      // `handleSessionInitAccept` returns a boolean and the outer handler
-      // can SKIP createMcpServer + server.connect + handleRequest on
-      // rollback.
+      // Pre-generate the session ID so the ipLimiter.tryAdd runs
+      // SYNCHRONOUSLY BEFORE createMcpServer / server.connect /
+      // transport.handleRequest, and a rejected init can skip all three.
+      // Workspaces are not allocated here: bash tool handlers allocate them
+      // lazily per operation (see handleSessionInitAccept).
       const preSid = randomUUID();
-      // Flag captured by the onsessioninitialized closure so a race-fallback
-      // triggered ASYNC from inside the SDK (pre-check beat this sid but a
-      // concurrent request from the same IP won the atomic tryAdd — extremely
-      // rare after the pre-check refactor) can still signal the outer
-      // handler. The ensureSession rollback path now runs synchronously
-      // BEFORE handleRequest and sets this directly.
+      // Flag set by the onsessioninitialized closure when its race-fallback
+      // fires, so the outer handler (completeInitRequestSafely) knows the
+      // session was rejected. That branch is defensive and not reached today
+      // (see the comment inside the callback).
       const initOutcome: { rejected: boolean } = { rejected: false };
       const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: () => preSid,
         enableJsonResponse: true,
         onsessioninitialized: (sid) => {
-          // Registration moved here intentionally — we can't populate
-          // transports[sid] before the transport object exists, and the SDK
-          // expects the sid-to-transport mapping to be live by the time it
-          // dispatches subsequent messages for this session. tryAdd/
-          // ensureSession already ran synchronously below, so by the time
-          // this callback fires we've either (a) committed to the session
-          // (happy path; just register the maps) or (b) already rolled back
-          // (initOutcome.rejected=true; no-op here — the outer handler
-          // will skip handleRequest).
+          // The route already registered both maps for preSid (below,
+          // before handleSessionInitAccept), and tryAdd already ran
+          // synchronously below; a failed tryAdd returns before
+          // handleRequest. So the writes here re-assign entries that already
+          // exist and are idempotent: they only make the maps hold the sid
+          // the SDK reports. The route's own registration is the one the
+          // count log, the rollback and onclose depend on, so do not remove
+          // it in favor of this callback. The initOutcome.rejected check is
+          // defensive.
           if (initOutcome.rejected) return;
           transports[sid] = transport;
           sessionLastActivity[sid] = Date.now();
@@ -2170,12 +2190,13 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         },
       });
 
-      // Synchronous pre-flight: tryAdd the sid to the ipLimiter and
-      // ensureSession on the workspaceManager BEFORE spinning up the MCP
-      // server. Either can reject this init.
+      // Synchronous pre-flight: tryAdd the sid to the ipLimiter BEFORE
+      // spinning up the MCP server. A failed tryAdd rejects this init.
       if (ipLimiter && !ipLimiter.tryAdd(ip, preSid)) {
-        // Atomic tryAdd failed — another concurrent init from the same IP
-        // beat us between the read-only pre-check and this increment.
+        // tryAdd failed. The pre-check above and this tryAdd run in the same
+        // synchronous turn, so no other request can raise the count between
+        // them; in practice tryAdd fails here only on a sid collision (see
+        // tryAddWithReason in ip-limiter.ts). Defensive either way.
         // Delegate to the shared race-fallback helper (inline map delete,
         // rejected-sid mark, loud log). Because the transport was just
         // constructed and hasn't been connected, transport.close() is the
@@ -2205,7 +2226,7 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
             retryAfterSeconds: retryAfterSecondsFromTtl(),
           });
         }
-        // The race-fallback + accept-rollback helpers intentionally seed
+        // The race-fallback helper intentionally seeds
         // rejectedSids so that IF `transport.onclose` were wired, it would
         // suppress double-cleanup. But we early-return BEFORE wiring onclose
         // on this path, so nothing will ever consume the marker. Drain it
@@ -2224,13 +2245,14 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       transport.onclose = () => {
         const sid = transport.sessionId;
         if (!sid) return;
-        // Rejected-sid suppression (R3 #3 / H1): if the race-fallback or the
-        // ensureSession rollback already tore this session down inline, the
-        // cleanup chain + counters are already consistent. Running the chain
-        // again here would (a) emit a misleading "Session closed" log for a
-        // session that was never opened, and (b) risk double-cleanup on
-        // sessionStateManager/workspaceManager. Drain the marker here so the
-        // Set doesn't grow unbounded.
+        // Rejected-sid suppression (R3 #3 / H1): the race-fallback or the
+        // connect-failure rollback tore this session down inline. Running
+        // the chain again here would (a) emit a misleading "Session closed"
+        // log for a session that was never opened, and (b) double-clean up
+        // after the connect-failure rollback, which already ran the full
+        // chain. The race-fallback did NOT release the ipLimiter slot, so on
+        // that path skipping the chain leaks it (see rejectedSids). Drain the
+        // marker here so the Set doesn't grow unbounded.
         if (rejectedSids.has(sid)) {
           rejectedSids.delete(sid);
           console.log(
@@ -2314,8 +2336,8 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         () => sessionUserAgent,
         () => analyticsCtx,
       );
-      // Z-1: server.connect(transport) can throw AFTER the pre-flight above
-      // committed maps + ipLimiter counter + onclose wiring. Without an
+      // Z-1: server.connect(transport) can throw AFTER this route committed
+      // the maps, the ipLimiter counter and the onclose wiring. Without an
       // explicit rollback, the session is stranded against
       // max_sessions_per_ip until TTL reap because nothing calls
       // transport.close(), so onclose never fires. The rollback covers a
@@ -2908,7 +2930,11 @@ app.get(
   "/.well-known/skills/default/skill.md",
   (_req: Request, res: Response) => {
     try {
-      res.type("text/markdown").send(generateSkillMd(getServerConfig()));
+      res.type("text/markdown").send(
+        generateSkillMd(getServerConfig(), {
+          modernProtocol: modernRoute !== undefined,
+        }),
+      );
     } catch (err) {
       console.error("[skill.md] Generation failed:", err);
       res.status(500).type("text/plain").send("Error generating skill.md");

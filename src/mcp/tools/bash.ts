@@ -116,19 +116,26 @@ function isSink(p: string): boolean {
  * Wraps the per-call view (the shared filesystem with a private /tmp mounted
  * on it) so that only /tmp is writable. A write whose target is anywhere else
  * calls `onWrite` and never reaches the inner filesystem, so no command can
- * change what other clients read. Contract: a write outside /tmp gives an
- * EROFS message and exit 1, the shared filesystem is unchanged, and other
- * output on the command line is best-effort.
+ * change what other clients read. Contract: a write outside /tmp leaves the
+ * shared filesystem unchanged and puts an EROFS line in stderr, and other
+ * output on the command line is best-effort. The exit code depends on the
+ * kind of write: a refused content write gives exit 1 (or the line's own
+ * nonzero code), and any other refused write fails in the command that made
+ * it, so the line's exit code follows shell semantics (`mkdir /d || true`
+ * exits 0). See the bullets below.
  *
  * - writeFile/appendFile (redirects, `tee`, `sed -i`, ...) record the path
  *   and resolve without writing. just-bash throws out of the whole exec()
  *   when a redirect rejects, which would drop the output of every other
  *   statement on the line; exec() adds the EROFS line and exit 1 afterwards.
+ *   So the shell sees every refused content write (a redirect, `tee`,
+ *   `sed -i`) as a success: in `echo x > f || fallback` or
+ *   `echo x | tee f || fallback` the fallback does not run.
  * - The other write methods (mkdir, rm, cp, mv, chmod, symlink, link,
  *   utimes) record the path and reject. The command that called them
  *   catches the error, prints its own message and fails, so `touch x ||
- *   fallback` and `mkdir d && ...` still see the failure, and the rest of
- *   the line still runs.
+ *   fallback` and `mkdir d && ...` still see the failure (unlike a content
+ *   write, above), and the rest of the line still runs.
  * - writeFile, appendFile, cp and utimes whose target is /dev/null or
  *   /dev/zero succeed and are discarded. They are not recorded and do not
  *   reach the inner filesystem: in just-bash /dev/null is an ordinary shared
@@ -322,9 +329,10 @@ export function registerBashTool(
     try {
       result = await view.exec(commandLine, execOptions);
     } catch (error) {
-      // A refused redirect resolves (see scratchOnlyFs), so this is a
-      // fallback: if a refused write still throws out of exec(), report it
-      // as a failed command instead of an error.
+      // A refused content write (redirect, tee, sed -i) resolves (see
+      // scratchOnlyFs), so this is a fallback: if a refused write still
+      // throws out of exec(), report it as a failed command instead of an
+      // error.
       if (refused) return null;
       if (writes.length === 0) throw error;
       result = { stdout: "", stderr: "", exitCode: 1 };
@@ -334,7 +342,8 @@ export function registerBashTool(
     // is reported as a deadline too; that race is accepted.
     const deadlineReached = execOptions.signal?.aborted === true;
     if (refused) return null;
-    // A refused redirect and `rm -f` print no error, so say it here.
+    // A refused content write (redirect, tee, sed -i) and `rm -f` print no
+    // error, so say it here.
     if (writes.length > 0 && !result.stderr.includes(READ_ONLY_ERROR)) {
       result = {
         stdout: result.stdout,
@@ -378,6 +387,11 @@ export function registerBashTool(
   server.registerTool(
     toolConfig.name,
     {
+      // MODERN_WORKSPACE_NOTE is appended whenever the workspace is on, but
+      // exec() refuses /workspace only when the shared docs tree has no
+      // /workspace of its own (see refuseWorkspace). On an install whose
+      // docs tree has /workspace, the note says it is unavailable while
+      // commands on it work. The served text is unchanged here (backlog).
       description: modern
         ? `${toolConfig.description}\n\n${MODERN_CD_HINT}\n\n${MODERN_FS_NOTE}${
             options?.workspace ? `\n\n${MODERN_WORKSPACE_NOTE}` : ""

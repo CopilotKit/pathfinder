@@ -17,8 +17,9 @@ import type { AuthContext } from "./oauth/handlers.js";
 
 /**
  * Per-session analytics context stamped onto every query_log row; its field
- * names are the query_log column names. On /mcp it is built once from the
- * initialize request. On SSE it is rebuilt on every tool call: the auth client
+ * names are the query_log column names. On legacy /mcp it is built once from
+ * the initialize request; on the modern (stateless) /mcp leg it is built for
+ * each request. On SSE it is rebuilt on every tool call: the auth client
  * id comes from GET /sse, and protocol_version / client_name come from the
  * first initialize that POST /messages accepted. A tool call that runs before
  * that initialize is accepted has NULL protocol_version and client_name.
@@ -27,9 +28,9 @@ export interface SessionAnalyticsContext {
   transport: "streamable_http" | "sse";
   /**
    * Protocol era, independent of `transport`. "legacy" is the
-   * pre-2026-07-28 session-based MCP protocol; every current writer stamps
-   * "legacy", on both transports. "modern" is reserved for the stateless
-   * protocol.
+   * pre-2026-07-28 session-based MCP protocol, stamped by the legacy /mcp
+   * and SSE paths. "modern" is the 2026-07-28 stateless protocol, stamped by
+   * the modern /mcp leg (startServer in server.ts).
    */
   protocol_era: "legacy" | "modern";
   protocol_version: string | null;
@@ -315,9 +316,11 @@ export function handshakeFor(key: object | undefined): Handshake | undefined {
 
 /**
  * Read and normalize the request-origin tag from the X-Pathfinder-Source
- * header. Captured ONCE at MCP-session init and closed over for the lifetime
- * of the session (each session gets its own server + transport), so every
- * tool call within that session records the origin its client declared.
+ * header. On legacy connections it is read ONCE, from the request that opens
+ * the session (the /mcp initialize, or GET /sse), and closed over for the
+ * lifetime of the session (each session gets its own server + transport), so
+ * every tool call within that session records the origin its client declared.
+ * On the modern stateless leg it is read from every request.
  *
  * Node joins duplicate headers into a comma-separated string and lower-cases
  * the name; we hand whatever's present to normalizeRequestSource, which maps
@@ -342,12 +345,13 @@ export function requestSourceFromHeaders(req: Request): RequestSource {
 
 /**
  * Distinct unrecognized `X-Pathfinder-Source` values already warned about in
- * this process. The header is read once per MCP session init, so an unbounded
- * warn would still be bounded by session rate — but a misconfigured client
+ * this process. The header is read once per legacy session and once per
+ * modern request, so an unbounded warn would fire at session rate on the
+ * legacy leg and at request rate on the modern leg. A misconfigured client
  * reconnecting in a loop would bury the line it is supposed to surface, and a
- * client sending a per-request identifier would grow this set without limit.
- * One line per distinct word, capped, is enough: the point is to name the
- * word, once, early.
+ * client sending a per-request identifier would grow an uncapped set without
+ * limit, hence WARNED_REQUEST_SOURCES_MAX (50). One line per distinct word,
+ * up to that cap, is enough: the point is to name the word, once, early.
  */
 const warnedRequestSources = new Set<string>();
 const WARNED_REQUEST_SOURCES_MAX = 50;

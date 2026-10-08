@@ -19,9 +19,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 24 }
       - run: npm ci
-      # Cover the gap-analysis script too: it ships from scripts/ and was
-      # previously neither format-checked nor type-checked in CI (the other
-      # scripts/ files predate this gate and are out of scope here).
+      # Also cover these scripts/ paths: gap-analysis/, weekly-search-report/
+      # and the top-level scripts/*.mjs files. The other scripts/ files
+      # predate this gate and are not checked here.
       - run: npx prettier --check "src/**/*.ts" "scripts/gap-analysis/**/*.ts" "scripts/weekly-search-report/**/*.ts" "scripts/*.mjs"
 
   test-shapes:
@@ -57,8 +57,10 @@ jobs:
         with: { node-version: 24 }
       - run: npm ci
       # The root tsconfig excludes scripts/ (rootDir: src), so `npm run build`
-      # never type-checks the shipped scheduled scripts. tsconfig.scripts.json
-      # type-checks them (and their tests) without emitting.
+      # never type-checks them. tsconfig.scripts.json type-checks
+      # scripts/gap-analysis and scripts/weekly-search-report (and their tests)
+      # without emitting. Other scripts, such as
+      # scripts/update-competitive-matrix.ts, are not type-checked here.
       - run: npx tsc --noEmit -p tsconfig.scripts.json
 
   build:

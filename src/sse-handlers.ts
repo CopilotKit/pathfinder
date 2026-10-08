@@ -21,14 +21,16 @@ import {
 } from "./request-context.js";
 
 /**
- * Minimal structural shape of WorkspaceManager that sse-handlers actually
- * uses. Widening to a structural type (rather than the concrete class)
- * lets tests pass stubs without casts.
+ * Minimal structural shape of WorkspaceManager for sse-handlers. Widening to
+ * a structural type (rather than the concrete class) lets tests pass stubs
+ * without casts.
  *
- * `ensureSession` return type is intentionally typed as `unknown` because
- * the handler never consumes it — the real class returns a path string,
- * test stubs return void. Typing the call-site as fire-and-forget keeps
- * both callable as drop-in replacements.
+ * This module calls only `cleanup`. It never calls `ensureSession`: bash
+ * tool handlers allocate workspaces lazily, per operation. The member stays
+ * so the real class and test stubs keep one shape (tests pass an
+ * `ensureSession` spy to assert it is not called). Its return type is
+ * `unknown` because the real class returns a path string and stubs return
+ * void.
  */
 export interface WorkspaceManagerLike {
   ensureSession: (sessionId: string) => unknown;
@@ -281,36 +283,39 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         }
       };
 
-      // Register in the map BEFORE wiring onclose handlers. If a close
-      // event fires between handler wiring and tryAdd/ensureSession below,
-      // cleanup()'s guard must see a valid map entry so it can drive the
-      // full teardown — otherwise cleanup no-ops and the subsequent steps
-      // run against a dead response, leaking ipLimiter counters and
-      // workspace allocations that nothing will tear down.
+      // Register in the map BEFORE wiring onclose handlers. cleanup() tears
+      // down only while its map entry exists, so the entry must be in place
+      // before any close can reach it. No close event can be delivered in
+      // the synchronous code between here and tryAdd below; the first real
+      // window is the `await server.connect(transport)` further down. A
+      // socket that closed before this handler ran is handled by the
+      // res.destroyed/writableEnded check below. Without the entry, cleanup
+      // would no-op and would not release the ipLimiter slot that tryAdd
+      // takes.
       sseTransports[sessionId] = transport;
       sessionLastActivity[sessionId] = Date.now();
 
       transport.onclose = cleanup;
       res.on("close", cleanup);
 
-      // Recovery for the narrow window between transport construction and
-      // the `res.on("close")` registration above: if the client already
-      // disconnected (socket destroyed or response ended), neither onclose
-      // nor the res 'close' listener will ever fire — the event already
-      // passed. Actively invoke cleanup so the map entry we just
+      // Recovery for a client that disconnected before this handler ran (for
+      // example during bearerMiddleware's async work): if the socket is
+      // destroyed or the response ended, its 'close' event already fired, so
+      // neither onclose nor the res 'close' listener will ever fire for it.
+      // Actively invoke cleanup so the map entry we just
       // registered is released, and bail before doing any more work. This
-      // prevents ipLimiter.tryAdd and workspaceManager.ensureSession from
-      // running against a response we can no longer write to.
+      // prevents ipLimiter.tryAdd and createMcpServer from running against a
+      // response we can no longer write to.
       if (res.destroyed || res.writableEnded) {
         cleanup();
         return;
       }
 
-      // Race-fallback: the pre-check above should have caught overflow, but
-      // two concurrent /sse requests from the same IP could still slip one
-      // through between pre-check and counter increment. tryAdd returning
-      // false here means the second request lost the race — reject with
-      // 429 + payload, same shape as the pre-check.
+      // Defensive fallback: the pre-check above and this tryAdd run in the
+      // same synchronous turn (no await between them), so no other request
+      // can raise the count in between; in practice tryAdd fails here only
+      // on a sid collision (see tryAddWithReason in ip-limiter.ts). If it
+      // does fail, reject with 429 + payload, same shape as the pre-check.
       if (ipLimiter && !ipLimiter.tryAdd(ip, sessionId)) {
         const currentCount = ipLimiter.getSessionCount(ip);
         const limit = ipLimiter.getMax();

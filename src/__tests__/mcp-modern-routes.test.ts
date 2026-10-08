@@ -489,15 +489,10 @@ describe("/mcp routes: modern protocol on", () => {
       `http://127.0.0.1:${port}/.well-known/skills/default/skill.md`,
     );
     expect(res.status).toBe(200);
-    const cdLine = (await res.text())
-      .split("\n")
-      .find((l) => l.startsWith("- `cd "));
-    expect(cdLine).toBeDefined();
-    expect(cdLine).not.toMatch(/persists across calls\)$/);
-    expect(cdLine).toContain("only on 2025-era (session) connections");
-    expect(cdLine).toContain(
-      "on 2026-07-28 connections it does not persist, so use absolute paths or `cd X && <cmd>`",
-    );
+    const text = await res.text();
+    expect(text.split("\n").filter((l) => l.startsWith("- `cd "))).toEqual([
+      "- `cd /path/` — change working directory (persists across calls only on 2025-era (session) connections; on 2026-07-28 connections it does not persist, so use absolute paths or `cd X && <cmd>`)",
+    ]);
   });
 });
 
@@ -516,11 +511,23 @@ describe("/mcp routes: modern protocol off", () => {
     expect(res.status).toBe(400);
     expect(json(res).error.code).toBe(-32000);
   });
+
+  it("served skill.md names no era: every connection is 2025-era", async () => {
+    const res = await fetch(
+      `http://127.0.0.1:${port}/.well-known/skills/default/skill.md`,
+    );
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text.split("\n").filter((l) => l.startsWith("- `cd "))).toEqual([
+      "- `cd /path/` — change working directory (persists across calls)",
+    ]);
+    expect(text).not.toContain("2026-07-28");
+    expect(text).not.toContain("2025-era");
+  });
 });
 
-// Owned by 6.2c. The legacy assertions are the positive control and pass now;
-// the modern assertions stay RED until the modern leg writes the same
-// per-tool log line as the legacy one.
+// Both legs must write the same per-tool log line (logMcpCall in server.ts).
+// The legacy assertions are the positive control for the modern ones.
 describe("per-tool log parity", () => {
   beforeAll(() => boot(true));
   afterAll(shutdown);

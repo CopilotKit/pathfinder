@@ -2,12 +2,21 @@ import fs from "fs";
 import path from "path";
 import { WorkspaceTracker } from "./mcp/tools/bash-session.js";
 
+/**
+ * Default cap on the bytes one session may write to its workspace, counted
+ * over every write (a rewrite counts again). The served skill.md states it.
+ */
+export const WORKSPACE_MAX_BYTES_PER_SESSION = 1024 * 1024;
+
 export class WorkspaceManager {
   private baseDir: string;
   private maxBytesPerSession: number;
   private trackers = new Map<string, WorkspaceTracker>();
 
-  constructor(baseDir: string, maxBytesPerSession: number = 1024 * 1024) {
+  constructor(
+    baseDir: string,
+    maxBytesPerSession: number = WORKSPACE_MAX_BYTES_PER_SESSION,
+  ) {
     this.baseDir = baseDir;
     this.maxBytesPerSession = maxBytesPerSession;
     try {
