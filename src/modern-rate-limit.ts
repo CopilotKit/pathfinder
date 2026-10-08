@@ -90,14 +90,19 @@ export class ModernRateLimiter {
       bucket.tokens -= 1;
       result = { ok: true };
     } else {
-      const seconds = Math.ceil((1 - bucket.tokens) / this.ratePerMs / 1000);
-      result = { ok: false, retryAfterSeconds: Math.max(1, seconds) };
+      result = this.refusal(bucket.tokens);
     }
 
     this.buckets.delete(key);
     this.buckets.set(key, bucket);
     this.enforceCap();
     return result;
+  }
+
+  /** The refusal for a bucket holding `tokens` (< 1). */
+  private refusal(tokens: number): ModernRateLimitResult {
+    const seconds = Math.ceil((1 - tokens) / this.ratePerMs / 1000);
+    return { ok: false, retryAfterSeconds: Math.max(1, seconds) };
   }
 
   /** Drop buckets that have refilled to full: they equal a fresh bucket. */
@@ -116,5 +121,62 @@ export class ModernRateLimiter {
       if (oldest === undefined) return;
       this.buckets.delete(oldest);
     }
+  }
+}
+
+/**
+ * Most POST /mcp bodies one IP may have in era classification at once. Only
+ * a body express.json did not parse (a non-JSON or missing Content-Type) is
+ * read there, and the read buffers up to the SDK's 4 MiB limit, so one IP
+ * can hold at most 4 x 4 MiB = 16 MiB of unread bodies. MCP clients send
+ * application/json, which never takes a slot, so 4 leaves room for a few
+ * clients behind one NAT address that use an odd Content-Type.
+ */
+export const MAX_CONCURRENT_BODY_READS_PER_IP = 4;
+
+/**
+ * Per-IP count of requests in progress, refused past a fixed cap. Keys are
+ * normalized like the rate limiter's, and an IP's entry is dropped when its
+ * count returns to 0, so the map holds only IPs with a request in progress.
+ */
+export class ConcurrentReadCap {
+  private readonly counts = new Map<string, number>();
+
+  constructor(private readonly max: number) {
+    if (!(max >= 1)) {
+      throw new TypeError(
+        `ConcurrentReadCap: max must be >= 1 (got ${String(max)})`,
+      );
+    }
+  }
+
+  /**
+   * Take a slot for `ip`. Returns the release function, or undefined when
+   * the IP already holds `max` slots. Release is idempotent: only its first
+   * call frees the slot.
+   */
+  tryAcquire(ip: string): (() => void) | undefined {
+    const key = bucketKey(ip);
+    const count = this.counts.get(key) ?? 0;
+    if (count >= this.max) return undefined;
+    this.counts.set(key, count + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this.counts.get(key) ?? 1) - 1;
+      if (left > 0) this.counts.set(key, left);
+      else this.counts.delete(key);
+    };
+  }
+
+  /** Slots `ip` holds now. */
+  inFlight(ip: string): number {
+    return this.counts.get(bucketKey(ip)) ?? 0;
+  }
+
+  /** IPs that hold at least one slot. */
+  get trackedIps(): number {
+    return this.counts.size;
   }
 }

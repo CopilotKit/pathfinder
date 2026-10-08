@@ -14,6 +14,7 @@ import type { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { createMcpServer } from "./mcp/server.js";
 import {
+  claimsModernProtocolByHeader,
   createModernMcpRoute,
   logModernMcpError,
   type ModernMcpRoute,
@@ -78,7 +79,11 @@ import {
 import type { AuthContext } from "./oauth/handlers.js";
 import { insertCollectedData } from "./db/queries.js";
 import { IpSessionLimiter } from "./ip-limiter.js";
-import { ModernRateLimiter } from "./modern-rate-limit.js";
+import {
+  ConcurrentReadCap,
+  MAX_CONCURRENT_BODY_READS_PER_IP,
+  ModernRateLimiter,
+} from "./modern-rate-limit.js";
 import { InflightCeiling } from "./modern-inflight.js";
 import {
   jsonRpcRateLimitError,
@@ -278,8 +283,11 @@ const sessionStateManager = new SessionStateManager();
 // so every request takes the legacy path.
 let modernRoute: ModernMcpRoute | undefined;
 // Admission control and client.seen dedup for the modern route. Built in
-// startServer next to modernRoute, and only when it is built: legacy
-// requests never reach them.
+// startServer next to modernRoute, and only when it is built. They run after
+// era classification and only for a modern request, with one exception: the
+// pre-read rate limit on POST /mcp spends a token before classification for
+// a request whose MCP-Protocol-Version header claims the modern revision,
+// even when its body then classifies it as legacy (see the route).
 let modernLimiter: ModernRateLimiter | undefined;
 let modernCeiling: InflightCeiling | undefined;
 let clientSeenDeduper: ClientSeenDeduper | undefined;
@@ -1678,6 +1686,57 @@ function logMcpCall(body: unknown, rawIp: string): void {
   }
 }
 
+/** Answer a modern request refused by the per-IP rate limit (429). */
+function writeModernRateLimited(
+  res: Response,
+  id: string | number | null,
+  retryAfterSeconds: number,
+): void {
+  res
+    .status(429)
+    .set("Retry-After", String(retryAfterSeconds))
+    .json({
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: JSONRPC_RATE_LIMIT_CODE,
+        message: "Rate limited: too many requests from this IP",
+        data: { retryAfterSeconds },
+      },
+    });
+}
+
+/**
+ * Most body bytes a refused request may send after its early 429 before the
+ * socket is closed. Equal to the SDK's request body limit (4 MiB), past which
+ * the read would have answered 413 anyway.
+ */
+const REFUSED_BODY_DISCARD_LIMIT = 4 * 1024 * 1024;
+
+/**
+ * Answer an early 429 to a request whose body has not been read. The answer
+ * keeps the connection open (no Connection: close), and the body is
+ * discarded as it arrives, never buffered. A client that writes its whole
+ * body before it reads the answer then gets the 429 and its Retry-After.
+ * Closing the socket while body bytes still arrive makes the peer's TCP
+ * stack reset the connection, and that client sees ECONNRESET or EPIPE in
+ * place of the answer. Node would discard the rest of the body by itself
+ * once the response ends, but with no limit; this listener closes the socket
+ * when the body runs past REFUSED_BODY_DISCARD_LIMIT.
+ */
+function writeEarlyModernRateLimited(
+  req: Request,
+  res: Response,
+  retryAfterSeconds: number,
+): void {
+  let discarded = 0;
+  req.on("data", (chunk: Buffer) => {
+    discarded += chunk.length;
+    if (discarded > REFUSED_BODY_DISCARD_LIMIT) req.socket.destroy();
+  });
+  writeModernRateLimited(res, null, retryAfterSeconds);
+}
+
 /**
  * Classify a POST /mcp as modern or legacy. When classification throws, this
  * writes the answer itself (or, for a client abort, nothing) and returns
@@ -1747,6 +1806,12 @@ async function classifyEra(
   }
 }
 
+/**
+ * Per-IP cap on POST /mcp bodies that era classification is reading at once
+ * (see MAX_CONCURRENT_BODY_READS_PER_IP and the route).
+ */
+const bodyReadCap = new ConcurrentReadCap(MAX_CONCURRENT_BODY_READS_PER_IP);
+
 app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
   try {
     // Modern (2026-07-28, stateless) requests go to the per-request handler.
@@ -1755,11 +1820,12 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
     // Content-Type to the legacy leg, and it would not get the modern 415.
     // When express.json did not parse the body (a non-JSON or missing
     // Content-Type), the classifier reads the request stream, up to the SDK's
-    // 4 MiB limit, before any admission control runs. A small body still
-    // reaches the legacy transport's 415 with no hang. The read can fail: an
-    // oversized body answers 413 (on either leg), a client abort ends the
-    // request quietly, and any other failure is logged and answers 500. See
-    // classifyEra.
+    // 4 MiB limit, before the rest of admission control runs (only the
+    // per-IP concurrent read cap and the per-IP rate limit for a
+    // modern-by-header request run earlier; see below). A small body still
+    // reaches the legacy transport's 415 with no hang. The read can fail: an oversized body answers 413 (on either leg),
+    // a client abort ends the request quietly, and any other failure is
+    // logged and answers 500. See classifyEra.
     //
     // Origin policy: the modern path allows every Origin and never answers
     // 403. Pathfinder is a public, unauthenticated, read-only documentation
@@ -1768,9 +1834,79 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
     // privileged local server to target. The app-wide cors({ origin: "*" })
     // stays. An opt-in Origin allowlist for localhost self-hosting is in
     // the backlog.
-    const era = modernRoute
-      ? await classifyEra(modernRoute, req, res)
-      : "legacy";
+    //
+    // The per-IP rate limit runs before the body read for a request that is
+    // modern from its headers alone: express.json left the body unread and
+    // the MCP-Protocol-Version header names the modern revision (the same
+    // header test the classifier uses). Such a request spends its token now,
+    // so an IP with an empty bucket gets its 429 before the classifier reads
+    // up to 4 MiB, and concurrent requests cannot all start a read on the
+    // same last token. Admission after the read does not spend a second
+    // token for it. The token stays spent when the read then classifies the
+    // request as legacy (for example a non-JSON body). Its answer does not
+    // change while the IP has tokens left, but from an IP with an empty
+    // bucket it gets this modern 429, not the legacy answer. The early 429
+    // cannot echo the JSON-RPC id (the body is unread), and it discards the
+    // rest of the body so the answer reaches the client (see
+    // writeEarlyModernRateLimited). Every other request is classified
+    // first and meets the limiter only if it is modern. The in-flight
+    // ceiling stays after the read: its subscriptions/listen exemption needs
+    // the method from the body.
+    //
+    // The header check alone does not bound the read: the SDK classifies by
+    // body first, so a client that leaves the header out still has its
+    // body read before its 429. Every unparsed body therefore first takes a
+    // per-IP read slot, with or without the header and on either era. An IP
+    // that already holds MAX_CONCURRENT_BODY_READS_PER_IP slots gets the
+    // early 429 (Retry-After 1), and its body is discarded, not buffered.
+    // The slot is held only for the classifier's read, and one finally frees
+    // it on every path: the read ends, the read fails (413 or 500), the
+    // client goes away mid-body (the read then fails and classifyEra
+    // returns), and the early 429 below. A client that stalls mid-body
+    // holds its slot until Node's request timeout closes the socket. A
+    // request under the cap is answered exactly as before. With the kill
+    // switch off there is no classifier read, so no slot is taken. An IP in
+    // server.allowlist takes no slot, as it bypasses the per-IP limits.
+    let releaseRead: (() => void) | undefined;
+    const readIp =
+      modernRoute && req.body === undefined
+        ? clientIp(req, isTrustingProxy())
+        : undefined;
+    if (readIp !== undefined && !ipLimiter?.isAllowlisted(readIp)) {
+      const ip = readIp;
+      releaseRead = bodyReadCap.tryAcquire(ip);
+      if (!releaseRead) {
+        console.warn(
+          `[mcp] concurrent body read cap reached for ${ip}, refused before reading the body`,
+        );
+        writeEarlyModernRateLimited(req, res, 1);
+        return;
+      }
+    }
+    let tokenSpentBeforeRead = false;
+    let era: "modern" | "legacy" | "answered";
+    try {
+      if (
+        modernRoute &&
+        modernLimiter &&
+        req.body === undefined &&
+        claimsModernProtocolByHeader(req)
+      ) {
+        const ip = clientIp(req, isTrustingProxy());
+        const early = modernLimiter.take(ip);
+        if (!early.ok) {
+          console.warn(
+            `[mcp] modern rate limit exceeded for ${ip}, refused before reading the body`,
+          );
+          writeEarlyModernRateLimited(req, res, early.retryAfterSeconds);
+          return;
+        }
+        tokenSpentBeforeRead = true;
+      }
+      era = modernRoute ? await classifyEra(modernRoute, req, res) : "legacy";
+    } finally {
+      releaseRead?.();
+    }
     if (era === "answered") return;
     if (era === "modern" && modernRoute) {
       // Admission order: per-IP rate limit, then the global in-flight
@@ -1786,21 +1922,10 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
           ? bodyId
           : null;
 
-      const limit = modernLimiter?.take(ip);
+      const limit = tokenSpentBeforeRead ? undefined : modernLimiter?.take(ip);
       if (limit && !limit.ok) {
         console.warn(`[mcp] modern rate limit exceeded for ${ip}`);
-        res
-          .status(429)
-          .set("Retry-After", String(limit.retryAfterSeconds))
-          .json({
-            jsonrpc: "2.0",
-            id: reqId,
-            error: {
-              code: JSONRPC_RATE_LIMIT_CODE,
-              message: "Rate limited: too many requests from this IP",
-              data: { retryAfterSeconds: limit.retryAfterSeconds },
-            },
-          });
+        writeModernRateLimited(res, reqId, limit.retryAfterSeconds);
         return;
       }
 
@@ -4661,7 +4786,7 @@ async function startServerInner(
   ipLimiter = new IpSessionLimiter(maxSessionsPerIp, { allowlist });
   if (allowlist.length > 0) {
     console.log(
-      `[startup] IP allowlist: ${allowlist.length} entr${allowlist.length === 1 ? "y" : "ies"} (bypasses max_sessions_per_ip, and the modern per-IP rate limit when PATHFINDER_MODERN_PROTOCOL is on; not modern_max_inflight)`,
+      `[startup] IP allowlist: ${allowlist.length} entr${allowlist.length === 1 ? "y" : "ies"} (bypasses max_sessions_per_ip, the per-IP concurrent body-read cap, and the modern per-IP rate limit when PATHFINDER_MODERN_PROTOCOL is on; not modern_max_inflight)`,
     );
   }
 
