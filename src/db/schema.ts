@@ -336,14 +336,40 @@ CREATE TRIGGER chunks_tsv_update
 }
 
 /**
- * SQL to query the current vector dimension of the embedding column.
- * Uses vector_dims() on actual data instead of pg_attribute (which PGlite may not support).
- * Returns { dimensions: number } or empty result if table has no rows.
+ * SQL to query the declared vector dimension of chunks.embedding.
+ * Reads the column type modifier from pg_attribute, so the check works on an
+ * empty table as well as a populated one. atttypmod is the dimension only for
+ * the pgvector `vector` type (for varchar(10) it is 14), so `dimensions` is
+ * set only when the column type is `vector` and has a declared size.
+ *
+ * Returns one row { type_name, declared_type, dimensions }, or no rows if the
+ * table does not exist yet. `dimensions` is null for an unsized `vector`
+ * column (use generateStoredDimensionQuery) and for any non-vector type.
  */
 export function generateDimensionCheckQuery(): string {
   return `
+SELECT t.typname AS type_name,
+       format_type(a.atttypid, a.atttypmod) AS declared_type,
+       CASE WHEN t.typname = 'vector' THEN NULLIF(a.atttypmod, -1) END AS dimensions
+FROM pg_attribute a
+JOIN pg_type t ON t.oid = a.atttypid
+WHERE a.attrelid = to_regclass('chunks')
+  AND a.attname = 'embedding'
+  AND NOT a.attisdropped;
+`;
+}
+
+/**
+ * SQL to read the dimension of a stored embedding. Used when chunks.embedding
+ * is a `vector` column with no declared size, so the catalog cannot say.
+ * Rows with a NULL embedding are skipped, since they have no dimension.
+ * Returns { dimensions: number }, or no rows if no row has an embedding.
+ */
+export function generateStoredDimensionQuery(): string {
+  return `
 SELECT vector_dims(embedding) AS dimensions
 FROM chunks
+WHERE embedding IS NOT NULL
 LIMIT 1;
 `;
 }

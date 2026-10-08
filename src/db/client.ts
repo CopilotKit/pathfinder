@@ -6,6 +6,7 @@ import {
   generatePostSchemaMigration,
   generateTsvTriggerDdl,
   generateDimensionCheckQuery,
+  generateStoredDimensionQuery,
 } from "./schema.js";
 import { getConfig, getServerConfig } from "../config.js";
 
@@ -109,27 +110,63 @@ async function initializePGlite(): Promise<void> {
 }
 
 /**
- * Check if the configured embedding dimensions match what's stored in the database.
- * Skips gracefully on empty tables, missing tables, or PGlite limitations.
- * Throws on a confirmed mismatch with instructions to reindex.
+ * Check that the configured embedding dimension matches chunks.embedding.
+ *
+ * Reads the column's declared size from the catalog, so an empty table is
+ * checked too. A `vector` column with no declared size falls back to the
+ * dimension of a stored row. The check is skipped when the table does not
+ * exist yet (the DDL will create it with the configured size). It is logged
+ * as NOT performed when the column is unsized and has no rows with an
+ * embedding.
+ *
+ * Throws on a confirmed mismatch, and when the column is not a `vector` at
+ * all, with the recovery steps.
+ * Exported for tests.
  */
-async function checkDimensionMismatch(
+export async function checkDimensionMismatch(
   p: pg.Pool,
   configuredDimensions: number,
 ): Promise<void> {
   try {
     const result = await p.query(generateDimensionCheckQuery());
-    if (result.rows.length === 0 || result.rows[0].dimensions == null) return;
+    if (result.rows.length === 0) return;
 
-    const dbDimensions = result.rows[0].dimensions;
-    if (dbDimensions !== configuredDimensions) {
+    const remedy =
+      "Switching embedding dimensions requires a full reindex. Drop the old index " +
+      "(DROP TABLE chunks, index_state;) and restart pathfinder serve. Startup " +
+      `recreates chunks as vector(${configuredDimensions}) and re-indexes every source.`;
+
+    const { type_name, declared_type } = result.rows[0];
+    if (type_name !== "vector") {
+      // The column cannot hold embeddings, so every upsert and search would
+      // fail later. Fail now. The message must contain "dimension mismatch"
+      // so the catch below re-throws it.
       console.error(
-        `[db] DIMENSION MISMATCH: Database has vector(${dbDimensions}) but config specifies dimensions=${configuredDimensions}. ` +
-          `Switching embedding providers requires a full reindex. Run: pathfinder reindex --force`,
+        `[db] DIMENSION MISMATCH: chunks.embedding has type ${declared_type}, expected vector(${configuredDimensions}). ${remedy}`,
       );
       throw new Error(
-        `Embedding dimension mismatch: database=${dbDimensions}, config=${configuredDimensions}. ` +
-          `Run "pathfinder reindex --force" to rebuild with the new dimensions.`,
+        `Embedding dimension mismatch: chunks.embedding has type ${declared_type}, expected vector(${configuredDimensions}). ${remedy}`,
+      );
+    }
+
+    let dbDimensions: number | null = result.rows[0].dimensions;
+    if (dbDimensions == null) {
+      const stored = await p.query(generateStoredDimensionQuery());
+      if (stored.rows.length === 0) {
+        console.warn(
+          "[db] Dimension check NOT performed: chunks.embedding has no declared dimension and chunks has no rows with an embedding.",
+        );
+        return;
+      }
+      dbDimensions = stored.rows[0].dimensions;
+    }
+
+    if (dbDimensions !== configuredDimensions) {
+      console.error(
+        `[db] DIMENSION MISMATCH: Database has vector(${dbDimensions}) but config specifies dimensions=${configuredDimensions}. ${remedy}`,
+      );
+      throw new Error(
+        `Embedding dimension mismatch: database=${dbDimensions}, config=${configuredDimensions}. ${remedy}`,
       );
     }
   } catch (error: unknown) {
@@ -140,9 +177,10 @@ async function checkDimensionMismatch(
     ) {
       throw error;
     }
-    // Expected failures: table doesn't exist yet, PGlite doesn't support vector_dims(), etc.
+    // Anything else is unexpected (connection, permissions, a broken query).
+    // Startup continues, but say clearly that no check ran.
     console.warn(
-      `[db] Dimension check skipped: ${error instanceof Error ? error.message : String(error)}`,
+      `[db] Dimension check NOT performed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
