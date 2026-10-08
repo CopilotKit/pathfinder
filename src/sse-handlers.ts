@@ -410,7 +410,13 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       });
       return;
     }
-    const transport = sseTransports[sessionId];
+    // Own-key check: sseTransports is a plain object, so a bare index maps
+    // ids such as "constructor" or "__proto__" to inherited
+    // Object.prototype members and the call below would 500. Those ids
+    // are unknown sessions.
+    const transport = Object.hasOwn(sseTransports, sessionId)
+      ? sseTransports[sessionId]
+      : undefined;
     if (!transport) {
       const trustProxy = resolve(deps.trustProxy ?? false) ?? false;
       const ip = clientIp(req, trustProxy);
