@@ -1,5 +1,18 @@
 # @copilotkit/pathfinder
 
+## 1.17.1
+
+### Patch Changes
+
+- **Weekly report headline counts unique clients.** It now reads `N unique clients (M unique IPs)`, and `Legacy sessions` shows only while there are any. An optional `SHARED_CLIENT_IDS` secret counts a shared OAuth client id by IP and user agent; if the server does not confirm the list, the report fails instead of publishing an undercount (#177)
+- **Session and request handling:** `/messages` answers 404, not 500, for session ids such as `constructor` or `__proto__`. A legacy `initialize` that the transport rejects (406 or 400) frees its per-IP session slot and sends no `session.created` event (#182)
+- **Errors and startup checks:** the knowledge tool no longer returns raw database error text. The embedding-dimension startup check reads the declared column size, so a mismatch stops startup even on an empty database (#182)
+- **Weekly report fixes:** Notion tables stay within the 100-children limit. `SHARED_CLIENT_IDS` accepts newline-separated ids as well as commas (#182)
+- **Telemetry delivery:** a send counts as delivered only after a 2xx response. A failed send retries after a 5-minute backoff, and a 307 or 308 redirect is followed (#182)
+- **Modern `/mcp` body limits:** a modern request from a rate-limited IP gets its 429 before the server reads the body. An IP can read at most 4 unparsed bodies at a time; allowlisted IPs are exempt (#182)
+- **Bash tool:** when the modern request deadline is reached, the result gets a `deadline:` line on stderr and exit code 124. The legacy `cd` target is passed as a literal, so `$(...)` and backticks in it do not run (#182)
+- **Docs:** source comments and docs are corrected. The served `skill.md` now describes each configured tool accurately, and the config page matches the code (#181)
+
 ## 1.17.0
 
 ### Minor Changes
