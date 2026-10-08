@@ -45,8 +45,14 @@ function getSharedEmbeddingProvider(
 
 /**
  * Creates a new McpServer instance with all tools registered.
- * Each MCP session gets its own server instance. Each bash tool gets its own
- * virtual filesystem instance, shared across all MCP sessions for that tool.
+ * The legacy leg builds one server per MCP session; the modern leg builds one
+ * per request. Each bash tool gets its own virtual filesystem instance. The
+ * instance is read from `bashInstances` once, when this function runs, and
+ * kept for the life of the server. refreshBashInstances (server.ts) swaps the
+ * map entry when it rebuilds a tree (startup, webhook, reindex), so only
+ * servers built after the swap see the new tree: every later modern request
+ * gets it, but a live legacy session keeps the instance from its init until
+ * the session ends.
  */
 export function createMcpServer(
   bashInstances?: Map<string, Bash>,
@@ -55,26 +61,32 @@ export function createMcpServer(
   telemetry?: BashTelemetry,
   workspace?: WorkspaceManager,
   hooks?: { onToolCall?: () => void },
-  // Accessor for the per-session request-origin tag (user|synthetic|analysis)
-  // captured from the X-Pathfinder-Source header on the MCP init request.
+  // Accessor for the request-origin tag (user|synthetic|analysis|relay)
+  // captured from the X-Pathfinder-Source header: on the legacy leg from the
+  // request that opens the session (the /mcp initialize, or GET /sse; fixed
+  // for the session), on the modern leg from each request.
   // Threaded into the RAG tool handlers so each query_log row records who
   // originated the traffic. Optional so existing callers/tests keep compiling;
   // when absent the writer defaults the column to 'user'.
   getRequestSource?: () => string | undefined,
-  // Per-session client IP / User-Agent accessors captured at MCP init.
+  // Client IP / User-Agent accessors, captured the same way as
+  // getRequestSource (legacy: from the /mcp initialize or GET /sse; modern:
+  // from each request).
   // Threaded the same way as getRequestSource so each query_log row carries
   // IP + UA without a session-id join against an external system. Both
   // optional; absent values persist as NULL in the new columns.
   getClientIp?: () => string | undefined,
   getUserAgent?: () => string | undefined,
-  // Per-session analytics context (see SessionAnalyticsContext), read on
-  // every logged tool call. Threaded the same way as the accessors above into
-  // the search and knowledge handlers so each query_log row carries it.
-  // Optional; absent values persist as NULL.
+  // Analytics context (see SessionAnalyticsContext; per session on legacy,
+  // per request on modern), read on every logged tool call. Threaded the same
+  // way as the accessors above into the search and knowledge handlers so each
+  // query_log row carries it. Optional; absent values persist as NULL.
   getAnalyticsContext?: () => SessionAnalyticsContext | undefined,
   // Protocol era of the connection this server serves. "modern" (2026-07-28,
   // stateless) adds the tools/list cache hints and builds bash tools with
-  // `era: "modern"`. Absent or "legacy" builds the server exactly as before.
+  // `era: "modern"`. Absent or "legacy" adds no cache hints and builds bash
+  // tools in the legacy era. Both eras run commands over a read-only view of
+  // the shared filesystem; see tools/bash.ts.
   // trackWork, when given, receives the promise of every tool call this
   // server runs (see ModernServerContext.trackWork). signal, when given, is
   // the request's deadline signal (ModernServerContext.signal); bash tools

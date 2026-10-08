@@ -680,8 +680,8 @@ export async function assertDocumentPeerDepsForSources(
   const tryImport =
     opts?.tryImport ??
     (async (m: string) => {
-      // Dynamic require via Function to dodge TS's static resolution of the
-      // optional peer — same pattern content-extractors.ts uses.
+      // Plain dynamic import() of a runtime string: TS does not resolve a
+      // non-literal specifier, so tsc builds without the optional peer.
       return await import(m);
     });
   const documentSources = sources.filter((s) => s.type === "document");

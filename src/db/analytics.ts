@@ -113,10 +113,12 @@ export {
  * text into the tools verbatim (see {@link MachineRelayRule}). It is real
  * traffic but it is NOT a user query, so it is excluded from the default
  * real-user population the same way `synthetic`/`analysis` are.
- * Sourced from the `X-Pathfinder-Source` request header on the MCP init
- * request. Anything outside this set (including a missing header) is coerced
- * to {@link DEFAULT_REQUEST_SOURCE} at the edge so the column only ever holds
- * a known value going forward.
+ * Sourced from the `X-Pathfinder-Source` request header: on the request that
+ * opens a legacy session (the /mcp initialize, or GET /sse), or on every
+ * modern request. A declared alias (see {@link REQUEST_SOURCE_ALIASES}) maps
+ * to its canonical value; anything else (including a missing header) is
+ * coerced to {@link DEFAULT_REQUEST_SOURCE} at the edge so the column only
+ * ever holds a known value going forward.
  */
 export const REQUEST_SOURCE_VALUES = [
   "user",
@@ -127,10 +129,10 @@ export const REQUEST_SOURCE_VALUES = [
 export type RequestSource = (typeof REQUEST_SOURCE_VALUES)[number];
 
 /**
- * HTTP header that carries the request-origin tag on the MCP init request.
- * Lower-cased because Node/Express normalize header names to lower case on
- * `req.headers`. Exported so the server-side capture site and tests share one
- * literal.
+ * HTTP header that carries the request-origin tag (read on the request that
+ * opens a legacy session, or on every modern request). Lower-cased because
+ * Node/Express normalize header names to lower case on `req.headers`.
+ * Exported so the server-side capture site and tests share one literal.
  */
 export const REQUEST_SOURCE_HEADER = "x-pathfinder-source";
 
@@ -138,16 +140,17 @@ export const REQUEST_SOURCE_HEADER = "x-pathfinder-source";
  * Default request source when the `X-Pathfinder-Source` header is absent or
  * not one of {@link REQUEST_SOURCE_VALUES}. New traffic without an explicit
  * tag is treated as a real user — the conservative choice that keeps the
- * default KPIs (which exclude synthetic/analysis) honest.
+ * default KPIs (which exclude synthetic/analysis/relay) honest.
  */
 export const DEFAULT_REQUEST_SOURCE: RequestSource = "user";
 
 /**
  * Request-source values that count as "real users" for the default analytics
  * KPIs. Includes NULL (historical rows predating the column) via the SQL in
- * {@link buildRequestSourceClause}. Synthetic/analysis traffic is excluded by
- * default and only included when the caller explicitly asks for an
- * all-sources view (see {@link AnalyticsFilter.request_source}).
+ * {@link buildRequestSourceClause}. Synthetic, analysis and relay traffic
+ * (tagged `relay`, or matching a machine-relay fingerprint rule) is excluded
+ * by default and only included when the caller asks for that audience or for
+ * the all-sources view (see {@link AnalyticsFilter.request_source}).
  */
 export const REAL_USER_REQUEST_SOURCES: readonly RequestSource[] = ["user"];
 
@@ -312,7 +315,8 @@ export interface QueryLogEntry {
   source_name: string | null;
   session_id: string | null;
   /**
-   * Request-origin tag (user|synthetic|analysis) from X-Pathfinder-Source.
+   * Request-origin tag (user|synthetic|analysis|relay) from
+   * X-Pathfinder-Source.
    * Optional on the entry so existing call sites that don't tag still compile;
    * the writer coerces an absent/unknown value to {@link DEFAULT_REQUEST_SOURCE}
    * so the persisted column is always a known value for new rows.
@@ -646,15 +650,20 @@ export interface AnalyticsFilter {
    * Request-origin filter for the analytics readers.
    *
    * - `undefined` (the default): restrict to REAL USER traffic —
-   *   `request_source IN ('user') OR request_source IS NULL`. This is what
+   *   `(request_source = 'user' OR request_source IS NULL)`. This is what
    *   makes the dashboard's KPIs default to real users while still counting
    *   historical rows (NULL) that predate the column.
-   * - `"all"`: no request-source restriction — every row regardless of origin.
-   *   Use for the explicit "all sources" dashboard view.
-   * - a specific {@link RequestSource} (`"user"` | `"synthetic"` | `"analysis"`):
-   *   restrict to exactly that origin. `"user"` here ALSO includes NULL rows
-   *   (they're real users); `"synthetic"`/`"analysis"` match the literal value
-   *   only.
+   * - `"all"`: no request-source restriction — every row regardless of origin,
+   *   relays included. Use for the explicit "all sources" dashboard view.
+   * - `"user"`: same as the default (real users, NULL rows included).
+   * - `"synthetic"` | `"analysis"`: restrict to rows with exactly that literal
+   *   value.
+   * - `"relay"`: the relay audience — rows tagged `relay` OR rows that match a
+   *   declared machine-relay fingerprint rule.
+   *
+   * Every audience except `"all"` and `"relay"` also excludes rows that match
+   * a declared machine-relay fingerprint rule. See
+   * {@link buildRequestSourceClause} for the SQL.
    */
   request_source?: RequestSource | "all";
   /**
@@ -691,8 +700,9 @@ export async function logQuery(
   const pool = getPool();
   const text = logQueryText ? entry.query_text : REDACTED_QUERY_TEXT;
   // Coerce the request source to a known value at the write boundary so the
-  // column only ever holds user|synthetic|analysis going forward (an absent or
-  // unrecognized tag becomes DEFAULT_REQUEST_SOURCE = 'user'). Historical rows
+  // column only ever holds user|synthetic|analysis|relay going forward (a
+  // declared alias maps to its canonical value; an absent or unrecognized tag
+  // becomes DEFAULT_REQUEST_SOURCE = 'user'). Historical rows
   // written before this column existed stay NULL and are read back as real
   // users by the analytics layer.
   const requestSource = normalizeRequestSource(entry.request_source);
@@ -814,7 +824,9 @@ function escapeLikePattern(s: string): string {
 }
 
 /**
- * Build WHERE clause fragments and params for tool_type and source filters.
+ * Build WHERE clause fragments and params for the tool_type and source
+ * filters, plus the default service-traffic exclusion (`session_id NOT LIKE
+ * 'service:%'`, skipped when include_service_traffic is set).
  * Returns { clauses: string[], params: any[], nextIdx: number }.
  */
 function buildFilterClauses(
@@ -854,23 +866,6 @@ function whereAnd(baseClauses: string[], filterClauses: string[]): string {
   return all.length > 0 ? "WHERE " + all.join(" AND ") : "";
 }
 
-/**
- * Build the request-source WHERE fragment + params for a reader.
- *
- * Semantics (see {@link AnalyticsFilter.request_source}):
- *  - `undefined` → default to real users:
- *    `(request_source IN ('user') OR request_source IS NULL)`. NULL is folded
- *    in so rows predating the column (which have no tag) still count as real
- *    user traffic — this is the back-compat guarantee.
- *  - `"all"` → no clause (every row, regardless of origin).
- *  - `"user"` → same as the default (real users incl. NULL).
- *  - `"synthetic"` | `"analysis"` → exact-match on the literal value
- *    (`request_source = $N`); NULL rows are NOT synthetic/analysis so they're
- *    excluded.
- *
- * Returns `{ clauses, params, nextIdx }` shaped like {@link buildFilterClauses}
- * so callers can splice it into their base clauses + param list uniformly.
- */
 /**
  * Build the SQL predicate that is TRUE for a row emitted by one of the
  * declared machine relays (see {@link MachineRelayRule}).
@@ -933,6 +928,31 @@ function buildMachineRelayPredicate(
  */
 const RELAY_TAG_SQL = "request_source = 'relay'";
 
+/**
+ * Build the request-source WHERE fragment + params for a reader.
+ *
+ * Semantics (see {@link AnalyticsFilter.request_source}):
+ *  - `undefined` → default to real users:
+ *    `(request_source = $N OR request_source IS NULL)` with `$N` bound to
+ *    `'user'`. NULL is folded in so rows predating the column (which have no
+ *    tag) still count as real user traffic — this is the back-compat
+ *    guarantee.
+ *  - `"all"` → no clause (every row, regardless of origin, relays included).
+ *  - `"user"` → same as the default (real users incl. NULL).
+ *  - `"relay"` → the relay audience: rows tagged `relay` OR rows that match a
+ *    declared machine-relay fingerprint rule.
+ *  - `"synthetic"` | `"analysis"` → exact-match on the literal value
+ *    (`request_source = $N`); NULL rows are NOT synthetic/analysis so they're
+ *    excluded.
+ *
+ * Every audience except `"all"` and `"relay"` also gets a
+ * `NOT (<fingerprint predicate>)` clause when a usable machine-relay rule is
+ * declared (see {@link buildMachineRelayPredicate}), so fingerprinted relay
+ * rows are excluded.
+ *
+ * Returns `{ clauses, params, nextIdx }` shaped like {@link buildFilterClauses}
+ * so callers can splice it into their base clauses + param list uniformly.
+ */
 function buildRequestSourceClause(
   filter: AnalyticsFilter,
   startIdx: number,
@@ -1000,8 +1020,9 @@ function buildRequestSourceClause(
  * (its window is "all retrieval traffic", not "the real-user audience"), but
  * its `total_user_queries_window` IS a user-facing denominator and must not
  * count a relay. Both halves apply: the TAG (`request_source = 'relay'`, set
- * when the relay sends `X-Pathfinder-Source: github-triage`) and the
- * FINGERPRINT (User-Agent + CIDR, for a relay that does not yet send it).
+ * when the relay sends an X-Pathfinder-Source value that normalizes to
+ * `relay`: `relay` itself or an alias in {@link REQUEST_SOURCE_ALIASES}) and
+ * the FINGERPRINT (User-Agent + CIDR, for a relay that does not yet send it).
  *
  * `IS DISTINCT FROM` rather than `<>` so the NULL request_source of a
  * historical row reads as "not a relay" instead of dropping the row.
@@ -1230,14 +1251,6 @@ function computeP95(latencies: number[]): number {
   return sorted[Math.min(index, sorted.length - 1)] ?? 0;
 }
 
-/**
- * Get a summary of analytics data.
- *
- * `days` controls the rolling "last N days" window for the non-total
- * subqueries (summary counts, latency, per-day, by-source). When the caller
- * supplies `filter.from`/`filter.to`, that explicit range takes precedence
- * and `days` is ignored — see {@link buildDateWindow}.
- */
 /** Most shared client ids one summary request may list. */
 export const SHARED_CLIENT_IDS_MAX = 50;
 
@@ -1251,6 +1264,14 @@ export interface AnalyticsSummaryOptions {
   sharedClientIds?: readonly string[];
 }
 
+/**
+ * Get a summary of analytics data.
+ *
+ * `days` controls the rolling "last N days" window for the non-total
+ * subqueries (summary counts, latency, per-day, by-source). When the caller
+ * supplies `filter.from`/`filter.to`, that explicit range takes precedence
+ * and `days` is ignored — see {@link buildDateWindow}.
+ */
 export async function getAnalyticsSummary(
   filter: AnalyticsFilter = {},
   days: number = 7,
@@ -1275,7 +1296,7 @@ export async function getAnalyticsSummary(
   // while the numerator and avg_latency implicitly exclude them, inflating
   // the rate. All windowed aggregates exclude `latency_ms < 0`. The only
   // aggregate that intentionally includes backfilled rows is the all-time
-  // `total_queries` count in this function (see the totals query below).
+  // `total_queries` count in this function (see the totals query above).
   //
   // Redacted rows (query_text = REDACTED_QUERY_TEXT) are also excluded from
   // the summary `total`/`empty` counts, the latency aggregates (avg AND p95),
@@ -1826,11 +1847,16 @@ export const RELAY_TAG_EXCLUSION_NAME = "x-pathfinder-source";
  * surfaces in this window, one row per rule, so the exclusion is visible
  * rather than silent. See {@link RelayExclusion}.
  *
- * The population matches the windowed aggregates (date window, backfilled
- * rows excluded) MINUS the request-source clause — the whole point is to
- * count rows the audience filter drops. Rules with a zero count are still
- * returned: "this rule is declared and matched nothing" is the reading that
- * tells an operator a stale rule can be deleted.
+ * The population is the windowed aggregates' date window, with backfilled
+ * rows excluded and the tool_type/source filters and the service-traffic
+ * exclusion (buildFilterClauses) applied, MINUS the request-source clause —
+ * the whole point is to count rows the audience filter drops. Unlike the
+ * summary aggregates (total_queries_window), redacted rows are NOT excluded
+ * here. A row can match the tag and a rule, or several rules, so the
+ * per-rule counts are not additive (their sum can exceed the number of
+ * excluded rows). Rules with a zero count are still returned: "this rule is
+ * declared and matched nothing" is the reading that tells an operator a
+ * stale rule can be deleted.
  */
 export async function getRelayExclusions(
   days: number = 7,
@@ -1910,21 +1936,26 @@ export async function getRelayExclusions(
  * not happen since the writer sets both atomically) collapse into a single
  * `<unknown>` bucket so they remain visible rather than silently dropping.
  *
- * Window semantics intentionally match {@link getEmptyQueries}:
- * `created_at > NOW() - INTERVAL '<days> days'`. No filter parameter — the
- * blocklist panel is operational-only and the filter wiring (tool/source/
- * request_source) doesn't carry meaning for short-circuited rows that never
- * reached the retrieval layer.
+ * Window semantics DIFFER from {@link getEmptyQueries}: this uses a sliding
+ * `created_at > NOW() - INTERVAL '<days> days'`, while getEmptyQueries uses
+ * buildDateWindow (whole UTC calendar days, or from/to, or all time), which
+ * caps a rolling window at ROLLING_WINDOW_CAP_DAYS (366); this window has no
+ * cap. For the same `days` the two panels can cover different rows. No
+ * filter parameter — the blocklist panel is operational-only and the filter
+ * wiring (tool/source/request_source) doesn't carry meaning for
+ * short-circuited rows that never reached the retrieval layer.
  */
 export async function getBlockedQueries(
   days: number = 7,
 ): Promise<BlockedQueryGroup[]> {
   const pool = getPool();
 
-  // Plain `interval N days` is bound via a parameterized integer so the
-  // operator-facing panel can't be SQL-injected through the days arg even
-  // if a future route surfaces it. Postgres rejects negative intervals on
-  // the `created_at >` half-bound anyway, but defense-in-depth.
+  // `days` is bound as a text parameter (`String(days)`) and cast with
+  // `($1 || ' days')::interval`, so the operator-facing panel can't be
+  // SQL-injected through the days arg. Postgres accepts a negative interval:
+  // `NOW() - '-5 days'` is in the future and the query returns no rows, with
+  // no error. The guard against a non-positive or non-integer `days` is the
+  // route's parseDaysOrError.
   //
   // CTE pre-projects `block_reason` to its display value (`'<unknown>'` for
   // NULL) so the outer GROUP BY operates on the same expression the
