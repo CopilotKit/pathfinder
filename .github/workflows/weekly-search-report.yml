@@ -34,6 +34,15 @@ name: Weekly Search Report
 #                               to the script's SLACK_ENGR_WEBHOOK env. Posted to
 #                               only on SUCCESS (the weekly digest). When unset,
 #                               the success ping is simply skipped.
+#
+# Optional repository secret:
+#   SHARED_CLIENT_IDS           Comma-separated OAuth client ids that many users
+#                               share (a hosted connector reusing one DCR
+#                               registration). The headline counts their rows
+#                               by IP + User-Agent instead (rows with no usable
+#                               IP still count by client id). Kept out of git on
+#                               purpose. When unset, every client id is one
+#                               client.
 on:
   schedule:
     # Weekly, Sunday ~09:07 UTC — off the :00 mark to avoid the cron stampede.
@@ -82,6 +91,13 @@ jobs:
           ANALYTICS_BASE_URL: "https://mcp.copilotkit.ai"
           # 7-day lookback window.
           REPORT_DAYS: "7"
+          # OAuth client ids that many users share (comma-separated). Rows with
+          # these ids are counted as clients by IP + User-Agent (rows with no
+          # usable IP still count by client id). The value lives only in the
+          # repository secret; set it with
+          # `gh secret set SHARED_CLIENT_IDS --repo CopilotKit/pathfinder`.
+          # Unset → empty → no ids are shared.
+          SHARED_CLIENT_IDS: ${{ secrets.SHARED_CLIENT_IDS }}
         run: npx tsx scripts/weekly-search-report/weekly-search-report.ts --report /tmp/weekly-report.md
 
       # Keep the rendered report as a build artifact for inspection even when

@@ -43,6 +43,16 @@
  *                               affects the exit code or any fail-loud path).
  *   ANALYTICS_BASE_URL          Override the analytics host (default prod).
  *   REPORT_DAYS                 Lookback window in days (default 7).
+ *   SHARED_CLIENT_IDS           Comma-separated OAuth client ids that many users
+ *                               share (for example, a hosted connector that
+ *                               reuses one DCR registration). The script sends
+ *                               them to /summary as ?shared_client_ids=, and the
+ *                               server counts rows with these ids by
+ *                               client_ip|user_agent instead of by client id.
+ *                               The WORKFLOW maps the repository secret of the
+ *                               same name. Unset or empty: no ids are shared.
+ *                               If the server does not confirm the list (an
+ *                               older deployment), the run fails loud.
  *
  * Usage:
  *   npx tsx scripts/weekly-search-report/weekly-search-report.ts
@@ -71,6 +81,12 @@ export interface AnalyticsSummary {
   modern_query_count_window?: number | null;
   streamable_http_query_count_window?: number | null;
   sse_query_count_window?: number | null;
+  /**
+   * Number of distinct shared client ids the server received and applied to
+   * the key, whether or not any row carries them. It proves that the server
+   * supports the list, not that each id matched traffic. See fetchBundle.
+   */
+  shared_client_ids_applied?: number;
   empty_result_count_window: number;
   empty_result_rate_window: number;
   low_confidence_count_window: number;
@@ -626,10 +642,13 @@ export function renderMarkdown(
   lines.push("## Header metrics");
   lines.push("");
   lines.push(`- Total tool calls: ${summary.total_queries_window}`);
-  lines.push(`- Unique IPs: ${summary.unique_ip_count_window}`);
-  lines.push(`- Unique sessions: ${summary.unique_session_count_window}`);
+  lines.push(`- ${clientsHeadline(summary)}`);
+  // Only legacy (sessionful) traffic has a session id, so this line goes
+  // away by itself once the legacy era drains.
+  if (summary.unique_session_count_window > 0) {
+    lines.push(`- Legacy sessions: ${summary.unique_session_count_window}`);
+  }
   const opt = parseOptionalCounts(summary);
-  lines.push(`- Unique clients: ${opt.unique_client_count_window ?? "n/a"}`);
   lines.push(
     `- Protocol mix: ${pairShare("legacy", opt.legacy_query_count_window, "modern", opt.modern_query_count_window, summary.total_queries_window)}; ` +
       `transport: ${pairShare("streamable_http", opt.streamable_http_query_count_window, "sse", opt.sse_query_count_window, summary.total_queries_window)}`,
@@ -752,6 +771,19 @@ export function renderMarkdown(
 }
 
 /**
+ * The report headline: "N unique clients (M unique IPs)". When the server
+ * does not report unique_client_count_window (an older deployment), it says
+ * so instead of printing a client count it does not have.
+ */
+export function clientsHeadline(summary: AnalyticsSummary): string {
+  const clients = parseOptionalCounts(summary).unique_client_count_window;
+  const ips = `${summary.unique_ip_count_window} unique IPs`;
+  return clients === undefined
+    ? `${ips} (unique clients not reported)`
+    : `${clients} unique clients (${ips})`;
+}
+
+/**
  * Neutralize a markdown TABLE cell so a pipe in user/analytics text can't break
  * the row. Pipes are escaped (`\|`) — the native Notion table path unescapes
  * them back via tableCellText — and every flavor of line break (\r\n, \r, \n)
@@ -787,9 +819,7 @@ export function buildObservations(bundle: AnalyticsBundle): string[] {
     `Empty-result rate is ${(summary.empty_result_rate_window * 100).toFixed(1)}% ` +
       `of ${summary.total_queries_window} tool calls in the window.`,
   );
-  out.push(
-    `${summary.unique_ip_count_window} unique IPs across ${summary.unique_session_count_window} sessions.`,
-  );
+  out.push(`${clientsHeadline(summary)}.`);
   const cats = categorizeQueries(queries);
   if (cats.length > 0) {
     out.push(
@@ -1029,6 +1059,23 @@ export interface RunEnv {
   SLACK_ENGR_WEBHOOK?: string;
   ANALYTICS_BASE_URL?: string;
   REPORT_DAYS?: string;
+  SHARED_CLIENT_IDS?: string;
+}
+
+/**
+ * Parse SHARED_CLIENT_IDS: comma-separated, trimmed, empty entries dropped,
+ * duplicates removed (the server dedupes the same way, so the count it
+ * echoes back matches this list's length).
+ */
+export function parseSharedClientIds(raw: string | undefined): string[] {
+  return [
+    ...new Set(
+      (raw ?? "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    ),
+  ];
 }
 
 export interface RunDeps {
@@ -1059,9 +1106,35 @@ export interface RunDeps {
 const DEFAULT_BASE_URL = "https://mcp.copilotkit.ai";
 const DEFAULT_PARENT_PAGE_ID = "3793aa38-1852-80a5-89d3-c3d37147aa22";
 
+/** Query parameters whose values are secret and must never reach a log or alert. */
+const SECRET_QUERY_PARAMS = ["shared_client_ids"];
+
+/** True when `path` sends a secret query parameter. */
+function carriesSecret(path: string): boolean {
+  const q = path.indexOf("?");
+  if (q === -1) return false;
+  const params = new URLSearchParams(path.slice(q + 1));
+  return SECRET_QUERY_PARAMS.some((name) => params.has(name));
+}
+
+/** The class name of a thrown value, such as TypeError. Never its message. */
+function errorClass(err: unknown): string {
+  return err instanceof Error && /^[A-Za-z]+$/.test(err.name)
+    ? err.name
+    : "Error";
+}
+
 /**
  * Build the real (network-backed) fetchJson bound to a base URL + token, modeled
  * on monthly-gap-analysis's helper.
+ *
+ * A request that sends a secret query parameter (shared_client_ids) gets a
+ * sealed error on every failure path (fetch throws, non-2xx, a body that is
+ * not JSON). The message holds only the endpoint path, the HTTP status or the
+ * error class, and a fixed "details withheld" note. It never holds the URL,
+ * the query, the status text, a body excerpt or an underlying message: any of
+ * them can quote the ids, in any encoding, and the message goes to the public
+ * Actions log and Slack. Requests with no secret keep the full error text.
  */
 export function makeFetchJson(
   baseUrl: string,
@@ -1069,15 +1142,27 @@ export function makeFetchJson(
 ): <T>(path: string) => Promise<T> {
   const base = baseUrl.replace(/\/+$/, "");
   return async <T>(path: string): Promise<T> => {
-    const url = `${base}${path}`;
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        "User-Agent": "pathfinder-weekly-search-report",
-      },
-    });
+    const sealed = carriesSecret(path);
+    const sealedError = (detail: string): Error =>
+      new Error(
+        `Analytics fetch failed: ${detail} for ${path.split("?")[0]} ` +
+          "(details withheld: the request carries shared_client_ids)",
+      );
+    let res: Response;
+    try {
+      res = await fetch(`${base}${path}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "User-Agent": "pathfinder-weekly-search-report",
+        },
+      });
+    } catch (err) {
+      if (sealed) throw sealedError(errorClass(err));
+      throw err;
+    }
     if (!res.ok) {
+      if (sealed) throw sealedError(String(res.status));
       const body = await res.text().catch(() => "");
       throw new Error(
         `Analytics fetch failed: ${res.status} ${res.statusText} for ${path}${
@@ -1085,7 +1170,12 @@ export function makeFetchJson(
         }`,
       );
     }
-    return (await res.json()) as T;
+    if (!sealed) return (await res.json()) as T;
+    try {
+      return (await res.json()) as T;
+    } catch (err) {
+      throw sealedError(errorClass(err));
+    }
   };
 }
 
@@ -1210,11 +1300,27 @@ export function makePostSlack(
 export async function fetchBundle(
   deps: Pick<RunDeps, "fetchJson">,
   days: number,
+  sharedClientIds: readonly string[] = [],
 ): Promise<AnalyticsBundle> {
+  const sharedParam =
+    sharedClientIds.length > 0
+      ? `&shared_client_ids=${encodeURIComponent(sharedClientIds.join(","))}`
+      : "";
   const summary = await deps.fetchJson<AnalyticsSummary>(
-    `/api/analytics/summary?days=${days}`,
+    `/api/analytics/summary?days=${days}${sharedParam}`,
   );
   assertValidSummary(summary);
+  // An older server ignores the parameter and would count every shared id as
+  // one client. Fail loud rather than publish a headline that undercounts.
+  if (
+    sharedClientIds.length > 0 &&
+    summary.shared_client_ids_applied !== sharedClientIds.length
+  ) {
+    throw new Error(
+      `summary did not apply shared_client_ids (sent ${sharedClientIds.length}, ` +
+        `server applied ${summary.shared_client_ids_applied === undefined ? "none" : Number.isInteger(summary.shared_client_ids_applied) && summary.shared_client_ids_applied >= 0 ? summary.shared_client_ids_applied : "invalid"})`,
+    );
+  }
 
   const queries = await deps.fetchJson<TopQuery[]>(
     `/api/analytics/queries?days=${days}&limit=200`,
@@ -1280,7 +1386,11 @@ export async function run(deps: RunDeps): Promise<void> {
 
   let bundle: AnalyticsBundle;
   try {
-    bundle = await fetchBundle(deps, days);
+    bundle = await fetchBundle(
+      deps,
+      days,
+      parseSharedClientIds(deps.env.SHARED_CLIENT_IDS),
+    );
   } catch (err) {
     const reason = String(err instanceof Error ? err.message : err);
     deps.error(`[weekly-report] FAILED: ${reason}`);
@@ -1353,7 +1463,7 @@ export function buildSuccessDigest(
   return (
     `:bar_chart: Pathfinder weekly search report — ` +
     `${summary.total_queries_window} tool calls · ` +
-    `${summary.unique_ip_count_window} unique IPs${topSegment} · ` +
+    `${clientsHeadline(summary)}${topSegment} · ` +
     `${emptyRatePct}% empty · ${link}`
   );
 }
@@ -1369,6 +1479,7 @@ function buildRealDeps(): RunDeps {
     SLACK_ENGR_WEBHOOK: process.env.SLACK_ENGR_WEBHOOK,
     ANALYTICS_BASE_URL: process.env.ANALYTICS_BASE_URL,
     REPORT_DAYS: process.env.REPORT_DAYS,
+    SHARED_CLIENT_IDS: process.env.SHARED_CLIENT_IDS,
   };
   const baseUrl = env.ANALYTICS_BASE_URL ?? DEFAULT_BASE_URL;
   const token = (env.PATHFINDER_ANALYTICS_TOKEN ?? "").trim();

@@ -19,6 +19,8 @@ vi.mock("../db/analytics.js", () => ({
   getRelayExclusions: (...args: unknown[]) => mockGetRelayExclusions(...args),
   getToolCounts: (...args: unknown[]) => mockGetToolCounts(...args),
   getToolBreakdown: (...args: unknown[]) => mockGetToolBreakdown(...args),
+  SHARED_CLIENT_IDS_MAX: 50,
+  AUTH_CLIENT_ID_MAX_LEN: 256,
 }));
 
 vi.mock("../config.js", () => ({
@@ -990,6 +992,75 @@ describe("Analytics server routes (HTTP-level)", () => {
       expect(daysArg).toBe(14);
       expect(filterArg.from).toBeInstanceOf(Date);
       expect(filterArg.to).toBeInstanceOf(Date);
+    });
+  });
+
+  describe("GET /api/analytics/summary (shared_client_ids)", () => {
+    function cfg() {
+      mockGetAnalyticsConfigFn.mockReturnValue({
+        enabled: true,
+        log_queries: true,
+        retention_days: 90,
+        token: "tok",
+      });
+      mockGetAnalyticsSummary.mockResolvedValue({ total_queries: 0 });
+    }
+
+    it("forwards a trimmed, deduped list as sharedClientIds", async () => {
+      cfg();
+      await startApp();
+      const res = await request(
+        server,
+        "GET",
+        "/api/analytics/summary?days=7&shared_client_ids=" +
+          encodeURIComponent(" a , b,,a "),
+        { Authorization: "Bearer tok" },
+      );
+      expect(res.status).toBe(200);
+      expect(mockGetAnalyticsSummary.mock.calls[0][2]).toEqual({
+        sharedClientIds: ["a", "b"],
+      });
+    });
+
+    it("forwards an empty list when the param is absent", async () => {
+      cfg();
+      await startApp();
+      await request(server, "GET", "/api/analytics/summary", {
+        Authorization: "Bearer tok",
+      });
+      expect(mockGetAnalyticsSummary.mock.calls[0][2]).toEqual({
+        sharedClientIds: [],
+      });
+    });
+
+    it.each([
+      [
+        "a repeated param",
+        "shared_client_ids=a&shared_client_ids=b",
+        /single string/,
+      ],
+      [
+        "more than 50 ids",
+        "shared_client_ids=" +
+          Array.from({ length: 51 }, (_, i) => `id${i}`).join(","),
+        /more than 50/,
+      ],
+      [
+        "an over-long id",
+        "shared_client_ids=" + "x".repeat(257),
+        /longer than 256/,
+      ],
+    ])("returns 400 for %s", async (_label, qs, msg) => {
+      cfg();
+      await startApp();
+      const res = await request(server, "GET", `/api/analytics/summary?${qs}`, {
+        Authorization: "Bearer tok",
+      });
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBe("invalid_request");
+      expect(body.error_description).toMatch(msg);
+      expect(mockGetAnalyticsSummary).not.toHaveBeenCalled();
     });
   });
 
