@@ -1,5 +1,13 @@
 # @copilotkit/pathfinder
 
+## 1.17.2
+
+### Patch Changes
+
+- **Docker images now use Node 24.22.1 (CVE-2026-111497).** `ghcr.io/copilotkit/pathfinder` `:latest` and `:latest-local` move from `node:20-slim` to `node:24.22.1-slim`, pinned by digest. Node 24.22.1 fixes the HIGH Brotli decompression memory bug from the Node.js October 2026 security releases; Node 20 is end-of-life and gets no fix. Pull the new image and restart (#187)
+- **The `-local` image installs `@xenova/transformers` again.** On npm 11 the old install step exited 0 but did not install the package. The `-local` image also no longer carries dev dependencies (#187)
+- **Engines guidance:** `engines.node` stays `>=20` in this patch release. If you run the npm package, use Node 24.22.1 or later, or Node 22.23.4 or later on the 22 line. Node 20 does not get the CVE-2026-111497 fix (#187)
+
 ## 1.17.1
 
 ### Patch Changes
