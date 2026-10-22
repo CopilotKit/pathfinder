@@ -1,5 +1,5 @@
 # Base — shared dependencies (all deps needed for build)
-FROM node:20-slim AS base
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS base
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -16,7 +16,7 @@ COPY . .
 CMD ["npx", "tsx", "watch", "src/index.ts"]
 
 # Prod — compiled JS only, fresh slim image with prod deps only
-FROM node:20-slim AS prod
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS prod
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
