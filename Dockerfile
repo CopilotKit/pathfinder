@@ -34,9 +34,14 @@ RUN npm ci --omit=dev
 # from the SAME Dockerfile: the default (slim, arg=false → tags :latest /
 # :<ref>) and the `-local` variant (arg=true → tags :latest-local /
 # :<ref>-local) which preinstalls the dep below. Default build stays slim.
+#
+# npm 11 (Node 24) keeps a bare `npm install <pkg>` of a package that is
+# already an optional peer as an optional peer, and does not install it.
+# `--save-optional` records it as an optional dependency so npm installs
+# it. `--omit=dev` keeps dev dependencies out, the same as `npm ci` above.
 ARG INCLUDE_LOCAL_EMBEDDINGS=false
 RUN if [ "$INCLUDE_LOCAL_EMBEDDINGS" = "true" ]; then \
-      npm install @xenova/transformers; \
+      npm install --omit=dev --save-optional @xenova/transformers; \
     fi
 COPY --from=build /app/dist/ ./dist/
 COPY docs/analytics.html ./docs/analytics.html
