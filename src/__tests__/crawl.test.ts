@@ -196,6 +196,24 @@ describe("respectsRobotsTxt", () => {
     const robotsTxt = `User-agent: *\nDisallow: /`;
     expect(respectsRobotsTxt(robotsTxt, "/docs/page")).toBe(false);
   });
+
+  it("applies rules from a group that lists * among several user agents", () => {
+    const robotsTxt = `User-agent: *\nUser-agent: Googlebot\nDisallow: /private/`;
+    expect(respectsRobotsTxt(robotsTxt, "/private/page")).toBe(false);
+    expect(respectsRobotsTxt(robotsTxt, "/docs/page")).toBe(true);
+  });
+
+  it("ignores rules from a group that does not list *", () => {
+    const robotsTxt = `User-agent: Googlebot\nUser-agent: Bingbot\nDisallow: /private/\n\nUser-agent: *\nDisallow: /admin/`;
+    expect(respectsRobotsTxt(robotsTxt, "/private/page")).toBe(true);
+    expect(respectsRobotsTxt(robotsTxt, "/admin/page")).toBe(false);
+  });
+
+  it("strips comments from Disallow rules", () => {
+    const robotsTxt = `# robots.txt\nUser-agent: * # everyone\nDisallow: /private/ # keep out`;
+    expect(respectsRobotsTxt(robotsTxt, "/private/page")).toBe(false);
+    expect(respectsRobotsTxt(robotsTxt, "/docs/page")).toBe(true);
+  });
 });
 
 // ── extractSitemapUrls from robots.txt ──────────────────────────────────────

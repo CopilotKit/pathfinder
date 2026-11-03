@@ -128,15 +128,22 @@ export function respectsRobotsTxt(robotsTxt: string, path: string): boolean {
 
   const lines = robotsTxt.split("\n");
   let inGlobalBlock = false;
+  // Consecutive User-agent lines open a single group (RFC 9309 §2.1), so a
+  // `*` anywhere in the run applies the group's rules to us.
+  let prevWasUserAgent = false;
   const disallowed: string[] = [];
 
   for (const rawLine of lines) {
-    const line = rawLine.trim();
+    // "#" starts a comment that runs to the end of the line (RFC 9309 §2.2).
+    const line = rawLine.replace(/#.*$/, "").trim();
+    if (!line) continue;
     if (line.toLowerCase().startsWith("user-agent:")) {
       const agent = line.slice("user-agent:".length).trim();
-      inGlobalBlock = agent === "*";
+      inGlobalBlock = (prevWasUserAgent && inGlobalBlock) || agent === "*";
+      prevWasUserAgent = true;
       continue;
     }
+    prevWasUserAgent = false;
     if (inGlobalBlock && line.toLowerCase().startsWith("disallow:")) {
       const rule = line.slice("disallow:".length).trim();
       if (rule) disallowed.push(rule);
