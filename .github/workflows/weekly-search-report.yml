@@ -106,15 +106,7 @@ jobs:
           # Unset → empty → no ids are shared. Set → the run fails if the
           # server does not confirm the list.
           SHARED_CLIENT_IDS: ${{ secrets.SHARED_CLIENT_IDS }}
-        run: npx tsx scripts/weekly-search-report/weekly-search-report.ts --report /tmp/weekly-report.md
-
-      # Keep the rendered report as a build artifact for inspection. The script
-      # writes --report before it publishes, so the report survives a failed
-      # Notion publish (the run still fails). NOTION_TOKEN is required.
-      - name: Upload weekly report artifact
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: weekly-search-report
-          path: /tmp/weekly-report.md
-          if-no-files-found: ignore
+        # No artifact upload, job summary or log echo of the report: it holds
+        # raw user query text and this repo is public. Notion is the only
+        # destination. A failed run is re-run, not inspected from an artifact.
+        run: npx tsx scripts/weekly-search-report/weekly-search-report.ts

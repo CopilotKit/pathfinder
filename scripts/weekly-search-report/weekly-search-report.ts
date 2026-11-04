@@ -57,7 +57,9 @@
  *
  * Usage:
  *   npx tsx scripts/weekly-search-report/weekly-search-report.ts
- *   npx tsx scripts/weekly-search-report/weekly-search-report.ts --report /tmp/weekly.md
+ *   npx tsx scripts/weekly-search-report/weekly-search-report.ts --report /tmp/weekly-report.md
+ *   (The --report file holds raw user query text. Write it to a private path
+ *   outside the repo, and do not commit, share or upload it.)
  */
 
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -1431,9 +1433,10 @@ export async function run(deps: RunDeps): Promise<void> {
   const title = reportTitle(now, days);
   const markdown = renderMarkdown(bundle, now, days);
 
-  // A requested --report path is written before publish — it's a local artifact
-  // the workflow uploads, not an external side effect, and is useful even if the
-  // publish step later fails.
+  // A requested --report path is written before publish, so a local caller gets
+  // the file even if the publish step later fails. The workflow does not pass
+  // --report and uploads nothing: the report holds raw user query text.
+  // (Workflow: .github/workflows/weekly-search-report.yml.)
   const reportPath = reportPathArgFrom(deps.argv);
   if (reportPath) {
     try {
