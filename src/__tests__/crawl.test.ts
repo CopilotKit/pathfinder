@@ -227,6 +227,15 @@ describe("extractSitemapsFromRobotsTxt", () => {
       "https://example.com/sitemap-blog.xml",
     ]);
   });
+
+  it("strips trailing # comments from Sitemap: lines", async () => {
+    const { extractSitemapsFromRobotsTxt } = await import("../crawl.js");
+    const robotsTxt = `Sitemap: https://example.com/sitemap.xml # main sitemap\nSitemap: https://example.com/blog.xml#blog\n# Sitemap: https://example.com/commented-out.xml\nSitemap: # nothing here`;
+    expect(extractSitemapsFromRobotsTxt(robotsTxt)).toEqual([
+      "https://example.com/sitemap.xml",
+      "https://example.com/blog.xml",
+    ]);
+  });
 });
 
 // ── crawlSite (integration-level, mocked fetch) ────────────────────────────

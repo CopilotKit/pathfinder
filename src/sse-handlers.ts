@@ -198,7 +198,7 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         const currentCount = ipLimiter.getSessionCount(ip);
         const limit = ipLimiter.getMax();
         console.warn(
-          `[mcp] IP rate limit exceeded for ${ip} (${currentCount}/${limit}), rejecting SSE session`,
+          `[mcp] IP rate limit exceeded for ${safeLogToken(ip)} (${currentCount}/${limit}), rejecting SSE session`,
         );
         // Clamp once so the Retry-After header agrees with the JSON body.
         // buildRateLimitPayload also clamps defensively, but the header is
@@ -320,7 +320,7 @@ export function createSseHandlers(deps: SseHandlerDeps): {
         const currentCount = ipLimiter.getSessionCount(ip);
         const limit = ipLimiter.getMax();
         console.warn(
-          `[mcp] IP rate limit exceeded for ${ip} (${currentCount}/${limit}), rejecting SSE session (race fallback)`,
+          `[mcp] IP rate limit exceeded for ${safeLogToken(ip)} (${currentCount}/${limit}), rejecting SSE session (race fallback)`,
         );
         // Same clamp as the pre-check path so header and body agree.
         const retryAfterSeconds = clampRetryAfterSeconds(
@@ -361,7 +361,7 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       await server.connect(transport);
 
       console.log(
-        `[mcp] New SSE session ${sessionId.slice(0, 8)} (${Object.keys(sseTransports).length} active) [${ip}]`,
+        `[mcp] New SSE session ${sessionId.slice(0, 8)} (${Object.keys(sseTransports).length} active) [${safeLogToken(ip)}]`,
       );
 
       // Telemetry — fire after the session is fully accepted so we don't
@@ -408,7 +408,9 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       // useful even without a session id to scope to.
       const trustProxy = resolve(deps.trustProxy ?? false) ?? false;
       const ip = clientIp(req, trustProxy);
-      console.warn(`[mcp] /messages 404 reason=missing-session-id ip=${ip}`);
+      console.warn(
+        `[mcp] /messages 404 reason=missing-session-id ip=${safeLogToken(ip)}`,
+      );
       res.status(404).json({
         error: "Session not found",
         reason: "missing-session-id",
@@ -426,7 +428,7 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       const trustProxy = resolve(deps.trustProxy ?? false) ?? false;
       const ip = clientIp(req, trustProxy);
       console.warn(
-        `[mcp] /messages 404 reason=unknown-session-id ip=${ip} sid=${sessionId.slice(0, 8)}`,
+        `[mcp] /messages 404 reason=unknown-session-id ip=${safeLogToken(ip)} sid=${safeLogToken(sessionId.slice(0, 8))}`,
       );
       res.status(404).json({
         error: "Session not found",
@@ -455,7 +457,7 @@ export function createSseHandlers(deps: SseHandlerDeps): {
       const trustProxy = resolve(deps.trustProxy ?? false) ?? false;
       const ip = clientIp(req, trustProxy);
       console.error(
-        `[mcp] SSE handlePostMessage failed for session ${sessionId.slice(0, 8)} ip=${ip}:`,
+        `[mcp] SSE handlePostMessage failed for session ${sessionId.slice(0, 8)} ip=${safeLogToken(ip)}:`,
         err,
       );
       if (!res.headersSent) {

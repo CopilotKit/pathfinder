@@ -67,9 +67,15 @@ export async function handleRelatedCommand(
     }
     return { stdout: lines.join("\n") + "\n", stderr: "", exitCode: 0 };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[bash-related] Error: ${msg}`);
-    return { stdout: "", stderr: `related: error: ${msg}\n`, exitCode: 1 };
+    // Full detail stays server-side; driver errors can name tables, SQL and
+    // connection targets, so the client gets a generic message (same
+    // contract as the knowledge tool).
+    console.error("[bash-related] Error:", err);
+    return {
+      stdout: "",
+      stderr: "related: error: search failed. Please try again later.\n",
+      exitCode: 1,
+    };
   }
 }
 

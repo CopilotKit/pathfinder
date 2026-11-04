@@ -57,7 +57,9 @@
  *
  * Usage:
  *   npx tsx scripts/weekly-search-report/weekly-search-report.ts
- *   npx tsx scripts/weekly-search-report/weekly-search-report.ts --report /tmp/weekly.md
+ *   npx tsx scripts/weekly-search-report/weekly-search-report.ts --report /tmp/weekly-report.md
+ *   (The --report file holds raw user query text. Write it to a private path
+ *   outside the repo, and do not commit, share or upload it.)
  */
 
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -1131,6 +1133,22 @@ function errorClass(err: unknown): string {
 }
 
 /**
+ * The system error code of an error's cause (for example ECONNREFUSED or
+ * ERR_INVALID_URL), or "" when there is none. Only the code is read: it is a
+ * fixed identifier, while the cause's message can quote the host and port.
+ * The allowlist rejects any code that is not plain upper-case letters and
+ * underscores.
+ */
+function errorCauseCode(err: unknown): string {
+  const cause = err instanceof Error ? err.cause : undefined;
+  const code =
+    typeof cause === "object" && cause !== null && "code" in cause
+      ? cause.code
+      : undefined;
+  return typeof code === "string" && /^[A-Z_]+$/.test(code) ? code : "";
+}
+
+/**
  * Build the real (network-backed) fetchJson bound to a base URL + token, modeled
  * on monthly-gap-analysis's helper.
  *
@@ -1294,7 +1312,13 @@ export function makePostSlack(
         );
       }
     } catch (err) {
-      console.warn(`[weekly-report] Slack POST error: ${String(err)}`);
+      // Only the error class and its cause's code: a malformed webhook makes
+      // fetch() throw a message that holds the whole URL, and the URL is the
+      // secret. The code (for example ECONNREFUSED) holds no URL.
+      const code = errorCauseCode(err);
+      console.warn(
+        `[weekly-report] Slack POST error: ${errorClass(err)}${code ? ` (${code})` : ""}`,
+      );
     }
   };
 }
@@ -1409,9 +1433,10 @@ export async function run(deps: RunDeps): Promise<void> {
   const title = reportTitle(now, days);
   const markdown = renderMarkdown(bundle, now, days);
 
-  // A requested --report path is written before publish — it's a local artifact
-  // the workflow uploads, not an external side effect, and is useful even if the
-  // publish step later fails.
+  // A requested --report path is written before publish, so a local caller gets
+  // the file even if the publish step later fails. The workflow does not pass
+  // --report and uploads nothing: the report holds raw user query text.
+  // (Workflow: .github/workflows/weekly-search-report.yml.)
   const reportPath = reportPathArgFrom(deps.argv);
   if (reportPath) {
     try {

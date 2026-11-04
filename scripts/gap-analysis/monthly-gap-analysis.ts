@@ -19,6 +19,8 @@
  *   PATHFINDER_ANALYTICS_TOKEN  Bearer token for the analytics API. If unset,
  *                               the script logs "skipping live fetch" and
  *                               exits 0 so CI lint passes without secrets.
+ *                               It is also the HMAC key for the stored gap
+ *                               state keys (see stateKeySecret).
  *   ANTHROPIC_API_KEY           Anthropic key for the single summarization pass.
  *                               If unset, a deterministic fallback report is
  *                               produced from the clusters (no LLM call).
@@ -56,6 +58,7 @@
  * not an external side effect.
  */
 
+import { createHmac } from "node:crypto";
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,17 +171,22 @@ export interface Gap {
 export interface RunState {
   generated_at: string;
   /**
-   * Stable, normalized keys (see normalizeQueryKey) of the high-severity gaps
-   * from this run. Keyed on the normalized form rather than the raw title so a
+   * Hashed, normalized keys (see gapStateKey) of the high-severity gaps from
+   * this run. Keyed on the normalized form rather than the raw title so a
    * run-to-run TRIVIAL rewording of the same underlying gap (casing,
    * punctuation, stop words, word order) maps to the same key and does NOT
    * re-alert. A SUBSTANTIAL semantic rephrasing (different significant tokens)
-   * yields a different key and may re-alert — this is not semantic dedup. The
-   * raw titles are kept alongside for human-readable debugging.
+   * yields a different key and may re-alert — this is not semantic dedup.
+   *
+   * Only keyed hashes (HMAC-SHA256, see gapStateKey) are stored. The state
+   * file is uploaded as an artifact on a public repo, and without the LLM a
+   * gap title IS a raw user query (and its normalized key is that query's own
+   * words). A plain hash would not protect it: high gaps are short, common
+   * queries, so anyone could hash guesses and compare. The HMAC key is a
+   * secret, so a reader of the artifact cannot test guesses. The next run only
+   * compares keys, so it needs no readable text.
    */
   high_severity_keys: string[];
-  /** Raw titles parallel to high_severity_keys, for readability only. */
-  high_severity_titles: string[];
 }
 
 // ── Analytics fetch ──────────────────────────────────────────────────────────
@@ -735,22 +743,75 @@ function renderMarkdown(
 
 // ── State diff (new high-severity gaps vs prior run) ─────────────────────────
 
+const STATE_KEY_PREFIX = "hmac-sha256:";
+const HASHED_STATE_KEY = /^hmac-sha256:[0-9a-f]{64}$/;
+
+/**
+ * The HMAC key for state keys. It is the PATHFINDER_ANALYTICS_TOKEN secret,
+ * which the workflow already passes to this script; no extra secret is needed.
+ * Read at call time (not module load) so the tests can set it.
+ *
+ * Rotating PATHFINDER_ANALYTICS_TOKEN changes every key, so the next run
+ * after a rotation treats every high-severity gap as new and alerts once.
+ *
+ * Without the secret this throws, so the script never writes a key that
+ * anyone can recompute. main() exits before it computes a key when the token
+ * is unset, and that path writes an empty key list.
+ */
+function stateKeySecret(): string {
+  const secret = process.env.PATHFINDER_ANALYTICS_TOKEN ?? "";
+  if (!secret) {
+    throw new Error(
+      "PATHFINDER_ANALYTICS_TOKEN unset — cannot compute gap state keys",
+    );
+  }
+  return secret;
+}
+
+function hashNormalizedKey(normalized: string): string {
+  return (
+    STATE_KEY_PREFIX +
+    createHmac("sha256", stateKeySecret()).update(normalized).digest("hex")
+  );
+}
+
+/**
+ * The persisted identity of a gap: an HMAC-SHA256 of its normalized title
+ * (see normalizeQueryKey), keyed with a secret (see stateKeySecret). Equal for
+ * trivial rewordings. The stored value is not the title, and a reader without
+ * the secret cannot confirm a guessed query against it.
+ */
+export function gapStateKey(title: string): string {
+  return hashNormalizedKey(normalizeQueryKey(title));
+}
+
+/**
+ * Pre-HMAC state files hold the plain normalized key. HMAC it on read so the
+ * next run still dedupes against them. normalizeQueryKey strips ":", so a
+ * plain key never looks like an HMAC key. This shim can go once every
+ * plain-key artifact has expired (90-day retention).
+ */
+function toHashedStateKey(key: string): string {
+  return HASHED_STATE_KEY.test(key) ? key : hashNormalizedKey(key);
+}
+
 export function readPriorState(): RunState | null {
   const path = statePath();
   if (!existsSync(path)) return null;
   try {
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(raw) as Partial<RunState>;
-    // Require the normalized-key array; a file missing it (older format or
-    // corrupt) is treated as no prior state → first run.
+    // Require high_severity_keys (HMAC keys, or plain keys from pre-HMAC
+    // state); a file without it (corrupt, or a format from before the array
+    // existed) is treated as no prior state → first run.
+    // Old files also carry raw `high_severity_titles`; they are ignored.
     if (Array.isArray(parsed?.high_severity_keys)) {
       return {
         generated_at:
           typeof parsed.generated_at === "string" ? parsed.generated_at : "",
-        high_severity_keys: parsed.high_severity_keys,
-        high_severity_titles: Array.isArray(parsed.high_severity_titles)
-          ? parsed.high_severity_titles
-          : [],
+        high_severity_keys: parsed.high_severity_keys
+          .filter((k): k is string => typeof k === "string")
+          .map(toHashedStateKey),
       };
     }
     return null;
@@ -764,10 +825,9 @@ export function writeState(gaps: Gap[]): RunState {
   const highGaps = gaps.filter((g) => g.severity === "high");
   const state: RunState = {
     generated_at: new Date().toISOString(),
-    // Normalized keys are the durable identity used for new-gap diffing; the
-    // raw titles ride alongside purely for human-readable debugging.
-    high_severity_keys: highGaps.map((g) => normalizeQueryKey(g.title)),
-    high_severity_titles: highGaps.map((g) => g.title),
+    // HMAC keys of the normalized titles are the durable identity used for
+    // new-gap diffing. No title text is stored (see RunState).
+    high_severity_keys: highGaps.map((g) => gapStateKey(g.title)),
   };
   try {
     // Create the parent directory so the write can't ENOENT when the dir is
@@ -841,10 +901,11 @@ export async function persistAndMaybeAlert(opts: {
 
 /**
  * High-severity gap titles present now but absent from the prior run, compared
- * on the STABLE normalized key (see normalizeQueryKey) rather than the raw
- * title. The LLM rephrases gap titles run-to-run; keying on the normalized form
- * means a TRIVIALLY reworded title for the same underlying gap (casing,
- * punctuation, stop words, word order) is NOT reported as new — which would
+ * on gapStateKey (an HMAC of the normalized key, see normalizeQueryKey)
+ * rather than the raw title. The LLM rephrases gap titles run-to-run; keying
+ * on the normalized form means a TRIVIALLY reworded title for the same
+ * underlying gap (casing, punctuation, stop words, word order) is NOT
+ * reported as new — which would
  * otherwise produce a recurring false-positive Slack storm. The collapse is only
  * as strong as the normalization: a SUBSTANTIAL semantic rephrasing (different
  * significant tokens) reduces to a different key and may still be reported as
@@ -858,8 +919,7 @@ export function newHighSeverityGaps(
   const priorKeys = new Set(prior?.high_severity_keys ?? []);
   return current
     .filter(
-      (g) =>
-        g.severity === "high" && !priorKeys.has(normalizeQueryKey(g.title)),
+      (g) => g.severity === "high" && !priorKeys.has(gapStateKey(g.title)),
     )
     .map((g) => g.title);
 }

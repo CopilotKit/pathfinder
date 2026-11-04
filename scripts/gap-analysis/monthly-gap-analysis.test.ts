@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash, createHmac } from "node:crypto";
 import {
   parseDays,
   parseGapJson,
@@ -15,6 +16,7 @@ import {
   newHighSeverityGaps,
   readPriorState,
   writeState,
+  gapStateKey,
   writeEarlyExitState,
   persistAndMaybeAlert,
   chunkText,
@@ -36,6 +38,16 @@ import {
 import { normalizeQueryKey, type QueryCluster } from "./cluster.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+// gapStateKey HMACs with PATHFINDER_ANALYTICS_TOKEN. Give every test a fixed
+// fake value; tests that need it unset stub it to "" themselves.
+const TEST_STATE_SECRET = "test-only-state-hmac-key";
+beforeEach(() => {
+  vi.stubEnv("PATHFINDER_ANALYTICS_TOKEN", TEST_STATE_SECRET);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function gap(partial: Partial<Gap> & { title: string }): Gap {
   return {
@@ -378,6 +390,103 @@ describe("state round-trip", () => {
     // Only high-severity gaps are persisted for diffing.
     expect(prior!.high_severity_keys.length).toBe(1);
   });
+
+  // The state file is uploaded as an artifact on a PUBLIC repo. Without the
+  // LLM, gap titles ARE raw user queries, and the normalized key is the query's
+  // own tokens — so neither may land in the file. Only HMAC keys may.
+  it("persists only hashed keys, never the raw title or its tokens", () => {
+    writeState([gap({ title: "Zqfixture widget renderer missing?" })]);
+    const raw = readFileSync(path, "utf-8");
+    expect(raw.toLowerCase()).not.toContain("zqfixture");
+    expect(raw).not.toContain("renderer");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty("high_severity_titles");
+    expect(parsed.high_severity_keys).toEqual([
+      gapStateKey("Zqfixture widget renderer missing?"),
+    ]);
+    expect(parsed.high_severity_keys).toEqual([
+      expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/),
+    ]);
+  });
+
+  // A plain sha256 of a short, common query can be recovered by hashing
+  // guesses. The key must need the secret.
+  it("keys the hash with the secret, so it cannot be recomputed without it", () => {
+    const normalized = normalizeQueryKey("How to set up authentication");
+    const key = gapStateKey("How to set up authentication");
+    const digest = key.replace(/^hmac-sha256:/, "");
+    // Not the guessable plain hash.
+    expect(digest).not.toBe(
+      createHash("sha256").update(normalized).digest("hex"),
+    );
+    // It is the HMAC under the secret.
+    expect(digest).toBe(
+      createHmac("sha256", TEST_STATE_SECRET).update(normalized).digest("hex"),
+    );
+    // A different secret gives a different key.
+    vi.stubEnv("PATHFINDER_ANALYTICS_TOKEN", "a-different-secret");
+    expect(gapStateKey("How to set up authentication")).not.toBe(key);
+  });
+
+  it("refuses to compute a key, and writes no state, without the secret", () => {
+    vi.stubEnv("PATHFINDER_ANALYTICS_TOKEN", "");
+    expect(() => gapStateKey("authentication setup")).toThrow(
+      /PATHFINDER_ANALYTICS_TOKEN/,
+    );
+    expect(() => writeState([gap({ title: "authentication setup" })])).toThrow(
+      /PATHFINDER_ANALYTICS_TOKEN/,
+    );
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("hashes the normalized title, so trivial rewordings share a key", () => {
+    expect(gapStateKey("How to set up authentication")).toBe(
+      gapStateKey("authentication setup"),
+    );
+    expect(gapStateKey("authentication setup")).not.toBe(
+      gapStateKey("webhook configuration"),
+    );
+  });
+
+  it("still dedupes against an OLD state file of raw normalized keys", () => {
+    // The pre-HMAC format: plain normalized keys plus raw titles. The next
+    // run must read it, HMAC the keys, and NOT re-alert the gaps it already
+    // alerted.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        generated_at: "2026-10-15T04:00:00.000Z",
+        high_severity_keys: [normalizeQueryKey("authentication setup")],
+        high_severity_titles: ["authentication setup"],
+      }),
+      "utf-8",
+    );
+    const prior = readPriorState();
+    expect(prior).not.toBeNull();
+    expect(prior!.high_severity_keys).toEqual([
+      gapStateKey("authentication setup"),
+    ]);
+    expect(
+      newHighSeverityGaps(
+        [
+          gap({ title: "How to set up authentication" }),
+          gap({ title: "webhook configuration" }),
+        ],
+        prior,
+      ),
+    ).toEqual(["webhook configuration"]);
+  });
+
+  it("keeps already-hashed keys as they are when reading new state", () => {
+    writeState([gap({ title: "authentication setup" })]);
+    const prior = readPriorState();
+    expect(prior!.high_severity_keys).toEqual([
+      gapStateKey("authentication setup"),
+    ]);
+    expect(
+      newHighSeverityGaps([gap({ title: "authentication setup" })], prior),
+    ).toEqual([]);
+  });
 });
 
 // ── writeState surfaces (does not swallow) a persistence failure ─────────────
@@ -548,6 +657,17 @@ describe("dry-run contract", () => {
     process.env.GAP_STATE_PATH = statePath;
     writeEarlyExitState(false);
     expect(existsSync(statePath)).toBe(true);
+  });
+
+  it("writes an empty key list on the early-exit path, which needs no secret", () => {
+    // The early exit runs exactly when PATHFINDER_ANALYTICS_TOKEN is unset.
+    // It stores no keys, so there is nothing to guess and no HMAC is needed.
+    vi.stubEnv("PATHFINDER_ANALYTICS_TOKEN", "");
+    const statePath = join(dir, "early-state.json");
+    process.env.GAP_STATE_PATH = statePath;
+    writeEarlyExitState(false);
+    const parsed = JSON.parse(readFileSync(statePath, "utf-8")) as RunState;
+    expect(parsed.high_severity_keys).toEqual([]);
   });
 });
 

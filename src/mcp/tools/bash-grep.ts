@@ -145,31 +145,33 @@ export async function vectorGrep(
     limit = 20,
   } = options;
   let semanticResults: ChunkResult[] = [];
-  let semanticError: string | null = null;
+  let semanticFailed = false;
   try {
     const embedding = await embeddingClient.embed(pattern);
     semanticResults = await searchChunksFn(embedding, limit, sourceName);
   } catch (err) {
-    semanticError = err instanceof Error ? err.message : String(err);
-    console.warn(`[bash-grep] Semantic search failed: ${semanticError}`);
+    // Full detail stays server-side; driver errors can name tables, SQL and
+    // connection targets, so the client only learns which search failed.
+    semanticFailed = true;
+    console.warn("[bash-grep] Semantic search failed:", err);
   }
   let textResults: ChunkResult[] = [];
-  let textError: string | null = null;
+  let textFailed = false;
   try {
     textResults = await textSearchFn(pattern, limit, sourceName);
   } catch (err) {
-    textError = err instanceof Error ? err.message : String(err);
-    console.warn(`[bash-grep] Text search failed: ${textError}`);
+    textFailed = true;
+    console.warn("[bash-grep] Text search failed:", err);
   }
   if (
     semanticResults.length === 0 &&
     textResults.length === 0 &&
-    semanticError &&
-    textError
+    semanticFailed &&
+    textFailed
   ) {
     return {
       stdout: "",
-      stderr: `grep: search unavailable (semantic: ${semanticError}, text: ${textError})\n`,
+      stderr: "grep: search unavailable. Please try again later.\n",
       exitCode: 2,
     };
   }
@@ -184,10 +186,10 @@ export async function vectorGrep(
   const regex = new RegExp(escapeRegex(pattern), "i");
   const matching = allResults.filter((r) => regex.test(r.content));
   let warnings = "";
-  if (semanticError && !textError) {
-    warnings = `[warning: semantic search unavailable: ${semanticError}]\n`;
-  } else if (!semanticError && textError) {
-    warnings = `[warning: text search unavailable: ${textError}]\n`;
+  if (semanticFailed && !textFailed) {
+    warnings = "[warning: semantic search unavailable]\n";
+  } else if (!semanticFailed && textFailed) {
+    warnings = "[warning: text search unavailable]\n";
   }
   if (matching.length === 0)
     return { stdout: "", stderr: warnings, exitCode: 1 };
