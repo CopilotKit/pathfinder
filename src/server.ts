@@ -5014,7 +5014,11 @@ async function startServerInner(
   registerAdminOpsRoutes(app);
 
   const serverName = serverCfg.server.name;
-  const server = app.listen(port, () => {
+  const server = app.listen(port, (err?: Error) => {
+    // Express 5 also calls this callback on a listen error (it registers it
+    // with server.once("error")). Print the banner only after a real bind; the
+    // "error" handler below reports the failure and exits 1.
+    if (err) return;
     console.log(`[${serverName}] Running at http://localhost:${port}/mcp`);
     console.log(`[health] http://localhost:${port}/health`);
   });
@@ -5023,8 +5027,11 @@ async function startServerInner(
     // `process.exit(1)` inline) left telemetry unflushed, open transports
     // abandoned, and the DB pool not closed. Route through the existing
     // `shutdown` helper so the teardown sequence is consistent with
-    // SIGINT/SIGTERM. `shutdown` is hoisted below (function declaration, not
-    // a const) so the forward reference resolves.
+    // SIGINT/SIGTERM. `shutdown` and the state it uses are declared below.
+    // This works because net emits a listen "error" asynchronously (on a
+    // later tick), after this function has run to the end and initialized
+    // them. Do not add an `await` between `app.listen` and those
+    // declarations.
     if (err.code === "EADDRINUSE") {
       console.error(
         `[startup] Port ${port} is already in use. Set PORT env var to use a different port.`,
@@ -5032,28 +5039,78 @@ async function startServerInner(
     } else {
       console.error(`[startup] Server error:`, err);
     }
-    // shutdown() calls process.exit(0) on completion; wrap in catch so a
-    // shutdown failure still terminates the process instead of hanging.
-    shutdown(`server-error:${err.code ?? "unknown"}`).catch((shutdownErr) => {
-      console.error("[startup] shutdown-on-error failed:", shutdownErr);
-      process.exit(1);
-    });
+    // A listen/server error is a failure: exit 1 after the same cleanup so an
+    // ON_FAILURE restart policy (railway.toml) restarts the process. Wrap in
+    // catch so a shutdown failure still terminates instead of hanging.
+    shutdown(`server-error:${err.code ?? "unknown"}`, 1).catch(
+      (shutdownErr) => {
+        console.error("[startup] shutdown-on-error failed:", shutdownErr);
+        process.exit(1);
+      },
+    );
   });
 
   // -------------------------------------------------------------------
   // Graceful shutdown
   // -------------------------------------------------------------------
 
-  async function shutdown(signal: string): Promise<void> {
+  // Upper bound for the cleanup below. The steps include remote round-trips
+  // (the telemetry flush and the DB pool end), so one can stall on the
+  // network. Railway sends SIGKILL 10s after SIGTERM, so the bound is 8s: the
+  // forced exit then happens, with our exit code and log line, before the
+  // SIGKILL. Without a bound, a step that never settles leaves the process
+  // alive: on a listen error nothing then exits 1, and ON_FAILURE never
+  // restarts it.
+  const SHUTDOWN_DEADLINE_MS = 8_000;
+  let shutdownPromise: Promise<void> | undefined;
+  let shutdownExitCode = 0;
+
+  // The first call wins. A later call (for example from the server "error"
+  // handler) neither starts a second teardown nor changes the exit code: a
+  // second run would find the pool already taken and reach process.exit(0)
+  // first, which turns a failure into a clean exit.
+  function shutdown(signal: string, exitCode = 0): Promise<void> {
+    if (shutdownPromise) {
+      console.log(
+        `[shutdown] Received ${signal} during shutdown, keeping exit code ${shutdownExitCode}`,
+      );
+      return shutdownPromise;
+    }
+    shutdownExitCode = exitCode;
+    shutdownPromise = runShutdown(signal, exitCode);
+    return shutdownPromise;
+  }
+
+  async function runShutdown(signal: string, exitCode: number): Promise<void> {
+    // Arm the deadline first, so that it also bounds a step that throws.
+    // A forced exit means cleanup did not finish, so it is always a failure
+    // (exit 1), also when a clean exit 0 was intended. Deliberately not
+    // unref'd: if a hung step is the only thing left, the loop could
+    // otherwise drain and exit with a code other than the forced one.
+    const forcedExitCode = exitCode === 0 ? 1 : exitCode;
+    setTimeout(() => {
+      console.error(
+        `[shutdown] Cleanup exceeded ${SHUTDOWN_DEADLINE_MS}ms, forcing exit ${forcedExitCode}`,
+      );
+      process.exit(forcedExitCode);
+    }, SHUTDOWN_DEADLINE_MS);
     console.log(`\n[shutdown] Received ${signal}, shutting down...`);
+    // A step below that throws when it is not expected to is a bug, so the
+    // process exits 1 after the remaining steps have run.
+    let unexpectedFailure = false;
     if (telemetryFlushInterval) {
       clearInterval(telemetryFlushInterval);
       telemetryFlushInterval = undefined;
     }
-    flushUnknownSession404Counts();
     if (sessionReaperInterval) {
       clearInterval(sessionReaperInterval);
       sessionReaperInterval = undefined;
+    }
+    try {
+      flushUnknownSession404Counts();
+    } catch (e) {
+      console.error("[shutdown] Unknown-session 404 count flush failed:", e);
+      unexpectedFailure = true;
     }
     try {
       await bashTelemetry?.flush();
@@ -5081,11 +5138,30 @@ async function startServerInner(
     } catch (e) {
       console.error("[shutdown] DB pool close failed:", e);
     }
-    process.exit(0);
+    process.exit(unexpectedFailure ? 1 : exitCode);
   }
 
-  const onSigint = () => shutdown("SIGINT");
-  const onSigterm = () => shutdown("SIGTERM");
+  // A repeated signal (for example a second Ctrl-C, or the platform's SIGTERM
+  // during a listen-error shutdown) means "stop now": exit at once with the
+  // first call's exit code instead of waiting for cleanup or the deadline.
+  // By design a repeated signal is an operator abort, so it keeps the first
+  // signal's code, while the unattended deadline always exits 1.
+  // A shutdown rejection is a failure: log it and exit 1, as the server
+  // "error" handler does.
+  function onSignal(signal: NodeJS.Signals): void {
+    if (shutdownPromise) {
+      console.error(
+        `[shutdown] Received ${signal} during shutdown, forcing exit ${shutdownExitCode}`,
+      );
+      process.exit(shutdownExitCode);
+    }
+    shutdown(signal).catch((shutdownErr) => {
+      console.error(`[shutdown] ${signal} shutdown failed:`, shutdownErr);
+      process.exit(1);
+    });
+  }
+  const onSigint = () => onSignal("SIGINT");
+  const onSigterm = () => onSignal("SIGTERM");
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
 
