@@ -192,7 +192,10 @@ describe("handleRelatedCommand", () => {
       mockSearch,
     );
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("embed failed");
+    expect(result.stderr).toBe(
+      "related: error: search failed. Please try again later.\n",
+    );
+    expect(result.stderr).not.toContain("embed failed");
   });
 
   it("deduplicates by file_path keeping highest similarity", async () => {

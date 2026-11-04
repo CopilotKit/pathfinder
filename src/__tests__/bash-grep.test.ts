@@ -78,7 +78,11 @@ describe("parseGrepCommand", () => {
     });
   });
   it("handles -e flag with argument", () => {
-    // -e consumes "pattern" as its argument, so "/docs" becomes the search pattern
+    // KNOWN LIMITATION, pinned as-is: parseGrepCommand treats -e as a generic
+    // flag that takes an argument, so "pattern" is stored as the flag's
+    // argument and "/docs" becomes the pattern. Real grep uses the -e argument
+    // as the pattern and "/docs" as the path. This test records the current
+    // parser output; it does not say that output is correct.
     const result = parseGrepCommand('grep -e "pattern" /docs');
     expect(result).toEqual({
       isGrep: true,
@@ -208,55 +212,126 @@ describe("vectorGrep", () => {
     expect(result.stdout).toBe("");
   });
 
-  it("handles semantic search failure gracefully", async () => {
-    const failEmbed = {
-      embed: vi.fn().mockRejectedValue(new Error("API down")),
-      embedBatch: vi.fn(),
-    };
-    const result = await vectorGrep({
-      pattern: "useCoAgent",
-      sourceName: "docs",
-      embeddingClient: failEmbed as any,
-      searchChunksFn: mockSearchChunks,
-      textSearchFn: mockTextSearch,
-    });
-    // Text search still works, so should find results
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("useCoAgent");
-  });
+  // A driver-shaped error: SQL text plus the connection target. None of it
+  // may reach the client, but all of it must reach the server log.
+  const driverError = () =>
+    new Error(
+      "connect ECONNREFUSED 10.1.2.3:5432 (postgres://pf:pw@db.internal/pathfinder): " +
+        "SELECT id, content FROM chunks ORDER BY embedding <=> $1",
+    );
+  const leaks = [
+    "SELECT",
+    "chunks",
+    "ECONNREFUSED",
+    "10.1.2.3",
+    "5432",
+    "postgres://",
+    "db.internal",
+  ];
+
+  // The semantic half has two steps that can fail: embed() (the provider) and
+  // the chunk query (the DB). Each must give the same generic client warning,
+  // keep the text-search results, and log the original error on the server.
+  it.each([
+    {
+      failing: "embed()",
+      embed: () => Promise.reject(driverError()),
+      searchChunks: mockSearchChunks,
+    },
+    {
+      failing: "the chunk search",
+      embed: () => Promise.resolve([0.1, 0.2, 0.3]),
+      searchChunks: (() =>
+        Promise.reject(driverError())) as typeof mockSearchChunks,
+    },
+  ])(
+    "handles semantic search failure gracefully when $failing fails",
+    async ({ embed, searchChunks }) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = await vectorGrep({
+          pattern: "useCoAgent",
+          sourceName: "docs",
+          embeddingClient: { embed: vi.fn(embed), embedBatch: vi.fn() } as any,
+          searchChunksFn: vi.fn(searchChunks),
+          textSearchFn: mockTextSearch,
+        });
+        // Text search still works, so its results are returned.
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe(
+          "/api/hooks.mdx:1:The useCoAgent hook provides state management.\n",
+        );
+        expect(result.stderr).toBe("[warning: semantic search unavailable]\n");
+        for (const leak of leaks) {
+          expect(result.stderr).not.toContain(leak);
+          expect(result.stdout).not.toContain(leak);
+        }
+        // The full error stays server-side.
+        expect(warn).toHaveBeenCalledTimes(1);
+        const [label, logged] = warn.mock.calls[0];
+        expect(label).toBe("[bash-grep] Semantic search failed:");
+        expect(logged).toBeInstanceOf(Error);
+        expect((logged as Error).message).toBe(driverError().message);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
 
   it("handles text search failure gracefully", async () => {
-    const failTextSearch = vi.fn().mockRejectedValue(new Error("DB timeout"));
-    const result = await vectorGrep({
-      pattern: "useCoAgent",
-      sourceName: "docs",
-      embeddingClient: mockEmbeddingClient as any,
-      searchChunksFn: mockSearchChunks,
-      textSearchFn: failTextSearch,
-    });
-    // Semantic search still works
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("useCoAgent");
+    const textError = new Error("DB timeout");
+    const failTextSearch = vi.fn().mockRejectedValue(textError);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await vectorGrep({
+        pattern: "useCoAgent",
+        sourceName: "docs",
+        embeddingClient: mockEmbeddingClient as any,
+        searchChunksFn: mockSearchChunks,
+        textSearchFn: failTextSearch,
+      });
+      // Semantic search still works
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("useCoAgent");
+      expect(result.stderr).toBe("[warning: text search unavailable]\n");
+      expect(warn.mock.calls).toEqual([
+        ["[bash-grep] Text search failed:", textError],
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  it("returns exit 2 with error info when both searches fail", async () => {
+  it("returns exit 2 with a generic error when both searches fail", async () => {
+    const embedError = new Error("API down");
+    const textError = new Error("DB down");
     const failEmbed = {
-      embed: vi.fn().mockRejectedValue(new Error("API down")),
+      embed: vi.fn().mockRejectedValue(embedError),
       embedBatch: vi.fn(),
     };
-    const failTextSearch = vi.fn().mockRejectedValue(new Error("DB down"));
-    const result = await vectorGrep({
-      pattern: "useCoAgent",
-      sourceName: "docs",
-      embeddingClient: failEmbed as any,
-      searchChunksFn: vi.fn().mockResolvedValue([]),
-      textSearchFn: failTextSearch,
-    });
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("search unavailable");
-    expect(result.stderr).toContain("API down");
-    expect(result.stderr).toContain("DB down");
-    expect(result.stdout).toBe("");
+    const failTextSearch = vi.fn().mockRejectedValue(textError);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await vectorGrep({
+        pattern: "useCoAgent",
+        sourceName: "docs",
+        embeddingClient: failEmbed as any,
+        searchChunksFn: vi.fn().mockResolvedValue([]),
+        textSearchFn: failTextSearch,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toBe(
+        "grep: search unavailable. Please try again later.\n",
+      );
+      expect(result.stdout).toBe("");
+      // Both original errors stay server-side.
+      expect(warn.mock.calls).toEqual([
+        ["[bash-grep] Semantic search failed:", embedError],
+        ["[bash-grep] Text search failed:", textError],
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("deduplicates results by chunk ID", async () => {
