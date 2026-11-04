@@ -32,7 +32,15 @@ reindex) and can be triggered manually via `workflow_dispatch`.
    _substantial_ semantic rephrasing of the same underlying gap (different
    significant tokens) may still re-alert. The same normalization de-duplicates
    trivially-reworded gaps **within** a single run too, so one underlying gap
-   yields one bullet and one stored key.
+   yields one bullet and one stored key. The state file stores only an
+   HMAC-SHA256 of each normalized key, never the title: the artifact is
+   public, and without the LLM a gap title is a raw user query. A plain hash
+   would not be enough, because high gaps are short, common queries that
+   anyone could hash and compare. The HMAC key is the
+   `PATHFINDER_ANALYTICS_TOKEN` secret, so a reader of the artifact cannot
+   test guesses. Rotating that secret makes the next run treat every
+   high-severity gap as new and alert once. Older state files with plain keys
+   are HMAC'd on read, so they still dedupe.
 
 ## Why no live MCP queries
 
@@ -52,12 +60,12 @@ and is already provisioned. The workflow runs without
 any of them, but no-ops gracefully until they are provisioned, so CI/lint and
 dry runs stay green.
 
-| Secret                       | Purpose                                                                                                                                          | When unset                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `PATHFINDER_ANALYTICS_TOKEN` | Bearer token for `GET /api/analytics/*` on the production MCP (`https://mcp.copilotkit.ai`).                                                     | Script logs "skipping live fetch" and exits 0.                             |
-| `ANTHROPIC_API_KEY`          | Anthropic key for the single LLM classification/summarization pass.                                                                              | Deterministic fallback report is produced from the clusters (no LLM call). |
-| `NOTION_TOKEN`               | Notion integration token used to publish the report page.                                                                                        | Notion publish step is skipped.                                            |
-| `SLACK_WEBHOOK_ENGR`         | Org-level incoming-webhook URL for **#engr**. The gap report (a successful-run signal) posts here only when new high-severity gaps are detected. | No Slack alert is sent.                                                    |
+| Secret                       | Purpose                                                                                                                                                                                                                 | When unset                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `PATHFINDER_ANALYTICS_TOKEN` | Bearer token for `GET /api/analytics/*` on the production MCP (`https://mcp.copilotkit.ai`). Also the HMAC key for the state artifact's gap keys; rotating it makes the next run re-alert every high-severity gap once. | Script logs "skipping live fetch" and exits 0.                             |
+| `ANTHROPIC_API_KEY`          | Anthropic key for the single LLM classification/summarization pass.                                                                                                                                                     | Deterministic fallback report is produced from the clusters (no LLM call). |
+| `NOTION_TOKEN`               | Notion integration token used to publish the report page.                                                                                                                                                               | Notion publish step is skipped.                                            |
+| `SLACK_WEBHOOK_ENGR`         | Org-level incoming-webhook URL for **#engr**. The gap report (a successful-run signal) posts here only when new high-severity gaps are detected.                                                                        | No Slack alert is sent.                                                    |
 
 > **Slack env var name + channel:** the _script_ reads the webhook URL from
 > `SLACK_WEBHOOK`, not `SLACK_WEBHOOK_ENGR`. The workflow bridges the two by

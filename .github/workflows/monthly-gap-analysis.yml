@@ -12,7 +12,8 @@ name: Gap Analysis
 #   PATHFINDER_ANALYTICS_TOKEN  Bearer token for GET /api/analytics/* on the
 #                               production MCP (https://mcp.copilotkit.ai). When
 #                               unset, the script logs "skipping live fetch" and
-#                               exits 0, so lint/dry runs stay green.
+#                               exits 0, so lint/dry runs stay green. It is also
+#                               the HMAC key for the state artifact's gap keys.
 #   ANTHROPIC_API_KEY           Anthropic key for the single LLM classification
 #                               pass. When unset, a deterministic fallback report
 #                               is produced from the clusters (no LLM call).
@@ -95,6 +96,9 @@ jobs:
       - name: Run gap analysis
         env:
           # Read-only analytics access. Unset → script exits 0 (dry/no-secrets).
+          # Also the HMAC key for the stored gap-state keys, so the public
+          # state artifact cannot be checked against guessed queries. Rotating
+          # it makes the next run treat every high-severity gap as new once.
           PATHFINDER_ANALYTICS_TOKEN: ${{ secrets.PATHFINDER_ANALYTICS_TOKEN }}
           # Single LLM classification pass. Unset → deterministic fallback.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -121,8 +125,11 @@ jobs:
       # Persist updated state as a durable artifact so the next run (≈2 weeks
       # later) can diff new high-severity gaps. Artifacts live 90 days
       # regardless of access — unlike the Actions cache, which evicts after 7
-      # days idle and so was always gone by the next run. Upload only
-      # when the script actually wrote the state file.
+      # days idle and so was always gone by the next run. This uploads
+      # whatever file is at the state path: the script's new write, or, when
+      # the script wrote nothing (a failed run or --dry-run), the prior state
+      # that the download step put there. Nothing is uploaded only when
+      # neither exists.
       - name: Upload gap-analysis state
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
