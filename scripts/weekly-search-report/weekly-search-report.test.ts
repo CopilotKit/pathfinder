@@ -415,6 +415,61 @@ describe("success ping → #engr", () => {
     const post = makePostSlack("");
     await expect(post("anything")).resolves.toBeUndefined();
   });
+
+  // A malformed webhook secret makes fetch() throw an error whose message holds
+  // the whole URL, token included. The log must name only the error class
+  // and its cause code.
+  // Both URLs point at 127.0.0.1 and fail to parse, so nothing leaves the host.
+  for (const webhook of [
+    "127.0.0.1/services/T000/B000/FAKETOKEN0b2",
+    "http://127.0.0.1:99999/services/T000/B000/FAKETOKEN0b2",
+  ]) {
+    it(`a Slack POST error never logs the webhook URL (${JSON.stringify(webhook)})`, async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await expect(
+          makePostSlack(webhook)("anything"),
+        ).resolves.toBeUndefined();
+        const logged = warn.mock.calls
+          .map((args) => args.map(String).join(" "))
+          .join("\n");
+        expect(logged).toBe(
+          "[weekly-report] Slack POST error: TypeError (ERR_INVALID_URL)",
+        );
+        expect(logged).not.toContain("FAKETOKEN0b2");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
+
+  // A network failure logs the cause's code, so DNS, refused and timeout
+  // failures can be told apart. The cause's message ("connect ECONNREFUSED
+  // 127.0.0.1:<port>") names the target and must not be logged.
+  it("a Slack POST network error logs the cause code, not the URL", async () => {
+    const closed = createServer();
+    await new Promise<void>((r) => closed.listen(0, "127.0.0.1", r));
+    const { port } = closed.address() as AddressInfo;
+    await new Promise<void>((r) => closed.close(() => r()));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(
+        makePostSlack(`http://127.0.0.1:${port}/services/FAKETOKEN0b2`)(
+          "anything",
+        ),
+      ).resolves.toBeUndefined();
+      const logged = warn.mock.calls
+        .map((args) => args.map(String).join(" "))
+        .join("\n");
+      expect(logged).toBe(
+        "[weekly-report] Slack POST error: TypeError (ECONNREFUSED)",
+      );
+      expect(logged).not.toContain("FAKETOKEN0b2");
+      expect(logged).not.toContain(String(port));
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 // ── parseReportDays ───────────────────────────────────────────────────────────

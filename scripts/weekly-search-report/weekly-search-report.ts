@@ -1131,6 +1131,22 @@ function errorClass(err: unknown): string {
 }
 
 /**
+ * The system error code of an error's cause (for example ECONNREFUSED or
+ * ERR_INVALID_URL), or "" when there is none. Only the code is read: it is a
+ * fixed identifier, while the cause's message can quote the host and port.
+ * The allowlist rejects any code that is not plain upper-case letters and
+ * underscores.
+ */
+function errorCauseCode(err: unknown): string {
+  const cause = err instanceof Error ? err.cause : undefined;
+  const code =
+    typeof cause === "object" && cause !== null && "code" in cause
+      ? cause.code
+      : undefined;
+  return typeof code === "string" && /^[A-Z_]+$/.test(code) ? code : "";
+}
+
+/**
  * Build the real (network-backed) fetchJson bound to a base URL + token, modeled
  * on monthly-gap-analysis's helper.
  *
@@ -1294,7 +1310,13 @@ export function makePostSlack(
         );
       }
     } catch (err) {
-      console.warn(`[weekly-report] Slack POST error: ${String(err)}`);
+      // Only the error class and its cause's code: a malformed webhook makes
+      // fetch() throw a message that holds the whole URL, and the URL is the
+      // secret. The code (for example ECONNREFUSED) holds no URL.
+      const code = errorCauseCode(err);
+      console.warn(
+        `[weekly-report] Slack POST error: ${errorClass(err)}${code ? ` (${code})` : ""}`,
+      );
     }
   };
 }
