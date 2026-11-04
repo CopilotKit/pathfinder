@@ -162,7 +162,8 @@ export function respectsRobotsTxt(robotsTxt: string, path: string): boolean {
 export function extractSitemapsFromRobotsTxt(robotsTxt: string): string[] {
   const sitemaps: string[] = [];
   for (const rawLine of robotsTxt.split("\n")) {
-    const line = rawLine.trim();
+    // "#" starts a comment that runs to the end of the line (RFC 9309 §2.2).
+    const line = rawLine.replace(/#.*$/, "").trim();
     if (line.toLowerCase().startsWith("sitemap:")) {
       const url = line.slice("sitemap:".length).trim();
       if (url) sitemaps.push(url);
