@@ -2319,23 +2319,6 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
         client_name: hs.clientName,
         auth_client_id: ctx.authClientId,
       });
-      const server = createMcpServer(
-        bashInstances,
-        sessionStateManager,
-        () => transport.sessionId ?? undefined,
-        bashTelemetry,
-        workspaceManager,
-        {
-          onToolCall: () => {
-            const sid = transport.sessionId;
-            if (sid) sessionHasBeenUsed[sid] = true;
-          },
-        },
-        () => requestSource,
-        () => sessionClientIp,
-        () => sessionUserAgent,
-        () => analyticsCtx,
-      );
       // Z-1: server.connect(transport) can throw AFTER this route committed
       // the maps, the ipLimiter counter and the onclose wiring. Without an
       // explicit rollback, the session is stranded against
@@ -2343,8 +2326,26 @@ app.post("/mcp", bearerMiddleware, async (req: Request, res: Response) => {
       // transport.close(), so onclose never fires. The rollback covers a
       // connect throw; a completeInitRequestSafely rethrow is also covered
       // (defensive; not reached on SDK v2 today). Rethrow into the outer
-      // catch-all so the 500 response behavior is preserved.
+      // catch-all so the 500 response behavior is preserved. createMcpServer runs
+      // inside the try so a throw from it is rolled back the same way.
       try {
+        const server = createMcpServer(
+          bashInstances,
+          sessionStateManager,
+          () => transport.sessionId ?? undefined,
+          bashTelemetry,
+          workspaceManager,
+          {
+            onToolCall: () => {
+              const sid = transport.sessionId;
+              if (sid) sessionHasBeenUsed[sid] = true;
+            },
+          },
+          () => requestSource,
+          () => sessionClientIp,
+          () => sessionUserAgent,
+          () => analyticsCtx,
+        );
         await server.connect(transport);
         // Swallows a handleRequest throw after a race-fallback rejection
         // (see completeInitRequestSafely). Defensive; not reached today.
