@@ -1,5 +1,17 @@
 # @copilotkit/pathfinder
 
+## 1.17.3
+
+### Patch Changes
+
+- **robots.txt groups with several user agents are honored.** A group that lists `*` among several `User-agent` lines now applies its `Disallow` rules; before, the crawler ignored them. A trailing `#` comment on a `User-agent` or `Disallow` line is now stripped, so the rule matches. Thanks to @RaphaelFakhri (#192)
+- **A listen error exits non-zero.** If the server cannot bind its port, it now exits 1, not 0, so an `ON_FAILURE` restart policy restarts it. Shutdown cleanup is bounded at 8 seconds, and a cleanup that hangs or fails also exits 1 (#193)
+- **A failed `initialize` frees its per-IP slot.** When `createMcpServer` throws during `initialize`, the per-IP session slot is released, so repeated failures no longer lock the IP out with 429 (#193)
+- **Logs and errors:** session ids and client IPs are escaped in the legacy SSE log lines, so a crafted session id cannot forge log lines. The bash `related` and `qmd` commands return a generic error, not the raw database error text. The weekly report no longer logs the Slack webhook URL (#193)
+- **Reports and state:** the weekly and monthly reports are no longer uploaded as public artifacts with raw queries. The public gap-analysis state stores HMACs of its keys and no longer stores raw query titles (#193)
+- **robots.txt `Sitemap:` lines:** a trailing comment is stripped from a `Sitemap:` URL (#193)
+- **CI:** a Sentinel workflow scans the GitHub Actions workflows for security issues (#83)
+
 ## 1.17.2
 
 ### Patch Changes
