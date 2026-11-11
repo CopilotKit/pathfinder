@@ -1,5 +1,6 @@
 import pgvector from "pgvector";
-import { getPool } from "./client.js";
+import { getPool, DB_MAINTENANCE_QUERY_TIMEOUT_MS } from "./client.js";
+import type { DeadlineQueryConfig } from "./client.js";
 import { topCosineScore } from "../relevance.js";
 import type {
   Chunk,
@@ -846,10 +847,17 @@ export async function deleteChunksByFile(
  */
 export async function deleteChunksBySource(sourceName: string): Promise<void> {
   const pool = getPool();
-  // Sanitize text bindings: see replaceChunksForFile.
-  await pool.query("DELETE FROM chunks WHERE source_name = $1", [
-    stripNulBytes(sourceName),
-  ]);
+  // Nothing calls this today. It deletes every chunk of a source in one
+  // statement (thousands of rows, each with its HNSW and GIN index entries),
+  // so it gets the maintenance deadline like the retention purges, not the
+  // request-path default.
+  const deleteAll: DeadlineQueryConfig = {
+    text: "DELETE FROM chunks WHERE source_name = $1",
+    // Sanitize text bindings: see replaceChunksForFile.
+    values: [stripNulBytes(sourceName)],
+    query_timeout: DB_MAINTENANCE_QUERY_TIMEOUT_MS,
+  };
+  await pool.query(deleteAll);
 }
 
 /**
@@ -1154,11 +1162,15 @@ export async function cleanupOldWebhookDeliveries(
     );
   }
   const pool = getPool();
+  // Same maintenance deadline as cleanupOldQueryLogs: a first purge of a
+  // large backlog can run for minutes.
+  const purge: DeadlineQueryConfig = {
+    text: `DELETE FROM webhook_deliveries WHERE delivered_at <= NOW() - INTERVAL '1 day' * $1`,
+    values: [retentionDays],
+    query_timeout: DB_MAINTENANCE_QUERY_TIMEOUT_MS,
+  };
   try {
-    const result = await pool.query(
-      `DELETE FROM webhook_deliveries WHERE delivered_at <= NOW() - INTERVAL '1 day' * $1`,
-      [retentionDays],
-    );
+    const result = await pool.query(purge);
     const rowCount = result.rowCount ?? 0;
     console.log(
       `[webhook-tracking] cleanupOldWebhookDeliveries: deleted ${rowCount} rows older than ${retentionDays} days`,
@@ -1185,6 +1197,19 @@ export interface IndexStats {
 }
 
 /**
+ * Upper bound for getAllChunksForLlms(). It reads the content of every chunk
+ * (about 13,000 chunks for the copilotkit-docs index), and pg's deadline also
+ * covers receiving and parsing every row. On a healthy database that takes
+ * seconds, but a larger index or a busy host can pass the 30 s request-path
+ * default. The caller is the /llms.txt and /llms-full.txt handler, an HTTP
+ * request, so the 30-minute maintenance deadline is too long. The handler
+ * caches the result until the next reindex, so this read runs once per cold
+ * cache, not once per request. 2 minutes gives about 4 times the default
+ * and still ends a hang.
+ */
+export const LLMS_EXPORT_QUERY_TIMEOUT_MS = 2 * 60_000;
+
+/**
  * Fetch all chunks (without embeddings) for llms.txt generation.
  * Ordered by source_name, file_path, chunk_index for deterministic output.
  */
@@ -1198,9 +1223,12 @@ export async function getAllChunksForLlms(): Promise<
   }[]
 > {
   const pool = getPool();
-  const result = await pool.query(
-    "SELECT source_name, file_path, title, content, chunk_index FROM chunks ORDER BY source_name, file_path, chunk_index",
-  );
+  // A full read of every chunk's content: see LLMS_EXPORT_QUERY_TIMEOUT_MS.
+  const exportAll: DeadlineQueryConfig = {
+    text: "SELECT source_name, file_path, title, content, chunk_index FROM chunks ORDER BY source_name, file_path, chunk_index",
+    query_timeout: LLMS_EXPORT_QUERY_TIMEOUT_MS,
+  };
+  const result = await pool.query(exportAll);
   return result.rows;
 }
 

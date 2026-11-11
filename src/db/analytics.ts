@@ -1,4 +1,5 @@
-import { getPool } from "./client.js";
+import { getPool, DB_MAINTENANCE_QUERY_TIMEOUT_MS } from "./client.js";
+import type { DeadlineQueryConfig } from "./client.js";
 import { getAnalyticsConfig } from "../config.js";
 import type { MachineRelayRule } from "../types.js";
 import type { SessionAnalyticsContext } from "../request-context.js";
@@ -2243,11 +2244,15 @@ export async function cleanupOldQueryLogs(
   // `<=` (non-strict) boundary means any row at or past the retention
   // cutoff is reachable by cleanup; we never want a row to be invisible to
   // reads AND immune to purge at the same time.
+  // A first purge of a large backlog can run for minutes: it gets the
+  // maintenance deadline, not the request-path default.
+  const purge: DeadlineQueryConfig = {
+    text: `DELETE FROM query_log WHERE created_at <= NOW() - INTERVAL '1 day' * $1`,
+    values: [retentionDays],
+    query_timeout: DB_MAINTENANCE_QUERY_TIMEOUT_MS,
+  };
   try {
-    const result = await pool.query(
-      `DELETE FROM query_log WHERE created_at <= NOW() - INTERVAL '1 day' * $1`,
-      [retentionDays],
-    );
+    const result = await pool.query(purge);
     const rowCount = result.rowCount ?? 0;
     console.log(
       `[analytics] cleanupOldQueryLogs: deleted ${rowCount} rows older than ${retentionDays} days`,
