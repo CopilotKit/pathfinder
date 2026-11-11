@@ -2,8 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the pool before importing analytics module
 const mockQuery = vi.fn();
+// vi.hoisted: the vi.mock factory below runs before this module's own
+// top-level code.
+const MAINTENANCE_QUERY_TIMEOUT_MS = vi.hoisted(() => 30 * 60_000);
 vi.mock("../db/client.js", () => ({
   getPool: () => ({ query: mockQuery }),
+  DB_MAINTENANCE_QUERY_TIMEOUT_MS: MAINTENANCE_QUERY_TIMEOUT_MS,
 }));
 
 import {
@@ -1129,9 +1133,11 @@ describe("cleanupOldQueryLogs", () => {
     const deleted = await cleanupOldQueryLogs(90);
     expect(deleted).toBe(150);
 
-    const [sql, params] = mockQuery.mock.calls[0];
-    expect(sql).toContain("DELETE FROM query_log");
-    expect(params).toEqual([90]);
+    const [config] = mockQuery.mock.calls[0];
+    expect(config.text).toContain("DELETE FROM query_log");
+    expect(config.values).toEqual([90]);
+    // A large purge must not get the 30 s request-path deadline.
+    expect(config.query_timeout).toBe(MAINTENANCE_QUERY_TIMEOUT_MS);
   });
 
   it("returns 0 when no rows match", async () => {
@@ -1155,8 +1161,8 @@ describe("cleanupOldQueryLogs", () => {
     // rows are removed.
     mockQuery.mockResolvedValueOnce({ rowCount: 0 });
     await cleanupOldQueryLogs(90);
-    const [sql] = mockQuery.mock.calls[0];
-    expect(sql).toContain("created_at <= NOW()");
+    const [config] = mockQuery.mock.calls[0];
+    expect(config.text).toContain("created_at <= NOW()");
   });
 });
 
