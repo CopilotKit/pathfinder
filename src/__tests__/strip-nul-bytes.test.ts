@@ -15,8 +15,14 @@ const connect = vi.fn(async () => ({
 // don't `connect()` a client — they go through pool.query directly).
 const poolQuery = vi.fn();
 
+// A stand-in value, so a test can tell the maintenance deadline apart.
+// Hoisted: the vi.mock factory below reads it when queries.ts imports.
+const { MAINTENANCE_QUERY_TIMEOUT_MS } = vi.hoisted(() => ({
+  MAINTENANCE_QUERY_TIMEOUT_MS: 1_234_567,
+}));
 vi.mock("../db/client.js", () => ({
   getPool: () => ({ connect, query: poolQuery }),
+  DB_MAINTENANCE_QUERY_TIMEOUT_MS: MAINTENANCE_QUERY_TIMEOUT_MS,
 }));
 
 vi.mock("pgvector", () => ({
@@ -517,8 +523,14 @@ describe("standalone delete-by-file/by-source NUL sanitization", () => {
     const NUL = "\x00";
     await deleteChunksBySource(`ag-ui${NUL}code`);
     expect(poolQuery).toHaveBeenCalledTimes(1);
-    const [, params] = poolQuery.mock.calls[0];
-    expect((params as unknown[])[0]).toBe("ag-uicode");
+    // One query config: the bulk delete also carries the maintenance deadline.
+    expect(poolQuery.mock.calls[0]).toEqual([
+      {
+        text: "DELETE FROM chunks WHERE source_name = $1",
+        values: ["ag-uicode"],
+        query_timeout: MAINTENANCE_QUERY_TIMEOUT_MS,
+      },
+    ]);
   });
 });
 
